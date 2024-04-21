@@ -1767,16 +1767,20 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['add_noise_to_real_id_embs']:
                     if not self.iter_flags['same_subject_in_batch']:
                         self.iter_flags['same_subject_in_batch'] = True
+                        # Change the ID features of multiple subjects in the batch to the ID features of 
+                        # the first subject, before adding noise to the ID features.
+                        '''
                         # Change the batch to have the (1 subject image) * BS strcture.
                         # NOTE: Use the same noise for different ID embeddings in the batch,
                         # so that we can compute the variance at each pixel.
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                        # Meanwhile, change the ID features of multiple subjects in the batch to the ID features of 
-                        # the first subject, before adding noise to the ID features.
-                        x_start, img_mask, fg_mask, batch_have_fg_mask, self.batch_subject_names, \
+                        # x_start, img_mask, fg_mask, batch_have_fg_mask, 
+                        '''
+                        self.batch_subject_names, \
                         self.iter_flags['is_face'], zs_clip_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
-                                                      x_start, img_mask, fg_mask, batch_have_fg_mask, self.batch_subject_names, 
+                                                      # x_start, img_mask, fg_mask, batch_have_fg_mask, 
+                                                      self.batch_subject_names, 
                                                       self.iter_flags['is_face'], zs_clip_features, zs_id_embs)
                         
                     # Add noise to the zero-shot ID embeddings.
@@ -2907,20 +2911,20 @@ class LatentDiffusion(DDPM):
                                                            img_mask, fg_mask, batch_have_fg_mask,
                                                            x_start.shape[0], loss_dict, prefix)
             else:
+                num_denoising_steps = self.iter_flags['num_denoising_steps']
+
                 if self.iter_flags['use_arc2face_as_target']:
                     x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-                    num_denoising_steps = self.iter_flags['num_denoising_steps']
 
                     arc2face_noise_preds, arc2face_pred_x0s, arc2face_noises, ts = \
                         self.arc2face(self, x_noisy, noise, t, self.iter_flags['arc2face_prompt_emb'], num_denoising_steps=num_denoising_steps)
-                    # target: replaced as the reconstructed x0 by the arc2face UNet.
-                    # If num_denoising_steps > 1, then arc2face_noise_preds contain 2*half_batch arc2face predicted noises (of different ts).
-                    # They are combined into a batch for loss computation.
-                    # target: [4, 4, 64, 64].
-                    target = torch.cat(arc2face_noise_preds, dim=0)
+                    # targets: replaced as the reconstructed x0 by the arc2face UNet.
+                    # If NS = num_denoising_steps > 1, then arc2face_noise_preds contain NS*half_batch arc2face predicted noises (of different ts).
+                    # targets: [2, 4, 64, 64] * 2 or 3.
+                    targets         = arc2face_noise_preds
+                    model_outputs   = [model_output]
 
                     if num_denoising_steps > 1:
-                        model_outputs = [model_output]
                         for s in range(1, num_denoising_steps):
                             # Predict the noise of the half-batch with t2 (a set of earlier t).
                             # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, 
@@ -2938,43 +2942,51 @@ class LatentDiffusion(DDPM):
                                                     emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                                     unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
                             model_outputs.append(model_output2)
-
-                        # Combine the ND half-batch outputs (of different ts) into a batch for loss computation.
-                        model_output = torch.cat(model_outputs, dim=0)
-                        # img_mask and fg_mask are repeated for the recombined batch.
-                        img_mask = img_mask.repeat(num_denoising_steps, 1, 1, 1) if img_mask is not None else None
-                        fg_mask  = fg_mask.repeat(num_denoising_steps,  1, 1, 1) if fg_mask  is not None else None
+                else:
+                    targets         = [target]
+                    model_outputs   = [model_output]
+                    ts              = [t]
 
                 # Otherwise, use the original image as target and num_denoising_steps = 1. 
                 # We don't need to change target or anything.
 
-                if self.iter_flags['gen_arc2face_rand_face']:
-                    # if gen_arc2face_rand_face, then always use_arc2face_as_target == True.                    
-                    # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
-                    # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
-                    # then multiply them with the loss variances across instances to get the final loss.
-                    loss_recon = self.get_loss(model_output, target.to(model_output.dtype), 
-                                               mean=not self.iter_flags['use_std_as_arc2face_recon_weighting'])
-                    if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                        spatial_weight = gen_spatial_weight_using_loss_std(loss_recon, out_spatial_shape=(64, 64))
+                loss_recons = []
+                for s in range(num_denoising_steps):
+                    model_output, target = model_outputs[s], targets[s]
+
+                    if self.iter_flags['gen_arc2face_rand_face']:
+                        # if gen_arc2face_rand_face, then always use_arc2face_as_target == True.                    
+                        # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
+                        # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
+                        # then multiply them with the loss variances across instances to get the final loss.
+                        loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=False)
+                        if self.iter_flags['use_std_as_arc2face_recon_weighting']:
+                            spatial_weight = gen_spatial_weight_using_loss_std(loss_recon, out_spatial_shape=(64, 64))
+                        else:
+                            spatial_weight = 1
                         loss_recon = (loss_recon * spatial_weight).mean()
-                else:
-                    # use_arc2face_as_target could be True or False.
-                    # If use_arc2face_as_target, we don't want to distill using the background pixels, 
-                    # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
-                    # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
-                    # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
-                    # Therefore, bg_pixel_weight = 0.2.
-                    # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
-                    # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
-                    bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
+                    else:
+                        # use_arc2face_as_target could be True or False.
+                        # If use_arc2face_as_target, we don't want to distill using the background pixels, 
+                        # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
+                        # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
+                        # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
+                        # Therefore, bg_pixel_weight = 0.2.
+                        # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
+                        # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
+                        bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
 
-                    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-                    loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                                         img_mask, fg_mask, 
-                                                         fg_pixel_weight=1,
-                                                         bg_pixel_weight=bg_pixel_weight)
+                        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+                        loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                                             img_mask, fg_mask, 
+                                                             fg_pixel_weight=1,
+                                                             bg_pixel_weight=bg_pixel_weight)
 
+                    loss_recons.append(loss_recon)
+                    if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                        print(f"{s}: {ts[s].tolist()}, {loss_recon.item():.5f}")
+
+                loss_recon = sum(loss_recons) / num_denoising_steps
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
 
@@ -5547,8 +5559,11 @@ class Arc2FaceWrapper(pl.LightningModule):
                 if i < num_denoising_steps - 1:
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                     relative_ts = torch.rand_like(timesteps.float())
-                    t_lb = timesteps * 0.6
-                    t_ub = timesteps * 0.8
+                    # Make sure at the earliest (i = num_denoising_steps - 1), the timestep 
+                    # is between 60% and 80% of the current timestep. So if num_denoising_steps = 3,
+                    # we take timesteps within [sqrt(0.6), sqrt(0.8)] of the current timestep.
+                    t_lb = t * np.power(0.6, 1 / (num_denoising_steps - 1))
+                    t_ub = t * np.power(0.8, 1 / (num_denoising_steps - 1))
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
@@ -5558,7 +5573,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                     noise = torch.randn_like(pred_x0)
                     # ts[0] is timesteps, ts[1] is earlier_timesteps.
                     # ts[0] > ts[1].
-                    x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1], noise)
+                    x_noisy = ddpm_model.q_sample(pred_x0, earlier_timesteps, noise)
                     noises.append(noise)
 
         return noise_preds, pred_x0s, noises, ts
