@@ -5544,12 +5544,6 @@ class Arc2FaceWrapper(pl.LightningModule):
                 pred_x0s.append(pred_x0)
 
                 if i < num_denoising_steps - 1:
-                    noise = torch.randn_like(pred_x0)
-                    # ts[0] is timesteps, ts[1] is earlier_timesteps.
-                    # ts[0] > ts[1].
-                    x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1], noise)
-                    noises.append(noise)
-
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                     relative_ts = torch.rand_like(timesteps.float())
                     t_lb = timesteps * 0.6
@@ -5557,8 +5551,14 @@ class Arc2FaceWrapper(pl.LightningModule):
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
-                    # earlier_timesteps < timesteps.
+                    # ts[i+1] < ts[i].
                     ts.append(earlier_timesteps)
+
+                    noise = torch.randn_like(pred_x0)
+                    # ts[0] is timesteps, ts[1] is earlier_timesteps.
+                    # ts[0] > ts[1].
+                    x_noisy = ddpm_model.q_sample(pred_x0, ts[i+1], noise)
+                    noises.append(noise)
 
         return noise_preds, pred_x0s, noises, ts
     
