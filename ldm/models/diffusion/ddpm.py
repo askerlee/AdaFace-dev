@@ -2986,7 +2986,8 @@ class LatentDiffusion(DDPM):
                     if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                         print(f"{s}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
-                loss_recon = sum(loss_recons) / num_denoising_steps
+                # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so no need to divide by num_denoising_steps.
+                loss_recon = sum(loss_recons) #/ num_denoising_steps
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
 
