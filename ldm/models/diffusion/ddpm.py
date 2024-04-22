@@ -135,7 +135,6 @@ class DDPM(pl.LightningModule):
                  prompt_embedding_clamp_value=-1,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
-                 same_subject_in_each_batch=False,
                  arc2face_distill_iter_prob=0.5,
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
@@ -188,7 +187,6 @@ class DDPM(pl.LightningModule):
                                                         else 0
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
-        self.same_subject_in_each_batch             = same_subject_in_each_batch
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -1718,12 +1716,8 @@ class LatentDiffusion(DDPM):
             assert self.iter_flags['fg_mask_avail_ratio'] == 0
             fg_mask = None
 
-        if self.same_subject_in_each_batch and len(set(batch['subject_name'])) > 1:
-            print("Different subjects in the batch when same_subject_in_each_batch=True.")
-            breakpoint()
-
         BS = len(batch['subject_name'])
-        if not self.same_subject_in_each_batch and self.iter_flags['do_mix_prompt_distillation']:
+        if self.iter_flags['do_mix_prompt_distillation']:
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
             batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
@@ -1731,7 +1725,7 @@ class LatentDiffusion(DDPM):
                                           x_start, img_mask, fg_mask, batch_have_fg_mask)
             self.iter_flags['same_subject_in_batch'] = True
         else:
-            self.iter_flags['same_subject_in_batch'] = self.same_subject_in_each_batch
+            self.iter_flags['same_subject_in_batch'] = False
 
         if self.iter_flags['do_arc2face_distill'] and random.random() < self.p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
@@ -2982,7 +2976,7 @@ class LatentDiffusion(DDPM):
                                                              bg_pixel_weight=bg_pixel_weight)
 
                     loss_recons.append(loss_recon)
-                    if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                    if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                         print(f"{s}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
                 # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so no need to divide by num_denoising_steps.

@@ -469,7 +469,7 @@ def worker_init_fn(_):
 class DataModuleFromConfig(pl.LightningDataModule):
     # train, validation: the corresponding section in the config file,
     # used by instantiate_from_config(self.dataset_configs[k]).
-    def __init__(self, batch_size, max_steps, same_subject_in_each_batch=False, train=None, validation=None, test=None, predict=None,
+    def __init__(self, batch_size, max_steps, train=None, validation=None, test=None, predict=None,
                  wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
                  shuffle_val_dataloader=False):
         super().__init__()
@@ -491,7 +491,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
             self.dataset_configs["predict"] = predict
             self.predict_dataloader = self._predict_dataloader
         self.wrap = wrap
-        self.same_subject_in_each_batch = same_subject_in_each_batch
 
     def prepare_data(self):
         for data_cfg in self.dataset_configs.values():
@@ -521,8 +520,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
             shuffle = False
             sampler = SubjectSampler(self.datasets['train'].num_subjects, self.datasets['train'].subject_names, 
                                      self.datasets['train'].subjects_are_faces, self.num_batches, 
-                                     self.batch_size, same_subject_in_each_batch=self.same_subject_in_each_batch,
-                                     skip_non_faces=True)
+                                     self.batch_size, skip_non_faces=True)
         else:
             sampler = None
 
@@ -954,7 +952,6 @@ if __name__ == "__main__":
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
-        config.model.params.same_subject_in_each_batch      = False
         config.model.params.p_gen_arc2face_rand_face  = opt.p_gen_arc2face_rand_face
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
@@ -981,9 +978,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
-            # When using zero-shot, we load different subjects in the same batch.
-            config.data.params.same_subject_in_each_batch = False
-        
+
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html

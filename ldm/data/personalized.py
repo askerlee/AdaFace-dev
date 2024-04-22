@@ -179,7 +179,7 @@ class PersonalizedBase(Dataset):
         
         subj_roots = []
         for base_folder in data_roots:
-            subfolders = [f.path for f in os.scandir(base_folder) if f.is_dir()]
+            subfolders = [ f.path for f in os.scandir(base_folder) if f.is_dir() ]
             # If base_folder contains subfolders, then expand them.
             if len(subfolders) > 0:
                 # Limit the number of subjects from each base_folder to 1000, to speed up loading.
@@ -944,7 +944,7 @@ class PersonalizedBase(Dataset):
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 class SubjectSampler(Sampler):
     def __init__(self, num_subjects, subject_names, subjects_are_faces, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
-                 same_subject_in_each_batch=False, skip_non_faces=True, debug=False):
+                 skip_non_faces=True, debug=False):
 
         # If do_zero_shot, then skip non-faces in the dataset. Otherwise, non-face subjects (dogs, cats)
         # will disrupt the model update.
@@ -959,7 +959,7 @@ class SubjectSampler(Sampler):
         rank = dist.get_rank()
         print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(rank, self.num_subjects, 
                                                                                  self.batch_size, self.num_batches))
-
+        same_subject_in_each_batch = False
         if same_subject_in_each_batch:
             self.switch_cycle_length = self.batch_size
         else:

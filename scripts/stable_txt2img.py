@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument(
         "--compel_cfg_weight_level",
         type=float,
-        default=0,
+        default=2,
         help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 
@@ -66,14 +66,14 @@ def parse_args():
         type=str,
         nargs="?",
         help="dir to write results to",
-        default="outputs/txt2img-samples"
+        default="samples-ada/"
     )
     parser.add_argument(
         "--indiv_subdir",
         type=str,
         help="subdir to write individual images to",
         default="samples"
-    )      
+    )
     parser.add_argument(
         "--skip_grid",
         action='store_true',
@@ -94,11 +94,6 @@ def parse_args():
         "--plms",
         action='store_true',
         help="use plms sampling",
-    )
-    parser.add_argument(
-        "--laion400m",
-        action='store_true',
-        help="uses the LAION400M model",
     )
     parser.add_argument(
         "--fixed_code",
@@ -362,12 +357,6 @@ def load_img(path, h, w):
 
 
 def main(opt):
-
-    if opt.laion400m:
-        print("Falling back to LAION 400M model...")
-        opt.config = "configs/latent-diffusion/txt2img-1p4B-eval.yaml"
-        opt.ckpt = "models/ldm/text2img-large/model.ckpt"
-        opt.outdir = "outputs/txt2img-samples-laion400m"
 
     # No GPUs detected. Use CPU instead.
     if not torch.cuda.is_available():
