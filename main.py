@@ -194,7 +194,11 @@ def get_parser(**parser_kwargs):
         type=str, 
         nargs='+', 
         required=True, 
-        help="Path(s) with training images")
+        help="Path(s) containing training images")
+    parser.add_argument("--mix_subj_data_roots",
+        type=str, nargs='+', default=None,
+        help="Path(s) containing training images of mixed subjects")
+    
     parser.add_argument("--subj_info_filepaths",
         type=str, nargs="*", default=argparse.SUPPRESS,
         help="Path to the subject info file (only necessary if multiple subjects are used)")
@@ -519,7 +523,10 @@ class DataModuleFromConfig(pl.LightningDataModule):
         if self.datasets['train'].num_subjects > 1:
             shuffle = False
             sampler = SubjectSampler(self.datasets['train'].num_subjects, self.datasets['train'].subject_names, 
-                                     self.datasets['train'].subjects_are_faces, self.num_batches, 
+                                     self.datasets['train'].subjects_are_faces, 
+                                     self.datasets['train'].are_mix_subj_folders,
+                                     self.datasets['train'].image_count_by_subj,
+                                     self.num_batches, 
                                      self.batch_size, skip_non_faces=True)
         else:
             sampler = None
@@ -949,6 +956,8 @@ if __name__ == "__main__":
         #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}}}
         config.data.params.train.params.data_roots       = opt.data_roots
         config.data.params.validation.params.data_roots  = opt.data_roots
+        config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
+        config.data.params.validation.params.mix_subj_data_roots = opt.mix_subj_data_roots
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot

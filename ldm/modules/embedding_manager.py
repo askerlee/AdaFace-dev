@@ -2965,7 +2965,7 @@ class EmbeddingManager(nn.Module):
         else:
             return self.embedding_attractor_loss()
 
-    # NOTE: calc_fg_bg_token_embs_ortho_loss() is DISABLED if do_zero_shot but not same_subject_in_each_batch,
+    # NOTE: calc_fg_bg_token_embs_ortho_loss() is DISABLED if do_zero_shot but not same_subject_in_batch,
     # i.e., do_zero_shot and different subjects are sampled in the same batch,
     # because the fg/bg ortho loss with multiple subjects will be too complicated, esp. considering
     # that in a compositional iteration, only the first prompt (corresponding to the first subject) is active.

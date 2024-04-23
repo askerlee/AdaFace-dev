@@ -131,6 +131,9 @@ class PersonalizedBase(Dataset):
     def __init__(self,
                  # a list of folders containing subfolders, each subfolder containing images of a subject.
                  data_roots,
+                 # a list of folders containing no subfolders, but only images of multiple subjects.
+                 # Their cls_delta_string are all set to the default 'person', as their genders are unknown.
+                 mix_subj_data_roots=None,
                  size=512,
                  repeats=100,
                  max_num_subjects_per_base_folder=-1,    # Set to -1 to load all subjects in each base folder.
@@ -176,8 +179,14 @@ class PersonalizedBase(Dataset):
         # Otherwise, data_roots is already a list of strings.
         if isinstance(data_roots, str):
             data_roots = [ data_roots ]
-        
+        if isinstance(mix_subj_data_roots, str):
+            mix_subj_data_roots = [ mix_subj_data_roots ]
+        # Now mix_subj_data_roots is either None or a list of folders.
+                
         subj_roots = []
+        # Map base_folder to a boolean value, indicating whether the subjects in the base_folder are mixed.
+        base_folders_are_mix_subj = {}
+
         for base_folder in data_roots:
             subfolders = [ f.path for f in os.scandir(base_folder) if f.is_dir() ]
             # If base_folder contains subfolders, then expand them.
@@ -189,17 +198,33 @@ class PersonalizedBase(Dataset):
                     # Load all subjects in each base folder.
                     subj_roots.extend(subfolders)
             else:
+                # Remove the trailing "/" or "\" in the folder name. Otherwise basename() will return "".
+                if base_folder.endswith("/") or base_folder.endswith("\\"):
+                    base_folder = base_folder[:-1]
                 # base_folder is a single folder containing images of a subject. No need to expand its subfolders.
                 subj_roots.append(base_folder)
+
+        for base_folder in subj_roots:
+            base_folders_are_mix_subj[base_folder] = False
+
+        if mix_subj_data_roots is not None:
+            for base_folder in mix_subj_data_roots:
+                # Remove the trailing "/" or "\" in the folder name. Otherwise basename() will return "".
+                if base_folder.endswith("/") or base_folder.endswith("\\"):
+                    base_folder = base_folder[:-1]
+                    
+                subj_roots.append(base_folder)
+                base_folders_are_mix_subj[base_folder] = True
 
         # Sort subj_roots, so that the order of subjects is consistent.
         self.subj_roots = sorted(subj_roots)
         # subject_names: sorted ascendingly for subjects within the same folder.
         self.subject_names = [] #[ os.path.basename(subj_root) for subj_root in self.subj_roots ]
-
+        self.are_mix_subj_folders = []
         assert len(self.subj_roots) > 0, f"No data found in data_roots={data_roots}!"
 
         self.image_paths_by_subj    = []
+        self.image_count_by_subj    = []
         self.fg_mask_paths_by_subj  = []
         self.caption_paths_by_subj  = []
         self.mean_emb_path_by_subj  = []
@@ -214,8 +239,9 @@ class PersonalizedBase(Dataset):
             # image_paths and mask_paths are full paths.
             all_file_paths      = [ os.path.join(subj_root, file_path) for file_path in all_filenames ]
             image_paths         = list(filter(lambda x: filter_non_image(x) and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
+            base_folder_is_mix_subj = base_folders_are_mix_subj[subj_root]
             # Limit the number of images for each subject to 100, to speed up loading.
-            if max_num_images_per_subject > 0:
+            if (not base_folder_is_mix_subj) and max_num_images_per_subject > 0:
                 image_paths = image_paths[:max_num_images_per_subject]
             if len(image_paths) == 0:
                 print(f"No images found in '{subj_root}', skip")
@@ -232,6 +258,8 @@ class PersonalizedBase(Dataset):
             self.image_paths_by_subj.append(image_paths)
             self.fg_mask_paths_by_subj.append(fg_mask_paths)
             self.caption_paths_by_subj.append(caption_paths)
+            self.image_count_by_subj.append(len(image_paths))
+            self.are_mix_subj_folders.append(base_folder_is_mix_subj)
 
             if 'mean_emb.pt' in all_filenames:
                 mean_emb_path = os.path.join(subj_root, 'mean_emb.pt')
@@ -251,7 +279,7 @@ class PersonalizedBase(Dataset):
             total_num_valid_fg_masks += num_valid_fg_masks
             total_num_valid_captions += num_valid_captions
 
-            if verbose and len(self.subj_roots) < 80:
+            if verbose and (len(self.subj_roots) < 80 or self.are_mix_subj_folders[-1]):
                 print("{} images, {} fg masks, {} captions found in '{}'".format( \
                     len(image_paths), num_valid_fg_masks, num_valid_captions, subj_root))
                 if num_valid_fg_masks > 0 and num_valid_fg_masks < len(image_paths):
@@ -942,69 +970,64 @@ class PersonalizedBase(Dataset):
 # In a multi-GPU training, we haven't done anything to seed each sampler differently.
 # In the first few iterations, they will sample the same subjects, but 
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
+# subject_names: a list of subject names, each name is indexed by subj_idx (for debugging).
+# subjects_are_faces: a list of boolean values, indicating whether the subject(s) is a face, indexed by subj_idx.
+# are_mix_subj_folders: a list of boolean values, indicating whether the folder contains 
+# multiple subjects, indexed by subj_idx.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, subject_names, subjects_are_faces, num_batches, batch_size, replay_buffer_size=20, p_replay=0.2,
-                 skip_non_faces=True, debug=False):
+    def __init__(self, num_subjects, subject_names, subjects_are_faces, are_mix_subj_folders, 
+                 image_count_by_subj, num_batches, batch_size, skip_non_faces=True, debug=False):
 
         # If do_zero_shot, then skip non-faces in the dataset. Otherwise, non-face subjects (dogs, cats)
         # will disrupt the model update.
-        self.skip_non_faces = skip_non_faces        
         self.subjects_are_faces = subjects_are_faces
+        self.skip_non_faces = skip_non_faces        
+        self.are_mix_subj_folders = are_mix_subj_folders
         self.batch_size = batch_size
         # num_batches: +1 to make sure the last batch is also used.
         self.num_batches  = num_batches + 1
         self.num_subjects = num_subjects
         self.subject_names = subject_names
+        image_count_by_subj = np.array(image_count_by_subj)
+        self.subj_weights = image_count_by_subj / image_count_by_subj.sum()
+
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
         rank = dist.get_rank()
         print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(rank, self.num_subjects, 
                                                                                  self.batch_size, self.num_batches))
-        same_subject_in_each_batch = False
-        if same_subject_in_each_batch:
-            self.switch_cycle_length = self.batch_size
-        else:
-            # Each batch has samples from different subjects. 
-            # Setting switch_cycle_length to 1, so that we switch to a new subject for each sample.
-            self.switch_cycle_length = 1
-
-        self.replay_buffer_size = replay_buffer_size
-        self.replay_buffer = Queue()
-        self.p_replay = p_replay
+        self.prefetch_buffer = Queue()
         self.curr_subj_idx = 0
-        self.curr_subj_count = 0
 
     def __len__(self):
         return self.num_batches * self.batch_size
     
     def next_subject(self):
-        if self.replay_buffer.qsize() > 0 and random.random() < self.p_replay:
-            new_subj_idx = self.replay_buffer.get()
-            print(f"Replay subject {new_subj_idx}:{self.subject_names[new_subj_idx]}, qsize: {self.replay_buffer.qsize()}")
+        # Pop out the oldest subject index if the prefetch_buffer is not empty
+        if self.prefetch_buffer.qsize() > 0:
+            subj_idx = self.prefetch_buffer.get()
         else:
             while True:
-                new_subj_idx = random.randint(0, self.num_subjects - 1)
-                if not self.skip_non_faces or self.subjects_are_faces[new_subj_idx]:
+                # np.random.choice() returns an array, even if the size is 1.
+                subj_idx = np.random.choice(self.num_subjects, 1, p=self.subj_weights)[0]
+                if not self.skip_non_faces or self.subjects_are_faces[subj_idx]:
                     break
-                
-            self.replay_buffer.put(new_subj_idx)
-            # Pop out the oldest subject index if the replay buffer is full, so that
-            # the replay buffer always contains <= replay_buffer_size subjects.
-            if self.replay_buffer.qsize() > self.replay_buffer_size:
-                self.replay_buffer.get()
-            #print(f"Random subject {new_subj_idx}, qsize: {self.replay_buffer.qsize()}")
+
+            # subj_idx either points to a folder that contains the images of a particular subject,
+            # or points to a folder that contains the images of different subjects.
+            is_mix_subj_folder = self.are_mix_subj_folders[subj_idx]
+            if is_mix_subj_folder:
+                # subj_idx points to a folder that contains different subjects.
+                # We can repeatedly sample subj_idx for batch_size times and store (batch_size - 1) of them in the prefetch_buffer.
+                # and return the last one. Then they will comprise a batch of batch_size samples.
+                for _ in range(self.batch_size):
+                    self.prefetch_buffer.put(subj_idx)
+            # Otherwise, subj_idx points to a folder that contains the same subject. 
+            # We only sample one image from it, without repetitions.
+            #print(f"Random subject {subj_idx}, qsize: {self.prefetch_buffer.qsize()}")
                   
-        return new_subj_idx
+        return subj_idx
 
     def __iter__(self):
-        # Output will be like:
-        # 0, 0, ..., 0 (repeat batch_size times), 1, 1, ..., 1 (repeat batch_size times) ...
-        # So that samples in each batch have the same chapter number.
         for i in range(self.num_batches * self.batch_size):
-            # If the current subject index has been repeated batch_size times, 
-            # we find the next subject index.
-            if self.curr_subj_count >= self.switch_cycle_length:
-                self.curr_subj_idx   = self.next_subject()
-                self.curr_subj_count = 0        
-
-            self.curr_subj_count += 1
+            self.curr_subj_idx   = self.next_subject()
             yield self.curr_subj_idx, True
