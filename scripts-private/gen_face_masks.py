@@ -66,9 +66,11 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
     if src_path.endswith('/') or src_path.endswith('\\'):
         src_path = src_path[:-1]
     
+    # trash_path: a folder to save images with too few (<=9) parts.
     trash_path   = src_path + "_" + trash_path_suffix
     if not os.path.exists(trash_path):
         os.makedirs(trash_path)
+    # inspect_path: a folder to save images with too many (>=18) parts.
     inspect_path = src_path + "_" + inspect_path_suffix
     if not os.path.exists(inspect_path):
         os.makedirs(inspect_path)
