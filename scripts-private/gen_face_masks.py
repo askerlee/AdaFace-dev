@@ -168,7 +168,7 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
 
                 print(f"{img_full_path} -> {new_img_path}")
                 # Save the image, instead of copying it. So that the new image will be (512, 512).
-                image_obj.save(new_img_path)
+                image_obj.save(new_img_path, compress_level=1)
                 #shutil.copy(img_full_path, new_img_path)
                 vis_parsing_maps(image_obj, parsing, stride=1, save_im=True, 
                                  save_path=osp.join(result_path, subj_dir, img_path))
