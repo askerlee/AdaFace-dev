@@ -992,9 +992,9 @@ if __name__ == "__main__":
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://lightning.ai/docs/pytorch/stable/data/datamodule.html
-        # calling these ourselves should not be necessary but it is.
-        # lightning still takes care of proper multiprocessing though
-        # data.prepare_data()
+        # calling these ourselves should not be necessary. In trainer.fit(), lightning will calls data.setup().
+        # However, some data structures in data['train'] are accessed before trainer.fit(), 
+        # therefore we still call it here.
         data.setup()
 
         print("#### Data #####")
