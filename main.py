@@ -993,7 +993,7 @@ if __name__ == "__main__":
         # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
         # calling these ourselves should not be necessary but it is.
         # lightning still takes care of proper multiprocessing though
-        data.prepare_data()
+        # data.prepare_data()
         data.setup()
 
         print("#### Data #####")
