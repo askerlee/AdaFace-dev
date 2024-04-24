@@ -497,8 +497,9 @@ class DataModuleFromConfig(pl.LightningDataModule):
         self.wrap = wrap
 
     def prepare_data(self):
-        for data_cfg in self.dataset_configs.values():
-            instantiate_from_config(data_cfg)
+        return None
+        #for data_cfg in self.dataset_configs.values():
+        #    instantiate_from_config(data_cfg)
 
     def setup(self, stage=None):
         self.datasets = dict(
@@ -990,7 +991,7 @@ if __name__ == "__main__":
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
-        # NOTE according to https://pytorch-lightning.readthedocs.io/en/latest/datamodules.html
+        # NOTE according to https://lightning.ai/docs/pytorch/stable/data/datamodule.html
         # calling these ourselves should not be necessary but it is.
         # lightning still takes care of proper multiprocessing though
         # data.prepare_data()
