@@ -679,12 +679,14 @@ class PersonalizedBase(Dataset):
         # example["image"]: [0, 255] -> [-1, 1]
         example["image"]        = (image / 127.5 - 1.0).astype(np.float32)
 
+        '''
         if mean_emb_path is not None:
             mean_emb = torch.load(mean_emb_path, map_location="cpu")
             example["mean_emb"] = mean_emb
         else:
             example["mean_emb"] = torch.zeros(1, 512)
-
+        '''
+        
         if gen_wds_comp:
             # subject_token, background_token: subject_string and background_string converted to 
             # token numbers.        
