@@ -1772,7 +1772,7 @@ class LatentDiffusion(DDPM):
                         # NOTE: Use the same noise for different ID embeddings in the batch,
                         # so that we can compute the variance at each pixel.
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                        x_start, img_mask, fg_mask, batch_have_fg_mask, 
+                        x_start, img_mask, fg_mask, batch_have_fg_mask, \
                         self.batch_subject_names, \
                         self.iter_flags['is_face'], zs_clip_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
