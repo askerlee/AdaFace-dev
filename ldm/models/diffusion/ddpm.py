@@ -1847,8 +1847,8 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
 
                 if self.iter_flags['use_arc2face_as_target']:
-                    # num_denoising_steps: 1, 2 or 3 with 33% chance each.
-                    num_denoising_steps = np.random.randint(1, 4)
+                    # num_denoising_steps: 1, 2, 3 or 4 with 25% chance each.
+                    num_denoising_steps = np.random.randint(1, 5)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
@@ -2845,7 +2845,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['num_denoising_steps'] > 1:
                     # Push t to the end of the timesteps by taking a weighted average of t and 1000,
                     # to make the denoising more challenging, since anyway we will have a second/third denoising step which is easier.
-                    t = (t * 2 + self.num_timesteps * (self.iter_flags['num_denoising_steps'] - 1)) // (1 + self.iter_flags['num_denoising_steps'])
+                    t = (3 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (2 + self.iter_flags['num_denoising_steps'])
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
@@ -5536,8 +5536,8 @@ class Arc2FaceWrapper(pl.LightningModule):
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
     def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
-        # Limited by RAM, we can only process 1, 2, 3 steps.
-        assert num_denoising_steps in [1, 2, 3]
+        # Limited by RAM, we can only process 1, 2, 3, 4 steps.
+        assert num_denoising_steps in [1, 2, 3, 4]
 
         x_starts    = [ x_start ]
         noises      = [ noise ]
@@ -5564,11 +5564,13 @@ class Arc2FaceWrapper(pl.LightningModule):
                 if i < num_denoising_steps - 1:
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                     relative_ts = torch.rand_like(t.float())
-                    # Make sure at the earliest (i = num_denoising_steps - 1), the timestep 
+                    # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
                     # is between 60% and 80% of the current timestep. So if num_denoising_steps = 3,
-                    # we take timesteps within [sqrt(0.6), sqrt(0.8)] of the current timestep.
-                    t_lb = t * np.power(0.6, 1 / (num_denoising_steps - 1))
-                    t_ub = t * np.power(0.8, 1 / (num_denoising_steps - 1))
+                    # we take timesteps within [0.6^0.7, 0.8^0.7] = [0.7, 0.85] of the current timestep.
+                    # If num_denoising_steps = 4, we take timesteps within [0.6^0.6, 0.8^0.6] = [0.74, 0.88] 
+                    # of the current timestep.
+                    t_lb = t * np.power(0.6, 1 / np.sqrt(num_denoising_steps - 1))
+                    t_ub = t * np.power(0.8, 1 / np.sqrt(num_denoising_steps - 1))
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
