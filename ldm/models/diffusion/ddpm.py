@@ -2289,7 +2289,7 @@ class LatentDiffusion(DDPM):
     # Otherwise, DINO embedding will be extracted.
     # fg_masks: a list of [Hi, Wi].
     def encode_zero_shot_image_features(self, images, fg_masks, is_face, size=(512, 512), 
-                                        calc_avg=False, image_paths=None):
+                                        calc_avg=False, skip_non_faces=False, image_paths=None):
         if not self.zs_image_encoder_instantiated:
             self.instantiate_zero_shot_image_encoders()
 
@@ -2325,16 +2325,21 @@ class LatentDiffusion(DDPM):
                  'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
                 '''                    
                 face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-                if len(face_info) == 0:
+                if len(face_info) == 0 and not skip_non_faces:
                     print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
                     # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
                     id_emb = torch.randn(512, device=self.device)
                     faceless_img_count += 1
-                else:
+                elif len(face_info) > 0:
                     face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                     # id_emb: [512,]
                     id_emb = torch.from_numpy(face_info.normed_embedding).to(self.device)
-                    
+                else:
+                    # len(face_info) == 0 and skip_non_faces.
+                    # Skip images without faces.
+                    print(f'Skip image without face: {image_paths[idx]}')
+                    continue
+
                 all_id_embs.append(id_emb)
 
             elif not is_face:
