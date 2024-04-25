@@ -1763,17 +1763,20 @@ class LatentDiffusion(DDPM):
                         self.iter_flags['same_subject_in_batch'] = True
                         # Change the ID features of multiple subjects in the batch to the ID features of 
                         # the first subject, before adding noise to the ID features.
-                        '''
+                        # Doing so is similar to contrastive learning: the embeddings in a batch are similar
+                        # (the first subject embedding + randn noise), but the generated images are quite different.
+                        # Therefore, the model may learn to distinguish the tiny differences in the embeddings.
+                        # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
+                        # the first subject's as well.
                         # Change the batch to have the (1 subject image) * BS strcture.
                         # NOTE: Use the same noise for different ID embeddings in the batch,
                         # so that we can compute the variance at each pixel.
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                        # x_start, img_mask, fg_mask, batch_have_fg_mask, 
-                        '''
+                        x_start, img_mask, fg_mask, batch_have_fg_mask, 
                         self.batch_subject_names, \
                         self.iter_flags['is_face'], zs_clip_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
-                                                      # x_start, img_mask, fg_mask, batch_have_fg_mask, 
+                                                      x_start, img_mask, fg_mask, batch_have_fg_mask, 
                                                       self.batch_subject_names, 
                                                       self.iter_flags['is_face'], zs_clip_features, zs_id_embs)
                         
