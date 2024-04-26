@@ -1848,7 +1848,7 @@ class LatentDiffusion(DDPM):
 
                 if self.iter_flags['use_arc2face_as_target']:
                     # num_denoising_steps: 1, 3, 5, among which 3 and 5 are selected with bigger chances.
-                    num_denoising_steps = np.random.choice([1, 3, 5], p=[0.2, 0.4, 0.4])
+                    num_denoising_steps = np.random.choice([2, 4, 6], p=[0.2, 0.4, 0.4])
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
@@ -1856,6 +1856,10 @@ class LatentDiffusion(DDPM):
                         # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
                         # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
                         HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
+                        # The batch size when doing multi-step denoising is at least 2. 
+                        # But naively doing so when num_denoising_steps >= 3 may cause OOM.
+                        # In that case, we need to discard the first few steps from loss computation.
+                        HALF_BS = max(2, HALF_BS)
 
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
                         x_start, img_mask, fg_mask, batch_have_fg_mask, self.batch_subject_names, \
@@ -2882,14 +2886,15 @@ class LatentDiffusion(DDPM):
         cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
                      'uncond_context': uncond_context }
         
-        model_output, x_recon, ada_embeddings = \
-            self.guided_denoise(x_start, noise, t, cond, 
-                                emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
-                                unet_has_grad=not self.iter_flags['do_teacher_filter'], 
-                                # Reconstruct the images at the pixel level for CLIP loss.
-                                # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
-                                do_pixel_recon=self.iter_flags['calc_clip_loss'],
-                                cfg_info=cfg_info)
+        if not self.iter_flags['use_arc2face_as_target']:
+            model_output, x_recon, ada_embeddings = \
+                self.guided_denoise(x_start, noise, t, cond, 
+                                    emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
+                                    unet_has_grad=not self.iter_flags['do_teacher_filter'], 
+                                    # Reconstruct the images at the pixel level for CLIP loss.
+                                    # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
+                                    do_pixel_recon=self.iter_flags['calc_clip_loss'],
+                                    cfg_info=cfg_info)
 
         extra_info['capture_distill_attn'] = False
 
@@ -2918,32 +2923,46 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_arc2face_as_target']:
                     arc2face_noise_preds, arc2face_pred_x0s, arc2face_noises, ts = \
                         self.arc2face(self, x_start, noise, t, self.iter_flags['arc2face_prompt_emb'], num_denoising_steps=num_denoising_steps)
+
+                    MAX_ACCUMU_BATCH_SIZE = 7
+                    # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 
+                    # When ND >= 2, HALF_BS = 2, max_num_loss_steps = 3.
+                    # Therefore, when ND <= 3, calc loss on all steps.
+                    # When ND == 4, skip the first step.
+                    # When ND == 5, skip the first two steps,
+                    # ...
+                    max_num_loss_steps = MAX_ACCUMU_BATCH_SIZE // x_start.shape[0]
+                    loss_start_step  = max(0, num_denoising_steps - max_num_loss_steps)
+
                     # targets: replaced as the reconstructed x0 by the arc2face UNet.
                     # If NS = num_denoising_steps > 1, then arc2face_noise_preds contain NS*half_batch arc2face predicted noises (of different ts).
-                    # targets: [2, 4, 64, 64] * 2 or 3.
-                    targets         = arc2face_noise_preds
-                    # model_outputs will be appended with the outputs of the second/third denoising steps.
-                    model_outputs   = [model_output]
+                    # targets: [HALF_BS, 4, 64, 64] * (num_denoising_steps - loss_start_step).
+                    # If we skip the first loss_start_step steps, then we remove the teacher output in these steps from
+                    # targets, so that they are not used in the loss computation.
+                    targets         = arc2face_noise_preds[loss_start_step:]
 
-                    if num_denoising_steps > 1:
-                        for s in range(1, num_denoising_steps):
-                            # Predict the noise of the half-batch with t2 (a set of earlier t).
-                            # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, 
-                            # used to seed the second denoising step. But using it will cut off the gradient flow.
-                            pred_x0 = arc2face_pred_x0s[s-1].to(model_output.dtype)
-                            # noise2, t2 are the s-th half-batch of noise/t used to by arc2face.
-                            noise2  = arc2face_noises[s].to(model_output.dtype)
-                            t2      = ts[s]
+                    # The outputs of the remaining denoising steps will be appended to model_outputs.
+                    model_outputs = []
 
-                            # Here pred_x0 is used as x_start.
-                            # emb_man_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
-                            # and the 'image_mask' is also for a half-batch.
-                            model_output2, x_recon2, ada_embeddings2 = \
-                                self.guided_denoise(pred_x0, noise2, t2, cond, 
-                                                    emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
-                                                    unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
-                            model_outputs.append(model_output2)
+                    for s in range(loss_start_step, num_denoising_steps):
+                        # Predict the noise of the half-batch with t2 (a set of earlier t).
+                        # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, 
+                        # used to seed the second denoising step. But using it will cut off the gradient flow.
+                        pred_x0 = arc2face_pred_x0s[s-1].to(x_start.dtype)
+                        # noise2, t2 are the s-th half-batch of noise/t used to by arc2face.
+                        noise2  = arc2face_noises[s].to(x_start.dtype)
+                        t2      = ts[s]
+
+                        # Here pred_x0 is used as x_start.
+                        # emb_man_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
+                        # and the 'image_mask' is also for a half-batch.
+                        model_output2, x_recon2, ada_embeddings2 = \
+                            self.guided_denoise(pred_x0, noise2, t2, cond, 
+                                                emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
+                                                unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
+                        model_outputs.append(model_output2)
                 else:
+                    loss_start_step = 0
                     targets         = [target]
                     model_outputs   = [model_output]
                     ts              = [t]
@@ -2952,7 +2971,7 @@ class LatentDiffusion(DDPM):
                 # We don't need to change target or anything.
 
                 loss_recons = []
-                for s in range(num_denoising_steps):
+                for s in range(num_denoising_steps - loss_start_step):
                     model_output, target = model_outputs[s], targets[s]
 
                     if self.iter_flags['gen_arc2face_rand_face']:
@@ -2985,7 +3004,7 @@ class LatentDiffusion(DDPM):
 
                     loss_recons.append(loss_recon)
                     if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                        print(f"{s}: {ts[s].tolist()}, {loss_recon.item():.5f}")
+                        print(f"{s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
                 # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so no need to divide by num_denoising_steps.
                 loss_recon = sum(loss_recons) #/ num_denoising_steps
