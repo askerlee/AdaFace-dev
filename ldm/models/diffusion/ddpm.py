@@ -1855,7 +1855,6 @@ class LatentDiffusion(DDPM):
                         ND = num_denoising_steps
                         # Only use the first half of the batch to avoid OOM.
                         # If num_denoising_steps == 3, BS == 4, then HALF_BS == 2. Watch for possible OOM.
-                        x_start = x_start.chunk(ND)[0]
                         HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
 
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
