@@ -1847,14 +1847,14 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
 
                 if self.iter_flags['use_arc2face_as_target']:
-                    # num_denoising_steps: 1, 2, 3 or 4 with 25% chance each.
-                    num_denoising_steps = np.random.randint(1, 5)
+                    # num_denoising_steps: 1, 3, 5 with 33% chance each.
+                    num_denoising_steps = np.random.randint(1, 4) * 2 - 1
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
-                        ND = num_denoising_steps
                         # Only use the first half of the batch to avoid OOM.
-                        # If num_denoising_steps == 3, BS == 4, then HALF_BS == 2. Watch for possible OOM.
+                        # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
+                        # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
                         HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
 
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
@@ -2843,8 +2843,9 @@ class LatentDiffusion(DDPM):
                                       keep_prob_range=(0.3, 0.1))
                 if self.iter_flags['num_denoising_steps'] > 1:
                     # Push t to the end of the timesteps by taking a weighted average of t and 1000,
-                    # to make the denoising more challenging, since anyway we will have a second/third denoising step which is easier.
-                    t = (3 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (2 + self.iter_flags['num_denoising_steps'])
+                    # to push the denoising t to a later range, 
+                    # so that the 2nd-4th denoising steps fall in a more reasonable range.
+                    t = (4 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (3 + self.iter_flags['num_denoising_steps'])
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
@@ -5536,7 +5537,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     @torch.no_grad()
     def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
         # Limited by RAM, we can only process 1, 2, 3, 4 steps.
-        assert num_denoising_steps in [1, 2, 3, 4]
+        assert num_denoising_steps in [1, 2, 3, 4, 5, 6]
 
         x_starts    = [ x_start ]
         noises      = [ noise ]
@@ -5564,12 +5565,12 @@ class Arc2FaceWrapper(pl.LightningModule):
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                     relative_ts = torch.rand_like(t.float())
                     # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
-                    # is between 60% and 80% of the current timestep. So if num_denoising_steps = 3,
-                    # we take timesteps within [0.6^0.7, 0.8^0.7] = [0.7, 0.85] of the current timestep.
-                    # If num_denoising_steps = 4, we take timesteps within [0.6^0.6, 0.8^0.6] = [0.74, 0.88] 
+                    # is between 60% and 80% of the current timestep. So if num_denoising_steps = 5,
+                    # we take timesteps within [0.5^0.5, 0.7^0.5] = [0.71, 0.84] of the current timestep.
+                    # If num_denoising_steps = 4, we take timesteps within [0.5^0.6, 0.7^0.6] = [0.66, 0.81] 
                     # of the current timestep.
-                    t_lb = t * np.power(0.6, 1 / np.sqrt(num_denoising_steps - 1))
-                    t_ub = t * np.power(0.8, 1 / np.sqrt(num_denoising_steps - 1))
+                    t_lb = t * np.power(0.5, 1 / np.sqrt(num_denoising_steps - 1))
+                    t_ub = t * np.power(0.7, 1 / np.sqrt(num_denoising_steps - 1))
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
