@@ -1847,8 +1847,8 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
 
                 if self.iter_flags['use_arc2face_as_target']:
-                    # num_denoising_steps: 1, 3, 5 with 33% chance each.
-                    num_denoising_steps = np.random.randint(1, 4) * 2 - 1
+                    # num_denoising_steps: 1, 3, 5, among which 3 and 5 are selected with bigger chances.
+                    num_denoising_steps = np.random.choice([1, 3, 5], p=[0.2, 0.4, 0.4])
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
@@ -5565,7 +5565,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                     relative_ts = torch.rand_like(t.float())
                     # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
-                    # is between 60% and 80% of the current timestep. So if num_denoising_steps = 5,
+                    # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
                     # we take timesteps within [0.5^0.5, 0.7^0.5] = [0.71, 0.84] of the current timestep.
                     # If num_denoising_steps = 4, we take timesteps within [0.5^0.6, 0.7^0.6] = [0.66, 0.81] 
                     # of the current timestep.
