@@ -36,6 +36,10 @@ class CLIPAttentionMKV(nn.Module):
         self.q_proj   = nn.Linear(self.embed_dim, self.embed_dim)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
+    # The (approximately) repeated token features are repeated along the last dim in tensor
+    # (multiplier * num_heads * head_dim), and then reshaped to (bsz, -1, num_heads, head_dim).
+    # Therefore, the "multiplier" dim is tucked into the seq_len dim, which looks like
+    # [token1_emb, token1_emb, token2_emb, token2_emb, ..., tokenN_emb, tokenN_emb].
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
@@ -52,29 +56,32 @@ class CLIPAttentionMKV(nn.Module):
         # making the bias terms diverge and identifiable after training.
         self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(self.multiplier)
         self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.repeat(self.multiplier)
-        ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
-        ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
-        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(self.multiplier, 1)
-        # Adding noise to the extra copies of the weights.
-        self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
-            add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
-                                noise_std, noise_std_is_relative, keep_norm)
-        if verbose:
-            NEW_V_SHAPE     = list(self.v_proj.weight.shape)
-            NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
-            print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with {noise_std} noise")
 
-        ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
-        ORIG_K_SHAPE_D0 = ORIG_K_SHAPE[0]
+        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(self.multiplier, 1)
         self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.repeat(self.multiplier, 1)
-        # Adding noise to the extra copies of the weights.
-        self.k_proj.weight.data[ORIG_K_SHAPE_D0:] = \
-            add_noise_to_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
-                                noise_std, noise_std_is_relative, keep_norm)
-        if verbose:
-            NEW_K_SHAPE     = list(self.k_proj.weight.shape)
-            NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
-            print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with {noise_std} noise")
+
+        if noise_std > 0:
+            ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
+            ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
+            # Adding noise to the extra copies of the weights.
+            self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
+                add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
+                                    noise_std, noise_std_is_relative, keep_norm)
+            if verbose:
+                NEW_V_SHAPE     = list(self.v_proj.weight.shape)
+                NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
+                print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with {noise_std} noise")
+
+            ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
+            ORIG_K_SHAPE_D0 = ORIG_K_SHAPE[0]
+            # Adding noise to the extra copies of the weights.
+            self.k_proj.weight.data[ORIG_K_SHAPE_D0:] = \
+                add_noise_to_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
+                                    noise_std, noise_std_is_relative, keep_norm)
+            if verbose:
+                NEW_K_SHAPE     = list(self.k_proj.weight.shape)
+                NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
+                print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with {noise_std} noise")
 
     def forward(
         self,
@@ -89,6 +96,7 @@ class CLIPAttentionMKV(nn.Module):
 
         query_states = self.q_proj(hidden_states) * self.scale
         # For key_states and value_states, the multiplier is absorbed into the seq_len (dim 1, shape specified as -1).
+        # [token0_head_emb, token0_head_emb, token1_head_emb, token1_head_emb, ..., tokenN-1_head_emb, tokenN-1_head_emb].
         key_states   = self._shape(self.k_proj(hidden_states), -1, bsz)
         value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
 
@@ -115,11 +123,13 @@ class CLIPAttentionMKV(nn.Module):
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len0)}, but is"
                     f" {causal_attention_mask.size()}"
                 )
-            # The last dim of attn_weights is like [0, 0, 1, 1, ..., N, N].
-            # If reshaping it as (self.multiplier, src_len0), it will become [[0, 0, 1, 1, ..., N//2], [N//2+1, N//2+1, ..., N, N]],
+            # The last dim of attn_weights corresponds to [token0, token0, token1, token1, ..., tokenN-1, tokenN-1].
+            # If reshaping it as (self.multiplier, src_len0), it will become 
+            # [[token0, token0, token1, token1, ..., tokenN//2], [tokenN//2+1, tokenN//2+1, ..., tokenN-1, tokenN-1]],
             # and the mask will be applied to wrong elements.
-            # If reshaping it as (src_len0, self.multiplier), it will become [[0, 1, ..., N], [0, 1, ..., N]], and then
-            # the mask at element i will mask the multiplier elements at i, which is desired.
+            # If reshaping it as (src_len0, self.multiplier), it will become 
+            # [[token0, token1, ..., tokenN-1], [token0, token1, ..., tokenN-1]], and then
+            # the mask at element i will mask all the multiplier elements at i, which is desired.
             attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len0, self.multiplier) + causal_attention_mask.unsqueeze(4)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
