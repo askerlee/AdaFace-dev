@@ -52,7 +52,7 @@ class CLIPAttentionMKV(nn.Module):
         # making the bias terms diverge and identifiable after training.
         self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(self.multiplier)
         self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.repeat(self.multiplier)
-        ORIG_V_SHAPE    = clip_attn_layer.v_proj.weight.shape
+        ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
         ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
         self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(self.multiplier, 1)
         # Adding noise to the extra copies of the weights.
@@ -60,8 +60,8 @@ class CLIPAttentionMKV(nn.Module):
             add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
                                 noise_std, noise_std_is_relative, keep_norm)
         if verbose:
-            NEW_V_SHAPE     = self.v_proj.weight.shape
-            NOISED_V_SHAPE  = self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape
+            NEW_V_SHAPE     = list(self.v_proj.weight.shape)
+            NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
             print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with noise")
 
         ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
@@ -73,7 +73,7 @@ class CLIPAttentionMKV(nn.Module):
                                 noise_std, noise_std_is_relative, keep_norm)
         if verbose:
             NEW_K_SHAPE     = list(self.k_proj.weight.shape)
-            NOISED_K_SHAPE  = self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape
+            NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
             print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with noise")
 
     def forward(
