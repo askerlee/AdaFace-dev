@@ -39,8 +39,8 @@ class CLIPAttentionMKV(nn.Module):
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-    def extend_weights(self, clip_attn_layer, noise_std=0.1, 
-                       noise_std_is_relative=True, keep_norm=False):
+    def extend_weights(self, clip_attn_layer, layer_idx, noise_std=0.1, 
+                       noise_std_is_relative=True, keep_norm=False, verbose=False):
         # q_proj and out_proj are the same as the original CLIPAttention.
         self.q_proj.weight.data   = clip_attn_layer.q_proj.weight.data.clone()
         self.q_proj.bias.data     = clip_attn_layer.q_proj.bias.data.clone()
@@ -59,20 +59,22 @@ class CLIPAttentionMKV(nn.Module):
         self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
             add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
                                 noise_std, noise_std_is_relative, keep_norm)
-        NEW_V_SHAPE     = self.v_proj.weight.shape
-        NOISED_V_SHAPE  = self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape
-        print(f"{NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with noise")
+        if verbose:
+            NEW_V_SHAPE     = self.v_proj.weight.shape
+            NOISED_V_SHAPE  = self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape
+            print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with noise")
 
-        ORIG_K_SHAPE    = clip_attn_layer.k_proj.weight.shape
+        ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
         ORIG_K_SHAPE_D0 = ORIG_K_SHAPE[0]
         self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.repeat(self.multiplier, 1)
         # Adding noise to the extra copies of the weights.
         self.k_proj.weight.data[ORIG_K_SHAPE_D0:] = \
             add_noise_to_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
                                 noise_std, noise_std_is_relative, keep_norm)
-        NEW_K_SHAPE     = self.k_proj.weight.shape
-        NOISED_K_SHAPE  = self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape
-        print(f"{NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with noise")
+        if verbose:
+            NEW_K_SHAPE     = list(self.k_proj.weight.shape)
+            NOISED_K_SHAPE  = self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape
+            print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with noise")
 
     def forward(
         self,
@@ -264,13 +266,13 @@ class CLIPTextModelWrapper(CLIPTextModel):
     def extend_clip_attention_MKV_multiplier(self, multiplier=2, noise_std=0.1):
         num_extended_layers = 0
 
-        for layer in self.text_model.encoder.layers:
+        for layer_idx, layer in enumerate(self.text_model.encoder.layers):
             # This shouldn't happen, unless self_attn has already been extended as CLIPAttentionMKV.
             if not isinstance(layer.self_attn, CLIPAttention):
                 breakpoint()
             old_attn_layer = layer.self_attn
             layer.self_attn = CLIPAttentionMKV(old_attn_layer.config, multiplier)
-            layer.self_attn.extend_weights(old_attn_layer, noise_std)
+            layer.self_attn.extend_weights(old_attn_layer, layer_idx, noise_std, verbose=True)
             num_extended_layers += 1
     
         return num_extended_layers
