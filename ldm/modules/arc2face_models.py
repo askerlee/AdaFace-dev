@@ -62,7 +62,7 @@ class CLIPAttentionMKV(nn.Module):
         if verbose:
             NEW_V_SHAPE     = list(self.v_proj.weight.shape)
             NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
-            print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with noise")
+            print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with {noise_std} noise")
 
         ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
         ORIG_K_SHAPE_D0 = ORIG_K_SHAPE[0]
@@ -74,7 +74,7 @@ class CLIPAttentionMKV(nn.Module):
         if verbose:
             NEW_K_SHAPE     = list(self.k_proj.weight.shape)
             NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
-            print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with noise")
+            print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with {noise_std} noise")
 
     def forward(
         self,
@@ -120,7 +120,7 @@ class CLIPAttentionMKV(nn.Module):
             # and the mask will be applied to wrong elements.
             # If reshaping it as (src_len0, self.multiplier), it will become [[0, 1, ..., N], [0, 1, ..., N]], and then
             # the mask at element i will mask the multiplier elements at i, which is desired.
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len0, self.multiplier) + causal_attention_mask.unsqueeze(4)
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, self.multiplier, src_len0) + causal_attention_mask.unsqueeze(3)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         if attention_mask is not None:
@@ -128,7 +128,7 @@ class CLIPAttentionMKV(nn.Module):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len0)}, but is {attention_mask.size()}"
                 )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len0, self.multiplier) + attention_mask.unsqueeze(4)
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, self.multiplier, src_len0) + attention_mask.unsqueeze(3)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
