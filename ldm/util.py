@@ -2374,7 +2374,7 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
     if keep_norm:
         orig_norm = ts.norm(dim=norm_dim, keepdim=True)
         ts = ts + noise
-        new_norm = ts.norm(dim=norm_dim, keepdim=True).detach()
+        new_norm  = ts.norm(dim=norm_dim, keepdim=True).detach()
         ts = ts * orig_norm / (new_norm + 1e-8)
     else:
         ts = ts + noise

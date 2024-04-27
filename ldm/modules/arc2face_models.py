@@ -115,7 +115,12 @@ class CLIPAttentionMKV(nn.Module):
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len0)}, but is"
                     f" {causal_attention_mask.size()}"
                 )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, self.multiplier, src_len0) + causal_attention_mask.unsqueeze(3)
+            # The last dim of attn_weights is like [0, 0, 1, 1, ..., N, N].
+            # If reshaping it as (self.multiplier, src_len0), it will become [[0, 0, 1, 1, ..., N//2], [N//2+1, N//2+1, ..., N, N]],
+            # and the mask will be applied to wrong elements.
+            # If reshaping it as (src_len0, self.multiplier), it will become [[0, 1, ..., N], [0, 1, ..., N]], and then
+            # the mask at element i will mask the multiplier elements at i, which is desired.
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len0, self.multiplier) + causal_attention_mask.unsqueeze(4)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         if attention_mask is not None:
@@ -123,7 +128,7 @@ class CLIPAttentionMKV(nn.Module):
                 raise ValueError(
                     f"Attention mask should be of size {(bsz, 1, tgt_len, src_len0)}, but is {attention_mask.size()}"
                 )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, self.multiplier, src_len0) + attention_mask.unsqueeze(3)
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len0, self.multiplier) + attention_mask.unsqueeze(4)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
