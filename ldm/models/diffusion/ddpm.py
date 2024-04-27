@@ -1856,10 +1856,12 @@ class LatentDiffusion(DDPM):
                         # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
                         # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
                         HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
-                        # The batch size when doing multi-step denoising is at least 2. 
-                        # But naively doing so when num_denoising_steps >= 3 may cause OOM.
-                        # In that case, we need to discard the first few steps from loss computation.
-                        HALF_BS = max(2, HALF_BS)
+                        # Setting the minimal batch size to be 2 requires skipping 3 steps if num_denoising_steps == 6.
+                        # Seems doing so will introduce too much artifact. Therefore it's DISABLED.
+                        ## The batch size when doing multi-step denoising is at least 2. 
+                        ## But naively doing so when num_denoising_steps >= 3 may cause OOM.
+                        ## In that case, we need to discard the first few steps from loss computation.
+                        ## HALF_BS = max(2, HALF_BS)
 
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
                         x_start, img_mask, fg_mask, batch_have_fg_mask, self.batch_subject_names, \
@@ -5585,11 +5587,11 @@ class Arc2FaceWrapper(pl.LightningModule):
                     relative_ts = torch.rand_like(t.float())
                     # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
                     # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
-                    # we take timesteps within [0.5^0.5, 0.7^0.5] = [0.71, 0.84] of the current timestep.
-                    # If num_denoising_steps = 4, we take timesteps within [0.5^0.6, 0.7^0.6] = [0.66, 0.81] 
+                    # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
+                    # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
                     # of the current timestep.
-                    t_lb = t * np.power(0.5, 1 / np.sqrt(num_denoising_steps - 1))
-                    t_ub = t * np.power(0.7, 1 / np.sqrt(num_denoising_steps - 1))
+                    t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
+                    t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
