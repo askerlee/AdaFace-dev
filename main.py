@@ -291,7 +291,9 @@ def get_parser(**parser_kwargs):
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
                         help="Probability of adding noise to real identity embeddings")
-        
+    parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=-1,
+                        help="Multiplier of the prompt2token projection attention")
+    
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -963,6 +965,9 @@ if __name__ == "__main__":
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.p_gen_arc2face_rand_face  = opt.p_gen_arc2face_rand_face
+        config.model.params.p_add_noise_to_real_id_embs = opt.p_add_noise_to_real_id_embs
+        config.model.params.extend_prompt2token_proj_attention_multiplier = opt.extend_prompt2token_proj_attention_multiplier
+
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
         config.data.params.validation.params.do_zero_shot   = opt.zeroshot

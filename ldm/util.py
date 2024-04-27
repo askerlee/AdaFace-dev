@@ -1262,9 +1262,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         # faceid_embeds: [10, 512] -> [1, 512] -> [BS, 512].
         # and the resulted prompt embeddings are the same.
         faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
-        faceid_embeds = add_noise_to_embedding(faceid_embeds, 0, begin_noise_std_range=(noise_level, noise_level), 
-                                               end_noise_std_range=None, add_noise_prob=1,
-                                               noise_std_is_relative=True, keep_norm=True)
+        faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
         
         faceid_embeds += torch.randn_like(faceid_embeds) * noise_level        
     else:
@@ -1272,9 +1270,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
         if pre_face_embs is None:
             faceid_embeds = torch.randn(out_image_count, 512)
             if noise_level > 0:
-                faceid_embeds = add_noise_to_embedding(faceid_embeds, 0, begin_noise_std_range=(noise_level, noise_level), 
-                                                       end_noise_std_range=None, add_noise_prob=1,
-                                                       noise_std_is_relative=True, keep_norm=True)
+                faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
         else:
             faceid_embeds = pre_face_embs
         faceid_embeds = faceid_embeds.to(torch.float16).to(device)
@@ -2368,11 +2364,28 @@ def normalized_sum(losses_list, norm_pow=0):
         breakpoint()
     return normalized_loss_sum
 
+def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
+                        std_dim=-1, norm_dim=-1):
+    if noise_std_is_relative:
+        ts_std_mean = ts.std(dim=std_dim).mean().detach()
+        noise_std *= ts_std_mean
+
+    noise = torch.randn_like(ts) * noise_std
+    if keep_norm:
+        orig_norm = ts.norm(dim=norm_dim, keepdim=True)
+        ts = ts + noise
+        new_norm = ts.norm(dim=norm_dim, keepdim=True).detach()
+        ts = ts * orig_norm / (new_norm + 1e-8)
+    else:
+        ts = ts + noise
+        
+    return ts
+
 # embeddings: [N, 768]. 
 # noise_std_range: the noise std / embeddings std falls within this range.
-def add_noise_to_embedding(embeddings, training_percent,
-                           begin_noise_std_range, end_noise_std_range, 
-                           add_noise_prob, noise_std_is_relative=True, keep_norm=False):
+def anneal_add_noise_to_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
+                                  add_noise_prob, noise_std_is_relative=True, keep_norm=False,
+                                  std_dim=-1, norm_dim=-1):
     if random.random() > add_noise_prob:
         return embeddings
     
@@ -2384,20 +2397,8 @@ def add_noise_to_embedding(embeddings, training_percent,
         
     noise_std = np.random.uniform(noise_std_lb, noise_std_ub)
 
-    if noise_std_is_relative:
-        emb_std_mean = embeddings.std(dim=-1).mean()
-        noise_std *= emb_std_mean
-
-    noise = torch.randn_like(embeddings) * noise_std
-    if keep_norm:
-        orig_norm = embeddings.norm(dim=-1, keepdim=True)
-        embeddings = embeddings + noise
-        new_norm = embeddings.norm(dim=-1, keepdim=True)
-        embeddings = embeddings * orig_norm / new_norm
-    else:
-        embeddings = embeddings + noise
-        
-    return embeddings
+    noised_embeddings = add_noise_to_tensor(embeddings, noise_std, noise_std_is_relative, keep_norm, std_dim, norm_dim)
+    return noised_embeddings
 
 # At scaled background, fill new x_start with random values (100% noise). 
 # At scaled foreground, fill new x_start with noised scaled x_start. 

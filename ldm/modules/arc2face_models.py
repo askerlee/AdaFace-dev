@@ -1,5 +1,7 @@
 import torch
+import torch.nn as nn
 from transformers import CLIPTextModel
+from transformers.models.clip.modeling_clip import CLIPAttention
 from typing import Any, Callable, Dict, Optional, Tuple, Union, List
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
@@ -7,6 +9,143 @@ from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 _make_causal_mask = AttentionMaskConverter._make_causal_mask
 _expand_mask = AttentionMaskConverter._expand_mask
 
+from ldm.util import add_noise_to_tensor
+
+# Extend CLIPAttention by using multiple k_proj and v_proj in each head.
+# To avoid too much increase of computation, we don't extend q_proj.
+class CLIPAttentionMKV(nn.Module):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+    def __init__(self, config, multiplier=2):
+        super().__init__()
+        self.config = config
+        self.embed_dim = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        if self.head_dim * self.num_heads != self.embed_dim:
+            raise ValueError(
+                f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim} and `num_heads`:"
+                f" {self.num_heads})."
+            )
+        self.scale = self.head_dim**-0.5
+        self.dropout = config.attention_dropout
+        self.multiplier  = multiplier
+
+        self.k_proj   = nn.Linear(self.embed_dim, self.embed_dim * self.multiplier)
+        self.v_proj   = nn.Linear(self.embed_dim, self.embed_dim * self.multiplier)
+        self.q_proj   = nn.Linear(self.embed_dim, self.embed_dim)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+
+    def extend_weights(self, clip_attn_layer, noise_std=0.1, 
+                       noise_std_is_relative=True, keep_norm=False):
+        # q_proj and out_proj are the same as the original CLIPAttention.
+        self.q_proj.weight.data   = clip_attn_layer.q_proj.weight.data.clone()
+        self.q_proj.bias.data     = clip_attn_layer.q_proj.bias.data.clone()
+        self.out_proj.weight.data = clip_attn_layer.out_proj.weight.data.clone()
+        self.out_proj.bias.data   = clip_attn_layer.out_proj.bias.data.clone()
+
+        # bias doesn't need noise perturbation, as after the weights are noised, 
+        # different copies of the weight/bias will receive different gradients, 
+        # making the bias terms diverge and identifiable after training.
+        self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(self.multiplier)
+        self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.repeat(self.multiplier)
+        orig_v_proj_weight_dim0   = clip_attn_layer.v_proj.weight.shape[0]
+        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(self.multiplier, 1)
+        # Adding noise to the extra copies of the weights.
+        self.v_proj.weight.data[orig_v_proj_weight_dim0:] = \
+            add_noise_to_tensor(self.v_proj.weight.data[orig_v_proj_weight_dim0:], 
+                                noise_std, noise_std_is_relative, keep_norm)
+        
+        orig_k_proj_weight_dim0   = clip_attn_layer.k_proj.weight.shape[0]
+        self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.repeat(self.multiplier, 1)
+        # Adding noise to the extra copies of the weights.
+        self.k_proj.weight.data[orig_k_proj_weight_dim0:] = \
+            add_noise_to_tensor(self.k_proj.weight.data[orig_k_proj_weight_dim0:], 
+                                noise_std, noise_std_is_relative, keep_norm)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        causal_attention_mask: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        """Input shape: Batch x Time x Channel"""
+
+        bsz, tgt_len, embed_dim = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states) * self.scale
+        # For key_states and value_states, the multiplier is absorbed into the seq_len (dim 1, shape specified as -1).
+        key_states   = self._shape(self.k_proj(hidden_states), -1, bsz)
+        value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+        proj_shape = (bsz * self.num_heads, -1, self.head_dim)
+        query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
+        key_states   = key_states.view(*proj_shape)
+        value_states = value_states.view(*proj_shape)
+
+        src_len = key_states.size(1)
+        # src_len0 is the original src_len without the multiplier.
+        src_len0 = src_len // self.multiplier
+        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+
+        if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
+            raise ValueError(
+                f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is"
+                f" {attn_weights.size()}"
+            )
+
+        # apply the causal_attention_mask first
+        if causal_attention_mask is not None:
+            if causal_attention_mask.size() != (bsz, 1, tgt_len, src_len0):
+                raise ValueError(
+                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len0)}, but is"
+                    f" {causal_attention_mask.size()}"
+                )
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, self.multiplier, src_len0) + causal_attention_mask.unsqueeze(3)
+            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+        if attention_mask is not None:
+            if attention_mask.size() != (bsz, 1, tgt_len, src_len0):
+                raise ValueError(
+                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len0)}, but is {attention_mask.size()}"
+                )
+            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, self.multiplier, src_len0) + attention_mask.unsqueeze(3)
+            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+        if output_attentions:
+            # this operation is a bit awkward, but it's required to
+            # make sure that attn_weights keeps its gradient.
+            # In order to do so, attn_weights have to reshaped
+            # twice and have to be reused in the following
+            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
+        else:
+            attn_weights_reshaped = None
+
+        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+
+        attn_output = torch.bmm(attn_probs, value_states)
+
+        if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
+            raise ValueError(
+                f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+                f" {attn_output.size()}"
+            )
+
+        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
+
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output, attn_weights_reshaped
+    
 class CLIPTextModelWrapper(CLIPTextModel):
     # Adapted from https://github.com/huggingface/transformers/blob/v4.34.1/src/transformers/models/clip/modeling_clip.py#L812
     # Modified to accept precomputed token embeddings "input_token_embs" as input or calculate them from input_ids and return them.
@@ -113,3 +252,18 @@ class CLIPTextModelWrapper(CLIPTextModel):
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
         )
+    
+    def extend_clip_attention_MKV_multiplier(self, multiplier=2, noise_std=0.1):
+        num_extended_layers = 0
+
+        for layer in self.text_model.encoder.layers:
+            # This shouldn't happen, unless self_attn has already been extended as CLIPAttentionMKV.
+            if not isinstance(layer.self_attn, CLIPAttention):
+                breakpoint()
+            old_attn_layer = layer.self_attn
+            layer.self_attn = CLIPAttentionMKV(old_attn_layer.config, multiplier)
+            layer.self_attn.extend_weights(old_attn_layer, noise_std)
+            num_extended_layers += 1
+    
+        return num_extended_layers
+    

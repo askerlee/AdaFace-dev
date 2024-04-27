@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
-                     add_noise_to_embedding, calc_ref_cosine_loss, \
+                     anneal_add_noise_to_embedding, calc_ref_cosine_loss, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
                      scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times, \
                      extend_clip_text_embedder, calc_init_word_embeddings, calc_stats, \
@@ -1530,11 +1530,11 @@ class EmbeddingManager(nn.Module):
                     # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.
                     # Noise std is absolute, not relative (to the std of all_id_embs).
                     if self.training:
-                        zs_id_embs = add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                            begin_noise_std_range=[0.01,  0.02], 
-                                                            end_noise_std_range  =[0.005, 0.01],
-                                                            add_noise_prob=0.5, noise_std_is_relative=False,
-                                                            keep_norm=True)
+                        zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, self.training_percent,
+                                                                   begin_noise_std_range=[0.01,  0.02], 
+                                                                   end_noise_std_range  =[0.005, 0.01],
+                                                                   add_noise_prob=0.5, noise_std_is_relative=False,
+                                                                   keep_norm=True)
 
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
@@ -1660,11 +1660,12 @@ class EmbeddingManager(nn.Module):
                 subj_static_embedding_k = subj_static_embedding[:, k]
 
                 if self.training and self.training_begin_add_noise_std_range is not None:
-                    subj_static_embedding_k = add_noise_to_embedding(subj_static_embedding_k, 
-                                                                     self.training_percent,
-                                                                     self.training_begin_add_noise_std_range,
-                                                                     self.training_end_add_noise_std_range,
-                                                                     self.training_add_noise_prob[self.iter_type])
+                    subj_static_embedding_k = \
+                        anneal_add_noise_to_embedding(subj_static_embedding_k, 
+                                                      self.training_percent,
+                                                      self.training_begin_add_noise_std_range,
+                                                      self.training_end_add_noise_std_range,
+                                                      self.training_add_noise_prob[self.iter_type])
 
                 # Training with delta loss. Each subject only appears once in subj_static_embedding, 
                 # but twice in the prompts (subject single and subject comp), so we need to repeat it twice.
@@ -1922,11 +1923,11 @@ class EmbeddingManager(nn.Module):
                 subj_ada_embedding_k = subj_ada_embedding[placeholder_indices_1st[0], k]
 
                 if self.training and self.training_begin_add_noise_std_range is not None:
-                    subj_ada_embedding_k = add_noise_to_embedding(subj_ada_embedding_k,  
-                                                                  self.training_percent,
-                                                                  self.training_begin_add_noise_std_range,
-                                                                  self.training_end_add_noise_std_range,
-                                                                  self.training_add_noise_prob[self.iter_type])
+                    subj_ada_embedding_k = anneal_add_noise_to_embedding(subj_ada_embedding_k,  
+                                                                         self.training_percent,
+                                                                         self.training_begin_add_noise_std_range,
+                                                                         self.training_end_add_noise_std_range,
+                                                                         self.training_add_noise_prob[self.iter_type])
                     
                 embedded_text[placeholder_indices_k] = subj_ada_embedding_k
 
@@ -2364,7 +2365,8 @@ class EmbeddingManager(nn.Module):
     # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
     # the first background string.
     def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, src_placeholders=None, 
-             loaded_embedder_components=None, frozen_placeholder_set=None, frozen_embedder_components=None):
+             loaded_embedder_components=None, frozen_placeholder_set=None, frozen_embedder_components=None,
+             extend_prompt2token_proj_attention_multiplier=-1):
         if src_placeholders is not None and loaded_embedder_components is not None:
             self.load_embedder_components(ckpt_paths, src_placeholders=src_placeholders, 
                                           loaded_embedder_components=loaded_embedder_components,
@@ -2452,7 +2454,31 @@ class EmbeddingManager(nn.Module):
                             ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.repeat(1, 768))
                             print(f"Expand along features:  hidden_state_layer_weights -> {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
 
-                    ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                    # ckpt_subj_basis_generator.prompt2token_proj hasn't been extended. 
+                    # So don't extend self.string_to_subj_basis_generator_dict[km] before loading the state_dict.
+                    if ckpt_subj_basis_generator.placeholder_is_bg or (not hasattr(ckpt_subj_basis_generator, "prompt2token_proj_attention_multiplier")) \
+                      or ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier == -1:
+                        # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
+                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                        if not ckpt_subj_basis_generator.placeholder_is_bg and extend_prompt2token_proj_attention_multiplier > 1:
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(extend_prompt2token_proj_attention_multiplier)
+
+                    # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj > 1.
+                    # If extend_prompt2token_proj_attention_multiplier is specified and inconsistent with ckpt, debug.
+                    elif extend_prompt2token_proj_attention_multiplier > 1 and \
+                      ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier != extend_prompt2token_proj_attention_multiplier:
+                        breakpoint()
+
+                    else:
+                        # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier > 1.
+                        # extend_prompt2token_proj_attention_multiplier is either unspecified, or is the same as ckpt.
+                        # Extend the CLIPAttention layers in the subj_basis_generator, before loading the state_dict.
+                        # This means that during inference, we don't need to specify extend_prompt2token_proj_attention_multiplier.
+                        # If the ckpt has an extended prompt2token_proj, then the subj_basis_generator's prompt2token_proj will be extended 
+                        # before loading the state_dict.
+                        # TODO: allow extending the subj_basis_generator.prompt2token_proj multiple times.
+                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier)
+                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
 
                     if len(ret.missing_keys) > 0:
                         print(f"Missing keys: {ret.missing_keys}")

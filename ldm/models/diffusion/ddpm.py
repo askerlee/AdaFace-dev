@@ -40,7 +40,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
                         probably_anneal_t, anneal_value, gen_cfg_scales_for_stu_tea, \
-                        get_arc2face_id_prompt_embs, add_noise_to_embedding, gen_spatial_weight_using_loss_std
+                        get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding, gen_spatial_weight_using_loss_std
                                               
 
 from ldm.modules.ema import LitEma
@@ -138,6 +138,7 @@ class DDPM(pl.LightningModule):
                  arc2face_distill_iter_prob=0.5,
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
+                 extend_prompt2token_proj_attention_multiplier=-1,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -187,6 +188,8 @@ class DDPM(pl.LightningModule):
                                                         else 0
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
+        self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
+
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -900,7 +903,8 @@ class LatentDiffusion(DDPM):
             frozen_embedder_components   = config.params.get("frozen_embedder_components", None)
             model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
                        src_placeholders, loaded_embedder_components,
-                       frozen_placeholder_set, frozen_embedder_components)
+                       frozen_placeholder_set, frozen_embedder_components,
+                       self.extend_prompt2token_proj_attention_multiplier)
         
         return model
 
@@ -1784,10 +1788,10 @@ class LatentDiffusion(DDPM):
                     # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
                     # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
                     # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
-                    zs_id_embs = add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
-                                                        end_noise_std_range=None, 
-                                                        add_noise_prob=1, noise_std_is_relative=True, keep_norm=True)
-                    
+                    zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
+                                                               end_noise_std_range=None, 
+                                                               add_noise_prob=1, noise_std_is_relative=True, keep_norm=True)
+                        
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
                 if self.iter_flags['do_arc2face_distill']:
