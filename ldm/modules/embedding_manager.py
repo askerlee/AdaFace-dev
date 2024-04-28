@@ -1573,7 +1573,7 @@ class EmbeddingManager(nn.Module):
                         self.check_arc2face_text_encoder()
 
                         with torch.no_grad():
-                            # arc2face_embs: [BS, 77, 768]. id_embs: [BS, 16, 768].
+                            # arc2face_embs: [BS, 77, 768]. arc2face_id_embs: [BS, 16, 768].
                             placeholder_arc2face_embs, arc2face_id_embs = \
                                     arc2face_forward_face_embs(self.tokenizer, self.arc2face_text_encoder, 
                                                                zs_id_embs, return_full_and_core_embs=True)
