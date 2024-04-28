@@ -13,11 +13,14 @@ T = 0.65
 
 # argparse to receive base_folder and trash_folder
 parser = argparse.ArgumentParser(description='Filter faces')
-parser.add_argument('--base_folder', type=str, default='/data/shaohua/VGGface2_HQ_masks/', help='Base folder')
-parser.add_argument('--trash_folder', type=str, default='/data/shaohua/VGGface2_HQ_masks_trash/', help='Trash folder')
+parser.add_argument('--base_folder', type=str, default='/data/shaohua/FFHQ_masks', help='Base folder')
+parser.add_argument('--trash_folder', type=str, default='/data/shaohua/FFHQ_trash', help='Trash folder')
 parser.add_argument('--resumed_subj_folder', type=str, default=None, 
                     help='Resume filtering from this subject folder and skipp all subjects before')
+parser.add_argument('--resumed_image_path', type=str, default=None, 
+                    help='Resume filtering from this image and skipp all images before')
 parser.add_argument('--no_trash', action='store_true', help='Do not move trash images to the trash folder')
+parser.add_argument('--is_folder_mix_subj', action='store_true', help='Is the subject folder of photos of different people?')
 parser.add_argument('--gpu_id', type=int, default=0, help='GPU id')
 args = parser.parse_args()
 
@@ -39,7 +42,12 @@ if args.resumed_subj_folder is None:
 else:
     resumed = False
 
-for subj_i, subj_folder in enumerate(sorted(os.listdir(base_folder))):
+if not args.is_folder_mix_subj:
+    subj_folders = sorted(os.listdir(base_folder))
+else:
+    subj_folders = [base_folder]
+
+for subj_i, subj_folder in enumerate(subj_folders):
     image_fullpaths = []
     id_embs = []
     print(f"{subj_i+1}/{num_subjects}: {subj_folder}")

@@ -1022,6 +1022,9 @@ class EmbeddingManager(nn.Module):
             zs_use_q_aware_to_v=True,
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
+            # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
+            # Therefore no perturbation during inference.
+            zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1158,6 +1161,7 @@ class EmbeddingManager(nn.Module):
             self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
+            self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
             # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceWrapper instance 
             # is initialized, so as to save some RAM.
             self.arc2face_text_encoder = None
@@ -2461,7 +2465,8 @@ class EmbeddingManager(nn.Module):
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         if not ckpt_subj_basis_generator.placeholder_is_bg and extend_prompt2token_proj_attention_multiplier > 1:
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(extend_prompt2token_proj_attention_multiplier)
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(extend_prompt2token_proj_attention_multiplier,
+                                                                                                            noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
 
                     # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj > 1.
                     # If extend_prompt2token_proj_attention_multiplier is specified and inconsistent with ckpt, debug.
@@ -2477,7 +2482,8 @@ class EmbeddingManager(nn.Module):
                         # If the ckpt has an extended prompt2token_proj, then the subj_basis_generator's prompt2token_proj will be extended 
                         # before loading the state_dict.
                         # TODO: allow extending the subj_basis_generator.prompt2token_proj multiple times.
-                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier)
+                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier,
+                                                                                                        noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
 
                     if len(ret.missing_keys) > 0:

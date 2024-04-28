@@ -287,6 +287,8 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the prompt2token projection layer")    
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
+    parser.add_argument("--zs_prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
+                        help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.4,
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
@@ -993,6 +995,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
+            config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
