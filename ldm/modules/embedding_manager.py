@@ -2459,7 +2459,9 @@ class EmbeddingManager(nn.Module):
                             print(f"Expand along features:  hidden_state_layer_weights -> {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
 
                     # ckpt_subj_basis_generator.prompt2token_proj hasn't been extended. 
-                    # So don't extend self.string_to_subj_basis_generator_dict[km] before loading the state_dict.
+                    # So only extend self.string_to_subj_basis_generator_dict[km] after loading the state_dict.
+                    # This should happen only during training, not inference. 
+                    # Therefore, whether noise_std is 0 or not doesn't really matter the inference result.
                     if ckpt_subj_basis_generator.placeholder_is_bg or (not hasattr(ckpt_subj_basis_generator, "prompt2token_proj_attention_multiplier")) \
                       or ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier == -1:
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
@@ -2481,6 +2483,8 @@ class EmbeddingManager(nn.Module):
                         # This means that during inference, we don't need to specify extend_prompt2token_proj_attention_multiplier.
                         # If the ckpt has an extended prompt2token_proj, then the subj_basis_generator's prompt2token_proj will be extended 
                         # before loading the state_dict.
+                        # NOTE: This could happen either during training or inference. Since state_dict is loaded,
+                        # whether noise_std is 0 or not has no impact to the extended attention weights.
                         # TODO: allow extending the subj_basis_generator.prompt2token_proj multiple times.
                         self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier,
                                                                                                         noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
