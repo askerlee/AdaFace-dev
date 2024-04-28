@@ -1687,7 +1687,6 @@ def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
 def anneal_value(training_percent, final_percent, value_range):
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
     v_init, v_final = value_range
-    # Gradually decrease the chance of flipping from the upperbound to lowerbound.
     if training_percent < final_percent:
         v_annealed = v_init + (v_final - v_init) * training_percent
     else:
@@ -1695,6 +1694,13 @@ def anneal_value(training_percent, final_percent, value_range):
         v_annealed = v_final
 
     return v_annealed
+
+def anneal_array(training_percent, final_percent, begin_array, end_array):
+    assert len(begin_array) == len(end_array)
+    begin_array = np.array(begin_array)
+    end_array   = np.array(end_array)
+    annealed_array = anneal_value(training_percent, final_percent, (begin_array, end_array))
+    return annealed_array
 
 # fluct_range: range of fluctuation ratios.
 def rand_annealed(training_percent, final_percent, mean_range, 

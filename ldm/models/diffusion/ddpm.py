@@ -39,7 +39,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
-                        probably_anneal_t, anneal_value, gen_cfg_scales_for_stu_tea, \
+                        probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding, gen_spatial_weight_using_loss_std
                                               
 
@@ -1851,8 +1851,14 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
 
                 if self.iter_flags['use_arc2face_as_target']:
-                    # num_denoising_steps: 1, 3, 5, among which 3 and 5 are selected with bigger chances.
-                    num_denoising_steps = np.random.choice([2, 4, 6], p=[0.2, 0.4, 0.4])
+                    # Gradually increase the chance of taking 5 or 7 denoising steps.
+                    p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
+                                                         final_percent=0.5,
+                                                         begin_array=[0.25, 0.25, 0.25, 0.25], 
+                                                         end_array  =[0.15, 0.2,  0.3,  0.35],
+                                                        )
+                    # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
+                    num_denoising_steps = np.random.choice([1, 3, 5, 7], p=p_num_denoising_steps)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
