@@ -200,11 +200,6 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 embedding_manager = None,
             ) -> torch.Tensor:
 
-                seq_length = input_ids.shape[-1] if input_ids is not None else inputs_embeds.shape[-2]
-
-                if position_ids is None:
-                    position_ids = self.position_ids[:, :seq_length]
-
                 if inputs_embeds is None:
                     inputs_embeds = self.token_embedding(input_ids)
 
@@ -214,6 +209,13 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                 # tokens with the learned embeddings. 
                 if embedding_manager is not None:
                     inputs_embeds = embedding_manager(input_ids, inputs_embeds)
+
+                if position_ids is None:
+                    # seq_length = input_ids.shape[-1] if input_ids is not None else inputs_embeds.shape[-2]
+                    seq_length = inputs_embeds.shape[-2]
+                    if input_ids.shape[-1] != seq_length:
+                        print(f"input_ids = {input_ids.shape[-1]}, seq_length = {seq_length}")
+                    position_ids = self.position_ids[:, :seq_length]
 
                 position_embeddings = self.position_embedding(position_ids)
                 embeddings = inputs_embeds + position_embeddings
@@ -322,7 +324,8 @@ class FrozenCLIPEmbedder(AbstractEncoder):
            
             # the batch size could be modified by embedding_manager
             bsz = hidden_states.shape[0]
-            seq_len = input_shape[1]
+            # seq_len = input_shape[1]
+            seq_len = hidden_states.shape[1]
             # CLIP's text model uses causal mask, prepare it here.
             # causal_attention_mask: [bsz, 1, seq_len, seq_len].
             # https://github.com/openai/CLIP/blob/cfcffb90e69f37bf2ff1e988237a0fbe41f33c04/clip/model.py#L324

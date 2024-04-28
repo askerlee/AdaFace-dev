@@ -470,6 +470,9 @@ class SubjBasisGenerator(nn.Module):
                 # core_id_embs: [BS, 18, 768], the identity and (at most) two extra words 
                 # in full_prompt_embs, without BOS and EOS.
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
+                # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
+                # Using b_core_e is more computationally efficient than using full_zeroed_extra. 
+                # But there is an unknow BUG that causes crash when using b_core_e. Therefore, we use full_zeroed_extra.
                 if training_percent >= 0:
                     return_emb_types = ['full_zeroed_extra', 'core']
                 else:
@@ -477,10 +480,10 @@ class SubjBasisGenerator(nn.Module):
 
                 arc2face_inverse_prompt_embs, core_id_embs = \
                     arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_proj, 
-                                                      arc2face_id_embs, list_extra_words, 
+                                                      arc2face_id_embs, list_extra_words,
+                                                      return_emb_types=return_emb_types, 
                                                       hidden_state_layer_weights=hidden_state_layer_weights,
-                                                      input_max_length=77,
-                                                      return_emb_types=return_emb_types)
+                                                      input_max_length=77)
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 # Reduce the update rate of prompt2token_proj.

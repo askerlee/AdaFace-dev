@@ -1024,7 +1024,7 @@ class LatentDiffusion(DDPM):
                                                                          self.embedding_manager.subj_name_to_cls_delta_token_weights)
                 else:
                     # Repeat the static prompt embeddings 16 times to match the layerwise prompts.
-                    static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, 77, 768)
+                    static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
                 '''
                 'subj_indices':                  filter_dict_by_key(self.embedding_manager.placeholder2indices,
