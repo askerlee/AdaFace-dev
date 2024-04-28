@@ -1154,7 +1154,7 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
 
 def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, list_extra_words,
                                       hidden_state_layer_weights=None, 
-                                      input_max_length=77, return_full_and_core_embs=True):
+                                      input_max_length=77, return_emb_types=['full', 'core']):
 
     '''
     text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
@@ -1166,8 +1166,11 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
 
     if list_extra_words is not None:
         if len(list_extra_words) != len(face_prompt_embs):
-            print("list_extra_words should have the same length as face_prompt_embs.")
-            breakpoint()
+            print("Warn: list_extra_words has different length as face_prompt_embs.")
+            if len(list_extra_words) == 1:
+                list_extra_words = list_extra_words * len(face_prompt_embs)
+            else:
+                breakpoint()
 
         for extra_words in list_extra_words:
             assert len(extra_words.split()) <= 2, "Each extra_words string should consist of at most 2 words."
@@ -1206,16 +1209,27 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
 
     # Restore the original dtype of prompt_embeds: float16 -> float32.
     prompt_embeds = prompt_embeds.to(face_prompt_embs_dtype)
+    # token 4: first ", " in the template prompt.
+    # 4:20 are the most important 16 embeddings that contain the subject's identity.
+    # 20:22 are embeddings of the (at most) two extra words.
+    # [N, 77, 768] -> [N, 18, 768]
+    core_prompt_embs = prompt_embeds[:, 4:22]
 
-    if return_full_and_core_embs:
-        # token 4: first ", " in the template prompt.
-        # 4:20 are the most important 16 embeddings that contain the subject's identity.
-        # 20:22 are embeddings of the (at most) two extra words.
-        # [N, 77, 768] -> [N, 18, 768]
-        return prompt_embeds, prompt_embeds[:, 4:22]
-    else:
-        # [N, 77, 768]
-        return prompt_embeds
+    return_prompts = []
+    for emb_type in return_emb_types:
+        if emb_type == 'full':
+            return_prompts.append(core_prompt_embs)
+        elif emb_type == 'core':
+            return_prompts.append(prompt_embeds[:, 4:20])
+        elif emb_type == 'full_zeroed_extra':
+            # Set the padding tokens with zero embeddings.
+            prompt_embeds2 = prompt_embeds.clone()
+            prompt_embeds2[:, 22:-1] = 0
+            return_prompts.append(prompt_embeds2)
+        else:
+            breakpoint()
+            
+    return return_prompts
 
 def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 
                                 extract_faceid_embeds, pre_face_embs, 

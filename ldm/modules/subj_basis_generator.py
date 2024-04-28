@@ -473,7 +473,7 @@ class SubjBasisGenerator(nn.Module):
                                                       arc2face_id_embs, list_extra_words, 
                                                       hidden_state_layer_weights=hidden_state_layer_weights,
                                                       input_max_length=77,
-                                                      return_full_and_core_embs=True)
+                                                      return_emb_types=['full_zeroed_extra', 'core'])
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 # Reduce the update rate of prompt2token_proj.
@@ -509,6 +509,7 @@ class SubjBasisGenerator(nn.Module):
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         output_queries = self.lora2hira(context) * self.output_scale
+        #arc2face_inverse_prompt_embs[1:-1] = arc2face_inverse_prompt_embs[1:-1] * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
