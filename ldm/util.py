@@ -1218,9 +1218,9 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
     return_prompts = []
     for emb_type in return_emb_types:
         if emb_type == 'full':
-            return_prompts.append(core_prompt_embs)
+            return_prompts.append(prompt_embeds)
         elif emb_type == 'core':
-            return_prompts.append(prompt_embeds[:, 4:20])
+            return_prompts.append(core_prompt_embs)
         elif emb_type == 'full_zeroed_extra':
             # Set the padding tokens with zero embeddings.
             prompt_embeds2 = prompt_embeds.clone()
@@ -1228,7 +1228,7 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
             return_prompts.append(prompt_embeds2)
         else:
             breakpoint()
-            
+
     return return_prompts
 
 def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 

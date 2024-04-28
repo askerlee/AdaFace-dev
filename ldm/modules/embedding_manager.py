@@ -1588,7 +1588,7 @@ class EmbeddingManager(nn.Module):
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
-                                                 training_percent=self.training_percent)
+                                                 training_percent=self.training_percent if self.training else -1)
                     
                     if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
                         assert placeholder_arc2face_inverse_prompt_embs is not None
@@ -1613,7 +1613,7 @@ class EmbeddingManager(nn.Module):
                                                  neg_arc2face_id_embs,
                                                  list_extra_words=None, 
                                                  is_face=self.curr_subj_is_face,
-                                                 training_percent=self.training_percent)
+                                                 training_percent=self.training_percent if self.training else -1)
                         
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets_pos = zs_vecs_2sets
