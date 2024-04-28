@@ -3018,8 +3018,9 @@ class LatentDiffusion(DDPM):
                     if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                         print(f"{s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
-                # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so no need to divide by num_denoising_steps.
-                loss_recon = sum(loss_recons) #/ num_denoising_steps
+                # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so don't divide by num_denoising_steps.
+                # Instead, only increase the normalizer sub-linearly.
+                loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
                 loss += loss_recon
 
