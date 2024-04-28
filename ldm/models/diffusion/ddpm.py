@@ -5567,8 +5567,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
     def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
-        # Limited by RAM, we can only process 1, 2, 3, 4 steps.
-        assert num_denoising_steps in [1, 2, 3, 4, 5, 6]
+        assert num_denoising_steps <= 10
 
         x_starts    = [ x_start ]
         noises      = [ noise ]
