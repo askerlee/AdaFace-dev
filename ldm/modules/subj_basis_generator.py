@@ -534,9 +534,9 @@ class SubjBasisGenerator(nn.Module):
             self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(6)
             print("hidden_state_layer_weights initialized as per-channel [1, 2, 4], with grad scaler 4.")
 
-    def extend_prompt2token_proj_attention(self, multiplier=2):
+    def extend_prompt2token_proj_attention(self, multiplier=2, noise_std=0.1):
         if multiplier > 1:
-            num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(multiplier, noise_std=0.1)
+            num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(multiplier, noise_std=noise_std)
             self.prompt2token_proj_attention_multiplier = multiplier
             print(f"{num_extended_layers} layers in prompt2token_proj_attention are x{multiplier}")
 
