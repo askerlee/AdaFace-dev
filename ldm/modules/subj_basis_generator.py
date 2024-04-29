@@ -19,7 +19,7 @@ from transformers.utils import ModelOutput
 from ldm.util import anneal_value, gen_gradient_scaler, arc2face_inverse_face_prompt_embs
 from ldm.modules.arc2face_models import CLIPTextModelWrapper
 
-tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -395,6 +395,7 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj_attention_multiplier = -1
             print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
+            self.pad_embeddings = None
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
@@ -479,10 +480,15 @@ class SubjBasisGenerator(nn.Module):
                 else:
                     return_emb_types = [arc2face_inverse_prompt_embs_inf_type, 'core']
 
+                if self.pad_embeddings is None:
+                    self.generate_pad_embeddings()
+
                 arc2face_inverse_prompt_embs, core_id_embs = \
-                    arc2face_inverse_face_prompt_embs(tokenizer, self.prompt2token_proj, 
+                    arc2face_inverse_face_prompt_embs(clip_tokenizer, 
+                                                      self.prompt2token_proj, 
                                                       arc2face_id_embs, list_extra_words,
                                                       return_emb_types=return_emb_types, 
+                                                      pad_embeddings=self.pad_embeddings,
                                                       hidden_state_layer_weights=hidden_state_layer_weights,
                                                       input_max_length=77)
                 
@@ -545,6 +551,21 @@ class SubjBasisGenerator(nn.Module):
                                                            requires_grad=True)
             self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(6)
             print("hidden_state_layer_weights initialized as per-channel [1, 2, 4], with grad scaler 4.")
+
+    def generate_pad_embeddings(self):
+        # clip_embeddings: CLIPTextEmbeddings instance. pad_embeddings is generated after 
+        # prompt2token_proj is loaded from the finetuned weight. It seems such pad embeddings perform 
+        # slightly better than the original pad embeddings.
+        clip_embeddings = self.prompt2token_proj.text_model.embeddings
+        # clip_embeddings() and clip_embeddings.token_embedding() differ in that 
+        # clip_embeddings() adds positional embeddings, while clip_embeddings.token_embedding() doesn't.
+        # Adding positional embeddings seems to help somewhat.
+        # pad_embeddings: [77, 768].
+        pad_tokens = torch.tensor([clip_tokenizer.pad_token_id]).to(clip_embeddings.token_embedding.weight.device).repeat(77)
+        pad_embeddings = clip_embeddings(pad_tokens)[0]
+        # We don't allow face recon to influence the pad embeddings. 
+        # Otherwise, face identity will leak into the pad embeddings.
+        self.pad_embeddings = pad_embeddings.detach()
 
     def extend_prompt2token_proj_attention(self, multiplier=2, noise_std=0.1):
         if multiplier > 1:

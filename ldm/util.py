@@ -1153,8 +1153,8 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
         return prompt_embeds[:, 4:20]
 
 # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
-def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs, list_extra_words,
-                                      return_emb_types, hidden_state_layer_weights=None, 
+def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_embs, list_extra_words,
+                                      return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
                                       input_max_length=77):
 
     '''
@@ -1184,7 +1184,7 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
 
     # This step should be quite fast, and there's no need to cache the input_ids.
     # input_ids: [BS, 77].
-    input_ids = tokenizer(
+    input_ids = clip_tokenizer(
             prompts,
             truncation=True,
             padding="max_length",
@@ -1223,9 +1223,10 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
         elif emb_type == 'core':
             return_prompts.append(core_prompt_embs)
         elif emb_type == 'full_zeroed_extra':
-            # Set the padding tokens with zero embeddings.
             prompt_embeds2 = prompt_embeds.clone()
-            prompt_embeds2[:, 22:-1] = 0
+            # Make the positional embeddings align with the actual positions.
+            prompt_embeds2[:, 22:24] = pad_embeddings[22:24]
+            prompt_embeds2[:, 24:-1] = 0
             return_prompts.append(prompt_embeds2)
         elif emb_type == 'b_core_e':
             b_core_e_embs = torch.cat([ prompt_embeds[:, :22], prompt_embeds[:, [-1]] ], dim=1)
@@ -1235,7 +1236,7 @@ def arc2face_inverse_face_prompt_embs(tokenizer, text_encoder, face_prompt_embs,
 
     return return_prompts
 
-def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder, 
+def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, text_encoder, 
                                 extract_faceid_embeds, pre_face_embs, 
                                 image_folder, image_paths, images_np,
                                 example_image_count, out_image_count,
@@ -1297,7 +1298,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
     # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
     with torch.no_grad():
-        arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(tokenizer, text_encoder, 
+        arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(clip_tokenizer, text_encoder, 
                                                                  faceid_embeds, input_max_length=input_max_length,
                                                                  return_full_and_core_embs=True)
     # If extract_faceid_embeds, we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
@@ -1308,7 +1309,7 @@ def get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
 
     if gen_neg_prompt:
         with torch.no_grad():
-            arc2face_neg_prompt_emb, _ = arc2face_forward_face_embs(tokenizer, text_encoder, 
+            arc2face_neg_prompt_emb, _ = arc2face_forward_face_embs(clip_tokenizer, text_encoder, 
                                                                     torch.zeros_like(faceid_embeds),
                                                                     input_max_length=input_max_length,
                                                                     return_full_and_core_embs=True)
@@ -1385,17 +1386,17 @@ def extend_nn_embedding(old_nn_embedding, new_token_embeddings):
     print(f"Extended nn.Embedding from {num_old_tokens} to {num_tokens2} tokens.")
     return new_nn_embedding
 
-def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
+def get_clip_tokens_for_string(clip_tokenizer, string, force_single_token=False):
     '''
     # If string is a new token, add it to the tokenizer.
-    if string not in tokenizer.get_vocab():
-        tokenizer.add_tokens([string])
-        # tokenizer() returns [49406, 49408, 49407]. 
+    if string not in clip_tokenizer.get_vocab():
+        clip_tokenizer.add_tokens([string])
+        # clip_tokenizer() returns [49406, 49408, 49407]. 
         # 49406: start of text, 49407: end of text, 49408: new token.
-        new_token_id = tokenizer(string)["input_ids"][1]
+        new_token_id = clip_tokenizer(string)["input_ids"][1]
         print("Added new token to tokenizer: {} -> {}".format(string, new_token_id))
     '''
-    batch_encoding = tokenizer(string, truncation=True, max_length=77, return_length=True,
+    batch_encoding = clip_tokenizer(string, truncation=True, max_length=77, return_length=True,
                                return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
     tokens = batch_encoding["input_ids"]
     # [49406, 11781,  4668, 49407, 49407...]. 49406: start of text, SOT, 49407: end of text, EOT
@@ -1408,8 +1409,8 @@ def get_clip_tokens_for_string(tokenizer, string, force_single_token=False):
     # Remove the SOT and EOT tokens.
     return tokens[0, 1:1+token_count]
 
-def get_bert_tokens_for_string(tokenizer, string):
-    token = tokenizer(string)
+def get_bert_tokens_for_string(clip_tokenizer, string):
+    token = clip_tokenizer(string)
     assert torch.count_nonzero(token) == 3, f"String '{string}' maps to more than a single token. Please use another string"
 
     token = token[0, 1]
@@ -1417,6 +1418,7 @@ def get_bert_tokens_for_string(tokenizer, string):
     return token
 
 def get_embeddings_for_clip_tokens(embedder, tokens):
+    # embedder: CLIPTextModel.text_model.embeddings
     # embedder(tokens): [1, N, 768]. N: number of tokens. 
     # RETURN: [N, 768]
     return embedder(tokens)[0]
