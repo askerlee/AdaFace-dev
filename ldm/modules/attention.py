@@ -228,7 +228,8 @@ class CrossAttention(nn.Module):
                                                     conv_attn_mix_weight=1,
                                                     shift_attn_maps_for_diff_embs=self.shift_attn_maps_for_diff_embs)
 
-        if (ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0 and placeholder2indices is not None:
+        # TODO: pass a flag to decide whether to disable bg attn suppression.
+        if False: #(ada_subj_attn_dict is not None) and len(ada_subj_attn_dict) > 0 and placeholder2indices is not None:
             for subj_string in self.subj2conv_attn_layer_scale.keys():
                 if subj_string not in ada_subj_attn_dict or subj_string not in placeholder2indices:
                     continue
