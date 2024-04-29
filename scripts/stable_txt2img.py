@@ -283,7 +283,7 @@ def parse_args():
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
                         help="Class delta string for zero-shot learning")
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full',
-                        choices=['full_zeroed_extra', 'full', 'full_avg_pad', 'b_core_e'],
+                        choices=['full_zeroed_extra', 'full', 'full_avg_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
