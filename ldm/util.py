@@ -1152,6 +1152,10 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
         # [N, 77, 768]
         return prompt_embeds[:, 4:20]
 
+def get_b_core_e_embeddings(prompt_embeds, length=22):
+    b_core_e_embs = torch.cat([ prompt_embeds[:, :length], prompt_embeds[:, [-1]] ], dim=1)
+    return b_core_e_embs
+
 # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
 def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_embs, list_extra_words,
                                       return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
@@ -1229,7 +1233,7 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
             prompt_embeds2[:, 24:-1] = 0
             return_prompts.append(prompt_embeds2)
         elif emb_type == 'b_core_e':
-            b_core_e_embs = torch.cat([ prompt_embeds[:, :22], prompt_embeds[:, [-1]] ], dim=1)
+            b_core_e_embs = get_b_core_e_embeddings(prompt_embeds, length=22)
             return_prompts.append(b_core_e_embs)
         else:
             breakpoint()

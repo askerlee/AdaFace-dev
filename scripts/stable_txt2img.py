@@ -17,7 +17,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, save_grid, extend_nn_embedding
+from ldm.util import instantiate_from_config, save_grid, extend_nn_embedding, get_b_core_e_embeddings
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
@@ -667,6 +667,9 @@ def main(opt):
                             if debug_arc2face_distill:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
                                 c = (static_prompt_embedding, c[1], c[2])
+                                if static_prompt_embedding.shape[1] > uc[0].shape[1]:
+                                    uncond_prompt_embedding = get_b_core_e_embeddings(uc[0], length=static_prompt_embedding.shape[1] - 1)
+                                    uc = (uncond_prompt_embedding, uc[1], uc[2])
 
                             if opt.compel_cfg_weight_level != 0:
                                 c[2]['compel_cfg_weight_level_range'] = (opt.compel_cfg_weight_level, opt.compel_cfg_weight_level)
