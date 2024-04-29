@@ -1025,6 +1025,7 @@ class EmbeddingManager(nn.Module):
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
+            zs_arc2face_inverse_prompt_embs_inf_type='full',
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -1162,6 +1163,7 @@ class EmbeddingManager(nn.Module):
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
+            self.zs_arc2face_inverse_prompt_embs_inf_type = zs_arc2face_inverse_prompt_embs_inf_type
             # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceWrapper instance 
             # is initialized, so as to save some RAM.
             self.arc2face_text_encoder = None
@@ -1588,7 +1590,8 @@ class EmbeddingManager(nn.Module):
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
-                                                 training_percent=self.training_percent if self.training else -1)
+                                                 training_percent=self.training_percent if self.training else -1,
+                                                 arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
                     
                     if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
                         assert placeholder_arc2face_inverse_prompt_embs is not None
@@ -1613,7 +1616,8 @@ class EmbeddingManager(nn.Module):
                                                  neg_arc2face_id_embs,
                                                  list_extra_words=None, 
                                                  is_face=self.curr_subj_is_face,
-                                                 training_percent=self.training_percent if self.training else -1)
+                                                 training_percent=self.training_percent if self.training else -1,
+                                                 arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
                         
                         zs_neg_subj_bases_weight = 0.2
                         zs_vecs_2sets_pos = zs_vecs_2sets
