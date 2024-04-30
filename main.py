@@ -295,7 +295,9 @@ def get_parser(**parser_kwargs):
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=-1,
                         help="Multiplier of the prompt2token projection attention")
-    
+    parser.add_argument("--arc2face_distill_iter_prob", type=float, default=argparse.SUPPRESS,
+                        help="Probability of doing arc2face distillation in each iteration")
+            
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -338,9 +340,7 @@ def get_parser(**parser_kwargs):
                         type=int, default=argparse.SUPPRESS,
                         help="Gaps between iterations for composition regularization. "
                              "Set to -1 to disable for ablation.")
-    parser.add_argument("--arc2face_distill_iter_prob", type=float, default=argparse.SUPPRESS,
-                        help="Probability of doing arc2face distillation in each iteration")
-        
+
     # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
     parser.add_argument("--num_compositions_per_image",
                         type=int, default=1,

@@ -242,7 +242,7 @@ class DDPM(pl.LightningModule):
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
-        if self.arc2face_distill_iter_prob > 0:
+        if self.do_zero_shot:
             self.arc2face = Arc2FaceWrapper()
         else:
             self.arc2face = None
