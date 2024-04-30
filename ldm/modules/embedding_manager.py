@@ -1025,7 +1025,7 @@ class EmbeddingManager(nn.Module):
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
-            zs_arc2face_inverse_prompt_embs_inf_type='full',
+            zs_arc2face_inverse_prompt_embs_inf_type='full_half_pad',
             # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
             # are used in ddpm.py, but ignored here.
             **kwargs
@@ -2783,7 +2783,7 @@ class EmbeddingManager(nn.Module):
             placeholder_strings = [ self.subject_strings[0], self.background_strings[0] ]
 
             for placeholder_string in placeholder_strings:
-                ada_embedder             = self.string_to_ada_embedder_dict[placeholder_string]
+                ada_embedder    = self.string_to_ada_embedder_dict[placeholder_string]
                 static_embedder = self.string_to_static_embedder_dict[placeholder_string]
 
                 if 'pooler' in self.shared_embedder_components:

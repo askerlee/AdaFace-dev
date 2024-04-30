@@ -392,6 +392,11 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
+            # Freeze prompt2token_proj if prompt2token_proj_grad_scale is 0.
+            # Set requires_grad to False for all parameters in prompt2token_proj, to save memory taken by the optimizer.
+            if prompt2token_proj_grad_scale == 0:
+                for param in self.prompt2token_proj.parameters():
+                    param.requires_grad = False
             self.prompt2token_proj_attention_multiplier = -1
             print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
@@ -415,7 +420,6 @@ class SubjBasisGenerator(nn.Module):
         self.latent_queries     = nn.ParameterList([])
         self.latent_query_lns   = nn.ModuleList([])
         self.use_FFN            = use_FFN
-        assert depth > 0, "depth must be > 0."
         self.depth = depth
         self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
 
@@ -483,14 +487,25 @@ class SubjBasisGenerator(nn.Module):
                 if self.pad_embeddings is None:
                     self.generate_pad_embeddings()
 
-                arc2face_inverse_prompt_embs, core_id_embs = \
-                    arc2face_inverse_face_prompt_embs(clip_tokenizer, 
-                                                      self.prompt2token_proj, 
-                                                      arc2face_id_embs, list_extra_words,
-                                                      return_emb_types=return_emb_types, 
-                                                      pad_embeddings=self.pad_embeddings,
-                                                      hidden_state_layer_weights=hidden_state_layer_weights,
-                                                      input_max_length=77)
+                if self.prompt2token_proj_grad_scale == 0:
+                    with torch.no_grad():
+                        arc2face_inverse_prompt_embs, core_id_embs = \
+                            arc2face_inverse_face_prompt_embs(clip_tokenizer, 
+                                                              self.prompt2token_proj, 
+                                                              arc2face_id_embs, list_extra_words,
+                                                              return_emb_types=return_emb_types, 
+                                                              pad_embeddings=self.pad_embeddings,
+                                                              hidden_state_layer_weights=hidden_state_layer_weights,
+                                                              input_max_length=77)
+                else:
+                    arc2face_inverse_prompt_embs, core_id_embs = \
+                        arc2face_inverse_face_prompt_embs(clip_tokenizer, 
+                                                        self.prompt2token_proj, 
+                                                        arc2face_id_embs, list_extra_words,
+                                                        return_emb_types=return_emb_types, 
+                                                        pad_embeddings=self.pad_embeddings,
+                                                        hidden_state_layer_weights=hidden_state_layer_weights,
+                                                        input_max_length=77)
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 # Reduce the update rate of prompt2token_proj.
