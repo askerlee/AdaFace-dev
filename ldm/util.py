@@ -1228,6 +1228,12 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
             prompt_embeds2 = prompt_embeds.clone()
             prompt_embeds2[:, 24:-1] = (prompt_embeds2[:, 24:-1] + pad_embeddings[24:-1]) / 2
             return_prompts.append(prompt_embeds2)
+        elif emb_type == 'full_half_pad':
+            prompt_embeds2 = prompt_embeds.clone()
+            PADS  = prompt_embeds2.shape[1] - 25 
+            if PADS >= 2:
+                prompt_embeds2[:, 24:24+PADS/2] = pad_embeddings[24:24+PADS/2]
+            return_prompts.append(prompt_embeds2)
         elif emb_type == 'full_pad':
             prompt_embeds2 = prompt_embeds.clone()
             prompt_embeds2[:, 24:-1] = pad_embeddings[24:-1]
