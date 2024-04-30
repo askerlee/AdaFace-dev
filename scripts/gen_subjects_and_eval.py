@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument("--use_pre_neg_prompt", type=str2bool, const=True, default=argparse.SUPPRESS, 
                         nargs="?", help="use predefined negative prompts")
     parser.add_argument(
-        "--compel_cfg_weight_level", type=float, default=2, #argparse.SUPPRESS,
+        "--compel_cfg_weight_level", type=float, default=argparse.SUPPRESS,
         help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 

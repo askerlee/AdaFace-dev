@@ -59,6 +59,7 @@ model:
     fg_bg_token_emb_ortho_loss_weight:  1e-4
     # Push the prompt embeddings slightly away from the null prompt embedding.
     compel_cfg_weight_level_range:      [2, 2]
+    # compel_cfg is disabled if doing zero-shot, even if the prob > 0.
     apply_compel_cfg_prob:              0.5
     # fg_wds_comple: used in wds recon iters.
     fg_wds_complementary_loss_weight:   0 #1e-4
