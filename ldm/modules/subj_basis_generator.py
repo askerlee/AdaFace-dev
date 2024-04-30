@@ -476,7 +476,7 @@ class SubjBasisGenerator(nn.Module):
                 # Using b_core_e is more computationally efficient than using full_zeroed_extra. 
                 # But there is an unknow BUG that causes crash when using b_core_e. Therefore, we use full_zeroed_extra.
                 if training_percent >= 0:
-                    return_emb_types = ['full_zeroed_extra', 'core']
+                    return_emb_types = ['b_core_e', 'core']
                 else:
                     return_emb_types = [arc2face_inverse_prompt_embs_inf_type, 'core']
 
