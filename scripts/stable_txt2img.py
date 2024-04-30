@@ -285,6 +285,8 @@ def parse_args():
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
+    parser.add_argument("--do_arc2face_distill", type=str2bool, nargs="?", const=True, default=False,
+                        help="Verify arc2face distillation")
     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
@@ -656,15 +658,15 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            debug_arc2face_distill = opt.zeroshot
+                            do_arc2face_distill = opt.zeroshot and opt.do_arc2face_distill
                             # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
-                                                               do_arc2face_distill=debug_arc2face_distill,
+                                                               do_arc2face_distill=do_arc2face_distill,
                                                                debug_arc2face_embs=False)
 
-                            if debug_arc2face_distill:
+                            if do_arc2face_distill:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
                                 c = (static_prompt_embedding, c[1], c[2])
                                 if static_prompt_embedding.shape[1] < uc[0].shape[1]:
