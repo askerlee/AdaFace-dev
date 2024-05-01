@@ -391,8 +391,8 @@ class SubjBasisGenerator(nn.Module):
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
             # TODO: use CLIPTextModelWrapper as obj_proj_in.
-            self.obj_proj_in            = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
-                                                     elementwise_affine=elementwise_affine)
+            self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
+                                          elementwise_affine=elementwise_affine)
 
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
@@ -429,7 +429,7 @@ class SubjBasisGenerator(nn.Module):
         self.use_FFN            = use_FFN
         self.depth = depth
         assert depth > 0, "depth must be > 0."
-        
+
         for dep in range(depth):
             q_aware_to_v = use_q_aware_to_v and not self.placeholder_is_bg
             identity_to_v   = not q_aware_to_v

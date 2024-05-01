@@ -1162,7 +1162,11 @@ class EmbeddingManager(nn.Module):
             self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
-            self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
+            if zs_prompt2token_proj_grad_scale == 0:
+                print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
+                self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
+            else:
+                self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
             self.zs_arc2face_inverse_prompt_embs_inf_type = zs_arc2face_inverse_prompt_embs_inf_type
             # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceWrapper instance 
             # is initialized, so as to save some RAM.
