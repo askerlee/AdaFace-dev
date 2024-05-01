@@ -385,7 +385,8 @@ class SubjBasisGenerator(nn.Module):
         self.placeholder_is_bg   = placeholder_is_bg
         self.num_latent_queries  = num_latent_queries
         self.num_latent_query_groups = num_latent_query_groups
-        self.latent_query_dim    = output_dim
+        self.latent_query_dim       = output_dim
+        self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -427,8 +428,8 @@ class SubjBasisGenerator(nn.Module):
         self.latent_query_lns   = nn.ModuleList([])
         self.use_FFN            = use_FFN
         self.depth = depth
-        self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
-
+        assert depth > 0, "depth must be > 0."
+        
         for dep in range(depth):
             q_aware_to_v = use_q_aware_to_v and not self.placeholder_is_bg
             identity_to_v   = not q_aware_to_v
