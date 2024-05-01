@@ -110,68 +110,67 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
             subj_dirs2.append(subj_dir)
         subj_dirs = subj_dirs2
 
-    with torch.no_grad():
-        for (subj_dir, subj_path) in zip(subj_dirs, subj_paths):
-            print(f"Processing {subj_path} '{subj_dir}'")
+    for (subj_dir, subj_path) in zip(subj_dirs, subj_paths):
+        print(f"Processing {subj_path} '{subj_dir}'")
 
-            subj_img_count = 0
-            for img_path in sorted(os.listdir(subj_path)):
-                if img_path.endswith("_mask.png"):
-                    continue
-                
-                img_full_path = osp.join(subj_path, img_path)
-                new_img_path  = osp.join(result_path, subj_dir, img_path)
-                if os.path.exists(new_img_path):
-                    continue
+        subj_img_count = 0
+        for img_path in sorted(os.listdir(subj_path)):
+            if img_path.endswith("_mask.png"):
+                continue
+            
+            img_full_path = osp.join(subj_path, img_path)
+            new_img_path  = osp.join(result_path, subj_dir, img_path)
+            if os.path.exists(new_img_path):
+                continue
 
-                subj_img_count += 1
-                if max_imgs_per_person > 0 and subj_img_count > max_imgs_per_person:
-                    break
+            subj_img_count += 1
+            if max_imgs_per_person > 0 and subj_img_count > max_imgs_per_person:
+                break
 
-                image_obj = Image.open(img_full_path)
-                image_obj = image_obj.resize((512, 512), Image.BILINEAR).convert("RGB") 
-                img = to_tensor(image_obj)
-                img = torch.unsqueeze(img, 0)
-                img = img.cuda()
-                with torch.no_grad():
-                    out = net(img)[0]
+            image_obj = Image.open(img_full_path)
+            image_obj = image_obj.resize((512, 512), Image.BILINEAR).convert("RGB") 
+            img = to_tensor(image_obj)
+            img = torch.unsqueeze(img, 0)
+            img = img.cuda()
+            with torch.no_grad():
+                out = net(img)[0]
 
-                parsing = out.squeeze(0).cpu().numpy().argmax(0)
-                unique_parts = np.unique(parsing)
-                # print(img_path, unique_parts)                
-                parts_number_stats[len(unique_parts)] = parts_number_stats.get(len(unique_parts), 0) + 1
-                img_count += 1
-                if img_count % 100 == 0:
-                    print(f'{img_count}: ', end="")
-                    pprint(parts_number_stats)
+            parsing = out.squeeze(0).cpu().numpy().argmax(0)
+            unique_parts = np.unique(parsing)
+            # print(img_path, unique_parts)                
+            parts_number_stats[len(unique_parts)] = parts_number_stats.get(len(unique_parts), 0) + 1
+            img_count += 1
+            if img_count % 100 == 0:
+                print(f'{img_count}: ', end="")
+                pprint(parts_number_stats)
 
-                # Bad images. Move to trash folder.
-                if len(unique_parts) <= 9:
-                    img_trash_path = osp.join(trash_path, subj_dir, img_path)
-                    if not os.path.exists(osp.join(trash_path, subj_dir)):
-                        os.makedirs(osp.join(trash_path, subj_dir))
+            # Bad images. Move to trash folder.
+            if len(unique_parts) <= 9:
+                img_trash_path = osp.join(trash_path, subj_dir, img_path)
+                if not os.path.exists(osp.join(trash_path, subj_dir)):
+                    os.makedirs(osp.join(trash_path, subj_dir))
 
-                    print(f"{img_full_path} -> {img_trash_path}")
-                    os.rename(img_full_path, img_trash_path)
-                    continue
+                print(f"{img_full_path} -> {img_trash_path}")
+                os.rename(img_full_path, img_trash_path)
+                continue
 
-                if len(unique_parts) >= 18:
-                    img_inspect_path = osp.join(inspect_path, subj_dir, img_path)
-                    if not os.path.exists(osp.join(inspect_path, subj_dir)):
-                        os.makedirs(osp.join(inspect_path, subj_dir))
-                    os.rename(img_full_path, img_inspect_path)
-                    print(f'Image {img_inspect_path} has {len(unique_parts)} parts.')
-                    continue
+            if len(unique_parts) >= 18:
+                img_inspect_path = osp.join(inspect_path, subj_dir, img_path)
+                if not os.path.exists(osp.join(inspect_path, subj_dir)):
+                    os.makedirs(osp.join(inspect_path, subj_dir))
+                os.rename(img_full_path, img_inspect_path)
+                print(f'Image {img_inspect_path} has {len(unique_parts)} parts.')
+                continue
 
-                if not os.path.exists(osp.join(result_path, subj_dir)):
-                    os.makedirs(osp.join(result_path, subj_dir))
+            if not os.path.exists(osp.join(result_path, subj_dir)):
+                os.makedirs(osp.join(result_path, subj_dir))
 
-                print(f"{img_full_path} -> {new_img_path}")
-                # Save the image, instead of copying it. So that the new image will be (512, 512).
-                image_obj.save(new_img_path, compress_level=1)
-                #shutil.copy(img_full_path, new_img_path)
-                vis_parsing_maps(image_obj, parsing, stride=1, save_im=True, 
-                                 save_path=osp.join(result_path, subj_dir, img_path))
+            print(f"{img_full_path} -> {new_img_path}")
+            # Save the image, instead of copying it. So that the new image will be (512, 512).
+            image_obj.save(new_img_path, compress_level=1)
+            #shutil.copy(img_full_path, new_img_path)
+            vis_parsing_maps(image_obj, parsing, stride=1, save_im=True, 
+                                save_path=osp.join(result_path, subj_dir, img_path))
 
 if __name__ == "__main__":
     ckpt_path = osp.join('/data/shaohua/face_parsing/res/cp', '79999_iter.pth')

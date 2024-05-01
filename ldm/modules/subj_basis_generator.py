@@ -487,25 +487,15 @@ class SubjBasisGenerator(nn.Module):
                 if self.pad_embeddings is None:
                     self.generate_pad_embeddings()
 
-                if self.prompt2token_proj_grad_scale == 0:
-                    with torch.no_grad():
-                        arc2face_inverse_prompt_embs, core_id_embs = \
-                            arc2face_inverse_face_prompt_embs(clip_tokenizer, 
-                                                              self.prompt2token_proj, 
-                                                              arc2face_id_embs, list_extra_words,
-                                                              return_emb_types=return_emb_types, 
-                                                              pad_embeddings=self.pad_embeddings,
-                                                              hidden_state_layer_weights=hidden_state_layer_weights,
-                                                              input_max_length=77)
-                else:
+                with torch.set_grad_enabled(self.prompt2token_proj_grad_scale != 0):
                     arc2face_inverse_prompt_embs, core_id_embs = \
                         arc2face_inverse_face_prompt_embs(clip_tokenizer, 
-                                                        self.prompt2token_proj, 
-                                                        arc2face_id_embs, list_extra_words,
-                                                        return_emb_types=return_emb_types, 
-                                                        pad_embeddings=self.pad_embeddings,
-                                                        hidden_state_layer_weights=hidden_state_layer_weights,
-                                                        input_max_length=77)
+                                                          self.prompt2token_proj, 
+                                                          arc2face_id_embs, list_extra_words,
+                                                          return_emb_types=return_emb_types, 
+                                                          pad_embeddings=self.pad_embeddings,
+                                                          hidden_state_layer_weights=hidden_state_layer_weights,
+                                                          input_max_length=77)
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 # Reduce the update rate of prompt2token_proj.

@@ -828,13 +828,12 @@ class LatentDiffusion(DDPM):
             #random.seed(10000)
             self.create_clip_evaluator(next(self.parameters()).device)
 
-            with torch.no_grad():
-                # empty_context_tea_filter is only used for clip teacher filtering.
-                self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers)
-                self.empty_context_2b = self.get_learned_conditioning([""] * 2)
-                empty_context_info = self.get_learned_conditioning([""])
-                # empty_context: [16, 77, 768] -> [1, 77, 768]
-                self.empty_context = empty_context_info[0][[0]]
+            # empty_context_tea_filter is only used for clip teacher filtering.
+            self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers)
+            self.empty_context_2b = self.get_learned_conditioning([""] * 2)
+            empty_context_info = self.get_learned_conditioning([""])
+            # empty_context: [16, 77, 768] -> [1, 77, 768]
+            self.empty_context = empty_context_info[0][[0]]
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -2479,12 +2478,9 @@ class LatentDiffusion(DDPM):
 
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
-        if not unet_has_grad:
-            with torch.no_grad():
-                model_output = self.apply_model(x_noisy, t, cond)
-        else:
-            # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
-            # Subject embeddings will naturally have gradients.
+        # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
+        # Subject embeddings will naturally have gradients.
+        with torch.set_grad_enabled(unet_has_grad):
             model_output = self.apply_model(x_noisy, t, cond)
 
         # Save ada embeddings generated during apply_model(), to be used in delta loss. 
