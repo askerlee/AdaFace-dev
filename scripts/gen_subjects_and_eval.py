@@ -41,9 +41,7 @@ def parse_args():
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
  
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use zero-shot learning")
-    parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
-                        help="Apply negative subject bases for zero-shot learning")    
+                        help="Whether to use zero-shot learning") 
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
                         help="Class delta string for zero-shot learning")    
     parser.add_argument("--no_id_emb", action="store_true",
@@ -486,8 +484,6 @@ if __name__ == "__main__":
                 command_line += f" --ignore_ref_masks"
             if args.no_id_emb:
                 command_line += f" --no_id_emb"
-            if args.zs_apply_neg_subj_bases:
-                command_line += f" --zs_apply_neg_subj_bases"
             if args.zs_cls_delta_string is not None:
                 command_line += f" --zs_cls_delta_string \"{args.zs_cls_delta_string}\""
                 

@@ -139,6 +139,7 @@ class DDPM(pl.LightningModule):
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
                  extend_prompt2token_proj_attention_multiplier=-1,
+                 load_old_embman_ckpt=False,
                  ):
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
@@ -189,7 +190,7 @@ class DDPM(pl.LightningModule):
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
-
+        self.load_old_embman_ckpt                          = load_old_embman_ckpt
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
@@ -903,7 +904,8 @@ class LatentDiffusion(DDPM):
             model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
                        src_placeholders, loaded_embedder_components,
                        frozen_placeholder_set, frozen_embedder_components,
-                       self.extend_prompt2token_proj_attention_multiplier)
+                       self.extend_prompt2token_proj_attention_multiplier,
+                       self.load_old_embman_ckpt)
         
         return model
 

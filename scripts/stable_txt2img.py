@@ -278,8 +278,6 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
-                        help="Apply negative subject bases for zero-shot learning")
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
                         help="Class delta string for zero-shot learning")
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
@@ -287,6 +285,8 @@ def parse_args():
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
     parser.add_argument("--do_arc2face_distill", type=str2bool, nargs="?", const=True, default=False,
                         help="Verify arc2face distillation")
+    parser.add_argument("--load_old_embman_ckpt", action="store_true", 
+                        help="Load the old checkpoint for the embedding manager")
     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
@@ -401,7 +401,6 @@ def main(opt):
             zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
             zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-            config.model.params.personalization_config.params.zs_apply_neg_subj_bases = opt.zs_apply_neg_subj_bases
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
         else:
@@ -410,7 +409,7 @@ def main(opt):
 
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
-            model.embedding_manager.load(opt.embedding_paths)
+            model.embedding_manager.load(opt.embedding_paths, load_old_embman_ckpt=opt.load_old_embman_ckpt)
             model.embedding_manager.eval()
             opt.subj_model_path = opt.embedding_paths[0]
         else:

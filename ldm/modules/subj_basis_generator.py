@@ -222,7 +222,7 @@ class CrossAttention(nn.Module):
     # output_dim is always the same as input_dim.
     def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, v_has_skip=True,
-                 q_aware_to_v=True, num_q=512, num_q_group=64, q_aware_to_v_lora_rank=64,
+                 q_aware_to_v=True, num_q=512, v_repeat=4, q_aware_to_v_lora_rank=64,
                  identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
@@ -239,6 +239,10 @@ class CrossAttention(nn.Module):
                         nn.Linear(input_dim, inner_dim, bias=False),
                         nn.LayerNorm(inner_dim, elementwise_affine=True) 
                     ) if not identity_to_k else nn.Identity()
+        
+        self.v_repeat = v_repeat
+        self.num_q_group = num_q_group = num_q // v_repeat
+
         # If q_aware_to_v is True, then self.to_v consists of num_q projections of input_dim to inner_dim.
         # Otherwise, self.to_v consists of a single projection of input_dim to inner_dim.
         if q_aware_to_v:
@@ -265,16 +269,16 @@ class CrossAttention(nn.Module):
                 Rearrange('b (q d) n -> b q n d', q=num_q_group, d=input_dim),
                 nn.LayerNorm(input_dim, elementwise_affine=True),
             )
-            self.v_repeat = num_q // num_q_group
         else:
             self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
         assert not (identity_to_out and out_has_skip), "identity_to_out and out_has_skip cannot be both True."
 
         self.to_out = nn.Sequential(
-            nn.Linear(input_dim, input_dim, bias=False) if not identity_to_out else nn.Identity(),
+            nn.Linear(input_dim, input_dim, bias=False),
             nn.Dropout(p_dropout)
-        )
+        ) if not identity_to_out else nn.Identity()
+
         self.out_has_skip = out_has_skip
         self.attn_drop = nn.Dropout(p_dropout)
 
@@ -361,8 +365,7 @@ class SubjBasisGenerator(nn.Module):
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        num_latent_queries=512,             # Number of latent queries.
-        num_latent_query_groups=64,         # number of latent query groups. Each group has its own v projection.
+        #num_latent_queries=512,             # Number of latent queries.
         # num_prompt2token_emb_modes=1,       # number of modes for prompt2token_emb.
         num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
         # init_proj_dim=768,                  # Arc2Face face projection dimension.
@@ -372,6 +375,7 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
         q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
+        v_repeat=4,                         # Repetitions of each latent query group. Each group has its own v projection.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
     ):
@@ -382,9 +386,14 @@ class SubjBasisGenerator(nn.Module):
             nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
         )
 
-        self.placeholder_is_bg   = placeholder_is_bg
-        self.num_latent_queries  = num_latent_queries
-        self.num_latent_query_groups = num_latent_query_groups
+        self.placeholder_is_bg  = placeholder_is_bg
+        self.num_out_queries    = num_out_queries
+        self.v_repeat           = v_repeat
+        # Make num_latent_queries a multiple of v_repeat. If num_out_queries % v_repeat = 0,
+        # this equation will compute v_repeat more latent queries than num_out_queries, which is
+        # redundant. But it's fine, as the redundant queries will be ignored.
+        self.num_latent_queries     = num_out_queries + v_repeat - num_out_queries % v_repeat
+        self.num_latent_query_groups = self.num_latent_queries // v_repeat
         self.latent_query_dim       = output_dim
         self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
 
@@ -399,13 +408,14 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
+            print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
             # Freeze prompt2token_proj if prompt2token_proj_grad_scale is 0.
             # Set requires_grad to False for all parameters in prompt2token_proj, to save memory taken by the optimizer.
             if prompt2token_proj_grad_scale == 0:
                 for param in self.prompt2token_proj.parameters():
                     param.requires_grad = False
+                print("Subj prompt2token_proj is frozen.")
             self.prompt2token_proj_attention_multiplier = -1
-            print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.pad_embeddings = None
         else:
@@ -418,11 +428,13 @@ class SubjBasisGenerator(nn.Module):
         self.num_lora2hira_modes    = num_lora2hira_modes
         self.elementwise_affine     = elementwise_affine
         self.output_scale           = output_dim ** -0.5
+        '''
         # Linearly combine the latent queries to generate the output queries.
-        self.lora2hira = Lora2Hira(lora_rank=num_latent_queries, hira_rank=num_out_queries, 
+        self.lora2hira = Lora2Hira(lora_rank=self.num_latent_queries, hira_rank=num_out_queries, 
                                    output_dim=output_dim, num_modes=num_lora2hira_modes,
                                    elementwise_affine=elementwise_affine)
-        
+        '''
+
         self.layers             = nn.ModuleList([])
         self.latent_queries     = nn.ParameterList([])
         self.latent_query_lns   = nn.ModuleList([])
@@ -431,11 +443,11 @@ class SubjBasisGenerator(nn.Module):
         assert depth > 0, "depth must be > 0."
 
         for dep in range(depth):
-            q_aware_to_v = use_q_aware_to_v and not self.placeholder_is_bg
+            v_has_skip      = True
+            q_aware_to_v    = use_q_aware_to_v and not self.placeholder_is_bg
             identity_to_v   = not q_aware_to_v
-            v_has_skip      = not identity_to_v
             identity_to_out = q_aware_to_v
-            out_has_skip = not identity_to_out
+            out_has_skip    = not identity_to_out
 
             self.layers.append(
                 nn.ModuleList(
@@ -445,7 +457,7 @@ class SubjBasisGenerator(nn.Module):
                                        identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                        q_aware_to_v=q_aware_to_v, v_has_skip=v_has_skip,
                                        num_q=self.num_latent_queries,
-                                       num_q_group=self.num_latent_query_groups,
+                                       v_repeat=self.v_repeat,
                                        q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
                                        identity_to_out=identity_to_out,
                                        out_has_skip=out_has_skip),
@@ -482,8 +494,6 @@ class SubjBasisGenerator(nn.Module):
                 # in embedding_manager: [BS, 16, 768] -> [BS, 77, 768].
                 # arc2face_id_embs is part of arc2face_embs: [BS, 77, 768] -> [BS, 16, 768].
                 # arc2face_inverse_prompt_embs is projected to the token embedding spaces.
-                # core_id_embs: [BS, 18, 768], the identity and (at most) two extra words 
-                # in full_prompt_embs, without BOS and EOS.
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
                 # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
                 # Using b_core_e is more computationally efficient than using full_zeroed_extra. 
@@ -497,6 +507,8 @@ class SubjBasisGenerator(nn.Module):
                     self.generate_pad_embeddings()
 
                 with torch.set_grad_enabled(self.prompt2token_proj_grad_scale != 0):
+                    # core_id_embs: [BS, 21, 768], three leading words, the 16 identity tokens 
+                    # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
                     arc2face_inverse_prompt_embs, core_id_embs = \
                         arc2face_inverse_face_prompt_embs(clip_tokenizer, 
                                                           self.prompt2token_proj, 
@@ -539,7 +551,8 @@ class SubjBasisGenerator(nn.Module):
                 context = (ff(context) + context) / 2
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
-        output_queries = self.lora2hira(context) * self.output_scale
+        # output_queries = self.lora2hira(context) * self.output_scale
+        output_queries = context[:, :self.num_out_queries]
         #arc2face_inverse_prompt_embs[1:-1] = arc2face_inverse_prompt_embs[1:-1] * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
 

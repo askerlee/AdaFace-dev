@@ -219,7 +219,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--frozen_embedder_components",
         type=str, default=None, 
         help="Embedder components to be frozen after loading from the checkpoint (candidates: pooler,layer_coeff_maps)")
-        
+
     parser.add_argument("--ckpt_params_perturb_ratio",
         type=float, default=-1,
         help="Ratio of parameters in the loaded ckpt to be perturbed")
@@ -279,8 +279,6 @@ def get_parser(**parser_kwargs):
                         help="Whether to use elementwise affine in zero-shot subject feature generator")
     parser.add_argument("--zs_use_FFN", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use FFN in zero-shot subject feature generator")
-    parser.add_argument("--zs_apply_neg_subj_bases", type=str2bool, nargs="?", const=True, default=False,
-                        help="Apply negative subject bases for zero-shot learning")
     parser.add_argument("--zs_use_q_aware_to_v", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use dynamic to_v in zero-shot learning")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
@@ -297,7 +295,9 @@ def get_parser(**parser_kwargs):
                         help="Multiplier of the prompt2token projection attention")
     parser.add_argument("--arc2face_distill_iter_prob", type=float, default=argparse.SUPPRESS,
                         help="Probability of doing arc2face distillation in each iteration")
-            
+    parser.add_argument("--load_old_embman_ckpt", action="store_true", 
+                        help="Load the old checkpoint for the embedding manager")
+                
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
@@ -990,7 +990,6 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_num_lora2hira_modes  = opt.zs_num_lora2hira_modes
             config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
             config.model.params.personalization_config.params.zs_use_FFN                = opt.zs_use_FFN
-            config.model.params.personalization_config.params.zs_apply_neg_subj_bases   = opt.zs_apply_neg_subj_bases
             config.model.params.personalization_config.params.zs_num_latent_queries     = opt.zs_num_latent_queries
             config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
@@ -1039,6 +1038,7 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'arc2face_distill_iter_prob'):
             config.model.params.arc2face_distill_iter_prob = opt.arc2face_distill_iter_prob
+        config.model.params.load_old_embman_ckpt = opt.load_old_embman_ckpt
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type

@@ -1014,7 +1014,6 @@ class EmbeddingManager(nn.Module):
             zs_num_lora2hira_modes=1,
             zs_elementwise_affine=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
-            zs_apply_neg_subj_bases=False,
             zs_num_latent_queries=512,
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
@@ -1253,7 +1252,7 @@ class EmbeddingManager(nn.Module):
                 depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
 
                 subj_basis_generator = SubjBasisGenerator(depth=depth,
-                                                          num_latent_queries = zs_num_latent_queries,
+                                                          #num_latent_queries = zs_num_latent_queries,
                                                           num_out_queries = num_out_queries,
                                                           num_lora2hira_modes = zs_num_lora2hira_modes,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
@@ -1263,6 +1262,7 @@ class EmbeddingManager(nn.Module):
                                                           use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           use_q_aware_to_v = zs_use_q_aware_to_v,
+                                                          v_repeat = 4,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
@@ -1314,7 +1314,6 @@ class EmbeddingManager(nn.Module):
 
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
-        self.zs_apply_neg_subj_bases = zs_apply_neg_subj_bases
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}, ada_emb_weight={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank, 
@@ -1588,7 +1587,7 @@ class EmbeddingManager(nn.Module):
                         arc2face_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
-                    # zs_vecs_2sets: [BS, 468, 768] -> [BS, 9, 52, 768]
+                    # zs_vecs: [BS, 234, 768] -> [BS, 9, 26, 768]
                     #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
                     zs_vecs_2sets, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
@@ -1601,32 +1600,6 @@ class EmbeddingManager(nn.Module):
                         assert placeholder_arc2face_inverse_prompt_embs is not None
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
                         self.arc2face_embs = placeholder_arc2face_embs
-
-                    if self.zs_apply_neg_subj_bases:
-                        if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
-                            with torch.no_grad():
-                                # neg_arc2face_id_embs: [BS, 16, 768].
-                                _, neg_arc2face_id_embs = \
-                                        arc2face_forward_face_embs(self.tokenizer, self.arc2face_text_encoder, 
-                                                                   torch.zeros_like(zs_id_embs), return_full_and_core_embs=True)
-                        else:
-                            neg_arc2face_id_embs = None
-
-                        zs_vecs_2sets_neg, _ = \
-                            subj_basis_generator(torch.zeros_like(zs_clip_features), 
-                                                 torch.zeros_like(zs_id_embs), 
-                                                 neg_arc2face_id_embs,
-                                                 list_extra_words=None, 
-                                                 is_face=self.curr_subj_is_face,
-                                                 training_percent=self.training_percent if self.training else -1,
-                                                 arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
-                        
-                        zs_neg_subj_bases_weight = 0.2
-                        zs_vecs_2sets_pos = zs_vecs_2sets
-                        # Similar to compel_cfg. So we use a similar weight 0.2.
-                        zs_vecs_2sets = zs_vecs_2sets_pos * (1 + zs_neg_subj_bases_weight) \
-                                        - zs_vecs_2sets_neg * zs_neg_subj_bases_weight
-                        #breakpoint()
 
                     # num_vectors_each_placeholder: 9. 
                     # num_zs_vecs_per_token: 26 = layerwise_lora_rank + self.num_unet_ca_layers.
@@ -2377,7 +2350,7 @@ class EmbeddingManager(nn.Module):
     # the first background string.
     def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, src_placeholders=None, 
              loaded_embedder_components=None, frozen_placeholder_set=None, frozen_embedder_components=None,
-             extend_prompt2token_proj_attention_multiplier=-1):
+             extend_prompt2token_proj_attention_multiplier=-1, load_old_embman_ckpt=False):
         if src_placeholders is not None and loaded_embedder_components is not None:
             self.load_embedder_components(ckpt_paths, src_placeholders=src_placeholders, 
                                           loaded_embedder_components=loaded_embedder_components,
@@ -2450,9 +2423,13 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     ckpt_subj_basis_generator.face_proj_in = None
-                    # Temporarily fix a different-shape of lora2hira bug.
-                    # TODO: correct the fix
-                    ckpt_subj_basis_generator.lora2hira = None
+                    
+                    if load_old_embman_ckpt:
+                        # Skip loadding lora2hira, latent_queries and layers, as the old ckpt has different shapes.
+                        ckpt_subj_basis_generator.lora2hira = None
+                        ckpt_subj_basis_generator.latent_queries = None
+                        ckpt_subj_basis_generator.layers = None
+
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
                     if (not ckpt_subj_basis_generator.placeholder_is_bg) \
                       and ckpt_subj_basis_generator.hidden_state_layer_weights.shape[-1] != self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1]:
