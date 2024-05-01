@@ -1153,7 +1153,7 @@ class EmbeddingManager(nn.Module):
             # num_zs_vecs_per_token: 10 + 16 = 26.
             # 10: 10 basis vecs for ada embedder. 16: 16 layerwise static embeddings.
             self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers
-            # num_subj_queries: 9 * 26 = 234.
+            # num_subj_queries: 16 * 26 = 416.
             self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
             # num_bg_queries:   4 * 26 = 104.
             self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
@@ -1587,7 +1587,7 @@ class EmbeddingManager(nn.Module):
                         arc2face_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
-                    # zs_vecs: [BS, 234, 768] -> [BS, 9, 26, 768]
+                    # zs_vecs: [BS, 416, 768] -> [BS, 16, 26, 768]
                     #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
                     zs_vecs_2sets, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
@@ -1603,19 +1603,19 @@ class EmbeddingManager(nn.Module):
 
                     # num_vectors_each_placeholder: 9. 
                     # num_zs_vecs_per_token: 26 = layerwise_lora_rank + self.num_unet_ca_layers.
-                    # zs_vecs_2sets: [BS, 234, 768] -> [BS, 9, 26, 768].
+                    # zs_vecs_2sets: [BS, 416, 768] -> [BS, 16, 26, 768].
                     zs_vecs_2sets = zs_vecs_2sets.reshape(zs_vecs_2sets.shape[0], 
                                                           num_vectors_each_placeholder,
                                                           self.num_zs_vecs_per_token, -1)
                     # If subj:
-                    # ada_zs_basis_vecs: [BS, 9, 10, 768], static_zs_embs: [BS, 9, 16, 768].
+                    # ada_zs_basis_vecs: [BS, 16, 10, 768], static_zs_embs: [BS, 16, 16, 768].
                     # If bg:
                     # ada_zs_basis_vecs: [BS, 4, 10, 768], static_zs_embs: [BS, 4, 16, 768].
                     ada_zs_basis_vecs, static_zs_embs = \
                         zs_vecs_2sets[:, :, :self.layerwise_lora_rank], \
                         zs_vecs_2sets[:, :, self.layerwise_lora_rank:]
                     self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
-                    # subj_static_embedding: [BS, 9, 16, 768] => [BS, 16, 9, 768]
+                    # subj_static_embedding: [BS, 16, 16, 768] => [BS, 16, 16, 768]
                     # [BS, num_unet_ca_layers, num_vectors_each_placeholder, 768].
                     static_zs_embs = static_zs_embs.permute(0, 2, 1, 3)
                 else:
