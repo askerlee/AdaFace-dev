@@ -219,16 +219,18 @@ class PerceiverAttention(nn.Module):
 
 
 class CrossAttention(nn.Module):
+    # output_dim is always the same as input_dim.
     def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
-                 identity_to_q=False, identity_to_k=False, identity_to_v=False, 
+                 identity_to_q=False, identity_to_k=False, identity_to_v=False, v_has_skip=True,
                  q_aware_to_v=True, num_q=512, num_q_group=64, q_aware_to_v_lora_rank=64,
                  identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
 
-        self.num_heads = num_heads
-        self.q_aware_to_v = q_aware_to_v
+        self.num_heads      = num_heads
+        self.q_aware_to_v   = q_aware_to_v
+        self.v_has_skip     = v_has_skip
         self.to_q = nn.Sequential(
                         nn.Linear(input_dim, inner_dim, bias=False),
                         nn.LayerNorm(inner_dim, elementwise_affine=True) 
@@ -291,9 +293,13 @@ class CrossAttention(nn.Module):
             # context: [BS, L, D]. v: [BS, Q, L, D].
             # There are effectively Q to_v projections.
             v = self.to_v(context)
+            if self.v_has_skip:
+                v = v + context.unsqueeze(1)
         else:
             # v: [BS, L, D].
             v = self.to_v(context)
+            if self.v_has_skip:
+                v = v + context
 
         #print(v.shape)
 
@@ -426,6 +432,7 @@ class SubjBasisGenerator(nn.Module):
         for dep in range(depth):
             q_aware_to_v = use_q_aware_to_v and not self.placeholder_is_bg
             identity_to_v   = not q_aware_to_v
+            v_has_skip      = not identity_to_v
             identity_to_out = q_aware_to_v
             out_has_skip = not identity_to_out
 
@@ -435,7 +442,8 @@ class SubjBasisGenerator(nn.Module):
                         # dim=768, num_heads=6.
                         CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
                                        identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
-                                       q_aware_to_v=q_aware_to_v, num_q=self.num_latent_queries,
+                                       q_aware_to_v=q_aware_to_v, v_has_skip=v_has_skip,
+                                       num_q=self.num_latent_queries,
                                        num_q_group=self.num_latent_query_groups,
                                        q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
                                        identity_to_out=identity_to_out,

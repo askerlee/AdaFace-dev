@@ -1572,7 +1572,7 @@ class EmbeddingManager(nn.Module):
                     # Loaded pretrained IP-Adapter model weight. No need to update arc2face_text_encoder.
                     # So arc2face_text_encoder is frozen.
                     if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
-                        self.check_arc2face_text_encoder()
+                        self.check_arc2face_text_encoder(zs_id_embs.device)
 
                         with torch.no_grad():
                             # arc2face_embs: [BS, 77, 768]. arc2face_id_embs: [BS, 16, 768].
@@ -1600,8 +1600,6 @@ class EmbeddingManager(nn.Module):
 
                     if self.zs_apply_neg_subj_bases:
                         if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
-                            self.check_arc2face_text_encoder()
-
                             with torch.no_grad():
                                 # neg_arc2face_id_embs: [BS, 16, 768].
                                 _, neg_arc2face_id_embs = \
@@ -2226,13 +2224,14 @@ class EmbeddingManager(nn.Module):
         self.attn_pooler_feat_reduction_ratio = attn_pooler_feat_reduction_ratio
         print(f"Setting attn_pooler_feat_reduction_ratio = {attn_pooler_feat_reduction_ratio}")
 
-    def check_arc2face_text_encoder(self):
+    def check_arc2face_text_encoder(self, device):
         if self.arc2face_text_encoder is None:
             from ldm.modules.arc2face_models import CLIPTextModelWrapper
             print("arc2face_text_encoder is still None. Initialize it as a private copy.")
             self.arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
                                             'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
                                         )
+            self.arc2face_text_encoder.to(device)
             
     def set_zs_image_features(self, zs_clip_features, zs_id_embs):
         # zs_clip_features: [1, 514, 1280]
