@@ -389,11 +389,12 @@ class SubjBasisGenerator(nn.Module):
         self.placeholder_is_bg  = placeholder_is_bg
         self.num_out_queries    = num_out_queries
         self.v_repeat           = v_repeat
-        # Make num_latent_queries a multiple of v_repeat. If num_out_queries % v_repeat = 0,
-        # this equation will compute v_repeat more latent queries than num_out_queries, which is
-        # redundant. But it's fine, as the redundant queries will be ignored.
-        self.num_latent_queries     = num_out_queries + v_repeat - num_out_queries % v_repeat
+        # Make num_latent_queries a multiple of v_repeat.
+        self.num_latent_queries = num_out_queries
+        if num_out_queries % v_repeat != 0:
+            self.num_latent_queries += v_repeat - num_out_queries % v_repeat
         self.num_latent_query_groups = self.num_latent_queries // v_repeat
+        
         self.latent_query_dim       = output_dim
         self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
 
