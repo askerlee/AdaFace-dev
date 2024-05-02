@@ -2430,6 +2430,8 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.lora2hira = None
                         ckpt_subj_basis_generator.latent_queries = None
                         ckpt_subj_basis_generator.layers = None
+                        ckpt_subj_basis_generator.obj_proj_in = None
+                        ckpt_subj_basis_generator.proj_in = None
 
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
                     if (not ckpt_subj_basis_generator.placeholder_is_bg) \

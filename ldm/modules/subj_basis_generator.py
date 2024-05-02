@@ -378,9 +378,9 @@ class SubjBasisGenerator(nn.Module):
         # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
-        num_id_vecs=16,                     # number of identity vectors.
-        num_out_queries=416,                # fg: 416 = 16 * 26. bg: 104 = 4 * 26.
-        image_embedding_dim=768,            # CLIP image feature dimension, as per config.json above.
+        num_id_vecs={ 'fg': 21, 'bg': 257 },  # number of identity vectors. 16 + 5 preceding tokens.
+        num_out_queries=416,                  # fg: 416 = 16 * 26. bg: 104 = 4 * 26.
+        image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
@@ -400,11 +400,6 @@ class SubjBasisGenerator(nn.Module):
     ):
         super().__init__()
 
-        self.proj_in = nn.Sequential(
-            nn.Linear(image_embedding_dim, output_dim, bias=False),
-            nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
-        )
-
         self.placeholder_is_bg  = placeholder_is_bg
         self.num_out_queries    = num_out_queries
         self.v_repeat           = v_repeat
@@ -415,11 +410,12 @@ class SubjBasisGenerator(nn.Module):
         
         self.latent_query_dim       = output_dim
         self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
+        self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
             # TODO: use CLIPTextModelWrapper as obj_proj_in.
-            self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=num_id_vecs,
+            self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=self.num_id_vecs,
                                           elementwise_affine=elementwise_affine)
 
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings).
@@ -437,22 +433,27 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj_attention_multiplier = -1
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.pad_embeddings = None
+            self.bg_proj_in = None
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
             self.prompt2token_proj = None
             print("Bg prompt2token_proj is set to None.")
 
+            self.bg_proj_in = nn.Sequential(
+                nn.Linear(image_embedding_dim, output_dim, bias=False),
+                nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
+            )
+
         self.num_out_queries        = num_out_queries
         self.num_lora2hira_modes    = num_lora2hira_modes
         self.elementwise_affine     = elementwise_affine
         self.output_scale           = output_dim ** -0.5
-        '''
-        # Linearly combine the latent queries to generate the output queries.
-        self.lora2hira = Lora2Hira(lora_rank=self.num_latent_queries, hira_rank=num_out_queries, 
+
+        # Linearly combine the original embeddings to generate the residual output queries. 21 -> 416.
+        self.lora2hira = Lora2Hira(lora_rank=self.num_id_vecs, hira_rank=self.num_latent_queries, 
                                    output_dim=output_dim, num_modes=num_lora2hira_modes,
                                    elementwise_affine=elementwise_affine)
-        '''
 
         self.layers             = nn.ModuleList([])
         self.latent_queries     = nn.ParameterList([])
@@ -541,14 +542,14 @@ class SubjBasisGenerator(nn.Module):
                 # Reduce the update rate of prompt2token_proj.
                 id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
             else:
-                # id_embs: [BS, 384] -> [BS, 16, 768].
+                # id_embs: [BS, 384] -> [BS, 21, 768].
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_proj.
                 id_embs = self.obj_proj_in(raw_id_embs)
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
             # id_embs: [BS, 257, 768].
-            id_embs = self.proj_in(clip_features)
+            id_embs = self.bg_proj_in(clip_features)
 
         # context is already in the token embedding space.
         context = id_embs
@@ -569,6 +570,11 @@ class SubjBasisGenerator(nn.Module):
             if isinstance(ff, nn.Sequential) and (torch.rand(1) > p_drop_path):
                 context_out = (ff(context_out) + context_out) / 2
 
+            if i == 0:
+                # Increase the number of original tokens from 16 to 416, so that we can add context and context_out.
+                # [4, 21, 768] -> [4, 416, 768]
+                context = self.lora2hira(context)
+            # Beyond the first layer, the number of tokens is fixed at 416.
             # Skip connection to retain the context information.
             context = context + context_out
 
