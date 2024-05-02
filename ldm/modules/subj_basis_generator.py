@@ -393,7 +393,6 @@ class SubjBasisGenerator(nn.Module):
         self.num_latent_queries = num_out_queries
         if num_out_queries % v_repeat != 0:
             self.num_latent_queries += v_repeat - num_out_queries % v_repeat
-        self.num_latent_query_groups = self.num_latent_queries // v_repeat
         
         self.latent_query_dim       = output_dim
         self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
@@ -447,7 +446,7 @@ class SubjBasisGenerator(nn.Module):
             v_has_skip      = True
             q_aware_to_v    = use_q_aware_to_v and not self.placeholder_is_bg
             identity_to_v   = not q_aware_to_v
-            identity_to_out = q_aware_to_v
+            identity_to_out = False #q_aware_to_v
             out_has_skip    = not identity_to_out
 
             self.layers.append(
