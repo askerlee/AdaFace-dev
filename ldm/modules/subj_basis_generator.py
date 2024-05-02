@@ -222,8 +222,8 @@ class CrossAttention(nn.Module):
     # output_dim is always the same as input_dim.
     def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, v_has_skip=True,
-                 q_aware_to_v=True, num_q=512, v_repeat=4, q_aware_to_v_lora_rank=64,
-                 identity_to_out=False, out_has_skip=False):
+                 q_aware_to_v=True, num_q=416, v_repeat=4, q_aware_to_v_lora_rank=64,
+                 identity_to_out=False, q_aware_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
@@ -241,43 +241,62 @@ class CrossAttention(nn.Module):
                     ) if not identity_to_k else nn.Identity()
         
         self.v_repeat = v_repeat
-        self.num_q_group = num_q_group = num_q // v_repeat
+        self.num_q_group = num_q_group = num_q // v_repeat      # 416 / 4 = 104.
 
         # If q_aware_to_v is True, then self.to_v consists of num_q projections of input_dim to inner_dim.
         # Otherwise, self.to_v consists of a single projection of input_dim to inner_dim.
         if q_aware_to_v:
-            # all_q_mid: 64 * 64 = 4096.
+            # all_q_mid: 104 * 64 = 6656.
             all_q_mid = num_q_group * q_aware_to_v_lora_rank
             self.to_v = nn.Sequential(
-                # number of params: 768 * 4096 = 3,145,728.
-                # Input:  [BS, 16, 768]. Output: [BS, 16, 4096]
+                # number of params: 768 * 6656 = 5,116,928.
+                # Input:  [BS, 16, 768]. Output: [BS, 16, 104*64] = [BS, 16, 6656].
+                # Each 768-dim vec is dispersed into 104 64-dim vecs.
                 nn.Linear(input_dim, all_q_mid, bias=False),
                 nn.LayerNorm(all_q_mid, elementwise_affine=True),
-                # Change the dim of the tensor to [BS, 4096, 16], as Conv1d transforms dim 1.
+                # Change the dim of the tensor to [BS, 6656, 16], as Conv1d transforms dim 1.
                 Rearrange('b n q -> b q n', q=all_q_mid),
-                # Each q_aware_to_v projection has its own lora2hira linear layer.
-                # The total number of parameters will be 4096*768 = 3,145,728.
-                # Output: [BS, 64*768, 16].
-                torch.nn.Conv1d(
+                # Each q_aware_to_v projection has its own linear layer.
+                # The total number of parameters will be 6656*768 = 5,116,928.
+                # Output: [BS, 104*768, 16].
+                nn.Conv1d(
                     in_channels=all_q_mid,
                     out_channels=num_q_group * input_dim,
                     kernel_size=1,
                     groups=num_q_group,
                     bias=False,
                 ),
-                # Output: [BS, 64, 16, 768].
+                # Output: [BS, 104, 16, 768].
                 Rearrange('b (q d) n -> b q n d', q=num_q_group, d=input_dim),
                 nn.LayerNorm(input_dim, elementwise_affine=True),
             )
         else:
             self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
-        assert not (identity_to_out and out_has_skip), "identity_to_out and out_has_skip cannot be both True."
+        if identity_to_out:
+            assert not (q_aware_to_out or out_has_skip), "identity_to_out=True, then q_aware_to_out and out_has_skip have to be both False."
 
-        self.to_out = nn.Sequential(
-            nn.Linear(input_dim, input_dim, bias=False),
-            nn.Dropout(p_dropout)
-        ) if not identity_to_out else nn.Identity()
+        if identity_to_out:
+            self.to_out = nn.Identity()
+        elif q_aware_to_out:
+            self.to_out = nn.Sequential(
+                # Each q_aware_to_out projection has its own linear layer.
+                # The total number of parameters will be 104*768*768 = 64,516,352.
+                # Output: [BS, 104*768, 416].
+                nn.Conv1d(
+                    in_channels=num_q_group * input_dim,
+                    out_channels=num_q_group * input_dim,
+                    kernel_size=1,
+                    groups=num_q_group,
+                    bias=False,
+                ),                
+                nn.LayerNorm(inner_dim, elementwise_affine=True),
+            )
+        else:
+            self.to_out = nn.Sequential(
+                nn.Linear(input_dim, input_dim, bias=False),
+                nn.Dropout(p_dropout)
+            )
 
         self.out_has_skip = out_has_skip
         self.attn_drop = nn.Dropout(p_dropout)
@@ -360,7 +379,7 @@ class SubjBasisGenerator(nn.Module):
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
         num_id_vecs=16,                     # number of identity vectors.
-        num_out_queries=234,                # fg: 234 = 9 * 26. bg: 104 = 4 * 26.
+        num_out_queries=416,                # fg: 416 = 16 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=768,            # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
@@ -537,7 +556,7 @@ class SubjBasisGenerator(nn.Module):
         for i, (attn, ff) in enumerate(self.layers):
             latent_queries = self.latent_query_lns[i](self.latent_queries[i])
             latent_queries = latent_queries.repeat(BS, 1, 1)
-            context = attn(latent_queries, context)
+            context_out = attn(latent_queries, context)
 
             # Gradually reduce the drop path rate from 0.4 to 0.1 (average: 0.3).
             # The ratio in dinov2's paper is 0.3 or 0.4. 
@@ -548,11 +567,14 @@ class SubjBasisGenerator(nn.Module):
             # ff is either nn.Identity() or nn.Sequential. If it's nn.Sequential, it implies self.use_FFN is True.
             # (torch.rand(1) > self.p_drop_path) is evaluated to [True] or [False], which is equivalent to True or False.
             if isinstance(ff, nn.Sequential) and (torch.rand(1) > p_drop_path):
-                context = (ff(context) + context) / 2
+                context_out = (ff(context_out) + context_out) / 2
+
+            # Skip connection to retain the context information.
+            context = context + context_out
 
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         # output_queries = self.lora2hira(context) * self.output_scale
-        # context: [4, 420, 768] -> [4, 416, 768].
+        # context: [4, 416, 768].
         output_queries = context[:, :self.num_out_queries] * self.output_scale
         #arc2face_inverse_prompt_embs[1:-1] = arc2face_inverse_prompt_embs[1:-1] * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
