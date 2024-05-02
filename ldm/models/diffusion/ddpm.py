@@ -3687,7 +3687,7 @@ class LatentDiffusion(DDPM):
             else:
                 # use_background_token == True and not self.iter_flags['use_wds_comp'].
                 # bg loss is somewhat discounted.
-                bg_pixel_weight = 0.
+                bg_pixel_weight = 0.01
             
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
