@@ -466,7 +466,8 @@ class SubjBasisGenerator(nn.Module):
             v_has_skip      = True
             q_aware_to_v    = use_q_aware_to_v and not self.placeholder_is_bg
             identity_to_v   = not q_aware_to_v
-            identity_to_out = True #q_aware_to_v
+            # q_aware_to_v has two linear layers. Therefore, if it's used, no need to use another to_out.
+            identity_to_out = q_aware_to_v
             out_has_skip    = not identity_to_out
 
             self.layers.append(
