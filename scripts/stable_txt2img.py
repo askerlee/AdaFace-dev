@@ -290,10 +290,6 @@ def parse_args():
     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
-    parser.add_argument("--ref_masks", type=str, nargs='+', default=None,
-                        help="Reference mask for zero-shot learning")
-    parser.add_argument("--ignore_ref_masks", action="store_true",
-                        help="Ignore reference masks for zero-shot learning")    
 
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -393,8 +389,6 @@ def main(opt):
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
-            ref_masks  = [ np.array(Image.open(ref_mask), dtype=float) for ref_mask in opt.ref_masks ] \
-                            if (opt.ref_masks is not None) and (not opt.ignore_ref_masks) else None
             zs_clip_type = 'openai'
             # image_emb_dim is not the output dim but the second last layer dim. 
             # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
@@ -405,7 +399,8 @@ def main(opt):
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
         else:
             ref_images = None
-            ref_masks  = None
+
+        ref_masks  = None
 
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -842,9 +837,6 @@ def main(opt):
                     if opt.neg_prompt != "":
                         experiment_sig += "-neg"
 
-                    if opt.zeroshot and (opt.ref_masks is not None) and (not opt.ignore_ref_masks):
-                        experiment_sig += "-mask"
-                    
                     # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                     if opt.from_file:
                         prompt = prompts[0]
