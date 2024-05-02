@@ -553,7 +553,7 @@ class SubjBasisGenerator(nn.Module):
         # lora2hira contains a LayerNorm, so no need to normalize output_queries.
         # output_queries = self.lora2hira(context) * self.output_scale
         # context: [4, 420, 768] -> [4, 416, 768].
-        output_queries = context[:, :self.num_out_queries]
+        output_queries = context[:, :self.num_out_queries] * self.output_scale
         #arc2face_inverse_prompt_embs[1:-1] = arc2face_inverse_prompt_embs[1:-1] * self.output_scale
         return output_queries, arc2face_inverse_prompt_embs
 
