@@ -454,7 +454,7 @@ class SubjBasisGenerator(nn.Module):
         self.elementwise_affine     = elementwise_affine
         self.output_scale           = output_dim ** -0.5
 
-        # Linearly combine the original embeddings to generate the residual output queries. 21 -> 416.
+        # Linearly combine the original embeddings to generate the residual output queries. 18 -> 416.
         self.lora2hira = Lora2Hira(lora_rank=self.num_id_vecs, hira_rank=self.num_latent_queries, 
                                    output_dim=output_dim, num_modes=num_lora2hira_modes,
                                    elementwise_affine=elementwise_affine)
@@ -650,19 +650,20 @@ class SubjBasisGenerator(nn.Module):
             # predefined number of latent queries, therefore it also needs to be extended.
             if cross_attn.q_aware_to_v:
                 input_dim = self.latent_query_dim
-                # all_q_mid: 64 * 64 = 4096.
+                # all_q_mid: 104 * 64 = 6656.
                 all_q_mid = new_num_latent_queries * q_aware_to_v_lora_rank
                 old_all_q_mid = self.num_latent_queries * q_aware_to_v_lora_rank
                 new_to_v = nn.Sequential(
-                    # number of params: 768 * 4096 = 3,145,728.
-                    # Input:  [BS, 16, 768]. Output: [BS, 16, 4096]
+                    # number of params: 768 * 6656 = 5,111,808.
+                    # Weight shape: [79872, 64, 1]. 
+                    # Input:  [BS, 16, 768]. Output: [BS, 16, 104*64] = [BS, 16, 6656].
                     nn.Linear(input_dim, all_q_mid, bias=False),
                     nn.LayerNorm(all_q_mid, elementwise_affine=True),
-                    # Change the dim of the tensor to [BS, 4096, 16], as Conv1d transforms dim 1.
+                    # Change the dim of the tensor to [BS, 6656, 16], as Conv1d transforms dim 1.
                     Rearrange('b n q -> b q n', q=all_q_mid),
                     # Each q_aware_to_v projection has its own lora2hira linear layer.
-                    # The total number of parameters will be 4096*768 = 3,145,728.
-                    # Output: [BS, 64*768, 16].
+                    # The total number of parameters will be 6656*768 = 5,111,808.
+                    # Output: [BS, 104*768, 16].
                     torch.nn.Conv1d(
                         in_channels=all_q_mid,
                         out_channels=new_num_latent_queries * input_dim,
@@ -670,7 +671,7 @@ class SubjBasisGenerator(nn.Module):
                         groups=new_num_latent_queries,
                         bias=False,
                     ),
-                    # Output: [BS, 64, 16, 768].
+                    # Output: [BS, 104, 16, 768].
                     Rearrange('b (q d) n -> b q n d', q=new_num_latent_queries, d=input_dim),
                     # nn.LayerNorm(input_dim, elementwise_affine=True),
                 )
