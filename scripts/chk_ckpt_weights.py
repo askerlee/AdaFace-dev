@@ -11,6 +11,7 @@ parser.add_argument("--sig", dest='ckpt_sig', type=str, required=True)
 parser.add_argument("--extra_sig", type=str, default="")
 parser.add_argument("--only100", action="store_true")
 parser.add_argument("--skipnames", nargs="+", default=[])
+parser.add_argument("--startiter", type=int, default=0)
 args = parser.parse_args()
 
 np.set_printoptions(precision=4, suppress=True)
@@ -44,7 +45,7 @@ if 'string_to_subj_basis_generator_dict' in emb_ckpt:
         prev_subj_basis_generator = None
 
         for idx, iteration in enumerate(iterations):
-            if args.only100 and iteration % 100 != 0:
+            if (args.only100 and iteration % 100 != 0) or (iteration < args.startiter):
                 continue
                     
             emb_path = os.path.join(emb_folder, iter2path[iteration])

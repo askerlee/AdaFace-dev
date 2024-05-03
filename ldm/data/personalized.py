@@ -991,6 +991,11 @@ class SubjectSampler(Sampler):
         self.num_subjects = num_subjects
         self.subject_names = subject_names
         image_count_by_subj = np.array(image_count_by_subj)
+        for subj_idx in range(num_subjects):
+            if are_mix_subj_folders[subj_idx]:
+                # Downweight the image count of mix-subject folders, as once it's sampled,
+                # it will surely repeat for batch_size times.
+                image_count_by_subj[subj_idx] /= batch_size
         self.subj_weights = image_count_by_subj / image_count_by_subj.sum()
 
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
