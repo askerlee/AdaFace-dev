@@ -427,9 +427,13 @@ class SubjBasisGenerator(nn.Module):
             # Freeze prompt2token_proj if prompt2token_proj_grad_scale is 0.
             # Set requires_grad to False for all parameters in prompt2token_proj, to save memory taken by the optimizer.
             if prompt2token_proj_grad_scale == 0:
-                for param in self.prompt2token_proj.parameters():
+                frozen_param_names = []
+                for param_name, param in self.prompt2token_proj.named_parameters():
                     param.requires_grad = False
+                    frozen_param_names.append(param_name)
                 print("Subj prompt2token_proj is frozen.")
+                #print(f"Frozen parameters:\n{frozen_param_names}")
+
             self.prompt2token_proj_attention_multiplier = -1
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.pad_embeddings = None

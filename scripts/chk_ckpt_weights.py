@@ -10,6 +10,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--sig", dest='ckpt_sig', type=str, required=True)
 parser.add_argument("--extra_sig", type=str, default="")
 parser.add_argument("--only100", action="store_true")
+parser.add_argument("--skipnames", nargs="+", default=[])
 args = parser.parse_args()
 
 np.set_printoptions(precision=4, suppress=True)
@@ -56,6 +57,8 @@ if 'string_to_subj_basis_generator_dict' in emb_ckpt:
                 param_total_norm  = 0
                 param_total_delta = 0
                 for param_name, param in subj_basis_generator.named_parameters():
+                    if any([skipname in param_name for skipname in args.skipnames]):
+                        continue
                     # Skip non-learnable parameters.
                     if param.requires_grad:
                         prev_param = prev_subj_basis_generator.state_dict()[param_name]

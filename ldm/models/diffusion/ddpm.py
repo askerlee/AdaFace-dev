@@ -2923,9 +2923,31 @@ class LatentDiffusion(DDPM):
                                 
         if self.iter_flags['do_normal_recon']:
             if not self.iter_flags['do_arc2face_distill']:
+                if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
+                    # bg loss is almost completely ignored. But giving it a little weight may help suppress 
+                    # subj embeddings' contribution to the background (serving as a contrast to the fg).
+                    bg_pixel_weight = 0 #0.01
+                else:
+                    if self.iter_flags['use_wds_comp']:
+                        # fg_pixel_weight/bg_pixel_weight are scalars.
+                        # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
+                        # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
+                        # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
+                        # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
+                        # and subject embeddings may be tempted to attend to the background, which will mix the 
+                        # background features into the subject embeddings, which hurt both authenticity and compositionality.
+                        ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
+                        ## may incur too high loss to the model (even in the fg areas).
+                        bg_pixel_weight = self.wds_bg_recon_discount
+                    else:
+                        # use_background_token == True and not self.iter_flags['use_wds_comp'].
+                        # bg loss is somewhat discounted.
+                        bg_pixel_weight = 0.01
+                                    
                 loss += self.calc_recon_and_complem_losses(model_output, target, extra_info,
                                                            all_subj_indices, all_bg_indices,
                                                            img_mask, fg_mask, batch_have_fg_mask,
+                                                           bg_pixel_weight,
                                                            x_start.shape[0], loss_dict, prefix)
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
@@ -3574,7 +3596,7 @@ class LatentDiffusion(DDPM):
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
                                       all_subj_indices, all_bg_indices,
                                       img_mask, fg_mask, batch_have_fg_mask, 
-                                      BLOCK_SIZE, loss_dict, prefix):
+                                      bg_pixel_weight, BLOCK_SIZE, loss_dict, prefix):
         loss = 0
 
         if self.fg_bg_complementary_loss_weight > 0:
@@ -3668,27 +3690,6 @@ class LatentDiffusion(DDPM):
                         + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
                     * self.fg_wds_complementary_loss_weight
 
-        if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
-            # bg loss is almost completely ignored. But giving it a little weight may help suppress 
-            # subj embeddings' contribution to the background (serving as a contrast to the fg).
-            bg_pixel_weight = 0 #0.01
-        else:
-            if self.iter_flags['use_wds_comp']:
-                # fg_pixel_weight/bg_pixel_weight are scalars.
-                # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
-                # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
-                # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
-                # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
-                # and subject embeddings may be tempted to attend to the background, which will mix the 
-                # background features into the subject embeddings, which hurt both authenticity and compositionality.
-                ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
-                ## may incur too high loss to the model (even in the fg areas).
-                bg_pixel_weight = self.wds_bg_recon_discount
-            else:
-                # use_background_token == True and not self.iter_flags['use_wds_comp'].
-                # bg loss is somewhat discounted.
-                bg_pixel_weight = 0.01
-            
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
                                              fg_pixel_weight=1,
