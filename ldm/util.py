@@ -1217,8 +1217,8 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
     # token 4: first ", " in the template prompt.
     # 4:20 are the most important 16 embeddings that contain the subject's identity.
     # 20:22 are embeddings of the (at most) two extra words.
-    # [N, 77, 768] -> [N, 21, 768]
-    core_prompt_embs = prompt_embeds[:, 1:22]
+    # [N, 77, 768] -> [N, 18, 768]
+    core_prompt_embs = prompt_embeds[:, 4:22]
 
     return_prompts = []
     for emb_type in return_emb_types:

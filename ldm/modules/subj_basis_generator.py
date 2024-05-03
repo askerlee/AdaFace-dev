@@ -378,7 +378,7 @@ class SubjBasisGenerator(nn.Module):
         # num_out_queries: number of output queries.
         # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
         # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
-        num_id_vecs={ 'fg': 21, 'bg': 257 },  # number of identity vectors. 16 + 5 preceding tokens.
+        num_id_vecs={ 'fg': 18, 'bg': 257 },  # number of identity vectors. 16 + 2 preceding tokens.
         num_out_queries=416,                  # fg: 416 = 16 * 26. bg: 104 = 4 * 26.
         image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
@@ -532,7 +532,7 @@ class SubjBasisGenerator(nn.Module):
                     self.generate_pad_embeddings()
 
                 with torch.set_grad_enabled(self.prompt2token_proj_grad_scale != 0):
-                    # core_id_embs: [BS, 21, 768], three leading words, the 16 identity tokens 
+                    # core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                     # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
                     arc2face_inverse_prompt_embs, core_id_embs = \
                         arc2face_inverse_face_prompt_embs(clip_tokenizer, 
@@ -547,7 +547,7 @@ class SubjBasisGenerator(nn.Module):
                 # Reduce the update rate of prompt2token_proj.
                 id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
             else:
-                # id_embs: [BS, 384] -> [BS, 21, 768].
+                # id_embs: [BS, 384] -> [BS, 18, 768].
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_proj.
                 id_embs = self.obj_proj_in(raw_id_embs)
@@ -577,7 +577,7 @@ class SubjBasisGenerator(nn.Module):
 
             if i == 0:
                 # Increase the number of original tokens from 16 to 416, so that we can add context and context_out.
-                # [4, 21, 768] -> [4, 416, 768]
+                # [4, 18, 768] -> [4, 416, 768]
                 context = self.lora2hira(context)
             # Beyond the first layer, the number of tokens is fixed at 416.
             # Skip connection to retain the context information.
