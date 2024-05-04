@@ -168,6 +168,8 @@ class PersonalizedBase(Dataset):
                  # then we could provide a list of subject info files in subj_info_filepaths,
                  # where the files contain the cls_delta_string of all subjects, in the field "cls_delta_strings".
                  subj_info_filepaths=None,
+                 load_meta_subj2person_type_cache_path=None,
+                 save_meta_subj2person_type_cache_path=None,
                  do_zero_shot=False,
                  wds_db_path=None,    # Path to a folder containing webdatabase .tar files
                  use_wds_prompts=False, # Use or ignore the prompts (when the prompts are noisy) in the webdataset.
@@ -227,19 +229,26 @@ class PersonalizedBase(Dataset):
         self.image_count_by_subj    = []
         self.fg_mask_paths_by_subj  = []
         self.caption_paths_by_subj  = []
-        self.mean_emb_path_by_subj  = []
         total_num_valid_fg_masks    = 0
         total_num_valid_captions    = 0
         total_num_valid_mean_embs   = 0
-        meta_subj2person_type       = {}
+        if load_meta_subj2person_type_cache_path is not None:
+            meta_subj2person_type = json.load(open(load_meta_subj2person_type_cache_path, "r"))
+            print(f"Loaded meta_subj2person_type from {load_meta_subj2person_type_cache_path}")
+        else:
+            meta_subj2person_type = {}
 
         for subj_root in self.subj_roots:
             subject_name = os.path.basename(subj_root)
-            all_filenames = sorted(os.listdir(subj_root))
+            base_folder_is_mix_subj = base_folders_are_mix_subj[subj_root]
+            all_filenames = os.listdir(subj_root)
+            # If the base folder is mixed, it contains maybe 100K+ images, so we don't sort them.
+            if not base_folder_is_mix_subj:
+                all_filenames = sorted(all_filenames)
+
             # image_paths and mask_paths are full paths.
             all_file_paths      = [ os.path.join(subj_root, file_path) for file_path in all_filenames ]
             image_paths         = list(filter(lambda x: filter_non_image(x) and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
-            base_folder_is_mix_subj = base_folders_are_mix_subj[subj_root]
             # Limit the number of images for each subject to 100, to speed up loading.
             if (not base_folder_is_mix_subj) and max_num_images_per_subject > 0:
                 image_paths = image_paths[:max_num_images_per_subject]
@@ -261,20 +270,15 @@ class PersonalizedBase(Dataset):
             self.image_count_by_subj.append(len(image_paths))
             self.are_mix_subj_folders.append(base_folder_is_mix_subj)
 
-            if 'mean_emb.pt' in all_filenames:
-                mean_emb_path = os.path.join(subj_root, 'mean_emb.pt')
-                self.mean_emb_path_by_subj.append(mean_emb_path)
-                total_num_valid_mean_embs += 1
-            else:
-                self.mean_emb_path_by_subj.append(None)
-
-            if 'metainfo.json' in all_filenames:
-                metainfo_path = os.path.join(subj_root, 'metainfo.json')
-                metainfo = json.load(open(metainfo_path, "r"))
-                if 'person_type' in metainfo:
-                    meta_subj2person_type[subject_name] = metainfo['person_type']
-                else:
-                    meta_subj2person_type[subject_name] = default_cls_delta_string
+            # Only load metainfo.json if the person type is not in the cache.
+            if subject_name not in meta_subj2person_type:
+                if 'metainfo.json' in all_filenames:
+                    metainfo_path = os.path.join(subj_root, 'metainfo.json')
+                    metainfo = json.load(open(metainfo_path, "r"))
+                    if 'person_type' in metainfo:
+                        meta_subj2person_type[subject_name] = metainfo['person_type']
+                    else:
+                        meta_subj2person_type[subject_name] = default_cls_delta_string
 
             total_num_valid_fg_masks += num_valid_fg_masks
             total_num_valid_captions += num_valid_captions
@@ -297,6 +301,10 @@ class PersonalizedBase(Dataset):
         print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
               f"{total_num_valid_mean_embs} mean embs, {total_num_valid_captions} captions")
   
+        if save_meta_subj2person_type_cache_path is not None:
+            json.dump(meta_subj2person_type, open(save_meta_subj2person_type_cache_path, "w"))
+            print(f"Saved meta_subj2person_type to {save_meta_subj2person_type_cache_path}")
+
         self.num_images = len(self.image_paths)
         self.set_name = set
         if set == "train":
@@ -503,13 +511,11 @@ class PersonalizedBase(Dataset):
             
             fg_mask_path    = self.fg_mask_paths_by_subj[index][image_idx]
             caption_path    = self.caption_paths_by_subj[index][image_idx]
-            mean_emb_path   = self.mean_emb_path_by_subj[index]
             subject_idx     = index
         else:
             image_path    = self.image_paths[index % self.num_images]
             fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
             caption_path  = self.caption_paths[index % self.num_images]
-            mean_emb_path   = self.mean_emb_path_by_subj[0]
             subject_idx   = 0
 
         cls_delta_string      = self.cls_delta_strings[subject_idx]

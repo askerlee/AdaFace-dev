@@ -198,6 +198,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--mix_subj_data_roots",
         type=str, nargs='+', default=None,
         help="Path(s) containing training images of mixed subjects")
+    parser.add_argument("--save_meta_subj2person_type_cache_path",
+        type=str, default=None,
+        help="Path to save the cache of subject to person type mapping")
     
     parser.add_argument("--subj_info_filepaths",
         type=str, nargs="*", default=argparse.SUPPRESS,
@@ -953,6 +956,8 @@ if __name__ == "__main__":
         config.data.params.validation.params.data_roots  = opt.data_roots
         config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
         config.data.params.validation.params.mix_subj_data_roots = opt.mix_subj_data_roots
+        config.data.params.train.params.load_meta_subj2person_type_cache_path = None
+        config.data.params.train.params.save_meta_subj2person_type_cache_path = opt.save_meta_subj2person_type_cache_path
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
@@ -987,7 +992,10 @@ if __name__ == "__main__":
         # calling these ourselves should not be necessary. In trainer.fit(), lightning will calls data.setup().
         # However, some data structures in data['train'] are accessed before trainer.fit(), 
         # therefore we still call it here.
+        # This step is SLOW. It takes 5 minutes to load the data.
         data.setup()
+        # Suppose the meta_subj2person_type has been saved, we can load it directly and save another 5 minutes.
+        config.data.params.train.params.load_meta_subj2person_type_cache_path = config.data.params.train.params.save_meta_subj2person_type_cache_path
 
         print("#### Data #####")
         for k in data.datasets:
