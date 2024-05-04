@@ -572,6 +572,9 @@ class SubjBasisGenerator(nn.Module):
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
+        # Fix compatability with the previous version.
+        if not hasattr(self, 'prompt_trans_layers_have_to_out_proj'):
+            self.prompt_trans_layers_have_to_out_proj = False
         return f"{type_sig} SubjBasisGenerator: num_layers={self.num_layers}, num_out_embs={self.num_out_embs}, " \
                f"prompt_trans_layers_have_to_out_proj={self.prompt_trans_layers_have_to_out_proj}"
     
