@@ -428,10 +428,10 @@ class SubjBasisGenerator(nn.Module):
 
         for layer_idx in range(num_layers):
             identity_to_v   = False
-            v_has_skip      = not identity_to_v
+            v_has_skip      = not identity_to_v     # True
             identity_to_out = True
-            out_has_skip    = not identity_to_out
-
+            out_has_skip    = not identity_to_out   # False
+            # Each prompt_trans_layer has a to_v projection with skip connection, and doesn't have a to_out projection.
             self.prompt_trans_layers.append(
                 # dim=768, num_heads=6.
                 CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
@@ -501,7 +501,7 @@ class SubjBasisGenerator(nn.Module):
             id_embs = self.bg_proj_in(clip_features)
 
         id_embs_out_all_layers = []
-        for i, attn in enumerate(self.prompt_trans_layers):
+        for layer_idx, attn in enumerate(self.prompt_trans_layers):
             if not self.placeholder_is_bg:
                 id_embs_out = attn(id_embs)
             else:
