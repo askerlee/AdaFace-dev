@@ -2420,6 +2420,7 @@ class EmbeddingManager(nn.Module):
                         # Skip loadding lora2hira, latent_queries and layers, as the old ckpt has different shapes.
                         ckpt_subj_basis_generator.lora2hira = None
                         ckpt_subj_basis_generator.latent_queries = None
+                        ckpt_subj_basis_generator.latent_query_lns = None
                         ckpt_subj_basis_generator.layers = None
                         ckpt_subj_basis_generator.obj_proj_in = None
                         ckpt_subj_basis_generator.proj_in = None
