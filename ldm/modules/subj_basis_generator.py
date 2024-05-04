@@ -274,7 +274,7 @@ class CrossAttention(nn.Module):
             self.to_v = nn.Sequential(
                             nn.Linear(input_dim, inner_dim, bias=False),
                             nn.LayerNorm(inner_dim, elementwise_affine=True) 
-                        ) if not identity_to_k else nn.Identity()
+                        ) if not identity_to_v else nn.Identity()
 
         if identity_to_out:
             assert not out_has_skip, "identity_to_out=True, then out_has_skip has to be False."
