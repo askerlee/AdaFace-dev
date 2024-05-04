@@ -223,7 +223,7 @@ class CrossAttention(nn.Module):
     def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, v_has_skip=True,
                  q_aware_to_v=True, num_q=416, v_repeat=4, q_aware_to_v_lora_rank=64,
-                 identity_to_out=False, q_aware_to_out=False, out_has_skip=False):
+                 identity_to_out=False, out_has_skip=False):
         super().__init__()
         dim_head  = input_dim // num_heads
         inner_dim = dim_head   * num_heads
@@ -258,7 +258,7 @@ class CrossAttention(nn.Module):
                 Rearrange('b n q -> b q n', q=all_q_mid),
                 # Each q_aware_to_v projection has its own linear layer.
                 # The total number of parameters will be 6656*768 = 5,111,808.
-                # Output: [BS, 104*768, 16].
+                # Output: [BS, 104*768, 16]. Each 64 dim feature is expanded to 768 dim.
                 nn.Conv1d(
                     in_channels=all_q_mid,
                     out_channels=num_q_group * input_dim,
@@ -274,24 +274,10 @@ class CrossAttention(nn.Module):
             self.to_v = nn.Linear(input_dim, inner_dim, bias=False) if not identity_to_v else nn.Identity()
 
         if identity_to_out:
-            assert not (q_aware_to_out or out_has_skip), "identity_to_out=True, then q_aware_to_out and out_has_skip have to be both False."
+            assert not out_has_skip, "identity_to_out=True, then out_has_skip has to be False."
 
         if identity_to_out:
             self.to_out = nn.Identity()
-        elif q_aware_to_out:
-            self.to_out = nn.Sequential(
-                # Each q_aware_to_out projection has its own linear layer.
-                # The total number of parameters will be 104*768*768 = 64,516,352.
-                # Output: [BS, 104*768, 416].
-                nn.Conv1d(
-                    in_channels=num_q_group * input_dim,
-                    out_channels=num_q_group * input_dim,
-                    kernel_size=1,
-                    groups=num_q_group,
-                    bias=False,
-                ),                
-                nn.LayerNorm(inner_dim, elementwise_affine=True),
-            )
         else:
             self.to_out = nn.Sequential(
                 nn.Linear(input_dim, input_dim, bias=False),
@@ -371,52 +357,36 @@ class CrossAttention(nn.Module):
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
-        depth=1,                            # number of (CrossAttention, FeedForward) layers.     
+        # number of CrossAttention layers. Should be the same as the number of cross-attention layers in UNet.
+        num_layers=16,                      
         # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=6,                       
-        # num_out_queries: number of output queries.
-        # 2 * Static/Ada layerwise_lora_rank. * 2 to generate both static and ada bases.
-        # Two different SubjBasisGenerator instances are used to generate subj and bg embedder bases.
-        num_id_vecs={ 'fg': 18, 'bg': 257 },  # number of identity vectors. 16 + 2 preceding tokens.
-        num_out_queries=416,                  # fg: 416 = 16 * 26. bg: 104 = 4 * 26.
+        num_id_vecs={ 'fg': 18, 'bg': 257 },  # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
+        num_out_embs_per_layer=16,                      # num_out_embs per layer. fg: 16. bg: 4.
         image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        #num_latent_queries=512,             # Number of latent queries.
-        # num_prompt2token_emb_modes=1,       # number of modes for prompt2token_emb.
-        num_lora2hira_modes=1,              # number of modes for Lora2Hira.  
-        # init_proj_dim=768,                  # Arc2Face face projection dimension.
         output_dim=768,                     # CLIP text embedding input dimension.
-        elementwise_affine: bool = True,    # Whether to use elementwise affine in LayerNorms.
-        use_FFN: bool = False,              # Whether to use FeedForward layer after cross-attention.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
-        use_q_aware_to_v: bool = True,      # Whether to use q-aware (q-specific) to_v in CrossAttention.
-        q_aware_to_v_lora_rank = 64,         # The rank of the q-aware to_v projection.
-        v_repeat=4,                         # Repetitions of each latent query group. Each group has its own v projection.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
     ):
         super().__init__()
 
         self.placeholder_is_bg  = placeholder_is_bg
-        self.num_out_queries    = num_out_queries
-        self.v_repeat           = v_repeat
-        # Make num_latent_queries a multiple of v_repeat.
-        self.num_latent_queries = num_out_queries
-        if num_out_queries % v_repeat != 0:
-            self.num_latent_queries += v_repeat - num_out_queries % v_repeat
-        
+        self.num_layers         = num_layers
+        self.num_out_embs_per_layer = num_out_embs_per_layer
+        self.num_out_embs       = num_out_embs_per_layer * num_layers 
+
         self.latent_query_dim       = output_dim
-        self.q_aware_to_v_lora_rank = q_aware_to_v_lora_rank
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
             # TODO: use CLIPTextModelWrapper as obj_proj_in.
-            self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=self.num_id_vecs,
-                                          elementwise_affine=elementwise_affine)
+            self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=self.num_id_vecs)
 
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
@@ -446,58 +416,31 @@ class SubjBasisGenerator(nn.Module):
 
             self.bg_proj_in = nn.Sequential(
                 nn.Linear(image_embedding_dim, output_dim, bias=False),
-                nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine),
+                nn.LayerNorm(output_dim),
             )
 
-        self.num_out_queries        = num_out_queries
-        self.num_lora2hira_modes    = num_lora2hira_modes
-        self.elementwise_affine     = elementwise_affine
+            self.latent_queries     = nn.Parameter(torch.randn(1, self.num_out_embs, output_dim))
+            self.latent_queries_ln  = nn.LayerNorm(output_dim)
+
         self.output_scale           = output_dim ** -0.5
 
-        # Linearly combine the original embeddings to generate the residual output queries. 18 -> 416.
-        self.lora2hira = Lora2Hira(lora_rank=self.num_id_vecs, hira_rank=self.num_latent_queries, 
-                                   output_dim=output_dim, num_modes=num_lora2hira_modes,
-                                   elementwise_affine=elementwise_affine)
+        self.prompt_trans_layers = nn.ModuleList([])
 
-        self.layers             = nn.ModuleList([])
-        self.latent_queries     = nn.ParameterList([])
-        self.latent_query_lns   = nn.ModuleList([])
-        self.use_FFN            = use_FFN
-        self.depth = depth
-        assert depth > 0, "depth must be > 0."
-
-        for dep in range(depth):
-            v_has_skip      = True
-            q_aware_to_v    = use_q_aware_to_v and not self.placeholder_is_bg
-            identity_to_v   = not q_aware_to_v
-            # q_aware_to_v has two linear layers. Therefore, if it's used, no need to use another to_out.
-            identity_to_out = q_aware_to_v
+        for layer_idx in range(num_layers):
+            identity_to_v   = False
+            v_has_skip      = not identity_to_v
+            identity_to_out = True
             out_has_skip    = not identity_to_out
 
-            self.layers.append(
-                nn.ModuleList(
-                    [
-                        # dim=768, num_heads=6.
-                        CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
-                                       identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
-                                       q_aware_to_v=q_aware_to_v, v_has_skip=v_has_skip,
-                                       num_q=self.num_latent_queries,
-                                       v_repeat=self.v_repeat,
-                                       q_aware_to_v_lora_rank=q_aware_to_v_lora_rank,
-                                       identity_to_out=identity_to_out,
-                                       out_has_skip=out_has_skip),
-                        # FeedForward: 2-layer MLP with GELU activation.
-                        # LayerNorm -> Linear -> GELU -> Linear.
-                        # Only use FFN in the first layer.
-                        FeedForward(dim=output_dim, mult=1, elementwise_affine=elementwise_affine) \
-                            if self.use_FFN else nn.Identity(),
-                    ]
-                )
+            self.prompt_trans_layers.append(
+                # dim=768, num_heads=6.
+                CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
+                                identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
+                                q_aware_to_v=False,  v_has_skip=v_has_skip,
+                                num_q=0, # No static learnable queries, as they are self-attention layers.
+                                identity_to_out=identity_to_out,
+                                out_has_skip=out_has_skip)
             )
-            # These sets of latent queries are used to attend to the ad-hoc identity features.
-            layer_latent_queries = nn.Parameter(torch.randn(1, self.num_latent_queries, output_dim) / output_dim**0.5)
-            self.latent_queries.append(layer_latent_queries)
-            self.latent_query_lns.append(nn.LayerNorm(output_dim, elementwise_affine=elementwise_affine))
 
         print(repr(self))
 
@@ -508,6 +451,7 @@ class SubjBasisGenerator(nn.Module):
     def forward(self, clip_features, raw_id_embs, arc2face_id_embs, 
                 list_extra_words, is_face, training_percent=0, 
                 arc2face_inverse_prompt_embs_inf_type='full'):    
+        
         BS = clip_features.shape[0]
         arc2face_inverse_prompt_embs = None
 
@@ -556,39 +500,26 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 257, 768].
             id_embs = self.bg_proj_in(clip_features)
 
-        # context is already in the token embedding space.
-        context = id_embs
+        id_embs_out_all_layers = []
+        for i, attn in enumerate(self.prompt_trans_layers):
+            if not self.placeholder_is_bg:
+                id_embs_out = attn(id_embs)
+            else:
+                latent_queries = self.latent_queries_ln(self.latent_queries)
+                latent_queries = latent_queries.repeat(BS, 1, 1)
+                id_embs_out = attn(latent_queries, id_embs)
+            # If fg, id_embs_out: [4, 18, 768] -> [4, 16, 768].
+            id_embs_out_all_layers.append(id_embs_out[:, :self.num_out_embs_per_layer])
 
-        for i, (attn, ff) in enumerate(self.layers):
-            latent_queries = self.latent_query_lns[i](self.latent_queries[i])
-            latent_queries = latent_queries.repeat(BS, 1, 1)
-            context_out = attn(latent_queries, context)
+        id_embs_out_all_layers = torch.cat(id_embs_out_all_layers, dim=1)
 
-            # Gradually reduce the drop path rate from 0.4 to 0.1 (average: 0.3).
-            # The ratio in dinov2's paper is 0.3 or 0.4. 
-            # https://github.com/huggingface/pytorch-image-models/issues/1836
-            p_drop_path = anneal_value(training_percent, 1, (0.4, 0.2)) if training_percent >= 0 else 0
-            # Skip ff(context) with probability p_drop_path. 
-            # Divide by 2 to keep the magnitude of context roughly the same, no matter whether ff(context) is skipped.
-            # ff is either nn.Identity() or nn.Sequential. If it's nn.Sequential, it implies self.use_FFN is True.
-            # (torch.rand(1) > self.p_drop_path) is evaluated to [True] or [False], which is equivalent to True or False.
-            if isinstance(ff, nn.Sequential) and (torch.rand(1) > p_drop_path):
-                context_out = (ff(context_out) + context_out) / 2
-
-            if i == 0:
-                # Increase the number of original tokens from 16 to 416, so that we can add context and context_out.
-                # [4, 18, 768] -> [4, 416, 768]
-                context = self.lora2hira(context)
-            # Beyond the first layer, the number of tokens is fixed at 416.
-            # Skip connection to retain the context information.
-            context = context + context_out
-
-        # lora2hira contains a LayerNorm, so no need to normalize output_queries.
-        # output_queries = self.lora2hira(context) * self.output_scale
-        # context: [4, 416, 768].
-        output_queries = context[:, :self.num_out_queries] * self.output_scale
-        #arc2face_inverse_prompt_embs[1:-1] = arc2face_inverse_prompt_embs[1:-1] * self.output_scale
-        return output_queries, arc2face_inverse_prompt_embs
+        # If fg, id_embs_out_all_layers has exactly self.num_out_embs embs. 
+        # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
+        # and we take the first 16*4=64. 
+        
+        # [4, 256, 768] if fg or [4, 64, 768] if bg.
+        output_embs = id_embs_out_all_layers[:, :self.num_out_embs] * self.output_scale
+        return output_embs, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
         if learnable_hidden_state_weights_scheme == 'none':
@@ -634,78 +565,9 @@ class SubjBasisGenerator(nn.Module):
             self.prompt2token_proj_attention_multiplier = multiplier
             print(f"{num_extended_layers} layers in prompt2token_proj_attention are x{multiplier}")
 
-    # q_aware_to_v_lora_rank has to be the same as the old q_aware_to_v_lora_rank.
-    def expand_latent_queries(self, new_num_latent_queries, q_aware_to_v_lora_rank=64, output_dim=768):
-        assert new_num_latent_queries > self.num_latent_queries, "new_num_latent_queries must be > num_latent_queries."
-
-        for i in range(self.depth):
-            layer_latent_queries = self.latent_queries[i]
-            new_layer_latent_queries = nn.Parameter(torch.randn(1, new_num_latent_queries, self.latent_query_dim) / new_num_latent_queries**0.5)
-            new_layer_latent_queries.data[:, :self.num_latent_queries] = layer_latent_queries.data
-            new_layer_latent_queries = new_layer_latent_queries.to(layer_latent_queries.device)
-            self.latent_queries[i] = new_layer_latent_queries
-
-            cross_attn = self.layers[i][0]
-            # if q_aware_to_v is enabled, CrossAttention layer is initialized with a 
-            # predefined number of latent queries, therefore it also needs to be extended.
-            if cross_attn.q_aware_to_v:
-                input_dim = self.latent_query_dim
-                # all_q_mid: 104 * 64 = 6656.
-                all_q_mid = new_num_latent_queries * q_aware_to_v_lora_rank
-                old_all_q_mid = self.num_latent_queries * q_aware_to_v_lora_rank
-                new_to_v = nn.Sequential(
-                    # number of params: 768 * 6656 = 5,111,808.
-                    # Weight shape: [79872, 64, 1]. 
-                    # Input:  [BS, 16, 768]. Output: [BS, 16, 104*64] = [BS, 16, 6656].
-                    nn.Linear(input_dim, all_q_mid, bias=False),
-                    nn.LayerNorm(all_q_mid, elementwise_affine=True),
-                    # Change the dim of the tensor to [BS, 6656, 16], as Conv1d transforms dim 1.
-                    Rearrange('b n q -> b q n', q=all_q_mid),
-                    # Each q_aware_to_v projection has its own lora2hira linear layer.
-                    # The total number of parameters will be 6656*768 = 5,111,808.
-                    # Output: [BS, 104*768, 16].
-                    torch.nn.Conv1d(
-                        in_channels=all_q_mid,
-                        out_channels=new_num_latent_queries * input_dim,
-                        kernel_size=1,
-                        groups=new_num_latent_queries,
-                        bias=False,
-                    ),
-                    # Output: [BS, 104, 16, 768].
-                    Rearrange('b (q d) n -> b q n d', q=new_num_latent_queries, d=input_dim),
-                    # nn.LayerNorm(input_dim, elementwise_affine=True),
-                )
-                new_to_v[0].weight.data[:old_all_q_mid] = cross_attn.to_v[0].weight.data
-                # We couldn't directly reuse the old LayerNorm, as it has a different number of channels.
-                # But we can still reuse part of the weights and biases that correspond to the old channels.
-                new_to_v[1].weight.data[:old_all_q_mid] = cross_attn.to_v[1].weight.data
-                new_to_v[1].bias.data[:old_all_q_mid]   = cross_attn.to_v[1].bias.data
-                # grouped Conv1d has a weight shape of [out_channels, in_channels], 
-                # same as non-grouped Conv1d.
-                old_out_channels = cross_attn.to_v[3].weight.shape[0]
-                new_to_v[3].weight.data[:old_out_channels:, :old_all_q_mid] = cross_attn.to_v[3].weight.data
-                new_to_v.to(cross_attn.to_v[0].weight.device)
-                cross_attn.to_v = new_to_v
-
-        # Linearly combine the latent queries to generate the output queries.
-        new_lora2hira = Lora2Hira(lora_rank=new_num_latent_queries, hira_rank=self.num_out_queries, 
-                                  output_dim=output_dim, num_modes=self.num_lora2hira_modes,
-                                  elementwise_affine=self.elementwise_affine)
-        # lora2hira[1]: nn.Linear(lora_rank, hira_rank * num_modes
-        new_lora2hira[1].weight.data[:, :self.num_latent_queries] = self.lora2hira[1].weight.data
-        new_lora2hira[3] = self.lora2hira[3]
-        new_lora2hira[4] = self.lora2hira[4]
-        new_lora2hira.to(self.lora2hira[1].weight.device)
-        self.lora2hira = new_lora2hira
-
-        type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        print(f"{type_sig} SubjBasisGenerator extended latent queries from {self.num_latent_queries} to {new_num_latent_queries}")
-        self.num_latent_queries = new_num_latent_queries
-
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: depth={self.depth}, use_FFN={self.use_FFN}, latent_queries={self.num_latent_queries}*{self.latent_query_dim}, num_out_queries={self.num_out_queries}, " \
-               f"num_lora2hira_modes={self.num_lora2hira_modes}, elementwise_affine={self.elementwise_affine}"
+        return f"{type_sig} SubjBasisGenerator: num_layers={self.num_layers}, num_out_embs={self.num_out_embs}, "
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

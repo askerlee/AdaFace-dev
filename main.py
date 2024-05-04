@@ -269,18 +269,6 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")
-    parser.add_argument("--zs_num_subj_generator_layers", type=int, default=1,
-                        help="Layers (depth) of zero-shot subject feature generator")
-    parser.add_argument("--zs_num_latent_queries", type=int, default=512,
-                        help="Number of latent queries for the zero-shot embedding to queries mapping")    
-    parser.add_argument("--zs_num_lora2hira_modes", type=int, default=1,
-                        help="Number of modes for the zero-shot embedding to queries mapping")
-    parser.add_argument("--zs_elementwise_affine", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use elementwise affine in zero-shot subject feature generator")
-    parser.add_argument("--zs_use_FFN", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use FFN in zero-shot subject feature generator")
-    parser.add_argument("--zs_use_q_aware_to_v", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use dynamic to_v in zero-shot learning")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
                         help="Gradient scale of the prompt2token projection layer")    
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
@@ -986,12 +974,6 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
 
             config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
-            config.model.params.personalization_config.params.zs_num_subj_generator_layers   = opt.zs_num_subj_generator_layers
-            config.model.params.personalization_config.params.zs_num_lora2hira_modes  = opt.zs_num_lora2hira_modes
-            config.model.params.personalization_config.params.zs_elementwise_affine     = opt.zs_elementwise_affine
-            config.model.params.personalization_config.params.zs_use_FFN                = opt.zs_use_FFN
-            config.model.params.personalization_config.params.zs_num_latent_queries     = opt.zs_num_latent_queries
-            config.model.params.personalization_config.params.zs_use_q_aware_to_v       = opt.zs_use_q_aware_to_v
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
             config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio

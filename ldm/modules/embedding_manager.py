@@ -1010,15 +1010,9 @@ class EmbeddingManager(nn.Module):
             shared_embedder_components='pooler',
             do_zero_shot=False,
             zs_image_emb_dim=1280,
-            zs_num_subj_generator_layers=1,
-            zs_num_lora2hira_modes=1,
-            zs_elementwise_affine=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
-            zs_num_latent_queries=512,
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
-            zs_use_FFN=False,
-            zs_use_q_aware_to_v=True,
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
@@ -1150,15 +1144,9 @@ class EmbeddingManager(nn.Module):
             else:
                 self.num_vectors_each_bg = 0
 
-            # num_zs_vecs_per_token: 10 + 16 = 26.
-            # 10: 10 basis vecs for ada embedder. 16: 16 layerwise static embeddings.
-            self.num_zs_vecs_per_token = layerwise_lora_rank + self.num_unet_ca_layers
-            # num_subj_queries: 16 * 26 = 416.
-            self.zs_num_vecs_per_subj  = self.number_vectors_each_subj * self.num_zs_vecs_per_token
-            # num_bg_queries:   4 * 26 = 104.
-            self.zs_num_vecs_per_bg    = self.num_vectors_each_bg * self.num_zs_vecs_per_token
+            # num_zs_vecs_per_token: 16.
+            self.num_zs_vecs_per_token = self.num_unet_ca_layers
             self.zs_cls_delta_string   = zs_cls_delta_string
-            self.zs_num_latent_queries = zs_num_latent_queries
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             if zs_prompt2token_proj_grad_scale == 0:
@@ -1247,22 +1235,24 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = None
 
             if self.do_zero_shot:
-                num_out_queries = self.zs_num_vecs_per_subj if not placeholder_is_bg else self.zs_num_vecs_per_bg
-                # bg placeholder always has depth=1.
-                depth = zs_num_subj_generator_layers if not placeholder_is_bg else 1
+                # num_layers: 16 if fg or 1 if bg.
+                # num_out_embs_per_layer: 16 if fg or 64 if bg. It actually should be 16*4. 
+                # But since we only use one layer for bg to save compute, we get all output embeddings from one layer.
+                # total embs: 16*16 if fg or 64*1 if bg.
+                if not placeholder_is_bg:
+                    num_out_embs_per_layer = self.number_vectors_each_subj
+                    num_layers = self.num_unet_ca_layers
+                else:
+                    # bg placeholder always has num_layers=1, i.e., all layers use the same set of embeddings.
+                    num_out_embs_per_layer = self.num_vectors_each_bg * self.num_unet_ca_layers
+                    num_layers = 1
 
-                subj_basis_generator = SubjBasisGenerator(depth=depth,
-                                                          #num_latent_queries = zs_num_latent_queries,
-                                                          num_out_queries = num_out_queries,
-                                                          num_lora2hira_modes = zs_num_lora2hira_modes,
+                subj_basis_generator = SubjBasisGenerator(num_layers = num_layers,
+                                                          num_out_embs_per_layer = num_out_embs_per_layer,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           output_dim = out_emb_dim,
-                                                          elementwise_affine = zs_elementwise_affine,
-                                                          use_FFN = zs_use_FFN,
                                                           placeholder_is_bg = placeholder_is_bg,
-                                                          use_q_aware_to_v = zs_use_q_aware_to_v,
-                                                          v_repeat = 4,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
@@ -1587,9 +1577,8 @@ class EmbeddingManager(nn.Module):
                         arc2face_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
-                    # zs_vecs: [BS, 416, 768] -> [BS, 16, 26, 768]
-                    #print(f"zs_clip_features: {zs_clip_features.shape}, zs_id_embs: {zs_id_embs.shape}")
-                    zs_vecs_2sets, placeholder_arc2face_inverse_prompt_embs = \
+                    # static_zs_embs:   [BS, 256, 768] if fg, or [BS,  64, 768] if bg.
+                    static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
@@ -1601,20 +1590,18 @@ class EmbeddingManager(nn.Module):
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
                         self.arc2face_embs = placeholder_arc2face_embs
 
-                    # num_vectors_each_placeholder: 9. 
-                    # num_zs_vecs_per_token: 26 = layerwise_lora_rank + self.num_unet_ca_layers.
-                    # zs_vecs_2sets: [BS, 416, 768] -> [BS, 16, 26, 768].
-                    zs_vecs_2sets = zs_vecs_2sets.reshape(zs_vecs_2sets.shape[0], 
-                                                          num_vectors_each_placeholder,
-                                                          self.num_zs_vecs_per_token, -1)
+                    # num_vectors_each_placeholder: 16 or 4.
+                    # num_zs_vecs_per_token: 16 = self.num_unet_ca_layers.
+                    # static_zs_embs: [BS, 256, 768] -> [BS, 16, 16, 768].
                     # If subj:
-                    # ada_zs_basis_vecs: [BS, 16, 10, 768], static_zs_embs: [BS, 16, 16, 768].
+                    # static_zs_embs: [BS, 16, 16, 768].
                     # If bg:
-                    # ada_zs_basis_vecs: [BS, 4, 10, 768], static_zs_embs: [BS, 4, 16, 768].
-                    ada_zs_basis_vecs, static_zs_embs = \
-                        zs_vecs_2sets[:, :, :self.layerwise_lora_rank], \
-                        zs_vecs_2sets[:, :, self.layerwise_lora_rank:]
-                    self.subj2ada_zs_basis_vecs[placeholder_string] = ada_zs_basis_vecs
+                    # static_zs_embs: [BS,  4, 16, 768].
+                    static_zs_embs = static_zs_embs.reshape(static_zs_embs.shape[0], 
+                                                            num_vectors_each_placeholder,
+                                                            self.num_zs_vecs_per_token, -1)
+                    # TODO: Remove ada zs embs completely.
+                    self.subj2ada_zs_basis_vecs[placeholder_string] = None
                     # subj_static_embedding: [BS, 16, 16, 768] => [BS, 16, 16, 768]
                     # [BS, num_unet_ca_layers, num_vectors_each_placeholder, 768].
                     static_zs_embs = static_zs_embs.permute(0, 2, 1, 3)
@@ -2205,7 +2192,7 @@ class EmbeddingManager(nn.Module):
     def check_arc2face_text_encoder(self, device):
         if self.arc2face_text_encoder is None:
             from ldm.modules.arc2face_models import CLIPTextModelWrapper
-            print("arc2face_text_encoder is still None. Initialize it as a private copy.")
+            print("arc2face_text_encoder is None. Initialize it as a private copy.")
             self.arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
                                             'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
                                         )
@@ -2419,7 +2406,11 @@ class EmbeddingManager(nn.Module):
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"] and self.zs_load_subj_basis_generators_from_ckpt:
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
-                    print(f"Loading {repr(ckpt_subj_basis_generator)}")
+                    if load_old_embman_ckpt:
+                        print(f"Loading ckpt_subj_basis_generator {km}")
+                    else:
+                        print(f"Loading {repr(ckpt_subj_basis_generator)}")
+
                     # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
                     # Then replace it with the one in ckpt.
                     # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
@@ -2482,12 +2473,6 @@ class EmbeddingManager(nn.Module):
                     if len(ret.unexpected_keys) > 0:
                         print(f"Unexpected keys: {ret.unexpected_keys}")
 
-                    '''
-                    # Dynamically expand the latent queries of the subj_basis_generator.
-                    if ckpt_subj_basis_generator.num_latent_queries < self.zs_num_latent_queries \
-                      and not ckpt_subj_basis_generator.placeholder_is_bg:
-                        ckpt_subj_basis_generator.expand_latent_queries(self.zs_num_latent_queries)
-                    '''
             else:
                 print(f"Skipping loading subj_basis_generator from {ckpt_path}")
 
