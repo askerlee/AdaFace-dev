@@ -1014,6 +1014,7 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
             zs_prompt2token_proj_grad_scale=0.4,
+            zs_prompt_trans_layers_have_to_out_proj=False,
             zs_load_subj_basis_generators_from_ckpt=True,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
@@ -1148,6 +1149,7 @@ class EmbeddingManager(nn.Module):
             self.num_zs_vecs_per_token = self.num_unet_ca_layers
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
+            self.zs_prompt_trans_layers_have_to_out_proj = zs_prompt_trans_layers_have_to_out_proj
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
@@ -1253,7 +1255,8 @@ class EmbeddingManager(nn.Module):
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
-                                                          prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale)
+                                                          prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
+                                                          prompt_trans_layers_have_to_out_proj=self.zs_prompt_trans_layers_have_to_out_proj)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 

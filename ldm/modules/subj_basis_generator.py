@@ -375,6 +375,7 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
+        prompt_trans_layers_have_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.
     ):
         super().__init__()
 
@@ -426,14 +427,14 @@ class SubjBasisGenerator(nn.Module):
             self.latent_queries_ln  = nn.LayerNorm(output_dim)
 
         self.output_scale           = output_dim ** -0.5
-
+        self.prompt_trans_layers_have_to_out_proj = prompt_trans_layers_have_to_out_proj
         self.prompt_trans_layers = nn.ModuleList([])
 
         for layer_idx in range(num_layers):
             identity_to_v   = False
-            v_has_skip      = not identity_to_v     # True
-            identity_to_out = True
-            out_has_skip    = not identity_to_out   # False
+            v_has_skip      = not identity_to_v                     # True
+            identity_to_out = not prompt_trans_layers_have_to_out_proj   # True
+            out_has_skip    = not identity_to_out                   # False
             # Each prompt_trans_layer has a to_v projection with skip connection, and doesn't have a to_out projection.
             self.prompt_trans_layers.append(
                 # dim=768, num_heads=6.
@@ -570,7 +571,8 @@ class SubjBasisGenerator(nn.Module):
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
-        return f"{type_sig} SubjBasisGenerator: num_layers={self.num_layers}, num_out_embs={self.num_out_embs}, "
+        return f"{type_sig} SubjBasisGenerator: num_layers={self.num_layers}, num_out_embs={self.num_out_embs}, " \
+               f"prompt_trans_layers_have_to_out_proj={self.prompt_trans_layers_have_to_out_proj}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):
