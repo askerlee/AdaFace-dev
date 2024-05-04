@@ -1217,6 +1217,7 @@ if __name__ == "__main__":
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
         trainer_kwargs["max_steps"] = trainer_opt.max_steps
+        trainer_kwargs["log_every_n_steps"] = 20
         if hasattr(trainer_opt, 'grad_clip'):
             trainer_kwargs["gradient_clip_val"] = trainer_opt.grad_clip
         
