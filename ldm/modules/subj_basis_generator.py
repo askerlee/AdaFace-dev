@@ -220,7 +220,7 @@ class PerceiverAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     # output_dim is always the same as input_dim.
-    def __init__(self, input_dim, num_heads=6, p_dropout=0.1, 
+    def __init__(self, input_dim, num_heads=6, p_dropout=0.05, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, v_has_skip=True,
                  q_aware_to_v=True, num_q=416, v_repeat=4, q_aware_to_v_lora_rank=64,
                  identity_to_out=False, out_has_skip=False):
@@ -284,7 +284,8 @@ class CrossAttention(nn.Module):
         else:
             self.to_out = nn.Sequential(
                 nn.Linear(input_dim, input_dim, bias=False),
-                nn.Dropout(p_dropout)
+                nn.Dropout(p_dropout),
+                nn.LayerNorm(inner_dim, elementwise_affine=True)
             )
 
         self.out_has_skip = out_has_skip
@@ -438,7 +439,7 @@ class SubjBasisGenerator(nn.Module):
             # Each prompt_trans_layer has a to_v projection with skip connection, and doesn't have a to_out projection.
             self.prompt_trans_layers.append(
                 # dim=768, num_heads=6.
-                CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.1,
+                CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.05,
                                 identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                 q_aware_to_v=False,  v_has_skip=v_has_skip,
                                 num_q=0, # No static learnable queries, as they are self-attention layers.
