@@ -287,7 +287,9 @@ def parse_args():
                         help="Verify arc2face distillation")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
-    
+    parser.add_argument("--zs_prompt_trans_layers_have_to_out_proj", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether the prompt translation layers have the to_out projection") 
+        
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
 
@@ -396,6 +398,7 @@ def main(opt):
             zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
+            config.model.params.personalization_config.params.zs_prompt_trans_layers_have_to_out_proj = opt.zs_prompt_trans_layers_have_to_out_proj
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
         else:
             ref_images = None
