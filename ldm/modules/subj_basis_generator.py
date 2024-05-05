@@ -512,7 +512,7 @@ class SubjBasisGenerator(nn.Module):
         for layer_idx, attn in enumerate(self.prompt_trans_layers):
             if not self.placeholder_is_bg:
                 # Remove pos_embs from id_embs_out.
-                id_embs_out = attn(self.pos_embs, id_embs) - self.pos_embs
+                id_embs_out = attn(self.pos_embs.repeat(BS, 1, 1), id_embs) - self.pos_embs
             else:
                 latent_queries = self.latent_queries_ln(self.latent_queries)
                 latent_queries = latent_queries.repeat(BS, 1, 1)
