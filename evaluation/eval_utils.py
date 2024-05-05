@@ -43,13 +43,13 @@ def init_evaluators(gpu_id):
 def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_samples=-1, gt_self_compare=False):
     # Import here to avoid recursive import.
     from ldm.data.personalized import PersonalizedBase
-    gt_data_loader         = PersonalizedBase(gt_dir,      set='evaluation', size=256, max_num_images_per_subject=-1, flip_p=0.0)
+    gt_data_loader         = PersonalizedBase(gt_dir,      set_name='evaluation', size=256, max_num_images_per_subject=-1, flip_p=0.0)
     if gt_self_compare:
         sample_data_loader = gt_data_loader
         # Always compare all images in the subject gt image folder.
         num_samples = -1
     else:
-        sample_data_loader = PersonalizedBase(samples_dir, set='evaluation', size=256, max_num_images_per_subject=-1, flip_p=0.0)
+        sample_data_loader = PersonalizedBase(samples_dir, set_name='evaluation', size=256, max_num_images_per_subject=-1, flip_p=0.0)
 
     sample_start_idx = 0 if num_samples == -1 else sample_data_loader.num_images - num_samples
     sample_range     = range(sample_start_idx, sample_data_loader.num_images)

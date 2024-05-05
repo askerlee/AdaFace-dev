@@ -387,6 +387,7 @@ class SubjBasisGenerator(nn.Module):
 
         self.latent_query_dim       = output_dim
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
+        self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -506,9 +507,12 @@ class SubjBasisGenerator(nn.Module):
             id_embs = self.bg_proj_in(clip_features)
 
         id_embs_out_all_layers = []
+        id_embs = id_embs + self.pos_embs
+
         for layer_idx, attn in enumerate(self.prompt_trans_layers):
             if not self.placeholder_is_bg:
-                id_embs_out = attn(id_embs)
+                # Remove pos_embs from id_embs_out.
+                id_embs_out = attn(self.pos_embs, id_embs) - self.pos_embs
             else:
                 latent_queries = self.latent_queries_ln(self.latent_queries)
                 latent_queries = latent_queries.repeat(BS, 1, 1)

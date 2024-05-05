@@ -20,7 +20,7 @@ class PersonalizedBase(Dataset):
                  repeats=100,
                  interpolation="bicubic",
                  flip_p=0.5,
-                 set="train",
+                 set_name="train",
                  placeholder_token="dog",
                  per_image_tokens=False,
                  center_crop=False,
@@ -50,7 +50,7 @@ class PersonalizedBase(Dataset):
             assert self.num_images < len(
                 per_img_token_list), f"Can't use per-image tokens when the training set contains more than {len(per_img_token_list)} tokens. To enable larger sets, add more tokens to 'per_img_token_list'."
 
-        if set == "train":
+        if set_name == "train":
             self._length = self.num_images * repeats
 
         self.size = size
