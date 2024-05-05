@@ -257,10 +257,10 @@ def get_parser(**parser_kwargs):
         help="One or more word tso be used in class-level prompts for delta loss")
     
     parser.add_argument("--num_vectors_per_subj_token",
-        type=int, default=9,
+        type=int, default=4,
         help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--num_vectors_per_bg_token",
-        type=int, default=4,
+        type=int, default=2,
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")

@@ -1237,20 +1237,13 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = None
 
             if self.do_zero_shot:
-                # num_layers: 16 if fg or 1 if bg.
-                # num_out_embs_per_layer: 16 if fg or 64 if bg. It actually should be 16*4. 
-                # But since we only use one layer for bg to save compute, we get all output embeddings from one layer.
-                # total embs: 16*16 if fg or 64*1 if bg.
+                # num_out_embs: 64 (16*4) if fg or 32 (16*2) if bg. 
                 if not placeholder_is_bg:
-                    num_out_embs_per_layer = self.number_vectors_each_subj
-                    num_layers = self.num_unet_ca_layers
+                    num_out_embs = self.number_vectors_each_subj * self.num_unet_ca_layers
                 else:
-                    # bg placeholder always has num_layers=1, i.e., all layers use the same set of embeddings.
-                    num_out_embs_per_layer = self.num_vectors_each_bg * self.num_unet_ca_layers
-                    num_layers = 1
+                    num_out_embs = self.num_vectors_each_bg * self.num_unet_ca_layers
 
-                subj_basis_generator = SubjBasisGenerator(num_layers = num_layers,
-                                                          num_out_embs_per_layer = num_out_embs_per_layer,
+                subj_basis_generator = SubjBasisGenerator(num_out_embs = num_out_embs,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           output_dim = out_emb_dim,
@@ -1585,7 +1578,7 @@ class EmbeddingManager(nn.Module):
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
-                                                 training_percent=self.training_percent if self.training else -1,
+                                                 is_training=self.training,
                                                  arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
                     
                     if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
@@ -1674,7 +1667,7 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
         #print(self.cls_delta_string_indices)
-        if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter':
+        if False: #self.do_zero_shot and self.iter_type == 'arc2face_distill_iter':
             # In an arc2face_distill_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
             # The updated embedded_text above is ignored. But subj_static_embeddings is 
             # still involved in delta-loss computation.

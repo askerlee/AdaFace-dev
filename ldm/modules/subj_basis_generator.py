@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPVisionModel, CLIPTokenizer
+from transformers import CLIPVisionModel, CLIPTokenizer, CLIPTextModel
 import numpy as np
 from torch import einsum
 from dataclasses import dataclass
@@ -220,6 +220,8 @@ class PerceiverAttention(nn.Module):
 
 class CrossAttention(nn.Module):
     # output_dim is always the same as input_dim.
+    # num_q only matters when q_aware_to_v is True. 
+    # If q_aware_to_v is False, query x in forward() is still usable.
     def __init__(self, input_dim, num_heads=6, p_dropout=0.05, 
                  identity_to_q=False, identity_to_k=False, identity_to_v=False, v_has_skip=True,
                  q_aware_to_v=True, num_q=416, v_repeat=4, q_aware_to_v_lora_rank=64,
@@ -349,7 +351,7 @@ class CrossAttention(nn.Module):
             out = einsum('b i j, b i j d -> b i d', attn, v)
         else:
             # v: [6, 17, 128]. out: [6, 32, 128].
-            out = einsum('b i j, b j d -> b i d', attn, v)
+            out = einsum('b i j, b j d -> b i d',   attn, v)
 
         # [6, 32, 128] -> [1, 32, 768].
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
@@ -367,13 +369,11 @@ class CrossAttention(nn.Module):
 class SubjBasisGenerator(nn.Module):
     def __init__(
         self,
-        # number of CrossAttention layers. Should be the same as the number of cross-attention layers in UNet.
-        num_layers=16,                      
         # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=6,                       
         num_id_vecs={ 'fg': 18, 'bg': 257 },  # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
-        num_out_embs_per_layer=16,                      # num_out_embs per layer. fg: 16. bg: 4.
+        num_out_embs=64,                      # num_out_embs. fg: 64. bg: 32.
         image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
@@ -387,9 +387,7 @@ class SubjBasisGenerator(nn.Module):
         super().__init__()
 
         self.placeholder_is_bg  = placeholder_is_bg
-        self.num_layers         = num_layers
-        self.num_out_embs_per_layer = num_out_embs_per_layer
-        self.num_out_embs       = num_out_embs_per_layer * num_layers 
+        self.num_out_embs       = num_out_embs
 
         self.latent_query_dim       = output_dim
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
@@ -436,40 +434,39 @@ class SubjBasisGenerator(nn.Module):
             self.latent_queries_ln  = nn.LayerNorm(output_dim)
 
         self.output_scale           = output_dim ** -0.5
-        self.prompt_trans_layers_have_to_out_proj = prompt_trans_layers_have_to_out_proj
-        self.prompt_trans_layers = nn.ModuleList([])
-
-        for layer_idx in range(num_layers):
-            identity_to_v   = True #False
-            v_has_skip      = not identity_to_v                     # True
-            identity_to_out = not prompt_trans_layers_have_to_out_proj   # True
-            out_has_skip    = not identity_to_out                   # False
-            # Each prompt_trans_layer has a to_v projection with skip connection, and doesn't have a to_out projection.
-            self.prompt_trans_layers.append(
-                # dim=768, num_heads=6.
+        if self.placeholder_is_bg:
+            self.prompt_trans_layers_have_to_out_proj = prompt_trans_layers_have_to_out_proj
+            identity_to_v   = False
+            v_has_skip      = not identity_to_v                         # True
+            identity_to_out = not prompt_trans_layers_have_to_out_proj  # True
+            out_has_skip    = not identity_to_out                       # False
+            # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
+            # dim=768, num_heads=6.
+            self.prompt_translator = \
                 CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.05,
                                 identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                 q_aware_to_v=False,  v_has_skip=v_has_skip,
-                                num_q=0, # No static learnable queries, as they are self-attention layers.
+                                num_q=0, # When not q_aware_to_v, num_q is not referenced.
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
-            )
+        else:
+            self.prompt_translator = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14').text_model.encoder
 
         print(repr(self))
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
-    # raw_id_embs: ArcFace embeddings for faces, or DINO embeddings for objects.
+    # raw_id_embs: ArcFace embeddings for faces (not used since we have arc2face_id_embs), 
+    # or DINO embeddings for objects.
     # arc2face_id_embs: [BS, 16, 768], the core identity embeddings generated by Arc2Face.
-    # training_percent: used to anneal the drop path rate. Also if training_percent == -1, then it's inference.
     def forward(self, clip_features, raw_id_embs, arc2face_id_embs, 
-                list_extra_words, is_face, training_percent=0, 
+                list_extra_words, is_face, is_training, 
                 arc2face_inverse_prompt_embs_inf_type='full'):    
         
         BS = clip_features.shape[0]
         arc2face_inverse_prompt_embs = None
 
         # No need to use raw_id_embs if placeholder_is_bg.
-        if (not self.placeholder_is_bg) and (raw_id_embs is not None):
+        if not self.placeholder_is_bg:
             if is_face:
                 assert arc2face_id_embs is not None
                 # arc2face_embs is projected to the prompt embedding space by arc2face_forward_face_embs
@@ -477,11 +474,12 @@ class SubjBasisGenerator(nn.Module):
                 # arc2face_id_embs is part of arc2face_embs: [BS, 77, 768] -> [BS, 16, 768].
                 # arc2face_inverse_prompt_embs is projected to the token embedding spaces.
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
-                # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
+                # return_emb_types: a list of strings, each string is among 
+                # ['full', 'core', 'full_pad', 'full_half_pad', 'full_zeroed_extra', 'b_core_e'].
                 # Using b_core_e is more computationally efficient than using full_zeroed_extra. 
                 # But there is an unknow BUG that causes crash when using b_core_e. Therefore, we use full_zeroed_extra.
-                if training_percent >= 0:
-                    return_emb_types = ['b_core_e', 'core']
+                if is_training:
+                    return_emb_types = ['full_pad', 'core']
                 else:
                     return_emb_types = [arc2face_inverse_prompt_embs_inf_type, 'core']
 
@@ -501,48 +499,33 @@ class SubjBasisGenerator(nn.Module):
                                                           input_max_length=77)
                 
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
-                # Reduce the update rate of prompt2token_proj.
-                id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
-            else:
+                # Reduce the update rate to prompt2token_proj.
+                id_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
+            elif raw_id_embs is not None:
                 # id_embs: [BS, 384] -> [BS, 18, 768].
                 # obj_proj_in is expected to project the DINO object features to 
                 # the token embedding space. So no need to use prompt2token_proj.
                 id_embs = self.obj_proj_in(raw_id_embs)
+            else:
+                breakpoint()
         else:
             # Otherwise, context is the ad-hoc CLIP image features.
             # id_embs: [BS, 257, 768].
             id_embs = self.bg_proj_in(clip_features)
 
-        id_embs_out_all_layers = []
-        id_embs = id_embs + self.pos_embs
-
-        for layer_idx, trans_layer in enumerate(self.prompt_trans_layers):
-            pos_embs = self.pos_embs_ln(self.pos_embs).repeat(BS, 1, 1)
-            if not self.placeholder_is_bg:
-                id_embs_out, attn_mat = trans_layer(pos_embs, id_embs, return_attn=True)
-                # If identity_v, then should hold pos_embs_out == pos_embs.
-                pos_embs_out = trans_layer(pos_embs, pos_embs, attn_mat=attn_mat)
-                # Remove pos_embs from id_embs_out.
-                id_embs_out = id_embs_out - pos_embs_out
-            else:
-                latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
-                id_embs_out, attn_mat = trans_layer(latent_queries, id_embs, return_attn=True)
-                # If identity_v, then should hold pos_embs_out == pos_embs.
-                pos_embs_out = trans_layer(latent_queries, pos_embs, attn_mat=attn_mat)
-                # Remove pos_embs from id_embs_out.
-                id_embs_out = id_embs_out - pos_embs_out
-
-            # If fg, id_embs_out: [4, 18, 768] -> [4, 16, 768].
-            id_embs_out_all_layers.append(id_embs_out[:, :self.num_out_embs_per_layer])
-
-        id_embs_out_all_layers = torch.cat(id_embs_out_all_layers, dim=1)
+        if self.placeholder_is_bg:
+            latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
+            # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
+            # and we take the first 16*4=64.             
+            # [4, 256, 768] if fg or [4, 64, 768] if bg.
+            id_embs_out = self.prompt_translator(latent_queries, id_embs)
+        else:
+            # If fg, we use a CLIP-encoder to generate 77 embs, and we take the first 16*4=64.
+            # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
+            id_embs_out = self.prompt_translator(inputs_embeds=id_embs, return_dict=False)[0]
+        output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale
 
         # If fg, id_embs_out_all_layers has exactly self.num_out_embs embs. 
-        # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
-        # and we take the first 16*4=64. 
-        
-        # [4, 256, 768] if fg or [4, 64, 768] if bg.
-        output_embs = id_embs_out_all_layers[:, :self.num_out_embs] * self.output_scale
         return output_embs, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
@@ -594,7 +577,7 @@ class SubjBasisGenerator(nn.Module):
         # Fix compatability with the previous version.
         if not hasattr(self, 'prompt_trans_layers_have_to_out_proj'):
             self.prompt_trans_layers_have_to_out_proj = False
-        return f"{type_sig} SubjBasisGenerator: num_layers={self.num_layers}, num_out_embs={self.num_out_embs}, " \
+        return f"{type_sig} SubjBasisGenerator: num_out_embs={self.num_out_embs}, " \
                f"prompt_trans_layers_have_to_out_proj={self.prompt_trans_layers_have_to_out_proj}"
     
 @dataclass
