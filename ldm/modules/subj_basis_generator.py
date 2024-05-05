@@ -432,7 +432,7 @@ class SubjBasisGenerator(nn.Module):
         self.prompt_trans_layers = nn.ModuleList([])
 
         for layer_idx in range(num_layers):
-            identity_to_v   = False
+            identity_to_v   = True #False
             v_has_skip      = not identity_to_v                     # True
             identity_to_out = not prompt_trans_layers_have_to_out_proj   # True
             out_has_skip    = not identity_to_out                   # False

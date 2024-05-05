@@ -142,7 +142,7 @@ class PersonalizedBase(Dataset):
                  # rand_scale_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
                  rand_scale_range=None,
-                 set="train",
+                 set_name="train",
                  subject_string="z",
                  background_string="y",
                  wds_background_string="w",
@@ -231,7 +231,6 @@ class PersonalizedBase(Dataset):
         self.caption_paths_by_subj  = []
         total_num_valid_fg_masks    = 0
         total_num_valid_captions    = 0
-        total_num_valid_mean_embs   = 0
         if load_meta_subj2person_type_cache_path is not None:
             meta_subj2person_type = json.load(open(load_meta_subj2person_type_cache_path, "r"))
             print(f"Loaded meta_subj2person_type from {load_meta_subj2person_type_cache_path}")
@@ -247,13 +246,16 @@ class PersonalizedBase(Dataset):
                 all_filenames = sorted(all_filenames)
 
             # image_paths and mask_paths are full paths.
-            all_file_paths      = [ os.path.join(subj_root, file_path) for file_path in all_filenames ]
+            all_file_paths      = [os.path.join(subj_root, file_path) for file_path in all_filenames]
+            all_file_paths      = set(all_file_paths)
             image_paths         = list(filter(lambda x: filter_non_image(x) and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
             # Limit the number of images for each subject to 100, to speed up loading.
             if (not base_folder_is_mix_subj) and max_num_images_per_subject > 0:
                 image_paths = image_paths[:max_num_images_per_subject]
+
+            mix_sig = 'mix' if base_folder_is_mix_subj else 'single'
             if len(image_paths) == 0:
-                print(f"No images found in '{subj_root}', skip")
+                print(f"No images found in {mix_sig} '{subj_root}', skip")
                 continue
 
             fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
@@ -270,6 +272,9 @@ class PersonalizedBase(Dataset):
             self.image_count_by_subj.append(len(image_paths))
             self.are_mix_subj_folders.append(base_folder_is_mix_subj)
 
+            if verbose:
+                print(f"Found {len(image_paths)} images in {mix_sig} '{subj_root}'")
+
             # Only load metainfo.json if the person type is not in the cache.
             if subject_name not in meta_subj2person_type:
                 if 'metainfo.json' in all_filenames:
@@ -283,7 +288,7 @@ class PersonalizedBase(Dataset):
             total_num_valid_fg_masks += num_valid_fg_masks
             total_num_valid_captions += num_valid_captions
 
-            if verbose and (len(self.subj_roots) < 80 or self.are_mix_subj_folders[-1]):
+            if (len(self.subj_roots) < 80 or self.are_mix_subj_folders[-1]):
                 print("{} images, {} fg masks, {} captions found in '{}'".format( \
                     len(image_paths), num_valid_fg_masks, num_valid_captions, subj_root))
                 if num_valid_fg_masks > 0 and num_valid_fg_masks < len(image_paths):
@@ -299,15 +304,15 @@ class PersonalizedBase(Dataset):
         self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
         self.caption_paths = sum(self.caption_paths_by_subj, [])
         print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
-              f"{total_num_valid_mean_embs} mean embs, {total_num_valid_captions} captions")
+              f"{total_num_valid_captions} captions")
   
         if save_meta_subj2person_type_cache_path is not None:
             json.dump(meta_subj2person_type, open(save_meta_subj2person_type_cache_path, "w"))
             print(f"Saved meta_subj2person_type to {save_meta_subj2person_type_cache_path}")
 
         self.num_images = len(self.image_paths)
-        self.set_name = set
-        if set == "train":
+        self.set_name = set_name
+        if set_name == "train":
             self.is_training = True
             self._length = self.num_images * repeats
         else:
@@ -467,12 +472,12 @@ class PersonalizedBase(Dataset):
                                                                 interpolation=InterpolationMode.NEAREST),
                                         transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                      ])
-                print(f"{set} images will be randomly scaled in range {rand_scale_range}")
+                print(f"{set_name} images will be randomly scaled in range {rand_scale_range}")
 
             if self.train_with_wds_data:
                 # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
                 # i.e., more aggressive scaling.
-                print(f"{set} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
+                print(f"{set_name} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
                 self.resize_and_crop = transforms.Compose([
                                             transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                             transforms.CenterCrop(size),

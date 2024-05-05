@@ -185,17 +185,17 @@ data:
       target: ldm.data.personalized.PersonalizedBase
       params:
         size: 512       # Image resolution
-        set: train
+        set_name: train
         repeats: 100
-        verbose: true
+        verbose: false
 
     validation:
       target: ldm.data.personalized.PersonalizedBase
       params:
         size: 512       # Image resolution
-        set: val
+        set_name: val
         repeats: 10
-        verbose: true
+        verbose: false
         
 lightning:
   modelcheckpoint:

@@ -947,10 +947,10 @@ if __name__ == "__main__":
         # config.data:
         # {'target': 'main.DataModuleFromConfig', 'params': {'batch_size': 2, 'num_workers': 2, 
         #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'train', 'repeats': 100, 
+        #  'params': {'size': 512, 'set_name': 'train', 'repeats': 100, 
         #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}, 
         #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set': 'val', 'repeats': 10, 
+        #  'params': {'size': 512, 'set_name': 'val', 'repeats': 10, 
         #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}}}
         config.data.params.train.params.data_roots       = opt.data_roots
         config.data.params.validation.params.data_roots  = opt.data_roots
