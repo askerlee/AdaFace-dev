@@ -291,16 +291,19 @@ class CrossAttention(nn.Module):
         self.out_has_skip = out_has_skip
         self.attn_drop = nn.Dropout(p_dropout)
 
-    def forward(self, x, context=None):
+    def forward(self, x, context=None, attn_mat=None, return_attn=False):
         h = self.num_heads
 
-        # q: [BS, Q, D] -> [BS, Q, D].
-        q = self.to_q(x)
         if context is None:
             context = x
 
-        # k: [BS, L, D] -> [BS, L, D].
-        k = self.to_k(context)
+        if attn_mat is None:
+            # q: [BS, Q, D] -> [BS, Q, D].
+            q = self.to_q(x)
+            # k: [BS, L, D] -> [BS, L, D].
+            k = self.to_k(context)
+            # q: [6, 512, 128], k: [6, 17, 128].
+            q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
 
         if self.q_aware_to_v:
             # context: [BS, L, D]. v: [BS, Q, L, D].
@@ -316,8 +319,6 @@ class CrossAttention(nn.Module):
 
         #print(v.shape)
 
-        # q: [6, 512, 128], k: [6, 17, 128].
-        q, k = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k))
         if self.q_aware_to_v:
             # v: [6, 64, 17, 128].
             # v is query-specific, so there's an extra dim for the query.
@@ -329,16 +330,18 @@ class CrossAttention(nn.Module):
         else:
             v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
 
-        scale = q.size(-1) ** -0.25
-
-        sim = einsum('b i d, b j d -> b i j', q * scale, k * scale)
-        # sim: [6, 64, 17]. 6: bs 1 * h 6.
-        # attention, what we cannot get enough of
-        # NOTE: the normalization is done across tokens, not across pixels.
-        # So for each pixel, the sum of attention scores across tokens is 1.
-        attn = sim.softmax(dim=-1)
-        attn = self.attn_drop(attn)
-        #print(attn.std())
+        if attn_mat is None:
+            scale = q.size(-1) ** -0.25
+            sim = einsum('b i d, b j d -> b i j', q * scale, k * scale)
+            # sim: [6, 64, 17]. 6: bs 1 * h 6.
+            # attention, what we cannot get enough of
+            # NOTE: the normalization is done across tokens, not across pixels.
+            # So for each pixel, the sum of attention scores across tokens is 1.
+            attn = sim.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+            #print(attn.std())
+        else:
+            attn = attn_mat
 
         if self.q_aware_to_v:
             # attn: [6, 32, 17]. v: [6, 32, 17, 128]. 128: dim of each head. out: [6, 32, 128].
@@ -356,7 +359,10 @@ class CrossAttention(nn.Module):
         else:
             out = self.to_out(out)
 
-        return out
+        if return_attn:
+            return out, attn
+        else:
+            return out
 
 class SubjBasisGenerator(nn.Module):
     def __init__(
@@ -388,6 +394,7 @@ class SubjBasisGenerator(nn.Module):
         self.latent_query_dim       = output_dim
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
         self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
+        self.pos_embs_ln = nn.LayerNorm(output_dim)
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -509,14 +516,22 @@ class SubjBasisGenerator(nn.Module):
         id_embs_out_all_layers = []
         id_embs = id_embs + self.pos_embs
 
-        for layer_idx, attn in enumerate(self.prompt_trans_layers):
+        for layer_idx, trans_layer in enumerate(self.prompt_trans_layers):
+            pos_embs = self.pos_embs_ln(self.pos_embs).repeat(BS, 1, 1)
             if not self.placeholder_is_bg:
+                id_embs_out, attn_mat = trans_layer(pos_embs, id_embs, return_attn=True)
+                # If identity_v, then should hold pos_embs_out == pos_embs.
+                pos_embs_out = trans_layer(pos_embs, pos_embs, attn_mat=attn_mat)
                 # Remove pos_embs from id_embs_out.
-                id_embs_out = attn(self.pos_embs.repeat(BS, 1, 1), id_embs) - self.pos_embs
+                id_embs_out = id_embs_out - pos_embs_out
             else:
-                latent_queries = self.latent_queries_ln(self.latent_queries)
-                latent_queries = latent_queries.repeat(BS, 1, 1)
-                id_embs_out = attn(latent_queries, id_embs)
+                latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
+                id_embs_out, attn_mat = trans_layer(latent_queries, id_embs, return_attn=True)
+                # If identity_v, then should hold pos_embs_out == pos_embs.
+                pos_embs_out = trans_layer(latent_queries, pos_embs, attn_mat=attn_mat)
+                # Remove pos_embs from id_embs_out.
+                id_embs_out = id_embs_out - pos_embs_out
+
             # If fg, id_embs_out: [4, 18, 768] -> [4, 16, 768].
             id_embs_out_all_layers.append(id_embs_out[:, :self.num_out_embs_per_layer])
 
