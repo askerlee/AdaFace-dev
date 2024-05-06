@@ -5305,9 +5305,11 @@ class LatentDiffusion(DDPM):
                 # Not sure if it's necessary to set requires_grad=True here.
                 #for param in params:
                 #    param.requires_grad = True
-                    
-                embedding_params_with_lrs.append( {'params': params, 'lr': param_lr, 
-                                                   'excluded_from_prodigy': param_group['excluded_from_prodigy']} )
+                # Exclude the parameters whose requires_grad is False
+                params = [ param for param in params if param.requires_grad ]
+                if len(params) > 0:
+                    embedding_params_with_lrs.append( {'params': params, 'lr': param_lr, 
+                                                       'excluded_from_prodigy': param_group['excluded_from_prodigy']} )
 
             # unfreeze_model:
             # Are we allowing the base model to train? If so, set two different parameter groups.
