@@ -523,6 +523,20 @@ class SubjBasisGenerator(nn.Module):
             # If fg, we use a CLIP-encoder to generate 77 embs, and we take the first 16*4=64.
             # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
             id_embs_out = self.prompt_translator(inputs_embeds=id_embs, return_dict=False)[0]
+            # Replace the first token, i.e., the BOS token, which has 
+            # very large embedding values and will take up too much attention.
+            # The 1st - 3th tokens are filler tokens which contain little identity information 
+            # (or maybe they do after fine-tuning?), and are kept and used to condition the first UNet CA layer.
+            # Ideally, we should only use tokens 4~67 as the ID embeddings and skip 0~3.
+            # However, since I only found this issue after 13k of training iterations, I can only
+            # fix it ad-hoc by zeroing out the first 4 tokens. We cannot use tokens 4~67 now, 
+            # since the token semantics will be misaligned with the layers, unless we redo the training.
+            # This ad-hoc fix seems to sacrificce little performance, 
+            # since the condition on the first cross-attn layer in the UNet 
+            # has the least influence among all 16 layers.
+            # TODO: remove this ad-hoc fix before the next training.
+            id_embs_out[:, 0] = id_embs_out[:, 4]
+
         output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale
 
         # If fg, id_embs_out_all_layers has exactly self.num_out_embs embs. 

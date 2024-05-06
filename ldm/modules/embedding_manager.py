@@ -1625,14 +1625,15 @@ class EmbeddingManager(nn.Module):
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
                 subj_static_embedding_k = subj_static_embedding[:, k]
-
+                
                 if self.training and self.training_begin_add_noise_std_range is not None:
                     subj_static_embedding_k = \
                         anneal_add_noise_to_embedding(subj_static_embedding_k, 
                                                       self.training_percent,
                                                       self.training_begin_add_noise_std_range,
                                                       self.training_end_add_noise_std_range,
-                                                      self.training_add_noise_prob[self.iter_type])
+                                                      self.training_add_noise_prob[self.iter_type],
+                                                      noise_std_is_relative=True, keep_norm=False)
 
                 # Training with delta loss. Each subject only appears once in subj_static_embedding, 
                 # but twice in the prompts (subject single and subject comp), so we need to repeat it twice.
