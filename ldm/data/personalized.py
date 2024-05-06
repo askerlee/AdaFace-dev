@@ -232,8 +232,12 @@ class PersonalizedBase(Dataset):
         total_num_valid_fg_masks    = 0
         total_num_valid_captions    = 0
         if load_meta_subj2person_type_cache_path is not None:
-            meta_subj2person_type = json.load(open(load_meta_subj2person_type_cache_path, "r"))
-            print(f"Loaded meta_subj2person_type from {load_meta_subj2person_type_cache_path}")
+            try:
+                meta_subj2person_type = json.load(open(load_meta_subj2person_type_cache_path, "r"))
+                print(f"Loaded meta_subj2person_type from {load_meta_subj2person_type_cache_path}")
+            except:
+                print(f"Failed to load meta_subj2person_type from {load_meta_subj2person_type_cache_path}, ignore")
+                meta_subj2person_type = {}
         else:
             meta_subj2person_type = {}
 

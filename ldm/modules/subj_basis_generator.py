@@ -408,12 +408,7 @@ class SubjBasisGenerator(nn.Module):
             # Freeze prompt2token_proj if prompt2token_proj_grad_scale is 0.
             # Set requires_grad to False for all parameters in prompt2token_proj, to save memory taken by the optimizer.
             if prompt2token_proj_grad_scale == 0:
-                frozen_param_names = []
-                for param_name, param in self.prompt2token_proj.named_parameters():
-                    param.requires_grad = False
-                    frozen_param_names.append(param_name)
-                print("Subj prompt2token_proj is frozen.")
-                #print(f"Frozen parameters:\n{frozen_param_names}")
+                self.freeze_prompt2token_proj()
 
             self.prompt2token_proj_attention_multiplier = -1
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
@@ -586,6 +581,19 @@ class SubjBasisGenerator(nn.Module):
             num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(multiplier, noise_std=noise_std)
             self.prompt2token_proj_attention_multiplier = multiplier
             print(f"{num_extended_layers} layers in prompt2token_proj_attention are x{multiplier}")
+
+    def freeze_prompt2token_proj(self):
+        # If bg, then prompt2token_proj is set to None. Therefore no need to freeze it.
+        # Then we don't have to check whether it's for fg or bg.
+        if self.prompt2token_proj is not None:
+            frozen_param_names = []
+            for param_name, param in self.prompt2token_proj.named_parameters():
+                if param.requires_grad:
+                    param.requires_grad = False
+                    frozen_param_names.append(param_name)
+                # If param is already frozen, then no need to freeze it again.
+            print(f"{len(frozen_param_names)} params in Subj prompt2token_proj is frozen.")
+            #print(f"Frozen parameters:\n{frozen_param_names}")
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'

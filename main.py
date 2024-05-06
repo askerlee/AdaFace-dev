@@ -198,9 +198,12 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--mix_subj_data_roots",
         type=str, nargs='+', default=None,
         help="Path(s) containing training images of mixed subjects")
+    parser.add_argument("--load_meta_subj2person_type_cache_path",
+        type=str, default=None,
+        help="Path to load the cache of subject to person type mapping from")
     parser.add_argument("--save_meta_subj2person_type_cache_path",
         type=str, default=None,
-        help="Path to save the cache of subject to person type mapping")
+        help="Path to save the cache of subject to person type mapping to")
     
     parser.add_argument("--subj_info_filepaths",
         type=str, nargs="*", default=argparse.SUPPRESS,
@@ -223,9 +226,6 @@ def get_parser(**parser_kwargs):
         type=str, default=None, 
         help="Embedder components to be frozen after loading from the checkpoint (candidates: pooler,layer_coeff_maps)")
 
-    parser.add_argument("--ckpt_params_perturb_ratio",
-        type=float, default=-1,
-        help="Ratio of parameters in the loaded ckpt to be perturbed")
     parser.add_argument("--emb_reg_loss_scale",
         type=float, default=1,
         help="Scale of the pre-specified embedding regularization loss")
@@ -956,7 +956,7 @@ if __name__ == "__main__":
         config.data.params.validation.params.data_roots  = opt.data_roots
         config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
         config.data.params.validation.params.mix_subj_data_roots = opt.mix_subj_data_roots
-        config.data.params.train.params.load_meta_subj2person_type_cache_path = None
+        config.data.params.train.params.load_meta_subj2person_type_cache_path = opt.load_meta_subj2person_type_cache_path
         config.data.params.train.params.save_meta_subj2person_type_cache_path = opt.save_meta_subj2person_type_cache_path
 
         # zero-shot settings.
@@ -995,7 +995,8 @@ if __name__ == "__main__":
         # This step is SLOW. It takes 5 minutes to load the data.
         data.setup()
         # Suppose the meta_subj2person_type has been saved, we can load it directly and save another 5 minutes.
-        config.data.params.train.params.load_meta_subj2person_type_cache_path = config.data.params.train.params.save_meta_subj2person_type_cache_path
+        if config.data.params.train.params.load_meta_subj2person_type_cache_path is None:
+            config.data.params.train.params.load_meta_subj2person_type_cache_path = config.data.params.train.params.load_meta_subj2person_type_cache_path
 
         print("#### Data #####")
         for k in data.datasets:
@@ -1065,15 +1066,12 @@ if __name__ == "__main__":
             assert opt.num_vectors_per_subj_token >= K * K, \
                     f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
             
-        config.model.params.personalization_config.params.use_conv_attn_kernel_size \
-            = opt.use_conv_attn_kernel_size
-
+        config.model.params.personalization_config.params.use_conv_attn_kernel_size     = opt.use_conv_attn_kernel_size
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.src_placeholders              = opt.src_placeholders
         config.model.params.personalization_config.params.loaded_embedder_components    = opt.loaded_embedder_components
         config.model.params.personalization_config.params.frozen_placeholder_set        = opt.frozen_placeholder_set
         config.model.params.personalization_config.params.frozen_embedder_components    = opt.frozen_embedder_components
-        config.model.params.personalization_config.params.ckpt_params_perturb_ratio     = opt.ckpt_params_perturb_ratio
         config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
 

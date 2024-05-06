@@ -1020,8 +1020,7 @@ class EmbeddingManager(nn.Module):
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
             zs_arc2face_inverse_prompt_embs_inf_type='full_half_pad',
-            # A few args, like embedding_manager_ckpt, ckpt_params_perturb_ratio, 
-            # are used in ddpm.py, but ignored here.
+            # A few args, like embedding_manager_ckpt, are used in ddpm.py, but ignored here.
             **kwargs
     ):
         super().__init__()
@@ -2333,7 +2332,7 @@ class EmbeddingManager(nn.Module):
     # If src_placeholders = None, then load the whole embedding manager. Otherwise, src_placeholders should 
     # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
     # the first background string.
-    def load(self, ckpt_paths, ckpt_params_perturb_ratio=0, src_placeholders=None, 
+    def load(self, ckpt_paths, src_placeholders=None, 
              loaded_embedder_components=None, frozen_placeholder_set=None, frozen_embedder_components=None,
              extend_prompt2token_proj_attention_multiplier=-1, load_old_embman_ckpt=False):
         if src_placeholders is not None and loaded_embedder_components is not None:
@@ -2471,6 +2470,10 @@ class EmbeddingManager(nn.Module):
                     if len(ret.unexpected_keys) > 0:
                         print(f"Unexpected keys: {ret.unexpected_keys}")
 
+                    if self.zs_prompt2token_proj_grad_scale == 0:
+                        # If it's for bg token, then freeze_prompt2token_proj() does nothing.
+                        self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
+
             else:
                 print(f"Skipping loading subj_basis_generator from {ckpt_path}")
 
@@ -2561,11 +2564,6 @@ class EmbeddingManager(nn.Module):
         if len(extended_token_embeddings) > 0:
             self.extended_token_embeddings = torch.cat(extended_token_embeddings, dim=0)
             print(f"Extended {len(extended_token_embeddings)} token embeddings")
-
-        # When we resume training from a ckpt, sometimes we want to perturb the parameters
-        # to reduce overfitting.
-        if ckpt_params_perturb_ratio > 0:
-            self.perturb_model_parameters(ckpt_params_perturb_ratio)
 
         # Regenerate subject_string_dict, background_string_dict 
         # in case subject_strings or background_strings have been changed.
@@ -2790,7 +2788,12 @@ class EmbeddingManager(nn.Module):
             slow_params_excl_prodigy = []
 
         if self.do_zero_shot:
-            subj_basis_generator_params = [ { 'params': list(self.string_to_subj_basis_generator_dict.parameters()), 
+            subj_basis_generator_param_list0 = list(self.string_to_subj_basis_generator_dict.parameters())
+            subj_basis_generator_param_list = [ p for p in subj_basis_generator_param_list0 if p.requires_grad ]
+            num_no_grad_params  = len(subj_basis_generator_param_list0) - len(subj_basis_generator_param_list)
+            num_total_params    = len(subj_basis_generator_param_list0)
+            print(f"Filtered out {num_no_grad_params} no-grad / {num_total_params} total parameters in subj_basis_generator_param_list0.")
+            subj_basis_generator_params = [ { 'params': subj_basis_generator_param_list, 
                                               'lr_ratio': 1, 'excluded_from_prodigy': False } ]
         else:
             subj_basis_generator_params = []

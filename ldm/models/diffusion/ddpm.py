@@ -896,12 +896,11 @@ class LatentDiffusion(DDPM):
         model = instantiate_from_config(config, text_embedder=text_embedder)
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
-            ckpt_params_perturb_ratio = config.params.get("ckpt_params_perturb_ratio", 0)
             src_placeholders = config.params.get("src_placeholders", None)
             loaded_embedder_components   = config.params.get("loaded_embedder_components", None)
             frozen_placeholder_set       = config.params.get("frozen_placeholder_set", None)
             frozen_embedder_components   = config.params.get("frozen_embedder_components", None)
-            model.load(config.params.embedding_manager_ckpt, ckpt_params_perturb_ratio,
+            model.load(config.params.embedding_manager_ckpt,
                        src_placeholders, loaded_embedder_components,
                        frozen_placeholder_set, frozen_embedder_components,
                        self.extend_prompt2token_proj_attention_multiplier,
@@ -3226,8 +3225,8 @@ class LatentDiffusion(DDPM):
         prompt_emb_delta_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
 
         if self.do_zero_shot:
-            # Completely disable the embedding reg loss if do_zero_shot, as it hurts performance.
-            emb_reg_loss_scale = 0
+            # Give the embedding reg loss a small weight if do_zero_shot, as it may hurt performance.
+            emb_reg_loss_scale = 0.1
             # Reduce the prompt_emb_delta_loss_scale by 5x (from 0.5 to 0.1) if do_zero_shot, 
             # as it might make learning slow.
             prompt_emb_delta_loss_scale /= 5
@@ -5297,6 +5296,7 @@ class LatentDiffusion(DDPM):
         # If using textual inversion, then embedding_manager is not None.
         if self.embedding_manager is not None: 
             embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
+            num_filtered_params = 0
 
             embedding_params_with_lrs = []
             for param_group in embedding_params_with_lr_ratios:
@@ -5306,10 +5306,13 @@ class LatentDiffusion(DDPM):
                 #for param in params:
                 #    param.requires_grad = True
                 # Exclude the parameters whose requires_grad is False
-                params = [ param for param in params if param.requires_grad ]
+                params2 = [ param for param in params if param.requires_grad ]
                 if len(params) > 0:
-                    embedding_params_with_lrs.append( {'params': params, 'lr': param_lr, 
+                    embedding_params_with_lrs.append( {'params': params2, 'lr': param_lr, 
                                                        'excluded_from_prodigy': param_group['excluded_from_prodigy']} )
+                num_filtered_params += len(params) - len(params2)
+            
+            print(f"Filtered out {num_filtered_params} no-grad parameters.")
 
             # unfreeze_model:
             # Are we allowing the base model to train? If so, set two different parameter groups.
