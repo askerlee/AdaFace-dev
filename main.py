@@ -145,7 +145,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument(
         "--lr",
         type=float, 
-        default=-1,
+        default=argparse.SUPPRESS,
         help="learning rate",
     )
     parser.add_argument(
@@ -266,7 +266,7 @@ def get_parser(**parser_kwargs):
                         help="Skip loading token2num_vectors from the checkpoint.")
         
     parser.add_argument("--use_conv_attn_kernel_size",
-                        type=int, default=None,
+                        type=int, default=argparse.SUPPRESS,
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
@@ -299,29 +299,29 @@ def get_parser(**parser_kwargs):
         help="Feature reduction ratio adopted by the attention pooler")
     
     parser.add_argument("--static_embedding_reg_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Static embedding regularization weight")
     parser.add_argument("--ada_embedding_reg_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Ada embedding regularization weight")
         
     parser.add_argument("--ada_emb_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Weight of ada embeddings (in contrast to static embeddings)")
 
     parser.add_argument("--prompt_emb_delta_reg_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
 
     parser.add_argument("--padding_embs_align_loss_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Weight of the padding embeddings alignment loss")
     parser.add_argument("--mix_prompt_distill_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Weight of the mixed prompt distillation loss")
     
     parser.add_argument("--comp_fg_bg_preserve_loss_weight",
-        type=float, default=-1,
+        type=float, default=argparse.SUPPRESS,
         help="Weight of the composition foreground-background preservation loss")
     
     parser.add_argument("--rand_scale_range",
@@ -1006,21 +1006,21 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.use_fp_trick = opt.use_fp_trick
 
-        if opt.static_embedding_reg_weight >= 0:
+        if hasattr(opt, 'static_embedding_reg_weight'):
             config.model.params.static_embedding_reg_weight = opt.static_embedding_reg_weight
-        if opt.ada_embedding_reg_weight >= 0:
+        if hasattr(opt, 'ada_embedding_reg_weight'):
             config.model.params.ada_embedding_reg_weight = opt.ada_embedding_reg_weight
 
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
-        if opt.prompt_emb_delta_reg_weight >= 0:
+        if hasattr(opt, 'prompt_emb_delta_reg_weight'):
             config.model.params.prompt_emb_delta_reg_weight = opt.prompt_emb_delta_reg_weight
 
-        if opt.padding_embs_align_loss_weight >= 0:
-            config.model.params.padding_embs_align_loss_weight = opt.padding_embs_align_loss_weight
-        if opt.comp_fg_bg_preserve_loss_weight >= 0:
-            config.model.params.comp_fg_bg_preserve_loss_weight     = opt.comp_fg_bg_preserve_loss_weight
-        if opt.mix_prompt_distill_weight >= 0:
-            config.model.params.mix_prompt_distill_weight           = opt.mix_prompt_distill_weight
+        if hasattr(opt, 'padding_embs_align_loss_weight'):
+            config.model.params.padding_embs_align_loss_weight  = opt.padding_embs_align_loss_weight
+        if hasattr(opt, 'comp_fg_bg_preserve_loss_weight'):
+            config.model.params.comp_fg_bg_preserve_loss_weight = opt.comp_fg_bg_preserve_loss_weight
+        if hasattr(opt, 'mix_prompt_distill_weight'):
+            config.model.params.mix_prompt_distill_weight       = opt.mix_prompt_distill_weight
 
         if hasattr(opt, 'composition_regs_iter_gap'):   
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
@@ -1047,7 +1047,7 @@ if __name__ == "__main__":
         if hasattr(opt, 'd_coef'):
             config.model.params.prodigy_config.d_coef = opt.d_coef
 
-        if opt.lr > 0:
+        if hasattr(opt, 'lr'):
             config.model.base_learning_rate = opt.lr
 
         # Personalization config
@@ -1057,10 +1057,10 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.attn_pooler_feat_reduction_ratio \
                 = opt.attn_pooler_feat_reduction_ratio
             
-        if opt.ada_emb_weight != -1:
+        if hasattr(opt, 'ada_emb_weight'):
             config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
 
-        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
+        if hasattr(opt, 'use_conv_attn_kernel_size') and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_subj_token >= K * K, \
                     f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
