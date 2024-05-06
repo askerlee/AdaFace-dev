@@ -532,8 +532,8 @@ class SubjBasisGenerator(nn.Module):
             # since the condition on the first cross-attn layer in the UNet 
             # has the least influence among all 16 layers.
             #id_embs_out[:, 0] = 0 #id_embs_out[:, 4]
-
-        output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale
+            
+        output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale        # * 0.036
 
         # If fg, id_embs_out_all_layers has exactly self.num_out_embs embs. 
         return output_embs, arc2face_inverse_prompt_embs

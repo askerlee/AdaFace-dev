@@ -1527,7 +1527,7 @@ class EmbeddingManager(nn.Module):
                         zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, self.training_percent,
                                                                    begin_noise_std_range=[0.01,  0.02], 
                                                                    end_noise_std_range  =[0.005, 0.01],
-                                                                   add_noise_prob=0.5, noise_std_is_relative=False,
+                                                                   add_noise_prob=0.5, noise_std_is_relative=True,
                                                                    keep_norm=True)
 
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 

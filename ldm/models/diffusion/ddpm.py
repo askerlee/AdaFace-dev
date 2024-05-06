@@ -1003,7 +1003,7 @@ class LatentDiffusion(DDPM):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
                 if True: #not do_arc2face_distill:
-                    emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=True)
+                    emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
                         emb_extra_global_scale = emb_global_scales_dict[placeholder]
