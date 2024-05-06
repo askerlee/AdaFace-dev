@@ -523,6 +523,8 @@ class SubjBasisGenerator(nn.Module):
             # If fg, we use a CLIP-encoder to generate 77 embs, and we take the first 16*4=64.
             # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
             id_embs_out = self.prompt_translator(inputs_embeds=id_embs, return_dict=False)[0]
+            # NOTE: this fix is no longer necessary as the training progresses,
+            # it seems that the model learns to repurpose BOS as one of the identity embeddings.
             # Replace the first token, i.e., the BOS token, which has 
             # very large embedding values and will take up too much attention.
             # The 1st - 3th tokens are filler tokens which contain little identity information 
@@ -534,8 +536,7 @@ class SubjBasisGenerator(nn.Module):
             # This ad-hoc fix seems to sacrificce little performance, 
             # since the condition on the first cross-attn layer in the UNet 
             # has the least influence among all 16 layers.
-            # TODO: remove this ad-hoc fix before the next training.
-            id_embs_out[:, 0] = id_embs_out[:, 4]
+            #id_embs_out[:, 0] = 0 #id_embs_out[:, 4]
 
         output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale
 
