@@ -1597,10 +1597,13 @@ class LatentDiffusion(DDPM):
                 elif self.iter_flags['do_arc2face_distill']:
                     # If do_arc2face_distill, then disable the background token.
                     p_use_background_token  = 0
+                elif self.do_zero_shot:
+                    # Reduced to 0.4, to force the learning of foreground tokens.
+                    p_use_background_token  = 0.4
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
-                    # force the foreground token to focus on the whole image.
+                    # force the foreground tokens to focus on the whole image.
                     p_use_background_token  = 0.9
 
             # Only use_background_token on recon iters.
