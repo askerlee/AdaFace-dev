@@ -533,20 +533,12 @@ class SubjBasisGenerator(nn.Module):
             pt_last_hidden_state = (torch.stack(pt_last_hidden_states, dim=0) * pt_last_layers_weights).sum(dim=0)
             id_embs_out = pt_last_hidden_state
 
-            # NOTE: the fix below is no longer necessary as the training progresses,
-            # it seems that the model learns to repurpose BOS as one of the identity embeddings.
-            # Replace the first token, i.e., the BOS token, which has 
+            # Remove the first token, i.e., the BOS token, which has 
             # very large embedding values and will take up too much attention.
             # The 1st - 3th tokens are filler tokens which contain little identity information 
-            # (or maybe they do after fine-tuning?), and are kept and used to condition the first UNet CA layer.
-            # Ideally, we should only use tokens 4~67 as the ID embeddings and skip 0~3.
-            # However, since I only found this issue after 13k of training iterations, I can only
-            # fix it ad-hoc by zeroing out the first 4 tokens. We cannot use tokens 4~67 now, 
-            # since the token semantics will be misaligned with the layers, unless we redo the training.
-            # This ad-hoc fix seems to sacrificce little performance, 
-            # since the condition on the first cross-attn layer in the UNet 
-            # has the least influence among all 16 layers.
-            #id_embs_out[:, 0] = 0 #id_embs_out[:, 4]
+            # (or maybe they do after fine-tuning?), and are removed as well.
+            # Therefore, we only use tokens 4~67 as the ID embeddings and skip 0~3.
+            id_embs_out = id_embs_out[:, 4:]
             
         output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale        # * 0.036
 
