@@ -508,8 +508,6 @@ class DDPM(pl.LightningModule):
                             'faceless_img_count':           0,
                             'use_arc2face_as_target':       False,
                             'num_denoising_steps':          1,
-                            # use_std_as_arc2face_recon_weighting is only applicable if gen_arc2face_rand_face.
-                            'use_std_as_arc2face_recon_weighting': False,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
@@ -1799,15 +1797,15 @@ class LatentDiffusion(DDPM):
 
                 if self.iter_flags['do_arc2face_distill']:
                     # The returned zs_id_embs2 should be (almost) the same as the passed-in zs_id_embs.
-                    zs_id_embs2, arc2face_pos_prompt_emb \
+                    zs_id_embs2, arc2face_prompt_emb \
                         = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
                                                                  pre_face_embs=zs_id_embs,
                                                                  gen_neg_prompt=False)
 
             else:
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
-                # zs_id_embs: [4, 512]. arc2face_pos_prompt_emb: [4, 21, 768]
-                zs_id_embs, arc2face_pos_prompt_emb \
+                # zs_id_embs: [4, 512]. arc2face_prompt_emb: [4, 21, 768]
+                zs_id_embs, arc2face_prompt_emb \
                     = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=None,
                                                              gen_neg_prompt=False)
                 # On random faces, we don't need to consider img_mask and fg_mask.
@@ -1815,26 +1813,18 @@ class LatentDiffusion(DDPM):
                 fg_mask  = None
                 batch_have_fg_mask[:] = False
                 # In a gen_arc2face_rand_face iteration, simply denoise a totally random x_start 
-                # with arc2face_pos_prompt_emb.
+                # with arc2face_prompt_emb.
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
-
-                p_use_std_as_arc2face_recon_weighting = 0 #1 
-                self.iter_flags['use_std_as_arc2face_recon_weighting'] = random.random() < p_use_std_as_arc2face_recon_weighting
-                if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                    # NOTE: Use the same noise for different ID embeddings in the batch,
-                    # so that we can compute the variance at each pixel.
-                    x_start = x_start[[0]].repeat(x_start.shape[0], 1, 1, 1)
-
                 self.iter_flags['faceless_img_count'] = 0
 
-            # During training, zs_id_embs, arc2face_pos_prompt_emb are float16, but x_start is float32.
+            # During training, zs_id_embs, arc2face_prompt_emb are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
 
             if self.iter_flags['do_arc2face_distill']:
-                arc2face_prompt_emb = arc2face_pos_prompt_emb.to(x_start.dtype)
+                arc2face_prompt_emb = arc2face_prompt_emb.to(x_start.dtype)
                 # arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
-                # arc2face_pos_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
+                # arc2face_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
                 # self.arc2face to generate the predicted teacher noise.
 
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
@@ -3014,14 +3004,7 @@ class LatentDiffusion(DDPM):
                     if self.iter_flags['gen_arc2face_rand_face']:
                         # if gen_arc2face_rand_face, then always use_arc2face_as_target == True.                    
                         # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
-                        # If self.iter_flags['use_std_as_arc2face_recon_weighting'], we get the pixel-wise losses,
-                        # then multiply them with the loss variances across instances to get the final loss.
-                        loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=False)
-                        if self.iter_flags['use_std_as_arc2face_recon_weighting']:
-                            spatial_weight = gen_spatial_weight_using_loss_std(loss_recon, out_spatial_shape=(64, 64))
-                        else:
-                            spatial_weight = 1
-                        loss_recon = (loss_recon * spatial_weight).mean()
+                        loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
                     else:
                         # use_arc2face_as_target could be True or False.
                         # If use_arc2face_as_target, we don't want to distill using the background pixels, 
@@ -5562,7 +5545,7 @@ class Arc2FaceWrapper(pl.LightningModule):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         
     def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None, gen_neg_prompt=False):
-        # Returns faceid_embeds, arc2face_pos_prompt_emb.
+        # Returns faceid_embeds, arc2face_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
                                            extract_faceid_embeds=False, 
                                            pre_face_embs=pre_face_embs,
