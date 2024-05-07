@@ -2943,7 +2943,7 @@ class LatentDiffusion(DDPM):
                     else:
                         # use_background_token == True and not self.iter_flags['use_wds_comp'].
                         # bg loss is somewhat discounted.
-                        bg_pixel_weight = 0.01
+                        bg_pixel_weight = 0.1
                                     
                 loss_fg_bg_contrast, loss_recon = \
                     self.calc_recon_and_complem_losses(model_output, target, extra_info,
