@@ -109,8 +109,8 @@ model:
         ada_uses_attn_pooler: True
         attn_pooler_feat_reduction_ratio: 2
         conv_attn_layerwise_scale_learnable: True
-        training_begin_add_noise_std_range:  [ 0.1, 0.2 ]
-        training_end_add_noise_std_range:    [ 0.1, 0.4 ]
+        training_begin_add_noise_std_range:  [ 0.02, 0.04 ]
+        training_end_add_noise_std_range:    [ 0.02, 0.04 ]
         # probs for recon_iter and distill_iter, respectively
         training_add_noise_prob:   { 'recon_iter': 0.6, 
                                      'arc2face_distill_iter': 0,
