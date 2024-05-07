@@ -138,6 +138,7 @@ class DDPM(pl.LightningModule):
                  arc2face_distill_iter_prob=0.5,
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
+                 max_num_denoising_steps=5,
                  extend_prompt2token_proj_attention_multiplier=-1,
                  load_old_embman_ckpt=False,
                  ):
@@ -189,6 +190,7 @@ class DDPM(pl.LightningModule):
                                                         else 0
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
+        self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.load_old_embman_ckpt                          = load_old_embman_ckpt
         self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
@@ -1850,8 +1852,15 @@ class LatentDiffusion(DDPM):
                                                          begin_array=[0.25, 0.25, 0.25, 0.25], 
                                                          end_array  =[0.15, 0.2,  0.3,  0.35],
                                                         )
+                    cand_num_denoising_steps = [1, 3, 5, 7]
+                    # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
+                    cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
+                                                 if si <= self.max_num_denoising_steps ]
+                    p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
+                    p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
+
                     # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
-                    num_denoising_steps = np.random.choice([1, 3, 5, 7], p=p_num_denoising_steps)
+                    num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
