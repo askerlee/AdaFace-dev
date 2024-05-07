@@ -615,6 +615,8 @@ class SubjBasisGenerator(nn.Module):
         # Fix compatability with the previous version.
         if not hasattr(self, 'prompt_trans_layers_have_to_out_proj'):
             self.prompt_trans_layers_have_to_out_proj = False
+        if not hasattr(self, 'num_out_embs'):
+            self.num_out_embs = -1
         return f"{type_sig} SubjBasisGenerator: num_out_embs={self.num_out_embs}, " \
                f"prompt_trans_layers_have_to_out_proj={self.prompt_trans_layers_have_to_out_proj}"
     
