@@ -40,7 +40,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
-                        get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding, gen_spatial_weight_using_loss_std
+                        get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding
                                               
 
 from ldm.modules.ema import LitEma
@@ -507,6 +507,7 @@ class DDPM(pl.LightningModule):
                             'do_arc2face_distill':          False,
                             'gen_arc2face_rand_face':       False,
                             'arc2face_prompt_emb':          None,
+                            'add_noise_to_real_id_embs':    False,
                             'faceless_img_count':           0,
                             'use_arc2face_as_target':       False,
                             'num_denoising_steps':          1,
@@ -978,8 +979,12 @@ class LatentDiffusion(DDPM):
 
                 # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_features is None.
                 # We don't update the zs_clip_features in this case.
+                # If iter_flags['add_noise_to_real_id_embs'], then 
+                # noise has been added to zs_id_embs. Don't add noise again.
                 if self.do_zero_shot and (zs_clip_features is not None or zs_id_embs is not None):
-                    self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs)
+                    self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs, 
+                                                                 add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
+                    
                     # When do_zero_shot, never apply compel_cfg (applied in UNet), as compel cfg has been applied in embedding manager.
                     apply_compel_cfg_prob = 0
                 else:
@@ -1793,7 +1798,8 @@ class LatentDiffusion(DDPM):
                     # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
                     zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
                                                                end_noise_std_range=None, 
-                                                               add_noise_prob=1, noise_std_is_relative=True, keep_norm=True)
+                                                               add_noise_prob=1, noise_std_is_relative=True, 
+                                                               keep_norm=True)
                         
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 

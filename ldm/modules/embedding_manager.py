@@ -1033,8 +1033,8 @@ class EmbeddingManager(nn.Module):
         self.string_to_ada_embedder_dict         = nn.ModuleDict()
         self.string_to_emb_ema_dict              = nn.ModuleDict()
         self.string_to_subj_basis_generator_dict = nn.ModuleDict()
-        self.initial_embeddings             = nn.ParameterDict() # These should not be optimized
-        self.placeholder_to_emb_cache       = nn.ParameterDict() # These should not be optimized
+        self.initial_embeddings                  = nn.ParameterDict() # These should not be optimized
+        self.placeholder_to_emb_cache            = nn.ParameterDict() # These should not be optimized
 
         self.set_ada_emb_weight(ada_emb_weight, is_first_time_print=True)
         self.ada_uses_attn_pooler = ada_uses_attn_pooler
@@ -1519,16 +1519,6 @@ class EmbeddingManager(nn.Module):
 
                     # zs_id_embs: [1, 512].
                     zs_id_embs = zs_image_feat_dict['id']
-
-                    # Add noise to all_id_embs during training with probability 0.5.
-                    # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.
-                    # Noise std is absolute, not relative (to the std of all_id_embs).
-                    if self.training:
-                        zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                                   begin_noise_std_range=[0.01,  0.02], 
-                                                                   end_noise_std_range  =[0.005, 0.01],
-                                                                   add_noise_prob=0.5, noise_std_is_relative=True,
-                                                                   keep_norm=True)
 
                     # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
                     # curr_subj_is_face. 
@@ -2194,13 +2184,24 @@ class EmbeddingManager(nn.Module):
                                         )
             self.arc2face_text_encoder.to(device)
             
-    def set_zs_image_features(self, zs_clip_features, zs_id_embs):
+    def set_zs_image_features(self, zs_clip_features, zs_id_embs, add_noise_to_zs_id_embs=False):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         # zs_id_embs: [1, 512] or [2, 16, 768]
         zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
-        #print(zs_clip_subj_features.mean(dim=1).squeeze(0)[:20])
-        #print(zs_clip_bg_features.mean(dim=1).squeeze(0)[:20])
+
+        # Add noise to all_id_embs during training with probability 0.5.
+        # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.
+        # Noise std is absolute, not relative (to the std of all_id_embs).
+        # If add_noise_to_real_id_embs in ddpm.py, zs_id_embs has been added with noise of
+        # std [0.02, 0.06]. Here we add noise again, but it's much smaller than the previous noise.
+        # Therefore it doesn't matter.
+        if self.training and add_noise_to_zs_id_embs:
+            zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, self.training_percent,
+                                                       begin_noise_std_range=[0.01,  0.02], 
+                                                       end_noise_std_range  =[0.005, 0.01],
+                                                       add_noise_prob=0.5, noise_std_is_relative=True,
+                                                       keep_norm=True)
 
         self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
                                     'id': zs_id_embs }

@@ -2404,6 +2404,7 @@ def normalized_sum(losses_list, norm_pow=0):
         breakpoint()
     return normalized_loss_sum
 
+# add_noise_to_tensor() adds a fixed amount of noise to the tensor.
 def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
                         std_dim=-1, norm_dim=-1):
     if noise_std_is_relative:
@@ -2423,6 +2424,7 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
 
 # embeddings: [N, 768]. 
 # noise_std_range: the noise std / embeddings std falls within this range.
+# anneal_add_noise_to_embedding() adds noise of the amount randomly selected from the noise_std_range.
 def anneal_add_noise_to_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
                                   add_noise_prob, noise_std_is_relative=True, keep_norm=False,
                                   std_dim=-1, norm_dim=-1):
