@@ -445,7 +445,9 @@ class SubjBasisGenerator(nn.Module):
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
         else:
-            self.prompt_translator = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14').text_model.encoder
+            clip_text_model = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14')
+            self.prompt_translator = clip_text_model.text_model.encoder
+            self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
             self.num_pt_last_layers     = 5
             self.pt_last_layers_weights = nn.Parameter(torch.ones(self.num_pt_last_layers), requires_grad=True)
 
@@ -531,7 +533,7 @@ class SubjBasisGenerator(nn.Module):
             # A weighted sum of pt_last_hidden_states.
             # [5, 1, 77, 768] * [5, 1, 1, 1] -> [5, 1, 77, 768] -> [1, 77, 768]
             pt_last_hidden_state = (torch.stack(pt_last_hidden_states, dim=0) * pt_last_layers_weights).sum(dim=0)
-            id_embs_out = pt_last_hidden_state
+            id_embs_out = self.pt_layer_norm(pt_last_hidden_state)
 
             # Remove the first token, i.e., the BOS token, which has 
             # very large embedding values and will take up too much attention.
