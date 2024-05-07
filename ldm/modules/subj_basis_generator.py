@@ -448,6 +448,7 @@ class SubjBasisGenerator(nn.Module):
             self.prompt_translator = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14').text_model.encoder
             self.num_pt_last_layers     = 5
             self.pt_last_layers_weights = nn.Parameter(torch.ones(self.num_pt_last_layers), requires_grad=True)
+
         print(repr(self))
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
@@ -518,16 +519,17 @@ class SubjBasisGenerator(nn.Module):
         else:
             # If fg, we use a CLIP-encoder to generate 77 embs, and we take the first 16*4=64.
             # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
+            # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
             id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
             pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_last_layers:]
             pt_last_layers_weights = self.pt_last_layers_weights.to(pt_last_hidden_states[0].dtype)
             # Normalize the weights of to sum to 1 across layers.
-            # hidden_state_layer_weights: [3, 1] or [3, 768].
+            # pt_last_layers_weights: [5].
             pt_last_layers_weights = pt_last_layers_weights / pt_last_layers_weights.sum(dim=0, keepdim=True)
-            # [3, 1/768] -> [3, 1, 1, 1/768]
-            pt_last_layers_weights = pt_last_layers_weights.unsqueeze(1).unsqueeze(1)
+            # [5] -> [5, 1, 1, 1]
+            pt_last_layers_weights = pt_last_layers_weights.reshape(-1, 1, 1, 1)
             # A weighted sum of pt_last_hidden_states.
-            # [3, 1, 22, 768] * [3, 1, 1, 1/768] -> [3, 1, 22, 768] -> [1, 22, 768]
+            # [5, 1, 77, 768] * [5, 1, 1, 1] -> [5, 1, 77, 768] -> [1, 77, 768]
             pt_last_hidden_state = (torch.stack(pt_last_hidden_states, dim=0) * pt_last_layers_weights).sum(dim=0)
             id_embs_out = pt_last_hidden_state
 
