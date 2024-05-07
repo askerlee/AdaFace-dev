@@ -2842,7 +2842,7 @@ class LatentDiffusion(DDPM):
             extra_info['emb_v_mixer'], extra_info['emb_v_layers_cls_mix_scales'] = \
                 emb_v_mixer, emb_v_layers_cls_mix_scales            
             
-        # Otherwise, it's a recon iter (attentional or unweighted).
+        # It's a RECON iter.
         else:
             assert self.iter_flags['do_normal_recon']
             BLOCK_SIZE = x_start.shape[0]
@@ -2852,19 +2852,19 @@ class LatentDiffusion(DDPM):
                 # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
                 t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
                                       keep_prob_range=(0.5, 0.3))
-            elif self.iter_flags['use_arc2face_as_target']:
+            elif self.do_zero_shot:
                 # Increase t slightly by (1, 1.5) to increase noise amount and make the denoising more challenging,
                 # with smaller prob to keep the original t.
                 t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.5), 
                                       keep_prob_range=(0.3, 0.1))
                 if self.iter_flags['num_denoising_steps'] > 1:
                     # Take a weighted average of t and 1000, to shift t to larger values, 
-                    # so that the 2nd-6th denoising steps fall in a more reasonable range.
+                    # so that the 2nd-6th denoising steps fall in more reasonable ranges.
                     t = (4 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (3 + self.iter_flags['num_denoising_steps'])
             else:
                 # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
                 # with larger prob to keep the original t.
-                # This branch includes the 'do_arc2face_distill' but not 'use_arc2face_as_target' iterations.
+                # This branch includes non-zero-shot training iterations.
                 t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                       keep_prob_range=(0.4, 0.2))
 
@@ -2945,11 +2945,15 @@ class LatentDiffusion(DDPM):
                         # bg loss is somewhat discounted.
                         bg_pixel_weight = 0.01
                                     
-                loss += self.calc_recon_and_complem_losses(model_output, target, extra_info,
-                                                           all_subj_indices, all_bg_indices,
-                                                           img_mask, fg_mask, batch_have_fg_mask,
-                                                           bg_pixel_weight,
-                                                           x_start.shape[0], loss_dict, prefix)
+                loss_fg_bg_contrast, loss_recon = \
+                    self.calc_recon_and_complem_losses(model_output, target, extra_info,
+                                                       all_subj_indices, all_bg_indices,
+                                                       img_mask, fg_mask, batch_have_fg_mask,
+                                                       bg_pixel_weight,
+                                                       x_start.shape[0], loss_dict, prefix)
+                loss += loss_fg_bg_contrast + loss_recon
+                if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                    print(f"0: {t.tolist()}, {loss_recon.item():.5f}")
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
@@ -3598,7 +3602,7 @@ class LatentDiffusion(DDPM):
                                       all_subj_indices, all_bg_indices,
                                       img_mask, fg_mask, batch_have_fg_mask, 
                                       bg_pixel_weight, BLOCK_SIZE, loss_dict, prefix):
-        loss = 0
+        loss_fg_bg_contrast = 0
 
         if self.fg_bg_complementary_loss_weight > 0:
             # NOTE: Do not check iter_flags['use_background_token'] here. If use_background_token, 
@@ -3631,9 +3635,9 @@ class LatentDiffusion(DDPM):
 
             # Reduce the scale of loss_fg_bg_complementary if do_zero_shot, as it hurts performance. 
             loss_fg_bg_complementary_scale = 0.2 if self.do_zero_shot else 1
-            loss += (loss_fg_bg_complementary * loss_fg_bg_complementary_scale + loss_subj_mb_suppress \
-                        + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
-                    * self.fg_bg_complementary_loss_weight
+            loss_fg_bg_contrast += (loss_fg_bg_complementary * loss_fg_bg_complementary_scale + loss_subj_mb_suppress \
+                                    + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
+                                   * self.fg_bg_complementary_loss_weight
 
         if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
             #print(c_in)
@@ -3686,10 +3690,10 @@ class LatentDiffusion(DDPM):
 
             fg_wds_comple_loss_scale    = 1
             wds_mask_align_loss_scale   = 1
-            loss += (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
-                        + loss_wds_mask_align     * wds_mask_align_loss_scale \
-                        + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
-                    * self.fg_wds_complementary_loss_weight
+            loss_fg_bg_contrast += (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
+                                    + loss_wds_mask_align     * wds_mask_align_loss_scale \
+                                    + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
+                                   * self.fg_wds_complementary_loss_weight
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
@@ -3697,9 +3701,8 @@ class LatentDiffusion(DDPM):
                                              bg_pixel_weight=bg_pixel_weight)
 
         loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
-        loss += loss_recon
 
-        return loss
+        return loss_fg_bg_contrast, loss_recon
 
     # pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
     # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
