@@ -114,7 +114,7 @@ class DDPM(pl.LightningModule):
                  static_embedding_reg_weight=0.,
                  ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
-                 padding_embs_align_loss_weight=0.,
+                 padding_bg_fg_embs_align_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
                  subj_comp_value_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
@@ -165,7 +165,7 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
-        self.padding_embs_align_loss_weight     = padding_embs_align_loss_weight
+        self.padding_bg_fg_embs_align_loss_weight     = padding_bg_fg_embs_align_loss_weight
         self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
         self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
@@ -3316,8 +3316,8 @@ class LatentDiffusion(DDPM):
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
         
-            # Even if padding_embs_align_loss_weight is disabled (=0), we still monitor loss_padding_subj_embs_align.
-            if self.padding_embs_align_loss_weight >= 0:
+            # Even if padding_bg_fg_embs_align_loss_weight is disabled (=0), we still monitor loss_padding_subj_embs_align.
+            if self.padding_bg_fg_embs_align_loss_weight >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = all_subj_indices_1b
                     bg_indices          = all_bg_indices_1b
@@ -3360,11 +3360,12 @@ class LatentDiffusion(DDPM):
                 bg_subj_embs_align_loss_scale  = 0.01 if self.do_zero_shot else 0.1
                 # NOTE: loss_padding_cls_embs_align is not optimized, but we still add it with scale 0 
                 # to release the computation graph.
-                loss_padding_embs_align = (loss_padding_subj_embs_align * padding_subj_embs_align_loss_scale \
-                                            + loss_padding_cls_embs_align * 0 \
-                                            + loss_bg_subj_embs_align   * bg_subj_embs_align_loss_scale)
+                loss_padding_bg_fg_embs_align = (loss_padding_subj_embs_align * padding_subj_embs_align_loss_scale \
+                                                 + loss_bg_subj_embs_align   * bg_subj_embs_align_loss_scale \
+                                                 + loss_padding_cls_embs_align * 0)
 
-                loss += loss_padding_embs_align * self.padding_embs_align_loss_weight
+                # padding_bg_fg_embs_align_loss_weight == 0, i.e., padding_embs_align_loss and bg_subj_embs_align_loss are disabled.
+                loss += loss_padding_bg_fg_embs_align * self.padding_bg_fg_embs_align_loss_weight
 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
           and (self.iter_flags['do_normal_recon'] \
