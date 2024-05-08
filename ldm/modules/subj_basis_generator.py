@@ -449,7 +449,7 @@ class SubjBasisGenerator(nn.Module):
             self.num_pt_output_layers     = 3
             self.pt_output_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
             self.pt_output_layers_weights_grad_scaler = gen_gradient_scaler(10)
-            
+
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
@@ -478,6 +478,8 @@ class SubjBasisGenerator(nn.Module):
                                 num_q=0, # When not q_aware_to_v, num_q is not referenced.
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
+
+        self.id_pos_embs = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
 
         print(repr(self))
 
@@ -540,6 +542,8 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 257, 768].
             id_embs = self.bg_proj_in(clip_features)
 
+        id_embs = id_embs + self.id_pos_embs
+        
         if self.placeholder_is_bg:
             latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
             # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
