@@ -446,10 +446,33 @@ class SubjBasisGenerator(nn.Module):
                                 out_has_skip=out_has_skip)
         else:
             clip_text_model = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14')
+            ''' 
+            prompt_translator: CLIPEncoder
+            # https://github.com/huggingface/transformers/blob/1872bde7fc6a5d6796bd742bc2dc38eaf8069c5d/src/transformers/models/clip/modeling_clip.py#L566
+            # CLIPEncoder.layers: 12 layers of CLIPEncoderLayer, each being
+                (0): CLIPEncoderLayer(
+                    (self_attn): CLIPAttention(
+                        (k_proj): Linear(in_features=768, out_features=768, bias=True)
+                        (v_proj): Linear(in_features=768, out_features=768, bias=True)
+                        (q_proj): Linear(in_features=768, out_features=768, bias=True)
+                        (out_proj): Linear(in_features=768, out_features=768, bias=True)
+                    )
+                    (layer_norm1): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+                    (mlp): CLIPMLP(
+                        (activation_fn): QuickGELUActivation()
+                        (fc1): Linear(in_features=768, out_features=3072, bias=True)
+                        (fc2): Linear(in_features=3072, out_features=768, bias=True)
+                    )
+                    (layer_norm2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+                )
+            '''
             self.prompt_translator = clip_text_model.text_model.encoder
+            # prompt_translator only uses the last 6 layers of the 12-layer CLIPEncoder.
+            self.pt_used_last_layers      = 6
+            self.prompt_translator.layers = self.prompt_translator.layers[-self.pt_used_last_layers:]
             self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
-            self.num_pt_last_layers     = 5
-            self.pt_last_layers_weights = nn.Parameter(torch.ones(self.num_pt_last_layers), requires_grad=True)
+            self.num_pt_output_layers     = 3
+            self.pt_last_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
 
         print(repr(self))
 
@@ -523,7 +546,7 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
             # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
             id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
-            pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_last_layers:]
+            pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_output_layers:]
             pt_last_layers_weights = self.pt_last_layers_weights.to(pt_last_hidden_states[0].dtype)
             # Normalize the weights of to sum to 1 across layers.
             # pt_last_layers_weights: [5].
