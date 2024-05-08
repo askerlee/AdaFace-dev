@@ -468,8 +468,12 @@ class SubjBasisGenerator(nn.Module):
             '''
             self.prompt_translator = clip_text_model.text_model.encoder
             # prompt_translator only uses the last 6 layers of the 12-layer CLIPEncoder.
-            self.pt_used_last_layers      = 6
-            self.prompt_translator.layers = self.prompt_translator.layers[-self.pt_used_last_layers:]
+            self.pt_used_first_layers, self.pt_used_last_layers = 6, -1     # -1, 6
+            if self.pt_used_first_layers > 0:
+                self.prompt_translator.layers = self.prompt_translator.layers[:self.pt_used_first_layers]
+            else:
+                self.prompt_translator.layers = self.prompt_translator.layers[-self.pt_used_last_layers:]
+
             self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
             self.num_pt_output_layers     = 3
             self.pt_output_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
