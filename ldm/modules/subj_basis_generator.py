@@ -393,6 +393,7 @@ class SubjBasisGenerator(nn.Module):
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
         self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
         self.pos_embs_ln = nn.LayerNorm(output_dim)
+        self.output_scale           = output_dim ** -0.5
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -414,37 +415,7 @@ class SubjBasisGenerator(nn.Module):
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.pad_embeddings = None
             self.bg_proj_in = None
-        else:
-            # For background placeholders, face and object embeddings are not used as they are foreground.
-            self.obj_proj_in  = None
-            self.prompt2token_proj = None
-            print("Bg prompt2token_proj is set to None.")
 
-            self.bg_proj_in = nn.Sequential(
-                nn.Linear(image_embedding_dim, output_dim, bias=False),
-                nn.LayerNorm(output_dim),
-            )
-
-            self.latent_queries     = nn.Parameter(torch.randn(1, self.num_out_embs, output_dim))
-            self.latent_queries_ln  = nn.LayerNorm(output_dim)
-
-        self.output_scale           = output_dim ** -0.5
-        if self.placeholder_is_bg:
-            self.prompt_trans_layers_have_to_out_proj = prompt_trans_layers_have_to_out_proj
-            identity_to_v   = False
-            v_has_skip      = not identity_to_v                         # True
-            identity_to_out = not prompt_trans_layers_have_to_out_proj  # True
-            out_has_skip    = not identity_to_out                       # False
-            # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
-            # dim=768, num_heads=6.
-            self.prompt_translator = \
-                CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.05,
-                                identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
-                                q_aware_to_v=False,  v_has_skip=v_has_skip,
-                                num_q=0, # When not q_aware_to_v, num_q is not referenced.
-                                identity_to_out=identity_to_out,
-                                out_has_skip=out_has_skip)
-        else:
             clip_text_model = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14')
             ''' 
             prompt_translator: CLIPEncoder
@@ -467,7 +438,7 @@ class SubjBasisGenerator(nn.Module):
                 )
             '''
             self.prompt_translator = clip_text_model.text_model.encoder
-            # prompt_translator only uses the last 6 layers of the 12-layer CLIPEncoder.
+            # prompt_translator either uses the first 6 layers, or the last 6 layers of the 12-layer CLIPEncoder.
             self.pt_used_first_layers, self.pt_used_last_layers = 6, -1     # -1, 6
             if self.pt_used_first_layers > 0:
                 self.prompt_translator.layers = self.prompt_translator.layers[:self.pt_used_first_layers]
@@ -478,6 +449,36 @@ class SubjBasisGenerator(nn.Module):
             self.num_pt_output_layers     = 3
             self.pt_output_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
             self.pt_output_layers_weights_grad_scaler = gen_gradient_scaler(10)
+            
+        else:
+            # For background placeholders, face and object embeddings are not used as they are foreground.
+            self.obj_proj_in  = None
+            self.prompt2token_proj = None
+            print("Bg prompt2token_proj is set to None.")
+
+            self.bg_proj_in = nn.Sequential(
+                nn.Linear(image_embedding_dim, output_dim, bias=False),
+                nn.LayerNorm(output_dim),
+            )
+
+            self.latent_queries     = nn.Parameter(torch.randn(1, self.num_out_embs, output_dim))
+            self.latent_queries_ln  = nn.LayerNorm(output_dim)
+
+            self.prompt_trans_layers_have_to_out_proj = prompt_trans_layers_have_to_out_proj
+            identity_to_v   = False
+            v_has_skip      = not identity_to_v                         # True
+            identity_to_out = not prompt_trans_layers_have_to_out_proj  # True
+            out_has_skip    = not identity_to_out                       # False
+            # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
+            # dim=768, num_heads=6.
+            self.prompt_translator = \
+                CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.05,
+                                identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
+                                q_aware_to_v=False,  v_has_skip=v_has_skip,
+                                num_q=0, # When not q_aware_to_v, num_q is not referenced.
+                                identity_to_out=identity_to_out,
+                                out_has_skip=out_has_skip)
+
         print(repr(self))
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
