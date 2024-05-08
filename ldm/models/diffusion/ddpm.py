@@ -1866,8 +1866,8 @@ class LatentDiffusion(DDPM):
                     # Gradually increase the chance of taking 5 or 7 denoising steps.
                     p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
                                                          final_percent=0.5,
-                                                         begin_array=[0.25, 0.25, 0.25, 0.25], 
-                                                         end_array  =[0.15, 0.2,  0.3,  0.35],
+                                                         begin_array=[0.4, 0.3, 0.2, 0.1], 
+                                                         end_array  =[0.4, 0.3, 0.2, 0.1],
                                                         )
                     cand_num_denoising_steps = [1, 3, 5, 7]
                     # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
