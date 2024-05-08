@@ -1942,14 +1942,6 @@ class EmbeddingManager(nn.Module):
         prompt_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
         # [B, N] => [B, N, 1]
         self.prompt_emb_mask  = prompt_emb_mask.float().unsqueeze(2)
-        padding_tokens_mask = (tokenized_text == 49407).float()
-        B,  N  = tokenized_text.shape
-        B2, N2 = tokenized_text_repeated.shape
-        assert N == N2
-
-        # Don't block the subj-padding interaction.
-        # # Block the interaction between the subject and padding tokens with a probability of 0.5.
-        p_block_subj_padding_interaction = 0 if self.training else 0
 
     # layer_static_prompt_embs: [4, 77, 768].
     # emb_mask:          [4, 77, 1]. Set to 1 to include / 0 to exclude from the mean.
