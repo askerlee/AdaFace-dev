@@ -372,7 +372,7 @@ class SubjBasisGenerator(nn.Module):
         # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=6,                       
-        num_id_vecs={ 'fg': 18, 'bg': 257 },  # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
+        num_id_vecs={ 'fg': 77, 'bg': 257 },  # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
         num_out_embs=64,                      # num_out_embs. fg: 64. bg: 32.
         image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
@@ -393,6 +393,7 @@ class SubjBasisGenerator(nn.Module):
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
         self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
         self.pos_embs_ln = nn.LayerNorm(output_dim)
+
         self.output_scale           = output_dim ** -0.5
 
         if not self.placeholder_is_bg:
@@ -479,8 +480,6 @@ class SubjBasisGenerator(nn.Module):
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
 
-        self.id_pos_embs = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
-
         print(repr(self))
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
@@ -542,8 +541,8 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 257, 768].
             id_embs = self.bg_proj_in(clip_features)
 
-        id_embs = id_embs + self.id_pos_embs
-        
+        id_embs = id_embs + self.pos_embs_ln(self.pos_embs)
+
         if self.placeholder_is_bg:
             latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
             # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
