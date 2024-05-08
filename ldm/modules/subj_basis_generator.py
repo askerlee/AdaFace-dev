@@ -450,7 +450,7 @@ class SubjBasisGenerator(nn.Module):
             self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
             self.num_pt_last_layers     = 5
             self.pt_last_layers_weights = nn.Parameter(torch.ones(self.num_pt_last_layers), requires_grad=True)
-
+            self.pt_last_layers_weights_grad_scaler = gen_gradient_scaler(10)
         print(repr(self))
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
@@ -524,7 +524,9 @@ class SubjBasisGenerator(nn.Module):
             # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
             id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
             pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_last_layers:]
-            pt_last_layers_weights = self.pt_last_layers_weights.to(pt_last_hidden_states[0].dtype)
+            # pt_last_layers_weights_grad_scaler increases the grad to pt_last_layers_weights by 10x,
+            # so that they can be updated more quickly.
+            pt_last_layers_weights = self.pt_last_layers_weights_grad_scaler(self.pt_last_layers_weights)
             # Normalize the weights of to sum to 1 across layers.
             # pt_last_layers_weights: [5].
             pt_last_layers_weights = pt_last_layers_weights / pt_last_layers_weights.sum(dim=0, keepdim=True)
