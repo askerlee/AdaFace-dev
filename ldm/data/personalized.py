@@ -496,6 +496,9 @@ class PersonalizedBase(Dataset):
         return self._length
 
     def __getitem__(self, index):
+        # If is_subject_idx == True, it means index is the index of a subject, not a particular image.
+        # i.e., we proceed to select an image from the image set of the subject (indexed by index).
+        # Otherwise, index is the index of a global image set.
         is_subject_idx = False
         if isinstance(index, tuple):
             index, is_subject_idx = index
@@ -1001,16 +1004,10 @@ class SubjectSampler(Sampler):
         self.skip_non_faces = skip_non_faces        
         self.are_mix_subj_folders = are_mix_subj_folders
         self.batch_size = batch_size
-        # num_batches: +1 to make sure the last batch is also used.
-        self.num_batches  = num_batches + 1
+        self.num_batches  = num_batches
         self.num_subjects = num_subjects
         self.subject_names = subject_names
         image_count_by_subj = np.array(image_count_by_subj)
-        for subj_idx in range(num_subjects):
-            if are_mix_subj_folders[subj_idx]:
-                # Downweight the image count of mix-subject folders, as once it's sampled,
-                # it will surely repeat for batch_size times.
-                image_count_by_subj[subj_idx] /= batch_size
         self.subj_weights = image_count_by_subj / image_count_by_subj.sum()
 
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
@@ -1024,29 +1021,12 @@ class SubjectSampler(Sampler):
         return self.num_batches * self.batch_size
     
     def next_subject(self):
-        # Pop out the oldest subject index if the prefetch_buffer is not empty
-        if self.prefetch_buffer.qsize() > 0:
-            subj_idx = self.prefetch_buffer.get()
-        else:
-            while True:
-                # np.random.choice() returns an array, even if the size is 1.
-                subj_idx = np.random.choice(self.num_subjects, 1, p=self.subj_weights)[0]
-                if not self.skip_non_faces or self.subjects_are_faces[subj_idx]:
-                    break
+        while True:
+            # np.random.choice() returns an array, even if the size is 1.
+            subj_idx = np.random.choice(self.num_subjects, 1, p=self.subj_weights)[0]
+            if not self.skip_non_faces or self.subjects_are_faces[subj_idx]:
+                break
 
-            # subj_idx either points to a folder that contains the images of a particular subject,
-            # or points to a folder that contains the images of different subjects.
-            is_mix_subj_folder = self.are_mix_subj_folders[subj_idx]
-            if is_mix_subj_folder:
-                # subj_idx points to a folder that contains different subjects.
-                # We can repeatedly sample subj_idx for batch_size times and store (batch_size - 1) of them in the prefetch_buffer.
-                # and return the last one. Then they will comprise a batch of batch_size samples.
-                for _ in range(self.batch_size - 1):
-                    self.prefetch_buffer.put(subj_idx)
-            # Otherwise, subj_idx points to a folder that contains the same subject. 
-            # We only sample one image from it, without repetitions.
-            #print(f"Random subject {subj_idx}, qsize: {self.prefetch_buffer.qsize()}")
-                  
         return subj_idx
 
     def __iter__(self):

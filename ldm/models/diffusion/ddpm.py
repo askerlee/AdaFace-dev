@@ -1010,6 +1010,8 @@ class LatentDiffusion(DDPM):
                     # when we wish to evaluate the original Arc2Face model.
                     # static_prompt_embedding: [1, 77, 768]. Need to repeat 16 times for 16 layers, and then BS times for BS instances.
                     static_prompt_embedding = self.embedding_manager.arc2face_embs
+                # If apply_arc2face_inverse_embs, the static_prompt_embedding is the CLIP-encoded Arc2Face inverse embeddings,
+                # which has been returned from self.cond_stage_model.encode(). So no need to change it.
 
                 # static_prompt_embedding is tensor. So the following statement is False.
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
