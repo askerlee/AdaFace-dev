@@ -1253,7 +1253,9 @@ class EmbeddingManager(nn.Module):
 
         # Initialize self.subj_name_to_cls_delta_tokens and self.subj_name_to_cls_delta_token_weights.
         self.init_cls_delta_tokens(get_tokens_for_string, get_embeddings_for_tokens, 
-                                   subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights)
+                                   subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights,
+                                   zs_cls_delta_string)
+        self.init_subj_name_to_being_faces(subj_name_to_being_faces)
         self.share_embedder_components(shared_placeholder_set, shared_embedder_components)
 
         self.layer_idx = -1
@@ -1264,7 +1266,10 @@ class EmbeddingManager(nn.Module):
         self.clear_prompt_adhoc_info()
         self.curr_batch_subj_names = []
         self.current_subj_name_to_cls_delta_tokens = {}
-        self.curr_subj_is_face = True
+        self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter'.
+        if self.do_zero_shot:
+            self.set_curr_batch_subject_names(["zs_default"])
+
         self.img_mask = None
         self.loss_call_count = 0
         self.training_percent = 0
@@ -1274,7 +1279,6 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
-        self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter'.
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
@@ -1291,12 +1295,6 @@ class EmbeddingManager(nn.Module):
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
         self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
-        # subj_name_to_being_faces: a dict that maps subject names to is_face.
-        # subj_name_to_being_faces is used in ddpm.py and not here.
-        self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
-                                            else {subj_name: True for subj_name in self.subject_strings}
-        self.subj_name_to_being_faces['arc2face'] = True
-
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
 
@@ -1309,12 +1307,18 @@ class EmbeddingManager(nn.Module):
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
-                              subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights):
+                              subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights,
+                              zs_cls_delta_string=None):
         if subj_name_to_cls_delta_string is None:
             subj_name_to_cls_delta_string = {}
         if subj_name_to_cls_delta_word_weights is None:
             subj_name_to_cls_delta_word_weights = {}
-        
+        if zs_cls_delta_string is not None:
+            # During inference, subj_name_to_cls_delta_string contains 'zs_default' as the subject name, and maps
+            # to zs_cls_delta_string, the default class delta string.
+            subj_name_to_cls_delta_string['zs_default'] = zs_cls_delta_string
+            subj_name_to_cls_delta_word_weights['zs_default'] = [1] * len(get_tokens_for_string(zs_cls_delta_string))
+
         # We don't know the gender of a random arc2face subject.
         subj_name_to_cls_delta_string['arc2face'] = 'person'
         subj_name_to_cls_delta_word_weights['arc2face'] = [1]
@@ -1353,6 +1357,14 @@ class EmbeddingManager(nn.Module):
             # should be multiplied by the number of subject strings. Currently not implemented.
             if num_cls_delta_tokens - 1 > self.CLS_DELTA_STRING_MAX_SEARCH_SPAN:
                 self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = num_cls_delta_tokens - 1
+
+    def init_subj_name_to_being_faces(self, subj_name_to_being_faces):
+        # subj_name_to_being_faces: a dict that maps subject names to is_face.
+        # subj_name_to_being_faces is used in ddpm.py and not here.
+        self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
+                                            else {subj_name: True for subj_name in self.subject_strings}
+        self.subj_name_to_being_faces['arc2face']   = True
+        self.subj_name_to_being_faces['zs_default'] = True
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -1991,11 +2003,13 @@ class EmbeddingManager(nn.Module):
         self.img_mask               = prompt_adhoc_info['img_mask']
         self.prompt_emb_mask        = prompt_adhoc_info['prompt_emb_mask']
     
+    # During training, set_curr_batch_subject_names() is called in ddpm.py.
+    # During inference, set_curr_batch_subject_names() is called by the embedding manager.
     def set_curr_batch_subject_names(self, subj_names):
         self.curr_batch_subj_names = subj_names
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         self.current_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
-                                                      for subj_name in self.curr_batch_subj_names }
+                                                       for subj_name in self.curr_batch_subj_names }
                 
         # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
         # curr_subj_is_face. 
@@ -2005,10 +2019,7 @@ class EmbeddingManager(nn.Module):
         if len(self.curr_batch_subj_names) > 0:
             self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
-        if self.zs_cls_delta_string is not None:
-            # During inference, zs_id_embs is [1, 512], so cls_delta_strings only contains one element.
-            self.cls_delta_strings       = [self.zs_cls_delta_string]
-        elif len(self.current_subj_name_to_cls_delta_tokens) > 0:
+        if len(self.current_subj_name_to_cls_delta_tokens) > 0:
             self.cls_delta_strings       = [ self.subj_name_to_cls_delta_string[subj_name] \
                                              for subj_name in self.curr_batch_subj_names ]
         else:
