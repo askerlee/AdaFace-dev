@@ -1580,6 +1580,8 @@ class EmbeddingManager(nn.Module):
                 else:
                     static_zs_embs = None
 
+                # static_embedder essentially only does:
+                # >> static_zs_embs = rearrange(static_zs_embs, 'b l k d -> (b l) k d')
                 subj_static_embedding = static_embedder(static_zs_embs)
                 subj_static_embedding = subj_static_embedding.to(embedded_text.dtype)
             else:

@@ -572,9 +572,8 @@ class SubjBasisGenerator(nn.Module):
             # Therefore, we only use tokens 4~67 as the ID embeddings and skip 0~3.
             id_embs_out = id_embs_out[:, 4:]
             
-        output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale        # * 0.036
+        output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale    # * 0.036
 
-        # If fg, id_embs_out_all_layers has exactly self.num_out_embs embs. 
         return output_embs, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
