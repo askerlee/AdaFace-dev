@@ -283,8 +283,11 @@ def parse_args():
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
-    parser.add_argument("--do_arc2face_distill", type=str2bool, nargs="?", const=True, default=False,
-                        help="Verify arc2face distillation")
+    parser.add_argument("--apply_arc2face_embs", action="store_true",
+                        help="Evaluate Arc2Face forward embeddings")
+    parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
+                        const=True, default=False,
+                        help="Evaluate Arc2Face inverse CLIP embeddings")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
     parser.add_argument("--zs_prompt_trans_layers_have_to_out_proj", type=str2bool, nargs="?", const=True, default=False,
@@ -655,15 +658,16 @@ def main(opt):
                             prompts = list(prompts)
 
                         if not opt.eval_blip:
-                            do_arc2face_distill = opt.zeroshot and opt.do_arc2face_distill
+                            apply_arc2face_inverse_embs = opt.zeroshot and opt.apply_arc2face_inverse_embs
+                            apply_arc2face_embs         = opt.zeroshot and opt.apply_arc2face_embs
                             # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
-                                                               do_arc2face_distill=do_arc2face_distill,
-                                                               debug_arc2face_embs=False)
+                                                               apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
+                                                               apply_arc2face_embs=apply_arc2face_embs)
 
-                            if do_arc2face_distill:
+                            if apply_arc2face_inverse_embs:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
                                 c = (static_prompt_embedding, c[1], c[2])
                                 # If the arc2face prompt is shorter than the uncond static prompt (77 tokens),

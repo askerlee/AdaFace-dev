@@ -1150,6 +1150,7 @@ class EmbeddingManager(nn.Module):
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_prompt_trans_layers_have_to_out_proj = zs_prompt_trans_layers_have_to_out_proj
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
+            self.arc2face_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
@@ -1274,7 +1275,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
-        self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_distill_iter'.
+        self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter'.
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
@@ -1570,9 +1571,12 @@ class EmbeddingManager(nn.Module):
                                                  is_training=self.training,
                                                  arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
                     
-                    if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter' and not placeholder_is_bg:
+                    if self.do_zero_shot and not placeholder_is_bg and \
+                      (self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter'):
                         assert placeholder_arc2face_inverse_prompt_embs is not None
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
+                        # arc2face_embs is the Arc2Face forward embeddings, while 
+                        # arc2face_inverse_prompt_embs is the Arc2Face inverse embeddings.
                         self.arc2face_embs = placeholder_arc2face_embs
 
                     # num_vectors_each_placeholder: 16 or 4.
@@ -1616,6 +1620,9 @@ class EmbeddingManager(nn.Module):
                 subj_static_embedding_k = subj_static_embedding[:, k]
                 
                 if self.training and self.training_begin_add_noise_std_range is not None:
+                    # The std of subj_static_embedding is around 0.07, times training_end_add_noise_std_range
+                    # (0.02 ~ 0.04) is very small. Therefore, it won't hurt the subject identity encoded
+                    # in the embeddings.
                     subj_static_embedding_k = \
                         anneal_add_noise_to_embedding(subj_static_embedding_k, 
                                                       self.training_percent,
@@ -1657,11 +1664,14 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
         #print(self.cls_delta_string_indices)
-        if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter':
-            # In an arc2face_distill_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
+        if self.do_zero_shot and self.iter_type == 'arc2face_inverse_clip_iter':
+            # In an arc2face_inverse_clip_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
             # The updated embedded_text above is ignored. But subj_static_embeddings is 
             # still involved in delta-loss computation.
             embedded_text = arc2face_inverse_prompt_embs
+            # NOTE: if self.iter_type == 'arc2face_clip_iter', we CANNOT return self.arc2face_embs
+            # as the updated embedded_text, since the returned embedded_text is used as the token embeddings,
+            # which will be encoded again by the text encoder.
             
         return embedded_text, tokenized_text, static_subj_embs_dict
 
@@ -2198,13 +2208,13 @@ class EmbeddingManager(nn.Module):
         # Therefore it doesn't matter.
         if self.training and add_noise_to_zs_id_embs:
             zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                       begin_noise_std_range=[0.01,  0.02], 
-                                                       end_noise_std_range  =[0.005, 0.01],
+                                                       begin_noise_std_range=[0.01, 0.02], 
+                                                       end_noise_std_range  =[0.01, 0.02],
                                                        add_noise_prob=0.5, noise_std_is_relative=True,
                                                        keep_norm=True)
 
         self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
-                                    'id': zs_id_embs }
+                                    'id':   zs_id_embs }
         # Beginning of a new iteration, clear the cached ada_zs_basis_vecs.
         self.subj2ada_zs_basis_vecs = {}
         # Clear the basis_vecs and bias saved in embedders.

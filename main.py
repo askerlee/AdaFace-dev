@@ -290,6 +290,9 @@ def get_parser(**parser_kwargs):
                         help="Multiplier of the prompt2token projection attention")
     parser.add_argument("--arc2face_distill_iter_prob", type=float, default=argparse.SUPPRESS,
                         help="Probability of doing arc2face distillation in each iteration")
+    parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
+                        const=True, default=False,
+                        help="Use Arc2Face inverse CLIP embeddings")    
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
                 
@@ -1035,6 +1038,7 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'arc2face_distill_iter_prob'):
             config.model.params.arc2face_distill_iter_prob = opt.arc2face_distill_iter_prob
+        config.model.params.apply_arc2face_inverse_embs = opt.apply_arc2face_inverse_embs
         config.model.params.load_old_embman_ckpt = opt.load_old_embman_ckpt
 
         if hasattr(opt, 'optimizer_type'):
