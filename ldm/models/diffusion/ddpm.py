@@ -189,7 +189,7 @@ class DDPM(pl.LightningModule):
         self.do_zero_shot                           = do_zero_shot
         self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if (do_zero_shot and self.training) \
                                                         else 0
-        self.apply_arc2face_inverse_embs             = apply_arc2face_inverse_embs
+        self.apply_arc2face_inverse_embs            = apply_arc2face_inverse_embs
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps

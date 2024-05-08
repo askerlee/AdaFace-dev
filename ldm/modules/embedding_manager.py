@@ -1264,11 +1264,13 @@ class EmbeddingManager(nn.Module):
         self.ada_subj_attn_dict    = {}
         self.clear_ada_layer_temp_info()
         self.clear_prompt_adhoc_info()
-        self.curr_batch_subj_names = []
-        self.current_subj_name_to_cls_delta_tokens = {}
+        
         self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter'.
-        if self.do_zero_shot:
+        if self.do_zero_shot and zs_cls_delta_string is not None:
             self.set_curr_batch_subject_names(["zs_default"])
+        else:
+            self.curr_batch_subj_names = []
+            self.current_subj_name_to_cls_delta_tokens = {}
 
         self.img_mask = None
         self.loss_call_count = 0

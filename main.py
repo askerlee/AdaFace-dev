@@ -282,8 +282,8 @@ def get_parser(**parser_kwargs):
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.4,
                         help="Probability of generating random faces during arc2face distillation")
-    parser.add_argument("--max_num_denoising_steps", type=int, default=1,
-                        help="Maximum number of denoising steps (default 5)")    
+    parser.add_argument("--max_num_denoising_steps", type=int, default=7,
+                        help="Maximum number of denoising steps (default 7)")    
     parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=-1,
