@@ -44,7 +44,7 @@ model:
     ada_embedding_reg_weight:           1e-3
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:        2e-4
-    padding_embs_align_loss_weight:     0 #2e-4 
+    padding_bg_fg_embs_align_loss_weight:     0 #2e-4 
     # typical loss_subj_comp_key_ortho is 0.2, * weight -> 2e-7
     subj_comp_key_ortho_loss_weight:    2e-4 # disabled. # 1e-4 
     subj_comp_value_ortho_loss_weight:  0 # disabled. # 1e-5

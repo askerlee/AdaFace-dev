@@ -318,9 +318,9 @@ def get_parser(**parser_kwargs):
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
 
-    parser.add_argument("--padding_embs_align_loss_weight",
+    parser.add_argument("--padding_bg_fg_embs_align_loss_weight",
         type=float, default=argparse.SUPPRESS,
-        help="Weight of the padding embeddings alignment loss")
+        help="Weight of the loss of padding and bg embeddings aligning with fg embeddings")
     parser.add_argument("--mix_prompt_distill_weight",
         type=float, default=argparse.SUPPRESS,
         help="Weight of the mixed prompt distillation loss")
@@ -1022,8 +1022,8 @@ if __name__ == "__main__":
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):
             config.model.params.prompt_emb_delta_reg_weight = opt.prompt_emb_delta_reg_weight
 
-        if hasattr(opt, 'padding_embs_align_loss_weight'):
-            config.model.params.padding_embs_align_loss_weight  = opt.padding_embs_align_loss_weight
+        if hasattr(opt, 'padding_bg_fg_embs_align_loss_weight'):
+            config.model.params.padding_bg_fg_embs_align_loss_weight  = opt.padding_bg_fg_embs_align_loss_weight
         if hasattr(opt, 'comp_fg_bg_preserve_loss_weight'):
             config.model.params.comp_fg_bg_preserve_loss_weight = opt.comp_fg_bg_preserve_loss_weight
         if hasattr(opt, 'mix_prompt_distill_weight'):
