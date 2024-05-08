@@ -1263,6 +1263,7 @@ class EmbeddingManager(nn.Module):
         self.clear_ada_layer_temp_info()
         self.clear_prompt_adhoc_info()
         self.curr_batch_subj_names = []
+        self.current_subj_name_to_cls_delta_tokens = {}
         self.curr_subj_is_face = True
         self.img_mask = None
         self.loss_call_count = 0
@@ -1437,9 +1438,7 @@ class EmbeddingManager(nn.Module):
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
         self.cls_delta_string_indices = []
-        # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
-        prompt_subj_name_to_cls_delta_tokens        = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
-                                                        for subj_name in self.curr_batch_subj_names }
+
         arc2face_inverse_prompt_embs = None
 
         if self.use_layerwise_embedding:
@@ -1491,12 +1490,12 @@ class EmbeddingManager(nn.Module):
             # occurs in the prompts without the placeholder token. If so, we need to merge 
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
-            # prompt_subj_name_to_cls_delta_tokens only contains the cls_delta_tokens of the current batch.
+            # current_subj_name_to_cls_delta_tokens only contains the cls_delta_tokens of the current batch.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
-              and len(prompt_subj_name_to_cls_delta_tokens) > 0:
+              and len(self.current_subj_name_to_cls_delta_tokens) > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text,
                                                                   placeholder_indices_1st,
-                                                                  prompt_subj_name_to_cls_delta_tokens,
+                                                                  self.current_subj_name_to_cls_delta_tokens,
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 # cls_delta_string_indices is a list of tuples, each tuple is 
                 # (batch_i, start_N, num_cls_delta_tokens, placeholder_token).
@@ -1518,34 +1517,8 @@ class EmbeddingManager(nn.Module):
 
                     # zs_id_embs: [1, 512].
                     zs_id_embs = zs_image_feat_dict['id']
-
-                    # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
-                    # curr_subj_is_face. 
-                    # During inference, we set curr_subj_is_face directly.
-                    # BUG: if there are multiple subjects in the same batch, then is_face is only 
-                    # about the first subject. But now we only support one subject in a batch.
-                    if len(self.curr_batch_subj_names) > 0:
-                        self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
-
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-
-                    if not placeholder_is_bg:
-                        if self.zs_cls_delta_string is not None:
-                            # During inference, zs_id_embs is [1, 512], so cls_delta_strings only contains one element.
-                            cls_delta_strings               = [self.zs_cls_delta_string]
-                        elif len(prompt_subj_name_to_cls_delta_tokens) > 0:
-                            cls_delta_strings            = [ self.subj_name_to_cls_delta_string[subj_name] \
-                                                             for subj_name in self.curr_batch_subj_names ]
-                        else:
-                            cls_delta_strings = None
-
-                        # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
-                        if cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
-                            cls_delta_strings = cls_delta_strings[:1]
-                            
-                        if cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                            print(f"cls_delta_strings: {cls_delta_strings}")
-
+                        
                     # Loaded pretrained IP-Adapter model weight. No need to update arc2face_text_encoder.
                     # So arc2face_text_encoder is frozen.
                     if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
@@ -1564,7 +1537,7 @@ class EmbeddingManager(nn.Module):
                     # static_zs_embs:   [BS, 256, 768] if fg, or [BS,  64, 768] if bg.
                     static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
-                                                 list_extra_words=cls_delta_strings, 
+                                                 list_extra_words=self.cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
                                                  arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
@@ -1694,9 +1667,6 @@ class EmbeddingManager(nn.Module):
         # layer_static_prompt_embs   = clamp_prompt_embedding(self.prompt_embedding_clamp_value, layer_static_prompt_embs)
         
         self.cls_delta_string_indices = []
-        prompt_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
-                                                 for subj_name in self.curr_batch_subj_names }
-
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
         # This order ensures that the background Ada embedder can always use 
@@ -1728,10 +1698,10 @@ class EmbeddingManager(nn.Module):
             # using merge_cls_token_embeddings().
             # During inference, cls delta strings are not used. So CLS_DELTA_STRING_MAX_SEARCH_SPAN = -1.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
-              and len(prompt_subj_name_to_cls_delta_tokens) > 0:
+              and len(self.current_subj_name_to_cls_delta_tokens) > 0:
                 cls_delta_string_indices = scan_cls_delta_strings(tokenized_text,
                                                                   placeholder_indices_1st,
-                                                                  prompt_subj_name_to_cls_delta_tokens,
+                                                                  self.current_subj_name_to_cls_delta_tokens,
                                                                   self.CLS_DELTA_STRING_MAX_SEARCH_SPAN)
                 
                 # cls_delta_string_indices is a list of tuples, each tuple is 
@@ -2023,7 +1993,34 @@ class EmbeddingManager(nn.Module):
     
     def set_curr_batch_subject_names(self, subj_names):
         self.curr_batch_subj_names = subj_names
+        # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
+        self.current_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
+                                                      for subj_name in self.curr_batch_subj_names }
+                
+        # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
+        # curr_subj_is_face. 
+        # During inference, we set curr_subj_is_face directly.
+        # BUG: if there are multiple subjects in the same batch, then is_face is only 
+        # about the first subject. But now we only support one subject in a batch.
+        if len(self.curr_batch_subj_names) > 0:
+            self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
+        if self.zs_cls_delta_string is not None:
+            # During inference, zs_id_embs is [1, 512], so cls_delta_strings only contains one element.
+            self.cls_delta_strings       = [self.zs_cls_delta_string]
+        elif len(self.current_subj_name_to_cls_delta_tokens) > 0:
+            self.cls_delta_strings       = [ self.subj_name_to_cls_delta_string[subj_name] \
+                                             for subj_name in self.curr_batch_subj_names ]
+        else:
+            self.cls_delta_strings = None
+
+        # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
+        if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
+            self.cls_delta_strings = self.cls_delta_strings[:1]
+            
+        if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+            print(f"subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
+            
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
         self.gen_ada_embedding      = True

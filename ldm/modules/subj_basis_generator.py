@@ -556,7 +556,7 @@ class SubjBasisGenerator(nn.Module):
             # [3] -> [3, 1, 1, 1]
             pt_output_layers_weights = pt_output_layers_weights.reshape(-1, 1, 1, 1)
             # A weighted sum of pt_output_hidden_states.
-            # [5, 1, 77, 768] * [5, 1, 1, 1] -> [5, 1, 77, 768] -> [1, 77, 768]
+            # [3, 1, 77, 768] * [3, 1, 1, 1] -> [3, 1, 77, 768] -> [1, 77, 768]
             pt_last_hidden_state = (torch.stack(pt_output_hidden_states, dim=0) * pt_output_layers_weights).sum(dim=0)
             id_embs_out = self.pt_layer_norm(pt_last_hidden_state)
 

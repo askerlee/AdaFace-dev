@@ -1927,7 +1927,6 @@ class LatentDiffusion(DDPM):
         self.iter_flags['arc2face_prompt_emb']  = arc2face_prompt_emb
 
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
-        print(self.batch_subject_names)
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -2352,16 +2351,7 @@ class LatentDiffusion(DDPM):
                     image = image.cpu().numpy().transpose(1, 2, 0)
                 # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
                 # PersonalizedBase dataset class.
-                image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))
-
-                '''
-                face_encoder:
-                {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
-                 'landmark_2d_106': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc2b0>, 
-                 'detection': <insightface.model_zoo.retinaface.RetinaFace object at 0x7f8e3f0cc100>, 
-                 'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
-                 'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
-                '''                    
+                image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))   
                 face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
                 if len(face_info) == 0 and not skip_non_faces:
                     print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
