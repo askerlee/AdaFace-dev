@@ -472,8 +472,8 @@ class SubjBasisGenerator(nn.Module):
             self.prompt_translator.layers = self.prompt_translator.layers[-self.pt_used_last_layers:]
             self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
             self.num_pt_output_layers     = 3
-            self.pt_last_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
-            self.pt_last_layers_weights_grad_scaler = gen_gradient_scaler(10)
+            self.pt_output_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
+            self.pt_output_layers_weights_grad_scaler = gen_gradient_scaler(10)
         print(repr(self))
 
     # list_extra_words: a list of length BS. Each element is a string of extra words.
@@ -546,17 +546,18 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
             # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
             id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
-            pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_output_layers:]
-            # Increase the bp grad to pt_last_layers_weights by a factor of 10, to make it learn faster.
-            pt_last_layers_weights = self.pt_last_layers_weights_grad_scaler(self.pt_last_layers_weights)
+            # pt_output_hidden_states: a list of num_pt_output_layers==3 tensor, each tensor is [BS, 77, 768].
+            pt_output_hidden_states = pt_last_hidden_states[-self.num_pt_output_layers:]
+            # Increase the bp grad to pt_output_layers_weights by a factor of 10, to make it learn faster.
+            pt_output_layers_weights = self.pt_output_layers_weights_grad_scaler(self.pt_output_layers_weights)
             # Normalize the weights of to sum to 1 across layers.
-            # pt_last_layers_weights: [5].
-            pt_last_layers_weights = pt_last_layers_weights / pt_last_layers_weights.sum(dim=0, keepdim=True)
-            # [5] -> [5, 1, 1, 1]
-            pt_last_layers_weights = pt_last_layers_weights.reshape(-1, 1, 1, 1)
-            # A weighted sum of pt_last_hidden_states.
+            # pt_output_layers_weights: [3].
+            pt_output_layers_weights = pt_output_layers_weights / pt_output_layers_weights.sum(dim=0, keepdim=True)
+            # [3] -> [3, 1, 1, 1]
+            pt_output_layers_weights = pt_output_layers_weights.reshape(-1, 1, 1, 1)
+            # A weighted sum of pt_output_hidden_states.
             # [5, 1, 77, 768] * [5, 1, 1, 1] -> [5, 1, 77, 768] -> [1, 77, 768]
-            pt_last_hidden_state = (torch.stack(pt_last_hidden_states, dim=0) * pt_last_layers_weights).sum(dim=0)
+            pt_last_hidden_state = (torch.stack(pt_output_hidden_states, dim=0) * pt_output_layers_weights).sum(dim=0)
             id_embs_out = self.pt_layer_norm(pt_last_hidden_state)
 
             # Remove the first token, i.e., the BOS token, which has 
