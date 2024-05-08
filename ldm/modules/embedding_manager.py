@@ -1144,8 +1144,6 @@ class EmbeddingManager(nn.Module):
             else:
                 self.num_vectors_each_bg = 0
 
-            # num_zs_vecs_per_token: 16.
-            self.num_zs_vecs_per_token = self.num_unet_ca_layers
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_prompt_trans_layers_have_to_out_proj = zs_prompt_trans_layers_have_to_out_proj
@@ -1577,23 +1575,21 @@ class EmbeddingManager(nn.Module):
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
                         # arc2face_embs is the Arc2Face forward embeddings, while 
                         # arc2face_inverse_prompt_embs is the Arc2Face inverse embeddings.
+                        # arc2face_embs: [BS, 77, 768].
                         self.arc2face_embs = placeholder_arc2face_embs
 
-                    # num_vectors_each_placeholder: 16 or 4.
-                    # num_zs_vecs_per_token: 16 = self.num_unet_ca_layers.
-                    # static_zs_embs: [BS, 256, 768] -> [BS, 16, 16, 768].
+                    # num_vectors_each_placeholder: 4 or 2.
                     # If subj:
-                    # static_zs_embs: [BS, 16, 16, 768].
+                    # static_zs_embs: [BS, 64, 768] -> [BS, 16, 4, 768].
                     # If bg:
-                    # static_zs_embs: [BS,  4, 16, 768].
-                    static_zs_embs = static_zs_embs.reshape(static_zs_embs.shape[0], 
-                                                            num_vectors_each_placeholder,
-                                                            self.num_zs_vecs_per_token, -1)
-                    # TODO: Remove ada zs embs completely.
-                    self.subj2ada_zs_basis_vecs[placeholder_string] = None
-                    # subj_static_embedding: [BS, 16, 16, 768] => [BS, 16, 16, 768]
+                    # static_zs_embs: [BS, 32, 768] -> [BS, 16, 2, 768].
                     # [BS, num_unet_ca_layers, num_vectors_each_placeholder, 768].
-                    static_zs_embs = static_zs_embs.permute(0, 2, 1, 3)
+                    static_zs_embs = static_zs_embs.reshape(static_zs_embs.shape[0], 
+                                                            self.num_unet_ca_layers, 
+                                                            num_vectors_each_placeholder,
+                                                            -1)
+                    # TODO: Remove subj2ada_zs_basis_vecs completely.
+                    self.subj2ada_zs_basis_vecs[placeholder_string] = None
                 else:
                     static_zs_embs = None
 
