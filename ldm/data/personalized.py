@@ -1041,7 +1041,7 @@ class SubjectSampler(Sampler):
                 # subj_idx points to a folder that contains different subjects.
                 # We can repeatedly sample subj_idx for batch_size times and store (batch_size - 1) of them in the prefetch_buffer.
                 # and return the last one. Then they will comprise a batch of batch_size samples.
-                for _ in range(self.batch_size):
+                for _ in range(self.batch_size - 1):
                     self.prefetch_buffer.put(subj_idx)
             # Otherwise, subj_idx points to a folder that contains the same subject. 
             # We only sample one image from it, without repetitions.

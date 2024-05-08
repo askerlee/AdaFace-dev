@@ -666,6 +666,8 @@ def main(opt):
                             if do_arc2face_distill:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
                                 c = (static_prompt_embedding, c[1], c[2])
+                                # If the arc2face prompt is shorter than the uncond static prompt (77 tokens),
+                                # Then we shorten the uncond static prompt to match the arc2face prompt.
                                 if static_prompt_embedding.shape[1] < uc[0].shape[1]:
                                     uncond_prompt_embedding = get_b_core_e_embeddings(uc[0], length=static_prompt_embedding.shape[1] - 1)
                                     uc = (uncond_prompt_embedding, uc[1], uc[2])
