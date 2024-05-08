@@ -991,7 +991,7 @@ class LatentDiffusion(DDPM):
                     apply_compel_cfg_prob = self.apply_compel_cfg_prob
 
                 if self.iter_flags['is_compos_iter']:
-                    self.embedding_manager.iter_type = 'distill_iter'
+                    self.embedding_manager.iter_type = 'compos_distill_iter'
                 elif do_arc2face_distill:
                     self.embedding_manager.iter_type = 'arc2face_distill_iter'
                 else:
@@ -1007,7 +1007,7 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
-                if True: #not do_arc2face_distill:
+                if not do_arc2face_distill:
                     emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():

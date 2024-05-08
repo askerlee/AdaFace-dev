@@ -1274,7 +1274,7 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
-        self.iter_type = None       # 'recon_iter', 'distill_iter', 'arc2face_distill_iter'.
+        self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_distill_iter'.
         self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
@@ -1540,8 +1540,8 @@ class EmbeddingManager(nn.Module):
                         else:
                             cls_delta_strings = None
 
-                        # In a distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
-                        if cls_delta_strings is not None and self.iter_type == 'distill_iter':
+                        # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
+                        if cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
                             cls_delta_strings = cls_delta_strings[:1]
                             
                         if cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
@@ -1657,7 +1657,7 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
         #print(self.cls_delta_string_indices)
-        if False: #self.do_zero_shot and self.iter_type == 'arc2face_distill_iter':
+        if self.do_zero_shot and self.iter_type == 'arc2face_distill_iter':
             # In an arc2face_distill_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
             # The updated embedded_text above is ignored. But subj_static_embeddings is 
             # still involved in delta-loss computation.
