@@ -3033,10 +3033,10 @@ class LatentDiffusion(DDPM):
                         # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
                         # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
                         # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
-                        # Therefore, bg_pixel_weight = 0.2.
+                        # Therefore, bg_pixel_weight = 0.1.
                         # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
                         # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
-                        bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.2
+                        bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.1
 
                         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                         loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
@@ -3736,7 +3736,7 @@ class LatentDiffusion(DDPM):
 
         loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
                       + (loss_recon_pixels * weighted_bg_mask).sum() )   \
-                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum())
+                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum() + 1e-6)
 
         return loss_recon, loss_recon_pixels
     
