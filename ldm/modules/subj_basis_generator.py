@@ -546,7 +546,7 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
             # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
             id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
-            pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_last_layers:]
+            pt_last_hidden_states = pt_last_hidden_states[-self.num_pt_output_layers:]
             # Increase the bp grad to pt_last_layers_weights by a factor of 10, to make it learn faster.
             pt_last_layers_weights = self.pt_last_layers_weights_grad_scaler(self.pt_last_layers_weights)
             # Normalize the weights of to sum to 1 across layers.
