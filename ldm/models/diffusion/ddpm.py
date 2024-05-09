@@ -606,7 +606,10 @@ class DDPM(pl.LightningModule):
         self.log("global_step", self.global_step,
                  prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
-        loss = loss / self.manual_accumulate_grad_batches
+        # No need to divide loss by self.manual_accumulate_grad_batches, since the learning rate is not scaled according to
+        # manual_accumulate_grad_batches. So if we divide loss by manual_accumulate_grad_batches, and at the same time,
+        # scale the learning rate by manual_accumulate_grad_batches, then they will cancel out each other.
+        #loss = loss / self.manual_accumulate_grad_batches
         self.manual_backward(loss)
 
         optimizers = self.optimizers()

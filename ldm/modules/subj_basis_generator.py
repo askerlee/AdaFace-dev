@@ -381,7 +381,7 @@ class SubjBasisGenerator(nn.Module):
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         output_dim=768,                     # CLIP text embedding input dimension.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
-        subj_has_prompt_translator: bool = True,    # Whether the subject basis generator has an additional prompt translator.
+        subj_has_prompt_translator: bool = False,    # Whether the subject basis generator has an additional prompt translator.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
         bg_prompt_translator_has_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.

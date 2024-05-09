@@ -1014,7 +1014,7 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_token_weights=None,
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
-            zs_subj_has_prompt_translator=True,
+            zs_subj_has_prompt_translator=False,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 

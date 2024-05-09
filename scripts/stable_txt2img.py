@@ -283,7 +283,7 @@ def parse_args():
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
-    parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether the subject basis generator has a prompt translator")        
     parser.add_argument("--apply_arc2face_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")

@@ -276,7 +276,7 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the prompt2token projection layer")   
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
-    parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether the subject basis generator has a prompt translator")    
     parser.add_argument("--zs_prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
