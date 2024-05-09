@@ -259,10 +259,10 @@ def parse_args():
                         help="Background placeholder string used in prompts to denote the background in training images.")
                     
     parser.add_argument("--num_vectors_per_subj_token",
-                        type=int, default=9,
+                        type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--num_vectors_per_bg_token",
-                        type=int, default=4,
+                        type=int, default=argparse.SUPPRESS,
                         help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
@@ -379,8 +379,14 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.model.params.personalization_config.params.token2num_vectors = { opt.subject_string:    opt.num_vectors_per_subj_token,
-                                                                                opt.background_string: opt.num_vectors_per_bg_token }
+        config.model.params.personalization_config.params.token2num_vectors = {} 
+        if hasattr(opt, 'num_vectors_per_subj_token'):
+            # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
+            config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
+            opt.skip_loading_token2num_vectors = True
+        if hasattr(opt, 'num_vectors_per_bg_token'):
+            # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
+            config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
         
         if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:

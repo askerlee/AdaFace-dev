@@ -1147,6 +1147,13 @@ class EmbeddingManager(nn.Module):
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             self.zs_subj_has_prompt_translator = zs_subj_has_prompt_translator
+            if self.zs_subj_has_prompt_translator:
+                zs_num_vecs_each_subj = self.number_vectors_each_subj * self.num_unet_ca_layers
+                # Maxinum number of output embeddings from prompt_translator is 73. This indicates a bug.
+                if zs_num_vecs_each_subj > 73:
+                    print(f"BUG: The number of vectors per subject {zs_num_vecs_each_subj} is beyond the capacity of prompt_translator.")
+                    breakpoint()
+
             self.arc2face_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")

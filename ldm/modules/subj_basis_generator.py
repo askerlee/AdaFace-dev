@@ -394,7 +394,7 @@ class SubjBasisGenerator(nn.Module):
         # subj: 64, bg: 32.
         self.num_out_embs           = num_out_layers * num_out_embs_per_layer
         self.output_dim             = output_dim
-        # If not subj_has_prompt_translator, then num_id_vecs should be the number of core ID embs, 18.
+        # If not subj_has_prompt_translator, then num_id_vecs should be the number of core ID embs, 16.
         # However, in such case, pos_embs is not used. So it doesn't matter if it's wrongly set.
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['subj']
         self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))

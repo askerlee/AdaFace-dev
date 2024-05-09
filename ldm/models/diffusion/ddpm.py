@@ -35,7 +35,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, calc_layer_subj_comp_k_or_v_ortho_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
-                        fix_emb_scales, replace_prompt_comp_extra, \
+                        fix_emb_scale, replace_prompt_comp_extra, \
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
@@ -1022,11 +1022,11 @@ class LatentDiffusion(DDPM):
                         if placeholder in self.embedding_manager.background_string_dict:
                             emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
-                        static_prompt_embedding = fix_emb_scales(static_prompt_embedding, placeholder_indices,
+                        static_prompt_embedding = fix_emb_scale(static_prompt_embedding, placeholder_indices,
                                                                  num_layers=self.N_CA_LAYERS,
                                                                  extra_scale=emb_extra_global_scale)
 
-                    # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
+                    # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scale first().
                     # If cls_delta_string_indices is not empty, then it must be a compositional 
                     # distillation iteration, and placeholder_indices only contains the indices of the subject 
                     # instances. Whereas cls_delta_string_indices only contains the indices of the
@@ -1105,15 +1105,17 @@ class LatentDiffusion(DDPM):
         emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=False)
         # The scales of ada embeddings are fixed here.
         # The scales of static subject embeddings are fixed in get_learned_conditioning().
+        # NOTE: If self.do_zero_shot, we shouldn't fix_emb_scale(). But since ada embeddings are disabled
+        # if do_zero_shot, we don't need to worry about this.
         for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
             emb_extra_global_scale = emb_global_scales_dict[placeholder]
             if placeholder in self.embedding_manager.background_string_dict:
                 emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
 
-            ada_prompt_embedding = fix_emb_scales(ada_prompt_embedding, placeholder_indices,
+            ada_prompt_embedding = fix_emb_scale(ada_prompt_embedding, placeholder_indices,
                                                   extra_scale=emb_extra_global_scale)
             
-        # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scales first().
+        # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scale first().
         # If cls_delta_string_indices is not empty, then it must be a compositional 
         # distillation iteration, and placeholder_indices only contains the indices of the subject 
         # instances. Whereas cls_delta_string_indices only contains the indices of the
