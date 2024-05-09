@@ -1157,7 +1157,7 @@ def get_b_core_e_embeddings(prompt_embeds, length=22):
 # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
 def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_embs, list_extra_words,
                                       return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
-                                      input_max_length=77, extra_words_scale=0.3):
+                                      input_max_length=77, extra_words_scale=0.1):
 
     '''
     text_encoder: arc2face_models.py CLIPTextModelWrapper instance.

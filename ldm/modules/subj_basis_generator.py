@@ -520,7 +520,8 @@ class SubjBasisGenerator(nn.Module):
                 if is_training:
                     return_emb_types = ['full_pad', 'core']
                 else:
-                    # arc2face_inverse_prompt_embs_inf_type: default is full_pad, same as training.
+                    # arc2face_inverse_prompt_embs_inf_type: default is full_half_pad, same as training.
+                    # But it doesn't matter, if zs_subj_has_prompt_translator is False.
                     return_emb_types = [arc2face_inverse_prompt_embs_inf_type, 'core']
 
                 if self.pad_embeddings is None:
