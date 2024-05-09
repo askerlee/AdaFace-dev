@@ -1272,7 +1272,7 @@ class EmbeddingManager(nn.Module):
         
         self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter'.
         if self.do_zero_shot and zs_cls_delta_string is not None:
-            self.set_curr_batch_subject_names(["zs_default"])
+            self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
         else:
             self.curr_batch_subj_names = []
             self.current_subj_name_to_cls_delta_tokens = {}
