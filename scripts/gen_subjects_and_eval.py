@@ -382,7 +382,7 @@ if __name__ == "__main__":
                 get_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
                                 class_name, cls_delta_string, 
                                 broad_class, args.prompt_set)
-            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}.txt"
+            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}-{args.num_vectors_per_subj_token}.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
             if args.n_samples == -1:
@@ -432,7 +432,7 @@ if __name__ == "__main__":
                 PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, class_long_prompt, class_short_prompt ]) + "\n" )
             else:
                 indiv_subdir = subject_name
-
+        
         if isinstance(args.scale, (list, tuple)):
             args.scale = " ".join([ str(s) for s in args.scale ])
 
@@ -442,6 +442,7 @@ if __name__ == "__main__":
             
         if args.prompt is None:
             PROMPTS.close()
+            print(f"{len(prompt_list)} prompts saved to {prompt_filepath}")
             # Since we use a prompt file, we don't need to specify --n_samples.
             command_line += f" --from_file {prompt_filepath}"
         else:

@@ -1063,7 +1063,7 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_
 # text_embedding: [B, N, D]
 # If text_embedding is static embedding, then num_layers=16, 
 # we need to reshape it to [B0, num_layers, N, D].
-def fix_emb_scales(text_embedding, placeholder_indices, num_layers=1, 
+def fix_emb_scale(text_embedding, placeholder_indices, num_layers=1, 
                    scale=-1, extra_scale=1):
     if placeholder_indices is None:
         return text_embedding
