@@ -1991,7 +1991,8 @@ class EmbeddingManager(nn.Module):
     
     # During training, set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.
-    def set_curr_batch_subject_names(self, subj_names):
+    def set_curr_batch_subject_names(self, subj_names, embman_iter_type):
+        self.iter_type = embman_iter_type
         self.curr_batch_subj_names = subj_names
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         self.current_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
@@ -2014,7 +2015,7 @@ class EmbeddingManager(nn.Module):
         # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
         if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
             self.cls_delta_strings = self.cls_delta_strings[:1]
-            
+        
         if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
             print(f"subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
             

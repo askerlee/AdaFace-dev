@@ -1169,12 +1169,17 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
 
     if list_extra_words is not None:
         if len(list_extra_words) != len(face_prompt_embs):
-            print("Warn: list_extra_words has different length as face_prompt_embs.")
-            if len(list_extra_words) == 1:
-                list_extra_words = list_extra_words * len(face_prompt_embs)
+            if len(face_prompt_embs) > 1:
+                print("Warn: list_extra_words has different length as face_prompt_embs.")
+                if len(list_extra_words) == 1:
+                    list_extra_words = list_extra_words * len(face_prompt_embs)
+                else:
+                    breakpoint()
             else:
-                breakpoint()
-
+                # len(face_prompt_embs) == 1, this occurs when same_subject_in_batch == True, e.g. in do_mix_prompt_distillation.
+                # But list_extra_words always corresponds to the actual batch size. So we only take the first element.
+                list_extra_words = list_extra_words[:1]
+                
         for extra_words in list_extra_words:
             assert len(extra_words.split()) <= 2, "Each extra_words string should consist of at most 2 words."
         # 16 ", " are placeholders for face_prompt_embs.

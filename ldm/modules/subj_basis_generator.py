@@ -536,7 +536,6 @@ class SubjBasisGenerator(nn.Module):
                                                           pad_embeddings=self.pad_embeddings,
                                                           hidden_state_layer_weights=hidden_state_layer_weights,
                                                           input_max_length=77)
-                
                 # Reduce the update rate to prompt2token_proj.
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 core_id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
@@ -557,9 +556,10 @@ class SubjBasisGenerator(nn.Module):
             latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
             # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
             # and we take the first 16*4=64.             
-            # [4, 256, 768] if subj or [4, 64, 768] if bg.
+            # Output of prompt_translator is exactly num_out_embs == 64 tokens. id_embs_out: [BS, 64, 768].
             id_embs_out = self.prompt_translator(latent_queries, id_embs)
-            id_embs_out = id_embs_out[:, :self.num_out_embs]
+            # [BS, 64, 768] -> [BS, 16, 4, 768]
+            id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
             output_embs = id_embs_out * self.output_scale    # * 0.036
         else:
             if self.subj_has_prompt_translator:

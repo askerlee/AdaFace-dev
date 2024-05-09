@@ -990,13 +990,14 @@ class LatentDiffusion(DDPM):
                     apply_compel_cfg_prob = self.apply_compel_cfg_prob
 
                 if self.iter_flags['is_compos_iter']:
-                    self.embedding_manager.iter_type = 'compos_distill_iter'
+                    embman_iter_type = 'compos_distill_iter'
                 elif apply_arc2face_inverse_embs:
-                    self.embedding_manager.iter_type = 'arc2face_inverse_clip_iter'
+                    embman_iter_type = 'arc2face_inverse_clip_iter'
                 elif apply_arc2face_embs:
-                    self.embedding_manager.iter_type = 'arc2face_clip_iter'
+                    embman_iter_type = 'arc2face_clip_iter'
                 else:
-                    self.embedding_manager.iter_type = 'recon_iter'
+                    embman_iter_type = 'recon_iter'
+                self.embedding_manager.iter_type = embman_iter_type
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -1769,6 +1770,7 @@ class LatentDiffusion(DDPM):
                 # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
                 # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
                 # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
+                # If do_mix_prompt_distillation, then self.iter_flags['same_subject_in_batch'] == True.
                 zs_clip_features, zs_id_embs, faceless_img_count = \
                     self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
                                                          # iter_flags['is_face'] is a list of 0/1 elements.
@@ -1926,7 +1928,20 @@ class LatentDiffusion(DDPM):
         self.iter_flags['zs_id_embs']           = zs_id_embs
         self.iter_flags['arc2face_prompt_emb']  = arc2face_prompt_emb
 
-        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
+        # In get_learned_conditioning(), embman_iter_type will be set again.
+        # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
+        # whose behavior depends on the correct embman_iter_type.
+        if self.iter_flags['is_compos_iter']:
+            embman_iter_type = 'compos_distill_iter'
+        elif self.iter_flags['do_arc2face_distill'] and self.apply_arc2face_inverse_embs:
+            embman_iter_type = 'arc2face_inverse_clip_iter'
+        # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning().
+        #elif apply_arc2face_embs:
+        #    embman_iter_type = 'arc2face_clip_iter'
+        else:
+            embman_iter_type = 'recon_iter'
+
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
