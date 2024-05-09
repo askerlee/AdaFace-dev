@@ -30,9 +30,6 @@ model:
     use_fp_trick:               True
     # Apply BN/LN on cross-attn Q and out features for loss computation.
     normalize_ca_q_and_outfeat: True
-    # By default, SOT embeddings have a max value around 33. We cut it to 10.
-    # Only used when computing losses, not used for CFG.
-    prompt_embedding_clamp_value:      10
     do_clip_teacher_filtering:         True
     num_candidate_teachers:             2
     composition_regs_iter_gap:          3
@@ -115,9 +112,6 @@ model:
         training_add_noise_prob:   { 'recon_iter': 0.6, 
                                      'arc2face_distill_iter': 0,
                                      'compos_distill_iter': 0.4 }
-        # By default, SOT embeddings have a max value around 33. We cut it to 10. 
-        # Only used when computing losses, not used for CFG.        
-        prompt_embedding_clamp_value:      10
         # Scale the background embeddings by this factor.
         background_extra_global_scale:     1 #0.5
         # Share this set of attn poolers when training multiple subjects simultaneously.

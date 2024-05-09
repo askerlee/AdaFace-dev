@@ -294,7 +294,7 @@ def parse_args():
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
-
+    
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
@@ -424,8 +424,8 @@ def main(opt):
 
         if hasattr(opt, 'num_vectors_per_subj_token'):
             ckpt_num_vectors_per_subj_token = model.embedding_manager.token2num_vectors[opt.subject_string]
-            assert ckpt_num_vectors_per_subj_token == opt.num_vectors_per_subj_token, \
-                   f"Number of vectors per token mismatch: command line {opt.num_vectors_per_subj_token} != ckpt {ckpt_num_vectors_per_subj_token}."
+            if ckpt_num_vectors_per_subj_token != opt.num_vectors_per_subj_token:
+                print(f"WARN: Number of vectors per token mismatch: command line {opt.num_vectors_per_subj_token} != ckpt {ckpt_num_vectors_per_subj_token}.")
 
         if hasattr(opt, 'emb_ema_as_pooling_probe'):
             model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
@@ -664,7 +664,8 @@ def main(opt):
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
                                                                apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
-                                                               apply_arc2face_embs=apply_arc2face_embs)
+                                                               apply_arc2face_embs=apply_arc2face_embs,
+                                                               do_fix_emb_scale=not opt.zeroshot)
 
                             if apply_arc2face_inverse_embs:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)

@@ -18,8 +18,6 @@ model:
     use_ema: False
     use_layerwise_embedding: True
     use_ada_embedding: True
-    # Don't do prompt_embedding_clamp during inference.
-    prompt_embedding_clamp_value:      -1
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
@@ -36,9 +34,7 @@ model:
         ada_emb_weight: 0.5
         ada_uses_attn_pooler: True
         emb_ema_as_pooling_probe_weight: 0.5
-        # Don't do prompt_embedding_clamp during inference.
-        prompt_embedding_clamp_value:    -1
-                
+
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
       #target: ldm.models.diffusion.ddpm.Arc2FaceWrapper

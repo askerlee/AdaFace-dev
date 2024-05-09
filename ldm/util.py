@@ -410,9 +410,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                          exponent=2, do_demean_first=False,
                          first_n_dims_to_flatten=3,
                          ref_grad_scale=0, aim_to_align=True, 
-                         margin=0, clamp_value=-1,
-                         debug=False):
-    delta, ref_delta = clamp_prompt_embedding(clamp_value, delta, ref_delta)
+                         margin=0, debug=False):
 
     B = delta.shape[0]
     loss = 0
@@ -2289,11 +2287,7 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
 # static_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
 def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mask,
-                               do_ada_prompt_delta_reg, prompt_embedding_clamp_value,
-                               cls_delta_grad_scale=0.05):
-    static_embeddings, ada_embeddings = \
-        clamp_prompt_embedding(prompt_embedding_clamp_value, static_embeddings, ada_embeddings)
-
+                               do_ada_prompt_delta_reg, cls_delta_grad_scale=0.05):
     # static_embeddings / ada_embeddings contain 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
     # static_embeddings: [4, 16, 77, 768].

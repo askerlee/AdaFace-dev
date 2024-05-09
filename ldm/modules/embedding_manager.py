@@ -1003,7 +1003,6 @@ class EmbeddingManager(nn.Module):
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=None,
             conv_attn_layerwise_scale_learnable=False,
-            prompt_embedding_clamp_value=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
             shared_placeholder_set='subj,bg',
@@ -1280,7 +1279,6 @@ class EmbeddingManager(nn.Module):
         self.ada_prompt_embeddings_cache    = {}
         self.ada_prompt_placeholder2indices_cache = {}
         self.emb_global_scales_dict = None
-        self.prompt_embedding_clamp_value  = prompt_embedding_clamp_value
         self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
         # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
@@ -1594,6 +1592,7 @@ class EmbeddingManager(nn.Module):
                 # After repeat, the RHS is
                 # [ek_l1, ..., ek_l16, ek_l1, ..., ek_l16, ..., ek_l1, ..., ek_l16].
                 # {________b1________} {_______b2_______}  ...  {_______bB________}
+                # During inference, BS = 1, subj_static_embedding_k: [16, 768]
                 subj_static_embedding_k = subj_static_embedding[:, k]
                 
                 if self.training and self.training_begin_add_noise_std_range is not None:
@@ -1614,6 +1613,7 @@ class EmbeddingManager(nn.Module):
                     # subj_static_embedding_k: [48, 768] => [48*2, 768]
                     subj_static_embedding_k = subj_static_embedding_k.repeat(2, 1)
                 # Single-subject batch. Probably it's during inference.
+                # During inference, BS = 1, subj_static_embedding_k: [16, 768]
                 # Each subject only appears once in subj_static_embedding, but BS == REAL_OCCURS_IN_BATCH
                 # times in the prompts. Therefore, it's repeated REAL_OCCURS_IN_BATCH times.
                 elif subj_static_embedding_k.shape[0] == num_unet_ca_layers:
@@ -1671,9 +1671,7 @@ class EmbeddingManager(nn.Module):
         
         assert self.use_layerwise_embedding, "Non-layerwise embedding cannot call get_ada_embedding()."
         layer_static_prompt_embs   = layer_attn_components['layer_static_prompt_embs']
-        # Clamping here seems to reduce the performance.
-        # layer_static_prompt_embs   = clamp_prompt_embedding(self.prompt_embedding_clamp_value, layer_static_prompt_embs)
-        
+
         self.cls_delta_string_indices = []
         # string_to_token_dict is an OrderedDict, with subject tokens added first, and 
         # the background token last (order controlled in main.py). 
@@ -3029,11 +3027,6 @@ class EmbeddingManager(nn.Module):
                 bg_hybrid_token_emb = bg_static_token_emb
                 '''
 
-                # The embeddings are token embeddings, not prompt embeddings. 
-                # So clamp_prompt_embedding() is not applicable.
-                #fg_hybrid_token_emb, bg_hybrid_token_emb = \
-                #    clamp_prompt_embedding(self.prompt_embedding_clamp_value, fg_hybrid_token_emb, bg_hybrid_token_emb)
-                
                 # fg_hybrid_token_emb, bg_hybrid_token_emb: [16, 768]. 16: num layers.
                 fg_hybrid_token_mean_emb = fg_hybrid_token_emb.mean(dim=1)
                 bg_hybrid_token_mean_emb = bg_hybrid_token_emb.mean(dim=1)

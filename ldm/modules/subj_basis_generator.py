@@ -560,6 +560,7 @@ class SubjBasisGenerator(nn.Module):
             # [4, 256, 768] if subj or [4, 64, 768] if bg.
             id_embs_out = self.prompt_translator(latent_queries, id_embs)
             id_embs_out = id_embs_out[:, :self.num_out_embs]
+            output_embs = id_embs_out * self.output_scale    # * 0.036
         else:
             if self.subj_has_prompt_translator:
                 # The whole 77 embeddings are used as input to self.prompt_translator.
@@ -590,12 +591,12 @@ class SubjBasisGenerator(nn.Module):
                 # Therefore, we only use tokens 4~67 as the ID embeddings and skip 0~3.
                 id_embs_out = id_embs_out[:, 4:self.num_out_embs+4]
                 id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
+                output_embs = id_embs_out * self.output_scale    # * 0.036
             else:
                 # core_id_embs: [BS, 18, 768] -> [BS, 1, 18, 768] -> [BS, 16, 18, 768]
                 id_embs_out = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
-
-        output_embs = id_embs_out * self.output_scale    # * 0.036
-
+                output_embs = id_embs_out
+                
         return output_embs, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):

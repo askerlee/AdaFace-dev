@@ -35,14 +35,13 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, calc_layer_subj_comp_k_or_v_ortho_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
-                        clamp_prompt_embedding, fix_emb_scales, replace_prompt_comp_extra, \
+                        fix_emb_scales, replace_prompt_comp_extra, \
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding
                                               
-
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
@@ -55,7 +54,6 @@ from functools import partial
 import random
 from safetensors.torch import load_file as safetensors_load_file
 import sys
-import collections
 import re, cv2
 from PIL import Image
 
@@ -132,7 +130,6 @@ class DDPM(pl.LightningModule):
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
-                 prompt_embedding_clamp_value=-1,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=False,
                  arc2face_distill_iter_prob=0.1,
@@ -194,8 +191,7 @@ class DDPM(pl.LightningModule):
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
-        self.load_old_embman_ckpt                          = load_old_embman_ckpt
-        self.prompt_embedding_clamp_value           = prompt_embedding_clamp_value
+        self.load_old_embman_ckpt                   = load_old_embman_ckpt
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
         self.face_encoder                           = None  # FaceAnalysis arc2face encoder.
@@ -970,7 +966,7 @@ class LatentDiffusion(DDPM):
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
                                  randomize_clip_weights=False, apply_arc2face_inverse_embs=False, 
-                                 apply_arc2face_embs=False):
+                                 apply_arc2face_embs=False, do_fix_emb_scale=True):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -1017,7 +1013,7 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
-                if not (apply_arc2face_inverse_embs or apply_arc2face_embs):
+                if do_fix_emb_scale and not (apply_arc2face_inverse_embs or apply_arc2face_embs):
                     emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
@@ -1037,10 +1033,12 @@ class LatentDiffusion(DDPM):
                     static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                          self.embedding_manager.cls_delta_string_indices,
                                                                          self.embedding_manager.subj_name_to_cls_delta_token_weights)
-                else:
+                elif (apply_arc2face_inverse_embs or apply_arc2face_embs):
                     # apply_arc2face_inverse_embs or apply_arc2face_embs.
                     # Repeat the static prompt embeddings 16 times to match the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
+                # Otherwise, do_fix_emb_scale == False, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
+                # we do nothing to the static_prompt_embedding.
 
                 '''
                 'subj_indices':                  filter_dict_by_key(self.embedding_manager.placeholder2indices,
@@ -2015,7 +2013,8 @@ class LatentDiffusion(DDPM):
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],
                                                       randomize_clip_weights=True,
-                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
+                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
+                                                      do_fix_emb_scale=not self.do_zero_shot)
                     
                     # Release zs_clip_features and zs_id_embs.
                     del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
@@ -2125,7 +2124,8 @@ class LatentDiffusion(DDPM):
                                                               self.iter_flags['zs_clip_features'],
                                                               self.iter_flags['zs_id_embs'],
                                                               randomize_clip_weights=True,
-                                                              apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
+                                                              apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
+                                                              do_fix_emb_scale=not self.do_zero_shot)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 
@@ -2163,7 +2163,8 @@ class LatentDiffusion(DDPM):
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],                                                      
                                                       randomize_clip_weights=True,
-                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
+                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
+                                                      do_fix_emb_scale=not self.do_zero_shot)
                     
                     extra_info = extra_info0
                     extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
@@ -3289,7 +3290,6 @@ class LatentDiffusion(DDPM):
                         extra_info['c_static_emb_4b'], ada_embeddings,
                         extra_info['prompt_emb_mask'],
                         self.iter_flags['do_ada_prompt_delta_reg'],
-                        self.prompt_embedding_clamp_value
                     )
 
             # The cached ada prompt embeddings are useless now, release them.
@@ -3336,8 +3336,7 @@ class LatentDiffusion(DDPM):
                                                         extra_info['prompt_emb_mask'],
                                                         subj_indices, bg_indices, SSB_SIZE, 
                                                         extra_info['iter_type'],
-                                                        self.iter_flags['is_compos_iter'],
-                                                        emb_clamp_value=self.prompt_embedding_clamp_value)
+                                                        self.iter_flags['is_compos_iter'])
 
                 if loss_padding_subj_embs_align != 0:
                     loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach().item() })
@@ -4781,7 +4780,7 @@ class LatentDiffusion(DDPM):
     # (subj-single and subj-comp blocks).
     def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_prompt_embeddings, 
                                      prompt_emb_mask, subj_indices, bg_indices,
-                                     SSB_SIZE, iter_type, is_compos_iter, emb_clamp_value=-1):
+                                     SSB_SIZE, iter_type, is_compos_iter):
         # If do_normal_recon:
         # static_prompt_embeddings: [3, 16, 77, 768].
         # ada_prompt_embeddings:    [3, 16, 77, 768].
@@ -4790,9 +4789,6 @@ class LatentDiffusion(DDPM):
         # static_prompt_embeddings: [4, 16, 77, 768].
         # ada_prompt_embeddings:    [4, 16, 77, 768].
         # prompt_emb_mask:          [4, 77,   1].
-
-        static_prompt_embeddings, ada_prompt_embeddings = \
-            clamp_prompt_embedding(emb_clamp_value, static_prompt_embeddings, ada_prompt_embeddings)
 
         if ada_prompt_embeddings is not None:
             # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
