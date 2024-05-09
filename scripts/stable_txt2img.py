@@ -283,16 +283,15 @@ def parse_args():
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
+    parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether the subject basis generator has a prompt translator")        
     parser.add_argument("--apply_arc2face_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
     parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
                         const=True, default=False,
                         help="Evaluate Arc2Face inverse CLIP embeddings")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
-                        help="Load the old checkpoint for the embedding manager")
-    parser.add_argument("--zs_prompt_trans_layers_have_to_out_proj", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether the prompt translation layers have the to_out projection") 
-        
+                        help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
 
@@ -401,8 +400,8 @@ def main(opt):
             zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
-            config.model.params.personalization_config.params.zs_prompt_trans_layers_have_to_out_proj = opt.zs_prompt_trans_layers_have_to_out_proj
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
+            config.model.params.personalization_config.params.zs_subj_has_prompt_translator = opt.zs_subj_has_prompt_translator
         else:
             ref_images = None
 

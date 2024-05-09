@@ -372,25 +372,31 @@ class SubjBasisGenerator(nn.Module):
         # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=6,                       
-        num_id_vecs={ 'fg': 77, 'bg': 257 },  # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
-        num_out_embs=64,                      # num_out_embs. fg: 64. bg: 32.
+        num_id_vecs={ 'subj': 77, 'bg': 257 }, # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
+        num_out_embs_per_layer=4,             # num_out_embs. subj: 4. bg: 2.
+        num_out_layers=16,                    # number of layers of output embeddings.
         image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
         # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
         dino_embedding_dim=384,             # DINO object feature dimension for objects.
         output_dim=768,                     # CLIP text embedding input dimension.
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
+        subj_has_prompt_translator: bool = True,    # Whether the subject basis generator has an additional prompt translator.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
-        prompt_trans_layers_have_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.
+        bg_prompt_translator_has_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.
     ):
         super().__init__()
 
-        self.placeholder_is_bg  = placeholder_is_bg
-        self.num_out_embs       = num_out_embs
-
-        self.latent_query_dim       = output_dim
-        self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['fg']
+        self.placeholder_is_bg      = placeholder_is_bg
+        self.num_out_layers         = num_out_layers
+        self.num_out_embs_per_layer = num_out_embs_per_layer
+        # subj: 64, bg: 32.
+        self.num_out_embs           = num_out_layers * num_out_embs_per_layer
+        self.output_dim             = output_dim
+        # If not subj_has_prompt_translator, then num_id_vecs should be the number of core ID embs, 18.
+        # However, in such case, pos_embs is not used. So it doesn't matter if it's wrongly set.
+        self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['subj']
         self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
         self.pos_embs_ln = nn.LayerNorm(output_dim)
 
@@ -438,18 +444,23 @@ class SubjBasisGenerator(nn.Module):
                     (layer_norm2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
                 )
             '''
-            self.prompt_translator = clip_text_model.text_model.encoder
-            # prompt_translator either uses the first 6 layers, or the last 6 layers of the 12-layer CLIPEncoder.
-            self.pt_used_first_layers, self.pt_used_last_layers = 6, -1     # -1, 6
-            if self.pt_used_first_layers > 0:
-                self.prompt_translator.layers = self.prompt_translator.layers[:self.pt_used_first_layers]
-            else:
-                self.prompt_translator.layers = self.prompt_translator.layers[-self.pt_used_last_layers:]
+            self.subj_has_prompt_translator = subj_has_prompt_translator
 
-            self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
-            self.num_pt_output_layers     = 3
-            self.pt_output_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
-            self.pt_output_layers_weights_grad_scaler = gen_gradient_scaler(10)
+            if self.subj_has_prompt_translator:
+                self.prompt_translator = clip_text_model.text_model.encoder
+                # prompt_translator either uses the first 6 layers, or the last 6 layers of the 12-layer CLIPEncoder.
+                self.pt_used_first_layers, self.pt_used_last_layers = 6, -1     # -1, 6
+                if self.pt_used_first_layers > 0:
+                    self.prompt_translator.layers = self.prompt_translator.layers[:self.pt_used_first_layers]
+                else:
+                    self.prompt_translator.layers = self.prompt_translator.layers[-self.pt_used_last_layers:]
+
+                self.pt_layer_norm = clip_text_model.text_model.final_layer_norm
+                self.num_pt_output_layers     = 3
+                self.pt_output_layers_weights = nn.Parameter(torch.ones(self.num_pt_output_layers), requires_grad=True)
+                self.pt_output_layers_weights_grad_scaler = gen_gradient_scaler(10)
+            else:
+                self.prompt_translator = None
 
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
@@ -465,10 +476,10 @@ class SubjBasisGenerator(nn.Module):
             self.latent_queries     = nn.Parameter(torch.randn(1, self.num_out_embs, output_dim))
             self.latent_queries_ln  = nn.LayerNorm(output_dim)
 
-            self.prompt_trans_layers_have_to_out_proj = prompt_trans_layers_have_to_out_proj
+            self.bg_prompt_translator_has_to_out_proj = bg_prompt_translator_has_to_out_proj
             identity_to_v   = False
             v_has_skip      = not identity_to_v                         # True
-            identity_to_out = not prompt_trans_layers_have_to_out_proj  # True
+            identity_to_out = not bg_prompt_translator_has_to_out_proj  # True
             out_has_skip    = not identity_to_out                       # False
             # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
             # dim=768, num_heads=6.
@@ -526,9 +537,9 @@ class SubjBasisGenerator(nn.Module):
                                                           hidden_state_layer_weights=hidden_state_layer_weights,
                                                           input_max_length=77)
                 
-                arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 # Reduce the update rate to prompt2token_proj.
-                id_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
+                arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
+                core_id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
             elif raw_id_embs is not None:
                 # id_embs: [BS, 384] -> [BS, 18, 768].
                 # obj_proj_in is expected to project the DINO object features to 
@@ -541,41 +552,49 @@ class SubjBasisGenerator(nn.Module):
             # id_embs: [BS, 257, 768].
             id_embs = self.bg_proj_in(clip_features)
 
-        id_embs = id_embs + self.pos_embs_ln(self.pos_embs)
-
         if self.placeholder_is_bg:
+            id_embs = id_embs + self.pos_embs_ln(self.pos_embs)
             latent_queries = self.latent_queries_ln(self.latent_queries).repeat(BS, 1, 1)
             # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
             # and we take the first 16*4=64.             
-            # [4, 256, 768] if fg or [4, 64, 768] if bg.
+            # [4, 256, 768] if subj or [4, 64, 768] if bg.
             id_embs_out = self.prompt_translator(latent_queries, id_embs)
+            id_embs_out = id_embs_out[:, :self.num_out_embs]
         else:
-            # If fg, we use a CLIP-encoder to generate 77 embs, and we take the first 16*4=64.
-            # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
-            # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
-            id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
-            # pt_output_hidden_states: a list of num_pt_output_layers==3 tensor, each tensor is [BS, 77, 768].
-            pt_output_hidden_states = pt_last_hidden_states[-self.num_pt_output_layers:]
-            # Increase the bp grad to pt_output_layers_weights by a factor of 10, to make it learn faster.
-            pt_output_layers_weights = self.pt_output_layers_weights_grad_scaler(self.pt_output_layers_weights)
-            # Normalize the weights of to sum to 1 across layers.
-            # pt_output_layers_weights: [3].
-            pt_output_layers_weights = pt_output_layers_weights / pt_output_layers_weights.sum(dim=0, keepdim=True)
-            # [3] -> [3, 1, 1, 1]
-            pt_output_layers_weights = pt_output_layers_weights.reshape(-1, 1, 1, 1)
-            # A weighted sum of pt_output_hidden_states.
-            # [3, 1, 77, 768] * [3, 1, 1, 1] -> [3, 1, 77, 768] -> [1, 77, 768]
-            pt_last_hidden_state = (torch.stack(pt_output_hidden_states, dim=0) * pt_output_layers_weights).sum(dim=0)
-            id_embs_out = self.pt_layer_norm(pt_last_hidden_state)
+            if self.subj_has_prompt_translator:
+                # The whole 77 embeddings are used as input to self.prompt_translator.
+                # Added to positional embeddings to increase their identifiability.
+                id_embs = arc2face_inverse_prompt_embs + self.pos_embs_ln(self.pos_embs)
+                # If subj, we use a CLIP-encoder to generate 77 embs, and we take the first 16*4=64.
+                # id_embs: [BS, 77, 768]. id_embs_out: [BS, 77, 768].
+                # pt_last_hidden_states: a list of 13 tensor, each tensor is [BS, 77, 768].
+                id_embs_out, pt_last_hidden_states = self.prompt_translator(inputs_embeds=id_embs, output_hidden_states=True, return_dict=False)
+                # pt_output_hidden_states: a list of num_pt_output_layers==3 tensor, each tensor is [BS, 77, 768].
+                pt_output_hidden_states = pt_last_hidden_states[-self.num_pt_output_layers:]
+                # Increase the bp grad to pt_output_layers_weights by a factor of 10, to make it learn faster.
+                pt_output_layers_weights = self.pt_output_layers_weights_grad_scaler(self.pt_output_layers_weights)
+                # Normalize the weights of to sum to 1 across layers.
+                # pt_output_layers_weights: [3].
+                pt_output_layers_weights = pt_output_layers_weights / pt_output_layers_weights.sum(dim=0, keepdim=True)
+                # [3] -> [3, 1, 1, 1]
+                pt_output_layers_weights = pt_output_layers_weights.reshape(-1, 1, 1, 1)
+                # A weighted sum of pt_output_hidden_states.
+                # [3, 1, 77, 768] * [3, 1, 1, 1] -> [3, 1, 77, 768] -> [1, 77, 768]
+                pt_last_hidden_state = (torch.stack(pt_output_hidden_states, dim=0) * pt_output_layers_weights).sum(dim=0)
+                id_embs_out = self.pt_layer_norm(pt_last_hidden_state)
 
-            # Remove the first token, i.e., the BOS token, which has 
-            # very large embedding values and will take up too much attention.
-            # The 1st - 3th tokens are filler tokens which contain little identity information 
-            # (or maybe they do after fine-tuning?), and are removed as well.
-            # Therefore, we only use tokens 4~67 as the ID embeddings and skip 0~3.
-            id_embs_out = id_embs_out[:, 4:]
-            
-        output_embs = id_embs_out[:, :self.num_out_embs] * self.output_scale    # * 0.036
+                # Remove the first token, i.e., the BOS token, which has 
+                # very large embedding values and will take up too much attention.
+                # The 1st - 3th tokens are filler tokens which contain little identity information 
+                # (or maybe they do after fine-tuning?), and are removed as well.
+                # Therefore, we only use tokens 4~67 as the ID embeddings and skip 0~3.
+                id_embs_out = id_embs_out[:, 4:self.num_out_embs+4]
+                id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
+            else:
+                # core_id_embs: [BS, 18, 768] -> [BS, 1, 18, 768] -> [BS, 16, 18, 768]
+                id_embs_out = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
+
+        output_embs = id_embs_out * self.output_scale    # * 0.036
 
         return output_embs, arc2face_inverse_prompt_embs
 
@@ -625,7 +644,7 @@ class SubjBasisGenerator(nn.Module):
 
     def freeze_prompt2token_proj(self):
         # If bg, then prompt2token_proj is set to None. Therefore no need to freeze it.
-        # Then we don't have to check whether it's for fg or bg.
+        # Then we don't have to check whether it's for subj or bg.
         if self.prompt2token_proj is not None:
             frozen_param_names = []
             for param_name, param in self.prompt2token_proj.named_parameters():
@@ -639,12 +658,12 @@ class SubjBasisGenerator(nn.Module):
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
         # Fix compatability with the previous version.
-        if not hasattr(self, 'prompt_trans_layers_have_to_out_proj'):
-            self.prompt_trans_layers_have_to_out_proj = False
+        if not hasattr(self, 'bg_prompt_translator_has_to_out_proj'):
+            self.bg_prompt_translator_has_to_out_proj = False
         if not hasattr(self, 'num_out_embs'):
             self.num_out_embs = -1
         return f"{type_sig} SubjBasisGenerator: num_out_embs={self.num_out_embs}, " \
-               f"prompt_trans_layers_have_to_out_proj={self.prompt_trans_layers_have_to_out_proj}"
+               f"bg_prompt_translator_has_to_out_proj={self.bg_prompt_translator_has_to_out_proj}"
     
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

@@ -1014,8 +1014,8 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_string=None,
             zs_cls_delta_token_weights=None,
             zs_prompt2token_proj_grad_scale=0.4,
-            zs_prompt_trans_layers_have_to_out_proj=False,
             zs_load_subj_basis_generators_from_ckpt=True,
+            zs_subj_has_prompt_translator=True,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
@@ -1146,8 +1146,8 @@ class EmbeddingManager(nn.Module):
 
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
-            self.zs_prompt_trans_layers_have_to_out_proj = zs_prompt_trans_layers_have_to_out_proj
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
+            self.zs_subj_has_prompt_translator = zs_subj_has_prompt_translator
             self.arc2face_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
@@ -1235,19 +1235,18 @@ class EmbeddingManager(nn.Module):
                 self.initial_embeddings[placeholder_string] = None
 
             if self.do_zero_shot:
-                # num_out_embs: 64 (16*4) if fg or 32 (16*2) if bg. 
-                if not placeholder_is_bg:
-                    num_out_embs = self.number_vectors_each_subj * self.num_unet_ca_layers
-                else:
-                    num_out_embs = self.num_vectors_each_bg * self.num_unet_ca_layers
+                # num_out_embs_per_layer: 4 if fg or 2 if bg. 
+                num_out_embs_per_layer = self.number_vectors_each_subj if not placeholder_is_bg else self.num_vectors_each_bg
 
-                subj_basis_generator = SubjBasisGenerator(num_out_embs = num_out_embs,
+                subj_basis_generator = SubjBasisGenerator(num_out_embs_per_layer = num_out_embs_per_layer,
+                                                          num_out_layers = self.num_unet_ca_layers,
                                                           # zs_image_emb_dim: laion: 1280, openai: 768.
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
+                                                          subj_has_prompt_translator   = self.zs_subj_has_prompt_translator,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
-                                                          prompt_trans_layers_have_to_out_proj=self.zs_prompt_trans_layers_have_to_out_proj)
+                                                          bg_prompt_translator_has_to_out_proj=False)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
@@ -1548,7 +1547,10 @@ class EmbeddingManager(nn.Module):
                         arc2face_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
-                    # static_zs_embs:   [BS, 256, 768] if fg, or [BS,  64, 768] if bg.
+                    # If subj_has_prompt_translator:
+                    # static_zs_embs:   [BS, 16,  4, 768] if fg, or [BS,  16, 2, 768] if bg.
+                    # Otherwise:
+                    # static_zs_embs:   [BS, 16, 18, 768] if fg, or [BS,  16, 2, 768] if bg.
                     static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=self.cls_delta_strings, 
@@ -1565,16 +1567,6 @@ class EmbeddingManager(nn.Module):
                         # arc2face_embs: [BS, 77, 768].
                         self.arc2face_embs = placeholder_arc2face_embs
 
-                    # num_vectors_each_placeholder: 4 or 2.
-                    # If subj:
-                    # static_zs_embs: [BS, 64, 768] -> [BS, 16, 4, 768].
-                    # If bg:
-                    # static_zs_embs: [BS, 32, 768] -> [BS, 16, 2, 768].
-                    # [BS, num_unet_ca_layers, num_vectors_each_placeholder, 768].
-                    static_zs_embs = static_zs_embs.reshape(static_zs_embs.shape[0], 
-                                                            self.num_unet_ca_layers, 
-                                                            num_vectors_each_placeholder,
-                                                            -1)
                     # TODO: Remove subj2ada_zs_basis_vecs completely.
                     self.subj2ada_zs_basis_vecs[placeholder_string] = None
                 else:
