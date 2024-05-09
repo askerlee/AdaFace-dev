@@ -1157,7 +1157,7 @@ def get_b_core_e_embeddings(prompt_embeds, length=22):
 # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
 def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_embs, list_extra_words,
                                       return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
-                                      input_max_length=77, extra_words_scale=0.1):
+                                      input_max_length=77, zs_extra_words_scale=0.5):
 
     '''
     text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
@@ -1222,7 +1222,7 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
     # 20:22 are embeddings of the (at most) two extra words.
     # [N, 77, 768] -> [N, 18, 768]
     core_prompt_embs = prompt_embeds[:, 4:20]
-    extra_words_embs = prompt_embeds[:, 20:22] * extra_words_scale
+    extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
     core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
 
     return_prompts = []

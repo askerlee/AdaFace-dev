@@ -274,10 +274,12 @@ def get_parser(**parser_kwargs):
                         help="Whether to use zero-shot learning")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
                         help="Gradient scale of the prompt2token projection layer")   
+    parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
+                        help="Scale of the extra words embeddings")
     parser.add_argument("--zs_load_subj_basis_generators_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Load the subject basis generators from the checkpoint")
     parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether the subject basis generator has a prompt translator")    
+                        help="Whether the subject basis generator has a prompt translator")  
     parser.add_argument("--zs_prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.4,
@@ -990,6 +992,7 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
             config.model.params.personalization_config.params.zs_subj_has_prompt_translator = opt.zs_subj_has_prompt_translator
+            config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
             config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
 
         # data: DataModuleFromConfig

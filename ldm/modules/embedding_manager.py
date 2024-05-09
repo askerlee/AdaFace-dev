@@ -1015,6 +1015,7 @@ class EmbeddingManager(nn.Module):
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
             zs_subj_has_prompt_translator=False,
+            zs_extra_words_scale=0.5,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
@@ -1147,6 +1148,7 @@ class EmbeddingManager(nn.Module):
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             self.zs_subj_has_prompt_translator = zs_subj_has_prompt_translator
+            self.zs_extra_words_scale = zs_extra_words_scale
             if self.zs_subj_has_prompt_translator:
                 zs_num_vecs_each_subj = self.number_vectors_each_subj * self.num_unet_ca_layers
                 # Maxinum number of output embeddings from prompt_translator is 73. This indicates a bug.
@@ -1252,7 +1254,8 @@ class EmbeddingManager(nn.Module):
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           subj_has_prompt_translator   = self.zs_subj_has_prompt_translator,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
-                                                          bg_prompt_translator_has_to_out_proj=False)
+                                                          bg_prompt_translator_has_to_out_proj=False,
+                                                          zs_extra_words_scale = self.zs_extra_words_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 

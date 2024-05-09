@@ -283,6 +283,8 @@ def parse_args():
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
+    parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
+                        help="Scale of the extra words embeddings")    
     parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether the subject basis generator has a prompt translator")        
     parser.add_argument("--apply_arc2face_embs", action="store_true",
@@ -408,6 +410,7 @@ def main(opt):
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
             config.model.params.personalization_config.params.zs_subj_has_prompt_translator = opt.zs_subj_has_prompt_translator
+            config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
         else:
             ref_images = None
 

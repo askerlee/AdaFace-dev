@@ -383,6 +383,7 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         subj_has_prompt_translator: bool = False,    # Whether the subject basis generator has an additional prompt translator.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
+        zs_extra_words_scale: float = 0.5,     # Scale for extra words in the prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
         bg_prompt_translator_has_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.
     ):
@@ -399,7 +400,7 @@ class SubjBasisGenerator(nn.Module):
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['subj']
         self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
         self.pos_embs_ln = nn.LayerNorm(output_dim)
-
+        self.zs_extra_words_scale = zs_extra_words_scale
         self.output_scale           = output_dim ** -0.5
 
         if not self.placeholder_is_bg:
@@ -537,7 +538,7 @@ class SubjBasisGenerator(nn.Module):
                                                           return_emb_types=return_emb_types, 
                                                           pad_embeddings=self.pad_embeddings,
                                                           hidden_state_layer_weights=hidden_state_layer_weights,
-                                                          input_max_length=77)
+                                                          input_max_length=77, zs_extra_words_scale=self.zs_extra_words_scale)
                 # Reduce the update rate to prompt2token_proj.
                 arc2face_inverse_prompt_embs = self.prompt2token_proj_grad_scaler(arc2face_inverse_prompt_embs)
                 core_id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
