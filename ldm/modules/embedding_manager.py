@@ -2431,6 +2431,8 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.layers = None
                         ckpt_subj_basis_generator.obj_proj_in = None
                         ckpt_subj_basis_generator.proj_in = None
+                        ckpt_subj_basis_generator.pos_embs = None
+                        self.string_to_subj_basis_generator_dict[km].pos_embs.data.zero_()
 
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
                     if (not ckpt_subj_basis_generator.placeholder_is_bg) \
