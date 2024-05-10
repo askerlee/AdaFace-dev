@@ -1506,7 +1506,7 @@ class LatentDiffusion(DDPM):
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
         self.batch_1st_subject_name  = batch['subject_name'][0]
-        self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
+        # self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
         # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True, and 
@@ -1515,8 +1515,8 @@ class LatentDiffusion(DDPM):
         # If not batch_1st_subject_is_in_mix_subj_folder, the subject name is the mix subject folder name,
         # which doesn't identify the subject, and thus we cannot reuse the cached inits.
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
-                                                and not self.batch_1st_subject_is_in_mix_subj_folder \
                                                 and self.batch_1st_subject_name in self.cached_inits)
+                                                # and not self.batch_1st_subject_is_in_mix_subj_folder \
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
@@ -1968,7 +1968,10 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
             self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
-
+            self.iter_flags['zs_clip_features']         = cached_inits['zs_clip_features']
+            self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
+            self.iter_flags['arc2face_prompt_emb']      = cached_inits['arc2face_prompt_emb']
+            
         loss = self(x_start, captions, **kwargs)
 
         return loss
@@ -2045,7 +2048,7 @@ class LatentDiffusion(DDPM):
                                                       do_fix_emb_scale=not self.do_zero_shot)
                     
                     # Release zs_clip_features and zs_id_embs.
-                    del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
+                    # del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
 
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
@@ -3214,19 +3217,24 @@ class LatentDiffusion(DDPM):
                     # If batch_1st_subject_is_in_mix_subj_folder, then the first subject is in the mix subj folder.
                     # We cannot identify the subject from the subject name (which is only the folder name),
                     # therefore we don't cache the inits in this case.
-                    if not self.batch_1st_subject_is_in_mix_subj_folder:
+                    if True: #not self.batch_1st_subject_is_in_mix_subj_folder:
                         self.cached_inits[self.batch_1st_subject_name] = \
                             { 'x_start':                x_recon_sel_rep, 
-                            'delta_prompts':          cond_orig[2]['delta_prompts'],
-                            't':                      t_sel,
-                            # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                            'img_mask':               None,   
-                            'fg_mask':                fg_mask,
-                            'batch_have_fg_mask':     batch_have_fg_mask,
-                            'filtered_fg_mask':       filtered_fg_mask,
-                            'use_background_token':   self.iter_flags['use_background_token'],
-                            'use_wds_comp':           self.iter_flags['use_wds_comp'],
-                            'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                              'delta_prompts':          cond_orig[2]['delta_prompts'],
+                              't':                      t_sel,
+                              # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                              'img_mask':               None,   
+                              'fg_mask':                fg_mask,
+                              'batch_have_fg_mask':     batch_have_fg_mask,
+                              'filtered_fg_mask':       filtered_fg_mask,
+                              'use_background_token':   self.iter_flags['use_background_token'],
+                              'use_wds_comp':           self.iter_flags['use_wds_comp'],
+                              'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                              # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'arc2face_prompt_emb' 
+                              # are all None.
+                              'zs_clip_features':       self.iter_flags['zs_clip_features'],
+                              'zs_id_embs':             self.iter_flags['zs_id_embs'],
+                              'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb']
                             }
                         
                 elif not self.iter_flags['is_teachable']:
