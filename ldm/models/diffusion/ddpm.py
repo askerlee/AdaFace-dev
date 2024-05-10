@@ -1506,10 +1506,16 @@ class LatentDiffusion(DDPM):
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
         self.batch_1st_subject_name  = batch['subject_name'][0]
+        self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
         # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
-        # cached_inits are only used if do_mix_prompt_distillation = True.
+        # cached_inits are only used if do_mix_prompt_distillation = True, and 
+        # the first subject in the batch is in its own individual folder 
+        # (therefore identifiable from the subject name).
+        # If not batch_1st_subject_is_in_mix_subj_folder, the subject name is the mix subject folder name,
+        # which doesn't identify the subject, and thus we cannot reuse the cached inits.
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
+                                                and not self.batch_1st_subject_is_in_mix_subj_folder \
                                                 and self.batch_1st_subject_name in self.cached_inits)
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
@@ -1596,6 +1602,8 @@ class LatentDiffusion(DDPM):
                 p_comp_init_fg_from_training_image = anneal_value(self.training_percent, 0.5, (0.7, 0.9))
             else:
                 # If do_zero_shot, then comp_init_fg_from_training_image is always enabled.
+                # It's OK, since when do_zero_shot, we have a large diverse set of training images,
+                # and always initializing from training images won't lead to overfitting.
                 p_comp_init_fg_from_training_image = 1
 
             # If reuse_init_conds, comp_init_fg_from_training_image may be set to True later
@@ -1618,8 +1626,8 @@ class LatentDiffusion(DDPM):
                     # If do_arc2face_distill, then disable the background token.
                     p_use_background_token  = 0
                 elif self.do_zero_shot:
-                    # Reduced to 0.4, to force the learning of foreground tokens.
-                    p_use_background_token  = 0.4
+                    # Reduced to 0.5, to focus the learning on foreground tokens.
+                    p_use_background_token  = 0.5
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
@@ -3203,20 +3211,24 @@ class LatentDiffusion(DDPM):
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
                     # NOTE: do_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
-                    self.cached_inits[self.batch_1st_subject_name] = \
-                        { 'x_start':                x_recon_sel_rep, 
-                          'delta_prompts':          cond_orig[2]['delta_prompts'],
-                          't':                      t_sel,
-                          # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                          'img_mask':               None,   
-                          'fg_mask':                fg_mask,
-                          'batch_have_fg_mask':     batch_have_fg_mask,
-                          'filtered_fg_mask':       filtered_fg_mask,
-                          'use_background_token':   self.iter_flags['use_background_token'],
-                          'use_wds_comp':           self.iter_flags['use_wds_comp'],
-                          'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                        }
-                    
+                    # If batch_1st_subject_is_in_mix_subj_folder, then the first subject is in the mix subj folder.
+                    # We cannot identify the subject from the subject name (which is only the folder name),
+                    # therefore we don't cache the inits in this case.
+                    if not self.batch_1st_subject_is_in_mix_subj_folder:
+                        self.cached_inits[self.batch_1st_subject_name] = \
+                            { 'x_start':                x_recon_sel_rep, 
+                            'delta_prompts':          cond_orig[2]['delta_prompts'],
+                            't':                      t_sel,
+                            # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                            'img_mask':               None,   
+                            'fg_mask':                fg_mask,
+                            'batch_have_fg_mask':     batch_have_fg_mask,
+                            'filtered_fg_mask':       filtered_fg_mask,
+                            'use_background_token':   self.iter_flags['use_background_token'],
+                            'use_wds_comp':           self.iter_flags['use_wds_comp'],
+                            'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                            }
+                        
                 elif not self.iter_flags['is_teachable']:
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 

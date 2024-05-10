@@ -499,9 +499,10 @@ class PersonalizedBase(Dataset):
         # If is_subject_idx == True, it means index is the index of a subject, not a particular image.
         # i.e., we proceed to select an image from the image set of the subject (indexed by index).
         # Otherwise, index is the index of a global image set.
-        is_subject_idx = False
         if isinstance(index, tuple):
             index, is_subject_idx = index
+        else:
+            is_subject_idx = False
 
         example = {}
         if is_subject_idx:
@@ -813,6 +814,14 @@ class PersonalizedBase(Dataset):
             # They are only accessed when 'has_wds_comp' is True.
 
         example["has_wds_comp"]         = gen_wds_comp
+
+        if is_subject_idx:
+            is_in_mix_subj_folder = self.are_mix_subj_folders[subject_idx]
+        else:
+            # If the image is from a global image set, then there's only a single subject.
+            # So is_in_mix_subj_folder is False.
+            is_in_mix_subj_folder = False
+        example["is_in_mix_subj_folder"] = is_in_mix_subj_folder
 
         DEBUG_WDS = False
         if DEBUG_WDS and gen_wds_comp:
