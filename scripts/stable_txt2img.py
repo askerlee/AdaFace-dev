@@ -259,10 +259,10 @@ def parse_args():
                         help="Background placeholder string used in prompts to denote the background in training images.")
                     
     parser.add_argument("--num_vectors_per_subj_token",
-                        type=int, default=argparse.SUPPRESS,
+                        type=int, default=16,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--num_vectors_per_bg_token",
-                        type=int, default=argparse.SUPPRESS,
+                        type=int, default=4,
                         help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
