@@ -1962,7 +1962,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['zs_clip_features']         = cached_inits['zs_clip_features']
             self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
             self.iter_flags['arc2face_prompt_emb']      = cached_inits['arc2face_prompt_emb']
-            self.iter_flags['do_arc2face_distill']      = cached_inits['do_arc2face_distill']
 
         # In get_learned_conditioning(), embman_iter_type will be set again.
         # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
