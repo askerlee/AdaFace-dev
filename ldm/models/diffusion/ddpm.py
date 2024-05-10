@@ -3501,13 +3501,14 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
-            feat_delta_align_scale = 2
+            feat_delta_align_scale = 2 if not self.do_zero_shot else 0.5
             if self.normalize_ca_q_and_outfeat:
                 # Normalize ca_outfeat at 50% chance.
                 normalize_ca_outfeat = random.random() < 0.5 #draw_annealed_bool(self.training_percent, 0.5, (0.5, 0.5))
             else:
                 normalize_ca_outfeat = False
 
+            # normalize_ca_outfeat is Disabled
             if normalize_ca_outfeat:
                 ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
                 # If using LN, feat delta is around 5x much smaller. So we scale it up to 

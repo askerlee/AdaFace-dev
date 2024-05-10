@@ -29,7 +29,7 @@ model:
     use_ada_embedding:          True
     use_fp_trick:               True
     # Apply BN/LN on cross-attn Q and out features for loss computation.
-    normalize_ca_q_and_outfeat: True
+    normalize_ca_q_and_outfeat: False #True
     do_clip_teacher_filtering:         True
     num_candidate_teachers:             2
     composition_regs_iter_gap:          3
