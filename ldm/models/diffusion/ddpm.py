@@ -3290,7 +3290,7 @@ class LatentDiffusion(DDPM):
             # as it might make learning slow.
             prompt_emb_delta_loss_scale /= 5
         
-        # If do_zero_shot, both static and ada embedding reg losses are disabled. But we still compute them to monitor.
+        # static and ada embedding reg losses are DISABLED if do_zero_shot. But we still compute them to monitor.
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
@@ -3310,7 +3310,7 @@ class LatentDiffusion(DDPM):
 
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        # If do_zero_shot, then fg_bg_token_emb_ortho loss is disabled, as it may hurt performance.
+        # fg_bg_token_emb_ortho loss is DISABLED if do_zero_shot, as it may hurt performance.
         if not self.do_zero_shot and self.fg_bg_token_emb_ortho_loss_weight >= 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
@@ -3350,7 +3350,7 @@ class LatentDiffusion(DDPM):
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
         
-            # padding_bg_fg_embs_align_loss_weight == 0. Although it's disabled, we still monitor loss_padding_subj_embs_align.
+            # DISABLED: padding_bg_fg_embs_align_loss_weight == 0. Although it's disabled, we still monitor loss_padding_subj_embs_align.
             if self.padding_bg_fg_embs_align_loss_weight >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = all_subj_indices_1b
@@ -3531,7 +3531,7 @@ class LatentDiffusion(DDPM):
             else:
                 normalize_ca_outfeat = False
 
-            # normalize_ca_outfeat is Disabled
+            # normalize_ca_outfeat is DISABLED
             if normalize_ca_outfeat:
                 ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
                 # If using LN, feat delta is around 5x much smaller. So we scale it up to 
@@ -3569,11 +3569,16 @@ class LatentDiffusion(DDPM):
 
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
             # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
-            # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.            
-            subj_attn_norm_distill_loss_base = 5.
-            subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                     subj_attn_norm_distill_loss_base,
-                                                                     subj_attn_norm_distill_loss_scale_base)
+            # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.     
+            if not self.do_zero_shot:       
+                subj_attn_norm_distill_loss_base = 5.
+                subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
+                                                                        subj_attn_norm_distill_loss_base,
+                                                                        subj_attn_norm_distill_loss_scale_base)
+            else:
+                # If do_zero_shot, loss_subj_attn_norm_distill is quite stable. So no need to use a dynamic loss scale,
+                # and also we only use a small loss scale.
+                subj_attn_norm_distill_loss_scale = 1
 
             loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
