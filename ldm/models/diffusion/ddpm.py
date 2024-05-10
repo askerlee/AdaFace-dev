@@ -3241,7 +3241,10 @@ class LatentDiffusion(DDPM):
                             'zs_id_embs':             self.iter_flags['zs_id_embs'],
                             'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb'],
                         }
-                    
+                    if len(self.cached_inits) > 100:
+                        # Delete a random element in the dict to save RAM.
+                        del self.cached_inits[random.choice(list(self.cached_inits.keys()))]
+                        
                 elif not self.iter_flags['is_teachable']:
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
