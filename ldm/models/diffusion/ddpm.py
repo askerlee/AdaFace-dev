@@ -3625,12 +3625,9 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
             if loss_subj_comp_value_ortho != 0:
                 loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
-            # ortho losses are less effecive, so scale them down.
-            key_ortho_loss_scale_base = 1
-            key_ortho_loss_base       = 0.1
-            key_ortho_loss_scale = calc_dyn_loss_scale(loss_subj_comp_key_ortho, key_ortho_loss_base,
-                                                       key_ortho_loss_scale_base)
-            
+            # ortho losses are less effecive, so scale them down, and disable them if do_zero_shot.
+            key_ortho_loss_scale = 0.1 if not self.do_zero_shot else 0
+
             # subj_comp_key_ortho_loss_weight:          2e-4, 
             # subj_comp_value_ortho_loss_weight:        0, disabled.
             loss +=   (loss_subj_comp_key_ortho   * key_ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
