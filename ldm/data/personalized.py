@@ -222,6 +222,8 @@ class PersonalizedBase(Dataset):
         self.subj_roots = sorted(subj_roots)
         # subject_names: sorted ascendingly for subjects within the same folder.
         self.subject_names = [] #[ os.path.basename(subj_root) for subj_root in self.subj_roots ]
+        # are_mix_subj_folders: a list of boolean values, indicating whether the subjects in the 
+        # base_folder are mixed, indexed by subject_idx in __getitem__().
         self.are_mix_subj_folders = []
         assert len(self.subj_roots) > 0, f"No data found in data_roots={data_roots}!"
 
