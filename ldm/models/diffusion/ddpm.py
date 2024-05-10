@@ -1941,21 +1941,6 @@ class LatentDiffusion(DDPM):
         self.iter_flags['zs_id_embs']           = zs_id_embs
         self.iter_flags['arc2face_prompt_emb']  = arc2face_prompt_emb
 
-        # In get_learned_conditioning(), embman_iter_type will be set again.
-        # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
-        # whose behavior depends on the correct embman_iter_type.
-        if self.iter_flags['is_compos_iter']:
-            embman_iter_type = 'compos_distill_iter'
-        elif self.iter_flags['do_arc2face_distill'] and self.apply_arc2face_inverse_embs:
-            embman_iter_type = 'arc2face_inverse_clip_iter'
-        # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning().
-        #elif apply_arc2face_embs:
-        #    embman_iter_type = 'arc2face_clip_iter'
-        else:
-            embman_iter_type = 'recon_iter'
-
-        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
-
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
             cached_inits = self.cached_inits[self.batch_1st_subject_name]
@@ -1971,7 +1956,23 @@ class LatentDiffusion(DDPM):
             self.iter_flags['zs_clip_features']         = cached_inits['zs_clip_features']
             self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
             self.iter_flags['arc2face_prompt_emb']      = cached_inits['arc2face_prompt_emb']
-            
+            self.iter_flags['do_arc2face_distill']      = cached_inits['do_arc2face_distill']
+
+        # In get_learned_conditioning(), embman_iter_type will be set again.
+        # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
+        # whose behavior depends on the correct embman_iter_type.
+        if self.iter_flags['is_compos_iter']:
+            embman_iter_type = 'compos_distill_iter'
+        elif self.iter_flags['do_arc2face_distill'] and self.apply_arc2face_inverse_embs:
+            embman_iter_type = 'arc2face_inverse_clip_iter'
+        # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning().
+        #elif apply_arc2face_embs:
+        #    embman_iter_type = 'arc2face_clip_iter'
+        else:
+            embman_iter_type = 'recon_iter'
+
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
+
         loss = self(x_start, captions, **kwargs)
 
         return loss
@@ -3232,9 +3233,12 @@ class LatentDiffusion(DDPM):
                               'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
                               # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'arc2face_prompt_emb' 
                               # are all None.
+                              # We don't need to cache other flags, such as do_arc2face_distill,
+                              # as they are only applicable to recon iters. 
+                              # We reuse init conds only in compositional iters.
                               'zs_clip_features':       self.iter_flags['zs_clip_features'],
                               'zs_id_embs':             self.iter_flags['zs_id_embs'],
-                              'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb']
+                              'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb'],
                             }
                         
                 elif not self.iter_flags['is_teachable']:
