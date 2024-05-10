@@ -157,6 +157,7 @@ class DDPM(pl.LightningModule):
 
         self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
 
+        self.do_zero_shot                = do_zero_shot
         self.static_embedding_reg_weight = static_embedding_reg_weight
         self.ada_embedding_reg_weight    = ada_embedding_reg_weight
         self.composition_regs_iter_gap   = composition_regs_iter_gap
@@ -183,7 +184,6 @@ class DDPM(pl.LightningModule):
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
-        self.do_zero_shot                           = do_zero_shot
         self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if (do_zero_shot and self.training) \
                                                         else 0
         self.apply_arc2face_inverse_embs            = apply_arc2face_inverse_embs
@@ -1506,17 +1506,15 @@ class LatentDiffusion(DDPM):
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
         self.batch_1st_subject_name  = batch['subject_name'][0]
-        # self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
         # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
-        # cached_inits are only used if do_mix_prompt_distillation = True, and 
-        # the first subject in the batch is in its own individual folder 
-        # (therefore identifiable from the subject name).
-        # If not batch_1st_subject_is_in_mix_subj_folder, the subject name is the mix subject folder name,
-        # which doesn't identify the subject, and thus we cannot reuse the cached inits.
+        # cached_inits are only used if do_mix_prompt_distillation = True.
+        # Even if the batch subjects are from a mix subject folder, since we have cached the subject ID embs and other features,
+        # we can still use the cached inits.
+        p_reuse_init_conds = 0.5
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
-                                                and self.batch_1st_subject_name in self.cached_inits)
-                                                # and not self.batch_1st_subject_is_in_mix_subj_folder \
+                                                and self.batch_1st_subject_name in self.cached_inits \
+                                                and random.random() < p_reuse_init_conds)
 
         # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
@@ -1752,6 +1750,7 @@ class LatentDiffusion(DDPM):
             fg_mask = None
 
         BS = len(batch['subject_name'])
+        # If do_mix_prompt_distillation, we repeat the instances in the batch, so that all instances are the same.
         if self.iter_flags['do_mix_prompt_distillation']:
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
@@ -1762,13 +1761,13 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = False
 
+        # do_arc2face_distill is only True in do_normal_recon iters.
         if self.iter_flags['do_arc2face_distill'] and random.random() < self.p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
-
-        if not self.iter_flags['gen_arc2face_rand_face']:
-            self.batch_subject_names = batch['subject_name']
-        else:
             self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
+        else:
+            self.iter_flags['gen_arc2face_rand_face'] = False
+            self.batch_subject_names = batch['subject_name']            
 
         self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
                                         for subject_name in self.batch_subject_names ]
@@ -1778,19 +1777,22 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             image_paths = batch["image_path"]
 
+            # 'gen_arc2face_rand_face' is only True in do_normal_recon iters.
             if not self.iter_flags['gen_arc2face_rand_face']:
                 # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
                 # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
                 # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
                 # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-                # If do_mix_prompt_distillation, then self.iter_flags['same_subject_in_batch'] == True.
+                # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
+                # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
                 zs_clip_features, zs_id_embs, faceless_img_count = \
                     self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
                                                          # iter_flags['is_face'] is a list of 0/1 elements.
                                                          is_face=self.iter_flags['is_face'][0],
                                                          calc_avg=self.iter_flags['same_subject_in_batch'],
                                                          image_paths=image_paths)
-                
+                # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
+                # ID information.
                 p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_arc2face_distill'] else 0                
                 # If do_arc2face_distill, then prob of add_noise_to_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
                 self.iter_flags['add_noise_to_real_id_embs'] = random.random() < p_add_noise_to_real_id_embs
@@ -1827,6 +1829,7 @@ class LatentDiffusion(DDPM):
                         
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
+                # Sometimes do_arc2face_distill is True but gen_arc2face_rand_face is False.
                 if self.iter_flags['do_arc2face_distill']:
                     # The returned zs_id_embs2 should be (almost) the same as the passed-in zs_id_embs.
                     zs_id_embs2, arc2face_prompt_emb \
@@ -1834,7 +1837,9 @@ class LatentDiffusion(DDPM):
                                                                  pre_face_embs=zs_id_embs,
                                                                  gen_neg_prompt=False)
 
+            # gen_arc2face_rand_face == True. It implies it's not do_mix_prompt_distillation.
             else:
+                # Since it's a random face, the CLIP features are all zeros as a placeholder.
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. arc2face_prompt_emb: [4, 21, 768]
                 zs_id_embs, arc2face_prompt_emb \
@@ -1849,6 +1854,7 @@ class LatentDiffusion(DDPM):
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
                 self.iter_flags['faceless_img_count'] = 0
+                self.iter_flags['same_subject_in_batch'] = False
 
             # During training, zs_id_embs, arc2face_prompt_emb are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
@@ -3215,32 +3221,28 @@ class LatentDiffusion(DDPM):
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
                     # NOTE: do_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
-                    # If batch_1st_subject_is_in_mix_subj_folder, then the first subject is in the mix subj folder.
-                    # We cannot identify the subject from the subject name (which is only the folder name),
-                    # therefore we don't cache the inits in this case.
-                    if True: #not self.batch_1st_subject_is_in_mix_subj_folder:
-                        self.cached_inits[self.batch_1st_subject_name] = \
-                            { 'x_start':                x_recon_sel_rep, 
-                              'delta_prompts':          cond_orig[2]['delta_prompts'],
-                              't':                      t_sel,
-                              # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                              'img_mask':               None,   
-                              'fg_mask':                fg_mask,
-                              'batch_have_fg_mask':     batch_have_fg_mask,
-                              'filtered_fg_mask':       filtered_fg_mask,
-                              'use_background_token':   self.iter_flags['use_background_token'],
-                              'use_wds_comp':           self.iter_flags['use_wds_comp'],
-                              'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                              # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'arc2face_prompt_emb' 
-                              # are all None.
-                              # We don't need to cache other flags, such as do_arc2face_distill,
-                              # as they are only applicable to recon iters. 
-                              # We reuse init conds only in compositional iters.
-                              'zs_clip_features':       self.iter_flags['zs_clip_features'],
-                              'zs_id_embs':             self.iter_flags['zs_id_embs'],
-                              'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb'],
-                            }
-                        
+                    self.cached_inits[self.batch_1st_subject_name] = \
+                        {   'x_start':                x_recon_sel_rep, 
+                            'delta_prompts':          cond_orig[2]['delta_prompts'],
+                            't':                      t_sel,
+                            # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                            'img_mask':               None,   
+                            'fg_mask':                fg_mask,
+                            'batch_have_fg_mask':     batch_have_fg_mask,
+                            'filtered_fg_mask':       filtered_fg_mask,
+                            'use_background_token':   self.iter_flags['use_background_token'],
+                            'use_wds_comp':           self.iter_flags['use_wds_comp'],
+                            'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                            # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'arc2face_prompt_emb' 
+                            # are all None.
+                            # We don't need to cache other flags, such as do_arc2face_distill,
+                            # as they are only applicable to recon iters. 
+                            # We reuse init conds only in compositional iters.
+                            'zs_clip_features':       self.iter_flags['zs_clip_features'],
+                            'zs_id_embs':             self.iter_flags['zs_id_embs'],
+                            'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb'],
+                        }
+                    
                 elif not self.iter_flags['is_teachable']:
                     # If not is_teachable, do not do distillation this time 
                     # (since both instances are not good teachers), 
@@ -3282,12 +3284,13 @@ class LatentDiffusion(DDPM):
         prompt_emb_delta_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
 
         if self.do_zero_shot:
-            # Give the embedding reg loss a small weight if do_zero_shot, as it may hurt performance.
-            emb_reg_loss_scale = 0.1
+            # If do_zero_shot, both static and ada embedding reg losses are disabled, as it may hurt performance.
+            emb_reg_loss_scale = 0
             # Reduce the prompt_emb_delta_loss_scale by 5x (from 0.5 to 0.1) if do_zero_shot, 
             # as it might make learning slow.
             prompt_emb_delta_loss_scale /= 5
         
+        # If do_zero_shot, both static and ada embedding reg losses are disabled. But we still compute them to monitor.
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
@@ -3307,12 +3310,8 @@ class LatentDiffusion(DDPM):
 
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        # If do_zero_shot but not self.iter_flags['same_subject_in_batch'], then in each batch,
-        # the subject instances are from different subjects, and their embeddings are different as well.
-        # The fg_bg_token_embs_ortho_loss will be too complicated to compute (we need to separately consider
-        # compositional and non-compositional iterations), so we disable it.
-        if not (self.do_zero_shot and not self.iter_flags['same_subject_in_batch']) \
-          and self.fg_bg_token_emb_ortho_loss_weight >= 0:
+        # If do_zero_shot, then fg_bg_token_emb_ortho loss is disabled, as it may hurt performance.
+        if not self.do_zero_shot and self.fg_bg_token_emb_ortho_loss_weight >= 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
             loss_fg_bg_token_emb_ortho = \
@@ -3320,10 +3319,7 @@ class LatentDiffusion(DDPM):
             if loss_fg_bg_token_emb_ortho > 0:
                 loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach().item() })
 
-            # Completely disable the fg_bg_token_emb_ortho_loss if do_zero_shot, as it hurts performance.
-            fg_bg_token_emb_ortho_loss_scale = 0 if self.do_zero_shot else 1
-
-            loss += loss_fg_bg_token_emb_ortho * fg_bg_token_emb_ortho_loss_scale * self.fg_bg_token_emb_ortho_loss_weight
+            loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
 
         if self.iter_flags['do_static_prompt_delta_reg']:
             # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
@@ -3349,10 +3345,12 @@ class LatentDiffusion(DDPM):
             # loss_static_prompt_delta in the total loss.
             ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
             
+            # prompt_emb_delta_loss_scale == 0.1 if do_zero_shot and use Prodigy. prompt_emb_delta_reg_weight is 2e-4.
+            # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
         
-            # Even if padding_bg_fg_embs_align_loss_weight is disabled (=0), we still monitor loss_padding_subj_embs_align.
+            # padding_bg_fg_embs_align_loss_weight == 0. Although it's disabled, we still monitor loss_padding_subj_embs_align.
             if self.padding_bg_fg_embs_align_loss_weight >= 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = all_subj_indices_1b
@@ -3402,6 +3400,7 @@ class LatentDiffusion(DDPM):
                 # padding_bg_fg_embs_align_loss_weight == 0, i.e., padding_embs_align_loss and bg_subj_embs_align_loss are disabled.
                 loss += loss_padding_bg_fg_embs_align * self.padding_bg_fg_embs_align_loss_weight
 
+        # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
           and (self.iter_flags['do_normal_recon'] \
                 or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable'])):
