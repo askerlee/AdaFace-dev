@@ -1,5 +1,6 @@
 import torch
 from torch import nn, einsum
+import torch.distributed as dist
 from einops import rearrange, repeat
 from ldm.modules.ema import LitEma
 from ldm.modules.subj_basis_generator import SubjBasisGenerator
@@ -2629,7 +2630,7 @@ class EmbeddingManager(nn.Module):
         # so it won't be updated.
         self.frozen_string_to_subj_basis_generator_dict = copy.deepcopy(self.string_to_subj_basis_generator_dict)
         print("Made a frozen copy of subj_basis_generators")
-        
+
     # src_placeholders should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.
     def load_embedder_components(self, ckpt_paths, src_placeholders, 
