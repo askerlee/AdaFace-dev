@@ -1602,15 +1602,14 @@ class EmbeddingManager(nn.Module):
                                                           is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
                                                           arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
-                            # static_zs_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
-                            static_zs_embs0 = static_zs_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
-                            # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
-                            # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
-                            static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0
-                            if rank == 0:
-                                print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
-                    else:
-                        static_zs_embs0 = None
+                            
+                        # static_zs_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
+                        static_zs_embs0 = static_zs_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
+                        # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
+                        # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
+                        static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0.to(static_zs_embs.dtype)
+                        if rank == 0:
+                            print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
 
                     # TODO: Remove subj2ada_zs_basis_vecs completely.
                     self.subj2ada_zs_basis_vecs[placeholder_string] = None
@@ -2625,10 +2624,12 @@ class EmbeddingManager(nn.Module):
         self.background_string_dict = { s: True for s in self.background_strings }
 
     # make_frozen_copy_of_subj_basis_generators() is only used during training, to generate the subject embeddings for subject-single prompts.
-    def make_frozen_copy_of_subj_basis_generators(self):
+    def make_frozen_copy_of_subj_basis_generators(self, dtype=torch.float16):
         # frozen_string_to_subj_basis_generator_dict won't be returned by optimized_parameters(),
         # so it won't be updated.
         self.frozen_string_to_subj_basis_generator_dict = copy.deepcopy(self.string_to_subj_basis_generator_dict)
+        # Convert the frozen copy of subj_basis_generators to float16 to save RAM.
+        self.frozen_string_to_subj_basis_generator_dict.to(dtype=dtype)
         print("Made a frozen copy of subj_basis_generators")
 
     # src_placeholders should be two strings, either "subject_string,background_string", 
