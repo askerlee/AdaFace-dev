@@ -1572,8 +1572,8 @@ class EmbeddingManager(nn.Module):
                     # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
                     # But static_zs_embs is generated from the subject-single instance only.
                     # Repeating at dim 0 is correct even if static_zs_embs has a batch size > 1:
-                    # If the subject-single batch is like [b1, b2], then the repeated batch is [b1, b2, b1, b2], which corresponds
-                    # to the batch structure of (subject-single, subject-single, ...).
+                    # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
+                    # matching the batch structure of (subject-single, subject-single, ...).
                     if static_zs_embs.shape[0] < REAL_OCCURS_IN_BATCH:
                         static_zs_embs = static_zs_embs.repeat(REAL_OCCURS_IN_BATCH // static_zs_embs.shape[0], 1, 1, 1)
                         if rank == 0:
@@ -1604,8 +1604,8 @@ class EmbeddingManager(nn.Module):
                                                           arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
                             # static_zs_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
                             static_zs_embs0 = static_zs_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
-                            # Replace the first REAL_OCCURS_IN_BATCH // 2 embeddings, i.e., the subj-single embeddings, 
-                            # with the frozen subject embeddings.
+                            # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
+                            # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
                             static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0
                             if rank == 0:
                                 print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
