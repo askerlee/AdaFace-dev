@@ -2163,16 +2163,16 @@ class LatentDiffusion(DDPM):
                         # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
                         # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
                         c_in2         = captions
-                        # In most cases, captions == subj_single_prompts.
-                        # They are not the same, if compos_placeholder_prefix is specified,
-                        # or if bg/fg overlay is used. In that case, we need to generate 
-                        # c_static_emb from captions.
+                        # captions == subj_single_prompts should always hold.
+                        # They are not the same, if bg/fg overlay is used (???). In that case, we need to generate 
+                        # c_static_emb from captions. This case is already disabled but just leave the code here.
                         if captions == subj_single_prompts:
                             c_static_emb = subj_single_emb
                             # The blocks as input to get_learned_conditioning() are not halved. 
                             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                         else:
+                            breakpoint()
                             # We are unable to reuse the static embeddings of subject single prompt within 
                             # the 4-type prompts, as captions are different. 
                             # So generate embeddings from the captions from scratch.
@@ -2193,6 +2193,12 @@ class LatentDiffusion(DDPM):
 
                         extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                              *c_static_emb.shape[1:])
+                                                
+                        # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
+                        # As static_zs_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
+                        # to do the replacement.
+                        # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.static_zs_embs0
+                                            
                         ##### End of normal_recon with static delta loss iters. #####
 
                     extra_info['cls_single_prompts'] = cls_single_prompts

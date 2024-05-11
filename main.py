@@ -239,9 +239,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--common_placeholder_prefix",
         type=str, default=None,
         help="Prefix of the placeholder string for all types of prompts. Default: None.")
-    parser.add_argument("--compos_placeholder_prefix",
-        type=str, default=None,
-        help="Prefix of the placeholder string for compositional prompts. Default: None.")
 
     parser.add_argument("--bg_init_string", 
         type=str, default="unknown",    # 'unknown' is a wild-card word to match various actual background patterns.
@@ -918,11 +915,9 @@ if __name__ == "__main__":
             config.data.params.train.params.subj_info_filepaths      = opt.subj_info_filepaths
             config.data.params.validation.params.subj_info_filepaths = opt.subj_info_filepaths
 
-        # common_placeholder_prefix, compos_placeholder_prefix
+        # common_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix
-        config.data.params.validation.params.common_placeholder_prefix  = opt.common_placeholder_prefix
-        config.data.params.train.params.compos_placeholder_prefix       = opt.compos_placeholder_prefix
-        config.data.params.validation.params.compos_placeholder_prefix  = opt.compos_placeholder_prefix        
+        config.data.params.validation.params.common_placeholder_prefix  = opt.common_placeholder_prefix   
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
         config.data.params.validation.params.broad_class        = opt.broad_class

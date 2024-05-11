@@ -1592,9 +1592,12 @@ class EmbeddingManager(nn.Module):
 
                     # NOTE: the condition iter_type == 'compos_distill_iter' is vital, as a recon_iter with delta loss 
                     # also has the 4-type prompt structure.
-                    # But we should NEVER replace the subject-single embeddings with the frozen ones, otherwise
+                    # But we should NEVER replace the subject-single embeddings with the frozen ones, 
+                    # because these embeddings are used to reconstruct the noisy image, and if replaced,
                     # the model will learn nothing from the recon loss.
-                    if self.iter_type == 'compos_distill_iter' and not placeholder_is_bg:
+                    # One potential issue is the delta loss may slowly degrade the identity information in the embeddings.
+                    # So we will replace the subject-single embeddings when computing the delta loss in ddpm.py later.
+                    if not placeholder_is_bg and self.iter_type in ['compos_distill_iter', 'recon_iter']:
                         # compos_distill_iter is with same_subject_in_batch=True. 
                         # So zs_id_embs: [1, 512].
                         if zs_id_embs.shape[0] != 1:
@@ -1610,11 +1613,15 @@ class EmbeddingManager(nn.Module):
                             
                         # static_zs_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
                         static_zs_embs0 = static_zs_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
+                        # static_zs_embs0: [2, 16, 16, 768] -> [32, 16, 768].
+                        self.static_zs_embs0 = rearrange(static_zs_embs0, 'b l k d -> (b l) k d')
+                        # Only replace the subject-single embeddings in the compos_distill_iter.
                         # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
                         # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
-                        static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0.to(static_zs_embs.dtype)
-                        if rank == 0:
-                            print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
+                        if self.iter_type == 'compos_distill_iter':
+                            static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0.to(static_zs_embs.dtype)
+                            if rank == 0:
+                                print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
 
                     # TODO: Remove subj2ada_zs_basis_vecs completely.
                     self.subj2ada_zs_basis_vecs[placeholder_string] = None

@@ -148,8 +148,6 @@ class PersonalizedBase(Dataset):
                  wds_background_string="w",
                  # placeholder_prefix for all types of prompts. Could be a list of strings, separated by ",".
                  common_placeholder_prefix=None,   
-                 # placeholder_prefix for compositional prompts. Could be a list of strings, separated by ",".
-                 compos_placeholder_prefix=None,   
                  # cls string used to compute the delta loss.
                  # default_cls_delta_string is the same as subj init string.
                  default_cls_delta_string=None,  
@@ -400,10 +398,6 @@ class PersonalizedBase(Dataset):
             self.common_placeholder_prefixes   = re.split("\s*,\s*", common_placeholder_prefix)
         else:
             self.common_placeholder_prefixes   = None
-        if compos_placeholder_prefix is not None:
-            self.compos_placeholder_prefixes   = re.split("\s*,\s*", compos_placeholder_prefix)
-        else:
-            self.compos_placeholder_prefixes   = None
 
         self.cls_delta_strings = []
         self.list_subj_initializer_word_weights = []
@@ -790,9 +784,6 @@ class PersonalizedBase(Dataset):
 
         if gen_wds_comp:
             # common_placeholder_prefix is prepended to caption and caption_bg.
-            # compos_placeholder_prefix is prepended to subj_prompt_single, subj_prompt_comps,
-            # cls_prompt_single, cls_prompt_comps, which we don't need to change, as they are 
-            # for compositional distillation.
             wds_comp_extra      = ", in front of " + bg_prompt
             wds_cls_comp_extra  = " " + cls_delta_string + wds_comp_extra
             example["wds_comp_extra"]       = wds_comp_extra
@@ -891,17 +882,8 @@ class PersonalizedBase(Dataset):
             subject_string          = common_placeholder_prefix + " " + subject_string
             cls_delta_string        = common_placeholder_prefix + " " + cls_delta_string
         # common_placeholder_prefixes are specified for red_cartoon.
-        # compos_placeholder_prefixes are specified for fixhand.
-        # They usually won't be used together. 
-        # If both common_placeholder_prefixes and compos_placeholder_prefixes happen to be specified,
-        # then the prompt is like "a photo of a compos_placeholder_prefix common_placeholder_prefix z ...".
-        if self.compos_placeholder_prefixes is not None:
-            compos_placeholder_prefix = random.choice(self.compos_placeholder_prefixes)
-            compos_subject_string   = compos_placeholder_prefix + " " + subject_string
-            compos_cls_delta_string = compos_placeholder_prefix + " " + cls_delta_string
-        else:
-            compos_subject_string   = subject_string
-            compos_cls_delta_string = cls_delta_string
+        compos_subject_string   = subject_string
+        compos_cls_delta_string = cls_delta_string
 
         template = random.choice(imagenet_templates_small)
 
@@ -947,8 +929,6 @@ class PersonalizedBase(Dataset):
                 cls_prompt_comps_fp.append(cls_prompt_comp_fp)
 
         # NOTE: "caption" and "caption_bg" are only for image reconstruction iterations.
-        # But subj_prompt_single must align with cls_prompt_single, subj_prompt_comp, cls_prompt_comp.
-        # So they are different when compos_placeholder_prefix is specified.
         # Only "caption" and "caption_bg" are formatted with subject_string and subject_string_with_bg.
         # Other 4 types of prompts are formatted with compos_subject_string and compos_cls_delta_string.
         example["caption"]              = subj_prompt_single.format(subject_string)
