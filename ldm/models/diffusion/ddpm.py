@@ -3594,7 +3594,8 @@ class LatentDiffusion(DDPM):
 
             # loss_subj_attn_delta_align_* use L2 losses, 
             # so no need to use dynamic loss scale.
-            subj_attn_delta_align_loss_scale = 0
+            # TODO: check if we need to totally disable loss_subj_attn_delta_align, by setting its scale to 0.
+            subj_attn_delta_align_loss_scale = 0.1
             # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
             # loss_subj_attn_norm_distill is usually 5~10. 
             # So scale it down by 0.2 to match the other two. New range: 1~2.
@@ -3605,12 +3606,15 @@ class LatentDiffusion(DDPM):
             # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.     
             if not self.do_zero_shot:       
                 subj_attn_norm_distill_loss_base = 5.
+                # If loss_subj_attn_norm_distill == 10, then subj_attn_norm_distill_loss_scale = 0.2 * 10 / 5 = 0.4.
+                # If loss_subj_attn_norm_distill == 25, then subj_attn_norm_distill_loss_scale = 0.2 * 25 / 5 = 1.
                 subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                        subj_attn_norm_distill_loss_base,
-                                                                        subj_attn_norm_distill_loss_scale_base)
+                                                                         subj_attn_norm_distill_loss_base,
+                                                                         subj_attn_norm_distill_loss_scale_base)
             else:
-                # If do_zero_shot, loss_subj_attn_norm_distill is quite stable. So no need to use a dynamic loss scale,
-                # and also we only use a small loss scale.
+                # If do_zero_shot, loss_subj_attn_norm_distill is quite (10~20, depending on various settings). 
+                # So no need to use a dynamic loss scale. A scale of 1 is close to the corresponding 
+                # dynamic scale when the loss is ~25.
                 subj_attn_norm_distill_loss_scale = 1
 
             loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
