@@ -1272,13 +1272,14 @@ class EmbeddingManager(nn.Module):
         self.ada_subj_attn_dict    = {}
         self.clear_ada_layer_temp_info()
         self.clear_prompt_adhoc_info()
-        
-        self.iter_type = None       # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter'.
+        # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter', 'empty'.
+        self.iter_type = None       
         if self.do_zero_shot and zs_cls_delta_string is not None:
             self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
         else:
             self.curr_batch_subj_names = []
             self.current_subj_name_to_cls_delta_tokens = {}
+            self.cls_delta_strings = None
 
         self.img_mask = None
         self.loss_call_count = 0
@@ -1461,6 +1462,7 @@ class EmbeddingManager(nn.Module):
         self.cls_delta_string_indices = []
 
         arc2face_inverse_prompt_embs = None
+        rank = dist.get_rank()
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
@@ -1558,22 +1560,56 @@ class EmbeddingManager(nn.Module):
                     # If subj_has_prompt_translator:
                     # static_zs_embs:   [BS, 16,  4, 768] if fg, or [BS,  16, 2, 768] if bg.
                     # Otherwise:
-                    # static_zs_embs:   [BS, 16, 18, 768] if fg, or [BS,  16, 2, 768] if bg.
+                    # static_zs_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
                     static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
                                                  list_extra_words=self.cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
                                                  arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
-                    
-                    if self.do_zero_shot and not placeholder_is_bg and \
-                      (self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter'):
-                        assert placeholder_arc2face_inverse_prompt_embs is not None
-                        arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
-                        # arc2face_embs is the Arc2Face forward embeddings, while 
+                    # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
+                    # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
+                    # But static_zs_embs is generated from the subject-single instance only.
+                    # Repeating at dim 0 is correct even if static_zs_embs has a batch size > 1:
+                    # If the subject-single batch is like [b1, b2], then the repeated batch is [b1, b2, b1, b2], which corresponds
+                    # to the batch structure of (subject-single, subject-single, ...).
+                    if static_zs_embs.shape[0] < REAL_OCCURS_IN_BATCH:
+                        static_zs_embs = static_zs_embs.repeat(REAL_OCCURS_IN_BATCH // static_zs_embs.shape[0], 1, 1, 1)
+                        if rank == 0:
+                            print(f"Repeat static_zs_embs from {static_zs_embs.shape[0]} to {REAL_OCCURS_IN_BATCH}.")
+
+                    if self.do_zero_shot and not placeholder_is_bg:
+                      if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter':
+                        # NOTE: arc2face_embs is the Arc2Face forward embeddings, while 
                         # arc2face_inverse_prompt_embs is the Arc2Face inverse embeddings.
                         # arc2face_embs: [BS, 77, 768].
                         self.arc2face_embs = placeholder_arc2face_embs
+                    if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'compos_distill_iter':
+                        assert placeholder_arc2face_inverse_prompt_embs is not None
+                        arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
+
+                    if self.iter_type == 'compos_distill_iter' and not placeholder_is_bg:
+                        # compos_distill_iter is with same_subject_in_batch=True. 
+                        # So zs_id_embs: [1, 512].
+                        if zs_id_embs.shape[0] != 1:
+                            breakpoint()
+                        subj_basis_generator0 = self.frozen_string_to_subj_basis_generator_dict[placeholder_string]
+                        with torch.no_grad():
+                            static_zs_embs0, placeholder_arc2face_inverse_prompt_embs0 = \
+                                    subj_basis_generator0(zs_clip_features, zs_id_embs, arc2face_id_embs,
+                                                          list_extra_words=self.cls_delta_strings, 
+                                                          is_face=self.curr_subj_is_face,
+                                                          is_training=self.training,
+                                                          arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
+                            # static_zs_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
+                            static_zs_embs0 = static_zs_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
+                            # Replace the first REAL_OCCURS_IN_BATCH // 2 embeddings, i.e., the subj-single embeddings, 
+                            # with the frozen subject embeddings.
+                            static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0
+                            if rank == 0:
+                                print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
+                    else:
+                        static_zs_embs0 = None
 
                     # TODO: Remove subj2ada_zs_basis_vecs completely.
                     self.subj2ada_zs_basis_vecs[placeholder_string] = None
@@ -1622,8 +1658,8 @@ class EmbeddingManager(nn.Module):
                 if REAL_OCCURS_IN_BATCH == BS // 2 and subj_static_embedding_k.shape[0] == REAL_OCCURS_IN_BATCH // 2 * num_unet_ca_layers:
                     # subj_static_embedding_k: [48, 768] => [48*2, 768]
                     subj_static_embedding_k = subj_static_embedding_k.repeat(2, 1)
-                # Single-subject batch. Probably it's during inference.
-                # During inference, BS = 1, subj_static_embedding_k: [16, 768]
+                # Single-subject batch. It's either during inference, or during training with same_subject_in_batch=True.
+                # BS = 1, subj_static_embedding_k: [16, 768]
                 # Each subject only appears once in subj_static_embedding, but BS == REAL_OCCURS_IN_BATCH
                 # times in the prompts. Therefore, it's repeated REAL_OCCURS_IN_BATCH times.
                 elif subj_static_embedding_k.shape[0] == num_unet_ca_layers:
@@ -1651,15 +1687,16 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
         #print(self.cls_delta_string_indices)
-        if self.do_zero_shot and self.iter_type == 'arc2face_inverse_clip_iter':
-            # In an arc2face_inverse_clip_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
-            # The updated embedded_text above is ignored. But subj_static_embeddings is 
-            # still involved in delta-loss computation.
-            embedded_text = arc2face_inverse_prompt_embs
+        if self.do_zero_shot:
+            if self.iter_type == 'arc2face_inverse_clip_iter':
+                # In an arc2face_inverse_clip_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
+                # The updated embedded_text above is ignored. But subj_static_embeddings is 
+                # still involved in delta-loss computation.
+                embedded_text = arc2face_inverse_prompt_embs
             # NOTE: if self.iter_type == 'arc2face_clip_iter', we CANNOT return self.arc2face_embs
-            # as the updated embedded_text, since the returned embedded_text is used as the token embeddings,
-            # which will be encoded again by the text encoder.
-            
+            # as the updated embedded_text, since the returned embedded_text will be encoded again by the text encoder.
+            # Instead, we replace the prompt embeddings with the arc2face_embs in ddpm.py:get_learned_conditioning().
+
         return embedded_text, tokenized_text, static_subj_embs_dict
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
@@ -2002,7 +2039,6 @@ class EmbeddingManager(nn.Module):
     # During training, set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.
     def set_curr_batch_subject_names(self, subj_names, embman_iter_type):
-        self.iter_type = embman_iter_type
         self.curr_batch_subj_names = subj_names
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         self.current_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
@@ -2022,13 +2058,16 @@ class EmbeddingManager(nn.Module):
         else:
             self.cls_delta_strings = None
 
+        self.set_curr_iter_type(embman_iter_type)
+        if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+            print(f"subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
+
+    def set_curr_iter_type(self, embman_iter_type):
+        self.iter_type = embman_iter_type
         # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
         if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
             self.cls_delta_strings = self.cls_delta_strings[:1]
         
-        if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-            print(f"subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
-            
     # Cache features used to compute ada embeddings.
     def cache_layer_features_for_ada(self, layer_idx, layer_attn_components, time_emb):
         self.gen_ada_embedding      = True
@@ -2583,6 +2622,12 @@ class EmbeddingManager(nn.Module):
         # in case subject_strings or background_strings have been changed.
         self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.background_string_dict = { s: True for s in self.background_strings }
+
+    # make_frozen_copy_of_subj_basis_generators() is only used during training, to generate the subject embeddings for subject-single prompts.
+    def make_frozen_copy_of_subj_basis_generators(self):
+        # frozen_string_to_subj_basis_generator_dict won't be returned by optimized_parameters(),
+        # so it won't be updated.
+        self.frozen_string_to_subj_basis_generator_dict = copy.deepcopy(self.string_to_subj_basis_generator_dict)
 
     # src_placeholders should be two strings, either "subject_string,background_string", 
     # or "1,1" which means the first subject and the first background string.

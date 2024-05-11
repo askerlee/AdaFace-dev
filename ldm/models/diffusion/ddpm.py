@@ -800,6 +800,11 @@ class LatentDiffusion(DDPM):
             # self.embedding_manager.training = True after creation. 
             # *** Where this status is set? ***
             self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+            if self.do_zero_shot:
+                # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
+                # which is used to generate the subject embeddings for subject-single prompts.
+                self.embedding_manager.make_frozen_copy_of_subj_basis_generators()
+                
             if self.arc2face is not None:
                 # Let embedding_manager share the text_encoder with arc2face, to save some RAM.
                 self.embedding_manager.arc2face_text_encoder = self.arc2face.text_encoder
@@ -832,9 +837,9 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(next(self.parameters()).device)
 
             # empty_context_tea_filter is only used for clip teacher filtering.
-            self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers)
-            self.empty_context_2b = self.get_learned_conditioning([""] * 2)
-            empty_context_info = self.get_learned_conditioning([""])
+            self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers, embman_iter_type='empty')
+            self.empty_context_2b = self.get_learned_conditioning([""] * 2, embman_iter_type='empty')
+            empty_context_info = self.get_learned_conditioning([""], embman_iter_type='empty')
             # empty_context: [16, 77, 768] -> [1, 77, 768]
             self.empty_context = empty_context_info[0][[0]]
 
@@ -907,7 +912,7 @@ class LatentDiffusion(DDPM):
                        frozen_placeholder_set, frozen_embedder_components,
                        self.extend_prompt2token_proj_attention_multiplier,
                        self.load_old_embman_ckpt)
-        
+
         return model
 
     def instantiate_zero_shot_image_encoders(self, clip_type='openai'):
@@ -966,10 +971,16 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
+    # Number of calls to get_learned_conditioning() during training:
+    # If do_mix_prompt_distillation, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
+    # If do_normal_recon with delta loss, then 2 calls (one on delta prompts, one on subject single prompts). 
+    # NOTE: the delta prompts consumes extram RAM.
+    # If do_normal_recon without delta loss, then 1 call.
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
+    # do_fix_emb_scale: only enabled when not do_zero_shot.
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
                                  randomize_clip_weights=False, apply_arc2face_inverse_embs=False, 
-                                 apply_arc2face_embs=False, do_fix_emb_scale=True):
+                                 apply_arc2face_embs=False, do_fix_emb_scale=False, embman_iter_type=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -992,15 +1003,17 @@ class LatentDiffusion(DDPM):
                 else:
                     apply_compel_cfg_prob = self.apply_compel_cfg_prob
 
-                if self.iter_flags['is_compos_iter']:
-                    embman_iter_type = 'compos_distill_iter'
-                elif apply_arc2face_inverse_embs:
-                    embman_iter_type = 'arc2face_inverse_clip_iter'
-                elif apply_arc2face_embs:
-                    embman_iter_type = 'arc2face_clip_iter'
-                else:
-                    embman_iter_type = 'recon_iter'
-                self.embedding_manager.iter_type = embman_iter_type
+                if embman_iter_type is None:
+                    if self.iter_flags['is_compos_iter']:
+                        embman_iter_type = 'compos_distill_iter'
+                    elif apply_arc2face_inverse_embs:
+                        embman_iter_type = 'arc2face_inverse_clip_iter'
+                    elif apply_arc2face_embs:
+                        embman_iter_type = 'arc2face_clip_iter'
+                    else:
+                        embman_iter_type = 'recon_iter'
+                # Update the iteration type of the embedding manager, according to the arguments passed in.
+                self.embedding_manager.set_curr_iter_type(embman_iter_type)
 
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -1017,7 +1030,13 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
-                if do_fix_emb_scale and not (apply_arc2face_inverse_embs or apply_arc2face_embs):
+                # If apply_arc2face_embs, the location of the subject embeddings is not 
+                # indexed by placeholder_indices, so no point to fix the scale of the embeddings.
+                # But if apply_arc2face_inverse_embs, in theory we can still fix the scale of the embeddings,
+                # as the location of the subject embeddings is still indexed by placeholder_indices.
+                # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
+                # and scaling them down may hurt subject fidelity.
+                if do_fix_emb_scale and not apply_arc2face_embs:
                     emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
@@ -1029,18 +1048,21 @@ class LatentDiffusion(DDPM):
                                                                  num_layers=self.N_CA_LAYERS,
                                                                  extra_scale=emb_extra_global_scale)
 
-                    # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scale first().
-                    # If cls_delta_string_indices is not empty, then it must be a compositional 
-                    # distillation iteration, and placeholder_indices only contains the indices of the subject 
-                    # instances. Whereas cls_delta_string_indices only contains the indices of the
-                    # class (mix) instances. Switching their order doesn't affect the results.
-                    static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
-                                                                         self.embedding_manager.cls_delta_string_indices,
-                                                                         self.embedding_manager.subj_name_to_cls_delta_token_weights)
+                    # If apply_arc2face_inverse_embs, there's no cls_delta_string in the prompt embeddings,
+                    # so no point to merge them.
+                    if not apply_arc2face_inverse_embs:
+                        # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scale first().
+                        # If cls_delta_string_indices is not empty, then it must be a compositional 
+                        # distillation iteration, and placeholder_indices only contains the indices of the subject 
+                        # instances. Whereas cls_delta_string_indices only contains the indices of the
+                        # class (mix) instances. Switching their order doesn't affect the results.
+                        static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
+                                                                             self.embedding_manager.cls_delta_string_indices,
+                                                                             self.embedding_manager.subj_name_to_cls_delta_token_weights)
                 elif (apply_arc2face_inverse_embs or apply_arc2face_embs):
-                    # apply_arc2face_inverse_embs or apply_arc2face_embs.
-                    # Repeat the static prompt embeddings 16 times to match the layerwise prompts.
+                    # Repeat the static prompt embeddings 16 times to get the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
+
                 # Otherwise, do_fix_emb_scale == False, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
                 # we do nothing to the static_prompt_embedding.
 
@@ -1506,12 +1528,15 @@ class LatentDiffusion(DDPM):
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
         self.batch_1st_subject_name  = batch['subject_name'][0]
+        self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
         # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
         # cached_inits are only used if do_mix_prompt_distillation = True.
         # Even if the batch subjects are from a mix subject folder, since we have cached the subject ID embs and other features,
-        # we can still use the cached inits.
-        p_reuse_init_conds = 0.5
+        # we can still use the cached inits. But in order to avoid these subjects from the mix subject folder dominating 
+        # the reuse_init_conds iterations (we will always find such subjects in the cache, but if the subject is not from the mix folder,
+        # the chance of finding the subject in the cache is much lower), we set p_reuse_init_conds = 0.25.
+        p_reuse_init_conds = 0.25 if self.batch_1st_subject_is_in_mix_subj_folder else 1
         self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_mix_prompt_distillation'] \
                                                 and self.batch_1st_subject_name in self.cached_inits \
                                                 and random.random() < p_reuse_init_conds)
