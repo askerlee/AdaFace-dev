@@ -635,7 +635,7 @@ def main(opt):
     if not opt.eval_blip:
         if opt.scale != 1.0:
             try:
-                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt])
+                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], embman_iter_type='empty')
             except:
                 breakpoint()
         else:
