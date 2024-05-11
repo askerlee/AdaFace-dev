@@ -1575,9 +1575,10 @@ class EmbeddingManager(nn.Module):
                     # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
                     # matching the batch structure of (subject-single, subject-single, ...).
                     if static_zs_embs.shape[0] < REAL_OCCURS_IN_BATCH:
+                        static_zs_embs_orig_bs = static_zs_embs.shape[0]
                         static_zs_embs = static_zs_embs.repeat(REAL_OCCURS_IN_BATCH // static_zs_embs.shape[0], 1, 1, 1)
                         if rank == 0:
-                            print(f"Repeat static_zs_embs from {static_zs_embs.shape[0]} to {REAL_OCCURS_IN_BATCH}.")
+                            print(f"Repeat static_zs_embs from {static_zs_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
 
                     if self.do_zero_shot and not placeholder_is_bg:
                       if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter':
