@@ -1463,7 +1463,10 @@ class EmbeddingManager(nn.Module):
         self.cls_delta_string_indices = []
 
         arc2face_inverse_prompt_embs = None
-        rank = dist.get_rank()
+        if dist.is_initialized():
+            rank = dist.get_rank()
+        else:
+            rank = 0
 
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
