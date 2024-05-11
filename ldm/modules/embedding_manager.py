@@ -1590,6 +1590,10 @@ class EmbeddingManager(nn.Module):
                         assert placeholder_arc2face_inverse_prompt_embs is not None
                         arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
 
+                    # NOTE: the condition iter_type == 'compos_distill_iter' is vital, as a recon_iter with delta loss 
+                    # also has the 4-type prompt structure.
+                    # But we should NEVER replace the subject-single embeddings with the frozen ones, otherwise
+                    # the model will learn nothing from the recon loss.
                     if self.iter_type == 'compos_distill_iter' and not placeholder_is_bg:
                         # compos_distill_iter is with same_subject_in_batch=True. 
                         # So zs_id_embs: [1, 512].
