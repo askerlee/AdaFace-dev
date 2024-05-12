@@ -1600,7 +1600,7 @@ class EmbeddingManager(nn.Module):
                     # the model will learn nothing from the recon loss.
                     # One potential issue is the delta loss may slowly degrade the identity information in the embeddings.
                     # So we will replace the subject-single embeddings when computing the delta loss in ddpm.py later.
-                    if not placeholder_is_bg and self.iter_type in ['compos_distill_iter', 'recon_iter']:
+                    if not placeholder_is_bg and self.iter_type in ['compos_distill_iter']: #, 'recon_iter']:
                         # compos_distill_iter is with same_subject_in_batch=True. 
                         # So zs_id_embs: [1, 512].
                         if zs_id_embs.shape[0] != 1:
