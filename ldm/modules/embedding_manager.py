@@ -1622,7 +1622,12 @@ class EmbeddingManager(nn.Module):
                         # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
                         # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
                         if self.iter_type == 'compos_distill_iter':
-                            static_zs_embs[:REAL_OCCURS_IN_BATCH // 2] = static_zs_embs0.to(static_zs_embs.dtype)
+                            NUM_HALF_SUBJS = REAL_OCCURS_IN_BATCH // 2
+                            # Still allow a small inference from the updated subj-single embeddings, 
+                            # maybe this will make the images more natural?
+                            static_zs_embs[:NUM_HALF_SUBJS] = static_zs_embs0.to(static_zs_embs.dtype) * 0.9 \
+                                                              + static_zs_embs[:NUM_HALF_SUBJS] * 0.1
+                            
                             if rank == 0:
                                 print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
 
