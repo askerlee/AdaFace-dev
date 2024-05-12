@@ -3343,8 +3343,8 @@ class LatentDiffusion(DDPM):
 
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        # fg_bg_token_emb_ortho loss is DISABLED if do_zero_shot, as it may hurt performance.
-        if not self.do_zero_shot and self.fg_bg_token_emb_ortho_loss_weight >= 0:
+        # DISABLED: fg_bg_token_emb_ortho loss is DISABLED if do_zero_shot, as it may hurt performance.
+        if self.fg_bg_token_emb_ortho_loss_weight > 0:
             # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
             # Otherwise, loss_fg_bg_token_emb_ortho is zero.
             loss_fg_bg_token_emb_ortho = \
@@ -3383,8 +3383,8 @@ class LatentDiffusion(DDPM):
             loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
                      * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
         
-            # DISABLED: padding_bg_fg_embs_align_loss_weight == 0. Although it's disabled, we still monitor loss_padding_subj_embs_align.
-            if self.padding_bg_fg_embs_align_loss_weight >= 0:
+            # DISABLED: padding_bg_fg_embs_align_loss_weight == 0. When it's disabled, we don't monitor loss_padding_subj_embs_align.
+            if self.padding_bg_fg_embs_align_loss_weight > 0:
                 if self.iter_flags['do_normal_recon']:
                     subj_indices        = all_subj_indices_1b
                     bg_indices          = all_bg_indices_1b
@@ -3423,7 +3423,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach().item() })
                 
                 padding_subj_embs_align_loss_scale = 0.2
-                bg_subj_embs_align_loss_scale  = 0.01 if self.do_zero_shot else 0.1
+                bg_subj_embs_align_loss_scale  = 0.1
                 # NOTE: loss_padding_cls_embs_align is not optimized, but we still add it with scale 0 
                 # to release the computation graph.
                 loss_padding_bg_fg_embs_align = (loss_padding_subj_embs_align * padding_subj_embs_align_loss_scale \
@@ -3475,6 +3475,7 @@ class LatentDiffusion(DDPM):
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
             # (since x_start has been filtered, masks are also filtered accordingly, 
             # and the same as to fg_mask_avail_ratio). So we need to check it here.
+            # comp_fg_bg_preserve_loss_weight: 1e-3
             if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
               and self.comp_fg_bg_preserve_loss_weight > 0:
                 # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
@@ -3567,7 +3568,7 @@ class LatentDiffusion(DDPM):
             # normalize_ca_outfeat is DISABLED
             if normalize_ca_outfeat:
                 ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
-                # If using LN, feat delta is around 5x much smaller. So we scale it up to 
+                # If using LN, feat delta is around 5x smaller. So we scale it up to 
                 # match the scale of not using LN.
                 feat_delta_align_scale *= 5
             else:
@@ -3597,14 +3598,14 @@ class LatentDiffusion(DDPM):
             # TODO: check if we need to totally disable loss_subj_attn_delta_align, by setting its scale to 0.
             subj_attn_delta_align_loss_scale = 0.1
             # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
-            # loss_subj_attn_norm_distill is usually 5~10. 
-            # So scale it down by 0.2 to match the other two. New range: 1~2.
-            subj_attn_norm_distill_loss_scale_base  = 0.2
 
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
             # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
             # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.     
             if not self.do_zero_shot:       
+                # loss_subj_attn_norm_distill is usually 5~10. 
+                # So scale it down by 0.2 to match the other two. New range: 1~2.
+                subj_attn_norm_distill_loss_scale_base  = 0.2
                 subj_attn_norm_distill_loss_base = 5.
                 # If loss_subj_attn_norm_distill == 10, then subj_attn_norm_distill_loss_scale = 0.2 * 10 / 5 = 0.4.
                 # If loss_subj_attn_norm_distill == 25, then subj_attn_norm_distill_loss_scale = 0.2 * 25 / 5 = 1.
@@ -3612,7 +3613,7 @@ class LatentDiffusion(DDPM):
                                                                          subj_attn_norm_distill_loss_base,
                                                                          subj_attn_norm_distill_loss_scale_base)
             else:
-                # If do_zero_shot, loss_subj_attn_norm_distill is quite (10~20, depending on various settings). 
+                # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
                 # So no need to use a dynamic loss scale. A scale of 1 is close to the corresponding 
                 # dynamic scale when the loss is ~25.
                 subj_attn_norm_distill_loss_scale = 1
@@ -3637,11 +3638,12 @@ class LatentDiffusion(DDPM):
             loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
                     * self.mix_prompt_distill_weight
 
+        # DISABLED: Both subj_comp_key_ortho_loss_weight and subj_comp_value_ortho_loss_weight are 0. So these losses are disabled.
         # Only compute loss_subj_comp_key_ortho/loss_subj_comp_value_ortho on compositional iterations.
-        # If subj_comp_key_ortho_loss_weight = 0, we still monitor loss_subj_comp_key_ortho 
+        # If subj_comp_key_ortho_loss_weight = 0, we don't monitor loss_subj_comp_key_ortho 
         # and loss_subj_comp_value_ortho.
         if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable'] \
-          and self.subj_comp_key_ortho_loss_weight >= 0:
+          and self.subj_comp_key_ortho_loss_weight > 0:
             subj_indices_1b = all_subj_indices_1b
             bg_indices_1b   = all_bg_indices_1b if self.iter_flags['use_background_token'] \
                                 else None
@@ -3670,7 +3672,7 @@ class LatentDiffusion(DDPM):
             # ortho losses are less effecive, so scale them down, and disable them if do_zero_shot.
             key_ortho_loss_scale = 0.1 if not self.do_zero_shot else 0
 
-            # subj_comp_key_ortho_loss_weight:          2e-4, 
+            # subj_comp_key_ortho_loss_weight:          0, disabled.
             # subj_comp_value_ortho_loss_weight:        0, disabled.
             loss +=   (loss_subj_comp_key_ortho   * key_ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
                     + (loss_subj_comp_value_ortho * key_ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
