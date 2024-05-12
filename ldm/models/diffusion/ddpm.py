@@ -1649,8 +1649,10 @@ class LatentDiffusion(DDPM):
                     # If do_arc2face_distill, then disable the background token.
                     p_use_background_token  = 0
                 elif self.do_zero_shot:
-                    # Reduced to 0.5, to focus the learning on foreground tokens.
-                    p_use_background_token  = 0.5
+                    # Since we train the model on many subjects, and the background token are kind of stable across subjects,
+                    # the chance that the background token will capture subject features is low. Therefore we can use the background token
+                    # with a relatively high probability.
+                    p_use_background_token  = 0.75
                 else:
                     # To avoid the backgound token taking too much of the foreground, 
                     # we only use the background token on 90% of the training images, to 
@@ -4790,7 +4792,8 @@ class LatentDiffusion(DDPM):
 
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
             # removed loss_layer_ms_mc_fg_match to save computation.
-            loss_layer_comp_single_align_map, loss_layer_ss_sc_fg_match, \
+            # loss_layer_comp_single_align_map: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
+            loss_layer_comp_single_align_map, loss_layer_sc_ss_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
                                              fg_bg_cutoff_prob=0.25,
@@ -4798,7 +4801,7 @@ class LatentDiffusion(DDPM):
                                              mix_feat_grad_scale=0.05)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
-            loss_layers_sc_ss_fg_match.append(loss_layer_ss_sc_fg_match * feat_distill_layer_weight)
+            loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * feat_distill_layer_weight)
             # loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
             loss_layers_sc_mc_bg_match.append(loss_layer_sc_mc_bg_match * feat_distill_layer_weight)
 
