@@ -3323,7 +3323,8 @@ class LatentDiffusion(DDPM):
             # as it might make learning slow.
             prompt_emb_delta_loss_scale /= 5
         
-        # static and ada embedding reg losses are DISABLED if do_zero_shot. But we still compute them to monitor.
+        # DISABLED: static and ada embedding reg losses are disabled when do_zero_shot. 
+        # In this case they are not monitored.
         if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
