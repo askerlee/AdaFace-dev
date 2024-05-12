@@ -1649,12 +1649,12 @@ class LatentDiffusion(DDPM):
                     # If do_arc2face_distill, then disable the background token.
                     p_use_background_token  = 0
                 elif self.do_zero_shot:
-                    # Since we train the model on many subjects, and the background token are kind of stable across subjects,
-                    # the chance that the background token will capture subject features is low. Therefore we can use the background token
-                    # with a relatively high probability.
-                    p_use_background_token  = 0.75
+                    # Since we train the model on many subjects, and the background tokens are kind of stable across subjects,
+                    # the chance that the background tokens will capture subject features is low. 
+                    # Therefore we can use the background tokens with a relatively high probability.
+                    p_use_background_token  = 0.9
                 else:
-                    # To avoid the backgound token taking too much of the foreground, 
+                    # To avoid the backgound token taking too much of the foreground (capturing the subject features),
                     # we only use the background token on 90% of the training images, to 
                     # force the foreground tokens to focus on the whole image.
                     p_use_background_token  = 0.9
