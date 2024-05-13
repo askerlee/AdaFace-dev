@@ -1060,8 +1060,9 @@ class LatentDiffusion(DDPM):
                                                                              self.embedding_manager.cls_delta_string_indices,
                                                                              self.embedding_manager.subj_name_to_cls_delta_token_weights)
                 elif (apply_arc2face_inverse_embs or apply_arc2face_embs):
+                    BS_repeat = len(cond_in) // static_prompt_embedding.shape[0]
                     # Repeat the static prompt embeddings 16 times to get the layerwise prompts.
-                    static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
+                    static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(BS_repeat, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
                 # Otherwise, do_fix_emb_scale == False, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
                 # we do nothing to the static_prompt_embedding.
