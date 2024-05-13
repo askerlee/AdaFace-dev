@@ -63,7 +63,7 @@ class CLIPAttentionMKV(nn.Module):
         if noise_std > 0:
             ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
             ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
-            # Adding noise to the extra copies of the weights.
+            # Adding noise to the extra copies of the weights (keep the first copy unchanged).
             self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
                 add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
                                     noise_std, noise_std_is_relative, keep_norm)

@@ -2518,25 +2518,29 @@ class EmbeddingManager(nn.Module):
                             self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(extend_prompt2token_proj_attention_multiplier,
                                                                                                             noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
 
-                    # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj > 1.
-                    # If extend_prompt2token_proj_attention_multiplier is specified and inconsistent with ckpt, debug.
-                    elif extend_prompt2token_proj_attention_multiplier > 1 and \
-                      ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier != extend_prompt2token_proj_attention_multiplier:
-                        breakpoint()
-
-                    else:
-                        # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier > 1.
-                        # extend_prompt2token_proj_attention_multiplier is either unspecified, or is the same as ckpt.
+                    # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier > 1,
+                    # and extend_prompt2token_proj_attention_multiplier is either unspecified, or is multiple of ckpt.
+                    elif extend_prompt2token_proj_attention_multiplier == -1 \
+                      or extend_prompt2token_proj_attention_multiplier % ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier == 0:
                         # Extend the CLIPAttention layers in the subj_basis_generator, before loading the state_dict.
                         # This means that during inference, we don't need to specify extend_prompt2token_proj_attention_multiplier.
                         # If the ckpt has an extended prompt2token_proj, then the subj_basis_generator's prompt2token_proj will be extended 
                         # before loading the state_dict.
-                        # NOTE: This could happen either during training or inference. Since state_dict is loaded,
+                        # NOTE: This could happen either during training or inference. Since state_dict will be loaded,
                         # whether noise_std is 0 or not has no impact to the extended attention weights.
-                        # TODO: allow extending the subj_basis_generator.prompt2token_proj multiple times.
                         self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier,
                                                                                                         noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                        if extend_prompt2token_proj_attention_multiplier > 0:
+                            second_ext_multiplier = extend_prompt2token_proj_attention_multiplier // ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier
+                            # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
+                            # During training,  zs_prompt2token_proj_ext_attention_perturb_ratio == 0.1.
+                            # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio == 0.
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(second_ext_multiplier,
+                                                                                                            noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
+                    # extend_prompt2token_proj_attention_multiplier is specified but inconsistent with ckpt, debug.
+                    else:
+                        breakpoint()
 
                     if len(ret.missing_keys) > 0:
                         print(f"Missing keys: {ret.missing_keys}")
