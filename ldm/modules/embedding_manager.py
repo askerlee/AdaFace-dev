@@ -2542,7 +2542,7 @@ class EmbeddingManager(nn.Module):
                             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio == 0.
                             # All CLIP encoder layers are 0-11. The last 6 layers are 6-11.
                             # 6, 12: extend the last 6 layers 6-11 (not including layer 12).
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(6, 12,
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(9, 12,
                                                                                                             second_ext_multiplier,
                                                                                                             noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
                     # extend_prompt2token_proj_attention_multiplier is specified but inconsistent with ckpt, debug.
