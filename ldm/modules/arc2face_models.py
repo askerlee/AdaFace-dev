@@ -279,10 +279,17 @@ class CLIPTextModelWrapper(CLIPTextModel):
             attentions=encoder_outputs.attentions,
         )
     
-    def extend_clip_attention_MKV_multiplier(self, multiplier=2, noise_std=0.1):
+    # Applied to layers [begin_layer_idx, end_layer_idx) in the encoder.
+    # The layer indexed by end_layer_idx is not included.
+    # If both layer indices are -1, then apply to all layers (0-11).
+    def extend_clip_attention_MKV_multiplier(self, begin_layer_idx=-1, end_layer_idx=-1, multiplier=2, noise_std=0.1):
         num_extended_layers = 0
 
         for layer_idx, layer in enumerate(self.text_model.encoder.layers):
+            if begin_layer_idx >= 0 and layer_idx < begin_layer_idx:
+                continue
+            if end_layer_idx >= 0 and layer_idx >= end_layer_idx:
+                break
             # This shouldn't happen, unless self_attn has already been extended as CLIPAttentionMKV.
             if not isinstance(layer.self_attn, (CLIPAttention, CLIPAttentionMKV)):
                 breakpoint()

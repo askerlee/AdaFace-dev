@@ -640,9 +640,9 @@ class SubjBasisGenerator(nn.Module):
         # Otherwise, face identity will leak into the pad embeddings.
         self.pad_embeddings = pad_embeddings.detach()
 
-    def extend_prompt2token_proj_attention(self, multiplier=2, noise_std=0.1):
+    def extend_prompt2token_proj_attention(self, begin_layer_idx=-1, end_layer_idx=-1, multiplier=2, noise_std=0.1):
         if multiplier > 1:
-            num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(multiplier, noise_std=noise_std)
+            num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(begin_layer_idx, end_layer_idx, multiplier, noise_std)
             self.prompt2token_proj_attention_multiplier = multiplier
             print(f"{num_extended_layers} layers in prompt2token_proj_attention are x{multiplier}")
 

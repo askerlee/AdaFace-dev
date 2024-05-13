@@ -2515,7 +2515,9 @@ class EmbeddingManager(nn.Module):
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         if not ckpt_subj_basis_generator.placeholder_is_bg and extend_prompt2token_proj_attention_multiplier > 1:
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(extend_prompt2token_proj_attention_multiplier,
+                            # -1, -1: extend all layers
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(-1, -1,
+                                                                                                            extend_prompt2token_proj_attention_multiplier,
                                                                                                             noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
 
                     # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier > 1,
@@ -2528,7 +2530,9 @@ class EmbeddingManager(nn.Module):
                         # before loading the state_dict.
                         # NOTE: This could happen either during training or inference. Since state_dict will be loaded,
                         # whether noise_std is 0 or not has no impact to the extended attention weights.
-                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier,
+                        # -1, -1: extend all layers
+                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(-1, -1,
+                                                                                                        ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier,
                                                                                                         noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         if extend_prompt2token_proj_attention_multiplier > 0:
@@ -2536,7 +2540,10 @@ class EmbeddingManager(nn.Module):
                             # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
                             # During training,  zs_prompt2token_proj_ext_attention_perturb_ratio == 0.1.
                             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio == 0.
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(second_ext_multiplier,
+                            # All CLIP encoder layers are 0-11. The last 6 layers are 6-11.
+                            # 6, 12: extend the last 6 layers 6-11 (not including layer 12).
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(6, 12,
+                                                                                                            second_ext_multiplier,
                                                                                                             noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
                     # extend_prompt2token_proj_attention_multiplier is specified but inconsistent with ckpt, debug.
                     else:
