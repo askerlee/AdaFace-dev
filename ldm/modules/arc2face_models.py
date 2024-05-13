@@ -43,8 +43,9 @@ class CLIPAttentionMKV(nn.Module):
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
-    def extend_weights(self, clip_attn_layer, layer_idx, noise_std=0.1, 
+    def extend_weights(self, clip_attn_layer, layer_idx, multiplier, noise_std=0.1, 
                        noise_std_is_relative=True, keep_norm=False, verbose=False):
+        self.multiplier *= multiplier
         # q_proj and out_proj are the same as the original CLIPAttention.
         self.q_proj.weight.data   = clip_attn_layer.q_proj.weight.data.clone()
         self.q_proj.bias.data     = clip_attn_layer.q_proj.bias.data.clone()
@@ -54,11 +55,11 @@ class CLIPAttentionMKV(nn.Module):
         # bias doesn't need noise perturbation, as after the weights are noised, 
         # different copies of the weight/bias will receive different gradients, 
         # making the bias terms diverge and identifiable after training.
-        self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(self.multiplier)
-        self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.repeat(self.multiplier)
+        self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(multiplier)
+        self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.repeat(multiplier)
 
-        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(self.multiplier, 1)
-        self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.repeat(self.multiplier, 1)
+        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(multiplier, 1)
+        self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.repeat(multiplier, 1)
 
         if noise_std > 0:
             ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
@@ -283,11 +284,12 @@ class CLIPTextModelWrapper(CLIPTextModel):
 
         for layer_idx, layer in enumerate(self.text_model.encoder.layers):
             # This shouldn't happen, unless self_attn has already been extended as CLIPAttentionMKV.
-            if not isinstance(layer.self_attn, CLIPAttention):
+            if not isinstance(layer.self_attn, (CLIPAttention, CLIPAttentionMKV)):
                 breakpoint()
             old_attn_layer = layer.self_attn
-            layer.self_attn = CLIPAttentionMKV(old_attn_layer.config, multiplier)
-            layer.self_attn.extend_weights(old_attn_layer, layer_idx, noise_std, verbose=True)
+            if not isinstance(old_attn_layer, CLIPAttentionMKV):
+                layer.self_attn = CLIPAttentionMKV(old_attn_layer.config, 1)
+            layer.self_attn.extend_weights(old_attn_layer, layer_idx, multiplier, noise_std, verbose=True)
             num_extended_layers += 1
     
         return num_extended_layers
