@@ -1537,10 +1537,8 @@ class EmbeddingManager(nn.Module):
                 if self.do_zero_shot:
                     if placeholder_is_bg:
                         zs_clip_features = zs_image_feat_dict['bg']
-                        num_vectors_each_placeholder = self.num_vectors_each_bg
                     else:
                         zs_clip_features = zs_image_feat_dict['subj']
-                        num_vectors_each_placeholder = self.number_vectors_each_subj
 
                     # zs_id_embs: [1, 512].
                     zs_id_embs = zs_image_feat_dict['id']
@@ -2546,9 +2544,10 @@ class EmbeddingManager(nn.Module):
                             # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
                             # During training,  zs_prompt2token_proj_ext_attention_perturb_ratio == 0.1.
                             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio == 0.
-                            # All CLIP encoder layers are 0-11. The last 6 layers are 6-11.
-                            # 6, 12: extend the last 6 layers 6-11 (not including layer 12).
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(9, 12,
+                            # All CLIP encoder layers are 0-11. 
+                            # 0, 6: extend the first 6 layers 0-5 (not including layer 6).
+                            # 0, 3: extend the first 3 layers 0-2 (not including layer 3).
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(0, 3,
                                                                                                             second_ext_multiplier,
                                                                                                             noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
                     # extend_prompt2token_proj_attention_multiplier is specified but inconsistent with ckpt, debug.
