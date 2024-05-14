@@ -2494,6 +2494,12 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.pos_embs = None
                         self.string_to_subj_basis_generator_dict[km].pos_embs.data.zero_()
 
+                    # No extension. So we just assign the ckpt to the current subj_basis_generator.
+                    # TODO: fix the logic below thoroughly in the future.
+                    if extend_prompt2token_proj_attention_multiplier == -1:
+                        self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
+                        continue
+
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
                     if (not ckpt_subj_basis_generator.placeholder_is_bg) \
                       and ckpt_subj_basis_generator.hidden_state_layer_weights.shape[-1] != self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1]:
