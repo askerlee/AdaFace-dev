@@ -1790,6 +1790,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['same_subject_in_batch'] = False
 
         # do_arc2face_distill is only True in do_normal_recon iters.
+        # p_gen_arc2face_rand_face: 0.4
         if self.iter_flags['do_arc2face_distill'] and random.random() < self.p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
             self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
@@ -1822,6 +1823,7 @@ class LatentDiffusion(DDPM):
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
                 p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_arc2face_distill'] else 0                
+                # p_add_noise_to_real_id_embs: default 0.6.
                 # If do_arc2face_distill, then prob of add_noise_to_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
                 self.iter_flags['add_noise_to_real_id_embs'] = random.random() < p_add_noise_to_real_id_embs
                 if self.iter_flags['add_noise_to_real_id_embs']:

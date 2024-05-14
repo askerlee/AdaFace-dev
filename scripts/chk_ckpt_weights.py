@@ -8,7 +8,7 @@ import argparse
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--sig", dest='ckpt_sig', type=str, required=True)
-parser.add_argument("--extra_sig", type=str, default="")
+parser.add_argument("--sig2", type=str, default="")
 parser.add_argument("--only100", action="store_true")
 parser.add_argument("--skipnames", nargs="+", default=[])
 parser.add_argument("--startiter", type=int, default=0)
@@ -19,7 +19,7 @@ np.set_printoptions(precision=4, suppress=True)
 all_ckpt_names = os.listdir("logs")
 # Sort all_ckpt_names by name (actually by timestamp in the name), so that most recent first.
 all_ckpt_names.sort(reverse=True)
-ckpt_name  = find_first_match(all_ckpt_names, args.ckpt_sig, extra_sig=args.extra_sig)
+ckpt_name  = find_first_match(all_ckpt_names, args.ckpt_sig, extra_sig=args.sig2)
 # embeddings_gs-{ckpt_iter}.pt
 emb_folder    = f"logs/{ckpt_name}/checkpoints/"
 iter2path = {}
