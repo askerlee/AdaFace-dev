@@ -35,9 +35,8 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, calc_layer_subj_comp_k_or_v_ortho_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
-                        fix_emb_scale, replace_prompt_comp_extra, \
+                        replace_prompt_comp_extra, extend_indices_B_by_n_times, \
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
-                        gen_comp_extra_indices_by_block, extend_indices_B_by_n_times, \
                         split_indices_by_instance, repeat_selected_instances, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding
@@ -959,10 +958,9 @@ class LatentDiffusion(DDPM):
     # NOTE: the delta prompts consumes extram RAM.
     # If do_normal_recon without delta loss, then 1 call.
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    # do_fix_emb_scale: only enabled when not do_zero_shot.
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
                                  randomize_clip_weights=False, apply_arc2face_inverse_embs=False, 
-                                 apply_arc2face_embs=False, do_fix_emb_scale=False, embman_iter_type=None):
+                                 apply_arc2face_embs=False, embman_iter_type=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -1012,41 +1010,23 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
-                # If apply_arc2face_embs, the location of the subject embeddings is not 
-                # indexed by placeholder_indices, so no point to fix the scale of the embeddings.
-                # But if apply_arc2face_inverse_embs, in theory we can still fix the scale of the embeddings,
-                # as the location of the subject embeddings is still indexed by placeholder_indices.
-                # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
-                # and scaling them down may hurt subject fidelity.
-                if do_fix_emb_scale and not apply_arc2face_embs:
-                    emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
-                    # Fix the scales of the static subject embeddings.
-                    for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
-                        emb_extra_global_scale = emb_global_scales_dict[placeholder]
-                        if placeholder in self.embedding_manager.background_string_dict:
-                            emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
-
-                        static_prompt_embedding = fix_emb_scale(static_prompt_embedding, placeholder_indices,
-                                                                 num_layers=self.N_CA_LAYERS,
-                                                                 extra_scale=emb_extra_global_scale)
-
-                    # If apply_arc2face_inverse_embs, there's no cls_delta_string in the prompt embeddings,
-                    # so no point to merge them.
-                    if not apply_arc2face_inverse_embs:
-                        # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scale first().
-                        # If cls_delta_string_indices is not empty, then it must be a compositional 
-                        # distillation iteration, and placeholder_indices only contains the indices of the subject 
-                        # instances. Whereas cls_delta_string_indices only contains the indices of the
-                        # class (mix) instances. Switching their order doesn't affect the results.
-                        static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
-                                                                             self.embedding_manager.cls_delta_string_indices,
-                                                                             self.embedding_manager.subj_name_to_cls_delta_token_weights)
+                # If apply_arc2face_inverse_embs, there's no cls_delta_string in the prompt embeddings,
+                # so no point to merge them.
+                if self.training and not apply_arc2face_inverse_embs:
+                    # If cls_delta_string_indices is not empty, then it must be a compositional 
+                    # distillation iteration, and placeholder_indices only contains the indices of the subject 
+                    # instances. Whereas cls_delta_string_indices only contains the indices of the
+                    # class (mix) instances.
+                    static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
+                                                                         self.embedding_manager.cls_delta_string_indices,
+                                                                         self.embedding_manager.subj_name_to_cls_delta_token_weights)
+                    
                 elif (apply_arc2face_inverse_embs or apply_arc2face_embs):
                     BS_repeat = len(cond_in) // static_prompt_embedding.shape[0]
                     # Repeat the static prompt embeddings 16 times to get the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(BS_repeat, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
-                # Otherwise, do_fix_emb_scale == False, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
+                # Otherwise, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
                 # we do nothing to the static_prompt_embedding.
 
                 '''
@@ -2003,8 +1983,7 @@ class LatentDiffusion(DDPM):
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],
                                                       randomize_clip_weights=True,
-                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
-                                                      do_fix_emb_scale=not self.do_zero_shot)
+                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
                     
                     # Release zs_clip_features and zs_id_embs.
                     # del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
@@ -2114,8 +2093,7 @@ class LatentDiffusion(DDPM):
                                                               self.iter_flags['zs_clip_features'],
                                                               self.iter_flags['zs_id_embs'],
                                                               randomize_clip_weights=True,
-                                                              apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
-                                                              do_fix_emb_scale=not self.do_zero_shot)
+                                                              apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
 
@@ -2159,8 +2137,7 @@ class LatentDiffusion(DDPM):
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],                                                      
                                                       randomize_clip_weights=True,
-                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
-                                                      do_fix_emb_scale=not self.do_zero_shot)
+                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
                     
                     extra_info = extra_info0
                     extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']

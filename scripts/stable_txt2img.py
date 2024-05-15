@@ -659,8 +659,7 @@ def main(opt):
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
                                                                apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
-                                                               apply_arc2face_embs=apply_arc2face_embs,
-                                                               do_fix_emb_scale=not opt.zeroshot)
+                                                               apply_arc2face_embs=apply_arc2face_embs)
 
                             if apply_arc2face_inverse_embs:
                                 static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
