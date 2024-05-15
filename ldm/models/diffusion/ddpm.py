@@ -111,8 +111,6 @@ class DDPM(pl.LightningModule):
                  static_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
                  padding_bg_fg_embs_align_loss_weight=0.,
-                 subj_comp_key_ortho_loss_weight=0.,
-                 subj_comp_value_ortho_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
@@ -158,8 +156,6 @@ class DDPM(pl.LightningModule):
 
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
         self.padding_bg_fg_embs_align_loss_weight     = padding_bg_fg_embs_align_loss_weight
-        self.subj_comp_key_ortho_loss_weight        = subj_comp_key_ortho_loss_weight
-        self.subj_comp_value_ortho_loss_weight      = subj_comp_value_ortho_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
@@ -3515,45 +3511,6 @@ class LatentDiffusion(DDPM):
             # mix_prompt_distill_weight: 1e-4.
             loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
                     * self.mix_prompt_distill_weight
-
-        # DISABLED: Both subj_comp_key_ortho_loss_weight and subj_comp_value_ortho_loss_weight are 0. So these losses are disabled.
-        # Only compute loss_subj_comp_key_ortho/loss_subj_comp_value_ortho on compositional iterations.
-        # If subj_comp_key_ortho_loss_weight = 0, we don't monitor loss_subj_comp_key_ortho 
-        # and loss_subj_comp_value_ortho.
-        if self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable'] \
-          and self.subj_comp_key_ortho_loss_weight > 0:
-            subj_indices_1b = all_subj_indices_1b
-            bg_indices_1b   = all_bg_indices_1b if self.iter_flags['use_background_token'] \
-                                else None
-            # subj_indices_4b: Extend subj_indices_1b to subj_indices_4b, by adding offset to batch indices.
-            # bg_indices_4b:   Extend bg_indices_1b   to bg_indices_4b,   by adding offset to batch indices.
-            subj_indices_4b, subj_indices_4b_by_block = \
-                extend_indices_B_by_n_times(subj_indices_1b, n=4, block_offset=BLOCK_SIZE)
-            bg_indices_4b,   bg_indices_4b_by_block   = \
-                extend_indices_B_by_n_times(bg_indices_1b,   n=4, block_offset=BLOCK_SIZE)
-
-            comp_extra_indices_4b_by_block = \
-                gen_comp_extra_indices_by_block(extra_info['prompt_emb_mask'],
-                                                (subj_indices_4b, bg_indices_4b), block_size=BLOCK_SIZE)
-
-            loss_subj_comp_key_ortho,  loss_subj_comp_value_ortho \
-                = self.calc_subj_comp_ortho_loss(extra_info['ca_layers_activations']['k'], 
-                                                    extra_info['ca_layers_activations']['v'], 
-                                                    extra_info['ca_layers_activations']['attnscore'], 
-                                                    subj_indices_4b_by_block, comp_extra_indices_4b_by_block,
-                                                    cls_grad_scale=0.05)
-
-            if loss_subj_comp_key_ortho != 0:
-                loss_dict.update({f'{prefix}/subj_comp_key_ortho':   loss_subj_comp_key_ortho.mean().detach().item() })
-            if loss_subj_comp_value_ortho != 0:
-                loss_dict.update({f'{prefix}/subj_comp_value_ortho': loss_subj_comp_value_ortho.mean().detach().item() })
-            # ortho losses are less effecive, so scale them down, and disable them if do_zero_shot.
-            key_ortho_loss_scale = 0.1 if not self.do_zero_shot else 0
-
-            # subj_comp_key_ortho_loss_weight:          0, disabled.
-            # subj_comp_value_ortho_loss_weight:        0, disabled.
-            loss +=   (loss_subj_comp_key_ortho   * key_ortho_loss_scale) * self.subj_comp_key_ortho_loss_weight \
-                    + (loss_subj_comp_value_ortho * key_ortho_loss_scale) * self.subj_comp_value_ortho_loss_weight
 
         if torch.isnan(loss):
             print('NaN loss detected.')

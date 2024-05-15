@@ -29,7 +29,6 @@ community_prompt_list = [
 female_prompt_list = [
 "{0} {1}{2} beautiful Gold Knightess redhead hysterically laughing out loud and dancing, visible eye laughter lines, visible smile lines, funny weird facial expression, tightly closed eyes, open gaping mouth, close up face, long flowing hair, photorealistic, wearing intricately designed high chroma tank top, perfect clean defined underarms, chiaroscuro solid colors, divine elegance, perfect teeth, beautiful intricate halo",
 "{0} {1}{2} as a Disney Princess",
-
 ]
 
 misc_prompt_list = [
