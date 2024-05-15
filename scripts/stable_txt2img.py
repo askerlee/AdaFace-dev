@@ -366,7 +366,9 @@ def main(opt):
 
     seed_everything(opt.seed)
     # More complex negative prompts may hurt the performance.
-    predefined_negative_prompt = "duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, disfigured, mutation"
+    # predefined_negative_prompt = "duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, disfigured, mutation"
+    # This negative prompt is borrowed from PuLID.
+    predefined_negative_prompt = "flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, deformed eyeballs, cross-eyed, blurry, mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions"
     device = f"cuda:{opt.gpu}" if torch.cuda.is_available() else "cpu"
     
     if not opt.eval_blip:
