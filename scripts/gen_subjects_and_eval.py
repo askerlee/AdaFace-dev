@@ -60,6 +60,8 @@ def parse_args():
 
     parser.add_argument("--prompt_set", type=str, default='all', choices=['dreambench', 'community', 'all'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
+    parser.add_argument("--gen_prompt_set_only", action="store_true",
+                        help="Generate prompt set and exit")
     
     parser.add_argument("--prompt", type=str, default=None,
                         help="Prompt to use for generating samples, using {} for subject_string (default: None)")
@@ -254,18 +256,6 @@ if __name__ == "__main__":
 
         print("Generating samples for subject: " + subject_name)
 
-        if hasattr(args, 'ckpt_name'):
-            ckpt_name = args.ckpt_name
-        else:
-            ckpt_sig   = subject_name + "-" + args.method
-            # Find the newest checkpoint that matches the subject name.
-            ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
-
-        if ckpt_name is None:
-            print("ERROR: No checkpoint found for subject: " + subject_name)
-            continue
-            # breakpoint()
-
         if not hasattr(args, 'z_suffix_type'):
             if broad_class == 1:
                 # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
@@ -297,65 +287,6 @@ if __name__ == "__main__":
         if len(args.extra_z_suffix) > 0:
             z_suffix += " " + args.extra_z_suffix + ","
 
-        if args.method == 'db':
-            config_file = "v1-inference-db.yaml"
-            ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
-            bb_type = ""
-        else:
-            config_file = "v1-inference-" + args.method + ".yaml"
-            if args.bb_type == 'v15-ema':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
-            elif args.bb_type == 'v15-dste':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste.ckpt"
-            elif args.bb_type == 'v15-dste8':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8.ckpt"
-            elif args.bb_type == 'v15-dste8-vae':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8-vae.ckpt"
-            elif args.bb_type == 'v15-arte':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-arte.ckpt"
-            elif args.bb_type == 'v15-rvte':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-rvte.ckpt"
-            elif args.bb_type == 'dreamshaper-v5':
-                ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
-            elif args.bb_type == 'dreamshaper-v6':
-                ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
-            elif args.bb_type == 'dreamshaper-v8':
-                ckpt_path   = "models/dreamshaper/DreamShaper_8_pruned.safetensors"
-            elif args.bb_type == 'ar-v16':
-                ckpt_path   = "models/absolutereality/ar-v1-6.safetensors"
-            elif args.bb_type == 'rv-v4':
-                ckpt_path   = "models/realisticvision/realisticVisionV40Fp16.cTYR.safetensors"
-            elif args.bb_type == 'v14':
-                ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
-            elif args.bb_type == 'v15':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
-            else:
-                print(f"ERROR: Unknown bb_type: {args.bb_type}")
-                exit(0)
-
-            # bb_type is used to tell stable_txt2img.py what suffix to put in the output image name.
-            # If bb_type is the default value, then no suffix is appended. So specify as "" here.
-            if args.bb_type == argparser.get_default('bb_type'):
-                bb_type = ""
-            else:
-                bb_type = args.bb_type
-
-            if args.ckpt_iter is None:
-                ckpt_iter = ckpt_iters[broad_class]
-            else:
-                ckpt_iter = args.ckpt_iter
-
-            emb_path    = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
-            if not os.path.exists(emb_path):
-                emb_path2 = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
-                if not os.path.exists(emb_path2):
-                    print(f"ERROR: Subject embedding not found: '{emb_path}' or '{emb_path2}'")
-                    continue
-
-                emb_path = emb_path2
-
-        outdir = args.out_dir_tmpl + "-" + args.method
-        os.makedirs(outdir, exist_ok=True)
 
         if args.background_string and args.include_bg_string:
             background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
@@ -363,7 +294,10 @@ if __name__ == "__main__":
         else:
             background_string = ""
             bg_suffix = ""
-            
+
+        outdir = args.out_dir_tmpl + "-" + args.method
+        os.makedirs(outdir, exist_ok=True)
+
         if args.prompt is None:
             if args.n_samples == -1:
                 args.n_samples = 4
@@ -424,7 +358,80 @@ if __name__ == "__main__":
                 PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, class_long_prompt, class_short_prompt ]) + "\n" )
             else:
                 indiv_subdir = subject_name
-        
+
+        if args.gen_prompt_set_only:
+            print(f"{len(prompt_list)} prompts saved to {prompt_filepath}")
+            continue
+
+        if hasattr(args, 'ckpt_name'):
+            ckpt_name = args.ckpt_name
+        else:
+            ckpt_sig   = subject_name + "-" + args.method
+            # Find the newest checkpoint that matches the subject name.
+            ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
+
+        if ckpt_name is None:
+            print("ERROR: No checkpoint found for subject: " + subject_name)
+            continue
+            # breakpoint()
+
+        if args.method == 'db':
+            config_file = "v1-inference-db.yaml"
+            ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
+            bb_type = ""
+        else:
+            config_file = "v1-inference-" + args.method + ".yaml"
+            if args.bb_type == 'v15-ema':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
+            elif args.bb_type == 'v15-dste':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste.ckpt"
+            elif args.bb_type == 'v15-dste8':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8.ckpt"
+            elif args.bb_type == 'v15-dste8-vae':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8-vae.ckpt"
+            elif args.bb_type == 'v15-arte':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-arte.ckpt"
+            elif args.bb_type == 'v15-rvte':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-rvte.ckpt"
+            elif args.bb_type == 'dreamshaper-v5':
+                ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
+            elif args.bb_type == 'dreamshaper-v6':
+                ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
+            elif args.bb_type == 'dreamshaper-v8':
+                ckpt_path   = "models/dreamshaper/DreamShaper_8_pruned.safetensors"
+            elif args.bb_type == 'ar-v16':
+                ckpt_path   = "models/absolutereality/ar-v1-6.safetensors"
+            elif args.bb_type == 'rv-v4':
+                ckpt_path   = "models/realisticvision/realisticVisionV40Fp16.cTYR.safetensors"
+            elif args.bb_type == 'v14':
+                ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
+            elif args.bb_type == 'v15':
+                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
+            else:
+                print(f"ERROR: Unknown bb_type: {args.bb_type}")
+                exit(0)
+
+            # bb_type is used to tell stable_txt2img.py what suffix to put in the output image name.
+            # If bb_type is the default value, then no suffix is appended. So specify as "" here.
+            if args.bb_type == argparser.get_default('bb_type'):
+                bb_type = ""
+            else:
+                bb_type = args.bb_type
+
+            if args.ckpt_iter is None:
+                ckpt_iter = ckpt_iters[broad_class]
+            else:
+                ckpt_iter = args.ckpt_iter
+
+            emb_path    = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
+            if not os.path.exists(emb_path):
+                emb_path2 = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
+                if not os.path.exists(emb_path2):
+                    print(f"ERROR: Subject embedding not found: '{emb_path}' or '{emb_path2}'")
+                    continue
+
+                emb_path = emb_path2
+
         if isinstance(args.scale, (list, tuple)):
             args.scale = " ".join([ str(s) for s in args.scale ])
 
@@ -516,6 +523,9 @@ if __name__ == "__main__":
         print(command_line)
         if not args.dryrun:
             os.system(command_line)
+
+    if args.gen_prompt_set_only:
+        exit(0)
 
     if args.scores_csv is not None and not args.dryrun:
         if not os.path.exists(args.scores_csv):
