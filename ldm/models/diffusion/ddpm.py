@@ -33,13 +33,13 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
                         sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
-                        calc_elastic_matching_loss, calc_layer_subj_comp_k_or_v_ortho_loss, \
+                        calc_elastic_matching_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
-                        replace_prompt_comp_extra, extend_indices_B_by_n_times, \
+                        replace_prompt_comp_extra, extend_indices_B_by_n_times, repeat_selected_instances, \
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
-                        split_indices_by_instance, repeat_selected_instances, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding
+                        # split_indices_by_instance, calc_layer_subj_comp_k_or_v_ortho_loss
                                               
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
@@ -4368,84 +4368,6 @@ class LatentDiffusion(DDPM):
 
         return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
-    # DISABLED. No obvious improvement.
-    def calc_subj_comp_ortho_loss(self, ca_ks, ca_vs, ca_attnscores,
-                                  subj_indices_by_block, comp_extra_indices_by_block, 
-                                  cls_grad_scale=0.05):
-
-        # Discard the first few bottom layers from the orthogonal loss.
-        k_ortho_layer_weights = { 7: 0.5, 8: 0.5,
-                                  12: 1.,
-                                  16: 1., 17: 1.,
-                                  18: 1.,
-                                  19: 1., 20: 1., 
-                                  21: 1., 22: 1., 
-                                  23: 1., 24: 1.,     
-                                }
-        
-        v_ortho_layer_weights = { 7: 0.5, 8: 0.5,
-                                  12: 1.,
-                                  16: 1., 17: 1.,
-                                  18: 0.5,
-                                  19: 0.5, 20: 0.5, 
-                                  21: 0.25, 22: 0.25, 
-                                  23: 0.25, 24: 0.25,                                
-                                }
-        
-        # Normalize the weights above so that each set sum to 1.
-        k_ortho_layer_weights = normalize_dict_values(k_ortho_layer_weights)
-        v_ortho_layer_weights = normalize_dict_values(v_ortho_layer_weights)
-
-        loss_subj_comp_key_ortho   = 0
-        loss_subj_comp_value_ortho = 0
-
-        subj_subj_indices = subj_indices_by_block[1]
-        subj_comp_indices = comp_extra_indices_by_block[1]
-        # cls blocks are available, so the ortho loss has to align the delta with the cls delta.
-        cls_subj_indices  = subj_indices_by_block[3]
-        cls_comp_indices  = comp_extra_indices_by_block[3]
-
-        for unet_layer_idx, seq_k in ca_ks.items():
-            if (unet_layer_idx not in k_ortho_layer_weights):
-                continue
-
-            # attn_score_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
-            # We don't need BP through attention into UNet.
-            attn_score_mat = ca_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
-            # avg_attn_scores: the average attention score of each prompt token to all image patches.
-            # The higher the average attention score, the more important role the token plays 
-            # in conditioning the image.
-            # Therefore, avg_attn_scores is used to weight the ks/vs of tokens when computing their mean k/v.
-            avg_attn_scores = attn_score_mat.mean(dim=(2,3), keepdim=False).clamp(min=0)
-
-            loss_layer_subj_comp_key_ortho = \
-                calc_layer_subj_comp_k_or_v_ortho_loss(seq_k, 
-                                                       subj_subj_indices, 
-                                                       subj_comp_indices, 
-                                                       cls_subj_indices, 
-                                                       cls_comp_indices,
-                                                       all_token_weights=avg_attn_scores,
-                                                       do_demean_first=False, 
-                                                       cls_grad_scale=cls_grad_scale,
-                                                       margin=0.6)
-            loss_layer_subj_comp_value_ortho = \
-                calc_layer_subj_comp_k_or_v_ortho_loss(ca_vs[unet_layer_idx], 
-                                                       subj_subj_indices, 
-                                                       subj_comp_indices, 
-                                                       cls_subj_indices, 
-                                                       cls_comp_indices,
-                                                       all_token_weights=avg_attn_scores,
-                                                       do_demean_first=False, 
-                                                       cls_grad_scale=cls_grad_scale,
-                                                       margin=0.7)
-                    
-            k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
-            v_ortho_layer_weight = v_ortho_layer_weights[unet_layer_idx]
-            loss_subj_comp_key_ortho   += loss_layer_subj_comp_key_ortho   * k_ortho_layer_weight
-            loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * v_ortho_layer_weight
-
-        return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho
-
     # Intuition of comp_fg_bg_preserve_loss: 
     # In distillation iterations, if comp_init_fg_from_training_image, then at fg_mask areas, x_start is initialized with 
     # the noisy input images. (Otherwise in distillation iterations, x_start is initialized as pure noise.)
@@ -4619,6 +4541,84 @@ class LatentDiffusion(DDPM):
         return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
                loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
                
+    '''
+    # DISABLED. No obvious improvement.
+    def calc_subj_comp_ortho_loss(self, ca_ks, ca_vs, ca_attnscores,
+                                  subj_indices_by_block, comp_extra_indices_by_block, 
+                                  cls_grad_scale=0.05):
+
+        # Discard the first few bottom layers from the orthogonal loss.
+        k_ortho_layer_weights = { 7: 0.5, 8: 0.5,
+                                  12: 1.,
+                                  16: 1., 17: 1.,
+                                  18: 1.,
+                                  19: 1., 20: 1., 
+                                  21: 1., 22: 1., 
+                                  23: 1., 24: 1.,     
+                                }
+        
+        v_ortho_layer_weights = { 7: 0.5, 8: 0.5,
+                                  12: 1.,
+                                  16: 1., 17: 1.,
+                                  18: 0.5,
+                                  19: 0.5, 20: 0.5, 
+                                  21: 0.25, 22: 0.25, 
+                                  23: 0.25, 24: 0.25,                                
+                                }
+        
+        # Normalize the weights above so that each set sum to 1.
+        k_ortho_layer_weights = normalize_dict_values(k_ortho_layer_weights)
+        v_ortho_layer_weights = normalize_dict_values(v_ortho_layer_weights)
+
+        loss_subj_comp_key_ortho   = 0
+        loss_subj_comp_value_ortho = 0
+
+        subj_subj_indices = subj_indices_by_block[1]
+        subj_comp_indices = comp_extra_indices_by_block[1]
+        # cls blocks are available, so the ortho loss has to align the delta with the cls delta.
+        cls_subj_indices  = subj_indices_by_block[3]
+        cls_comp_indices  = comp_extra_indices_by_block[3]
+
+        for unet_layer_idx, seq_k in ca_ks.items():
+            if (unet_layer_idx not in k_ortho_layer_weights):
+                continue
+
+            # attn_score_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
+            # We don't need BP through attention into UNet.
+            attn_score_mat = ca_attnscores[unet_layer_idx].permute(0, 3, 1, 2)
+            # avg_attn_scores: the average attention score of each prompt token to all image patches.
+            # The higher the average attention score, the more important role the token plays 
+            # in conditioning the image.
+            # Therefore, avg_attn_scores is used to weight the ks/vs of tokens when computing their mean k/v.
+            avg_attn_scores = attn_score_mat.mean(dim=(2,3), keepdim=False).clamp(min=0)
+
+            loss_layer_subj_comp_key_ortho = \
+                calc_layer_subj_comp_k_or_v_ortho_loss(seq_k, 
+                                                       subj_subj_indices, 
+                                                       subj_comp_indices, 
+                                                       cls_subj_indices, 
+                                                       cls_comp_indices,
+                                                       all_token_weights=avg_attn_scores,
+                                                       do_demean_first=False, 
+                                                       cls_grad_scale=cls_grad_scale,
+                                                       margin=0.6)
+            loss_layer_subj_comp_value_ortho = \
+                calc_layer_subj_comp_k_or_v_ortho_loss(ca_vs[unet_layer_idx], 
+                                                       subj_subj_indices, 
+                                                       subj_comp_indices, 
+                                                       cls_subj_indices, 
+                                                       cls_comp_indices,
+                                                       all_token_weights=avg_attn_scores,
+                                                       do_demean_first=False, 
+                                                       cls_grad_scale=cls_grad_scale,
+                                                       margin=0.7)
+                    
+            k_ortho_layer_weight = k_ortho_layer_weights[unet_layer_idx]
+            v_ortho_layer_weight = v_ortho_layer_weights[unet_layer_idx]
+            loss_subj_comp_key_ortho   += loss_layer_subj_comp_key_ortho   * k_ortho_layer_weight
+            loss_subj_comp_value_ortho += loss_layer_subj_comp_value_ortho * v_ortho_layer_weight
+
+        return loss_subj_comp_key_ortho, loss_subj_comp_value_ortho
 
     # DISABLED: No obvious improvement.
     # SSB_SIZE: subject sub-batch size.
@@ -4771,6 +4771,7 @@ class LatentDiffusion(DDPM):
             loss_bg_subj_embs_align /= SSB_SIZE
 
         return loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align
+    '''
 
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):

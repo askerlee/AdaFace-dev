@@ -440,30 +440,30 @@ def get_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     'a {0} cube shaped {1}{2}'
     ]
 
+    # Remove 'on top of a wooden floor' and 'on top of a purple rug in a forest'
+    # They will lead to weird layouts.
     animal_prompt_list = [
     'a {0} {1}{2} in the jungle',                                       # 0
     'a {0} {1}{2} in the snow',
     'a {0} {1}{2} on the beach',
     'a {0} {1}{2} on a cobblestone street',
     'a {0} {1}{2} on top of pink fabric',
-    'a {0} {1}{2} on top of a wooden floor',                            # 5
-    'a {0} {1}{2} with a city in the background',
+    'a {0} {1}{2} with a city in the background',                       # 5
     'a {0} {1}{2} with a mountain in the background',
     'a {0} {1}{2} with a blue house in the background',
-    'a {0} {1}{2} on top of a purple rug in a forest',
-    'a {0} {1}{2} wearing a red hat',                                   # 10
+    'a {0} {1}{2} wearing a red hat',                                   
     'a {0} {1}{2} wearing a santa hat',
-    'a {0} {1}{2} wearing a rainbow scarf',
+    'a {0} {1}{2} wearing a rainbow scarf',                             # 10
     'a {0} {1}{2} wearing a black top hat and a monocle',
     'a {0} {1}{2} in a chef outfit',
-    'a {0} {1}{2} in a firefighter outfit',                             # 15
+    'a {0} {1}{2} in a firefighter outfit',                             
     'a {0} {1}{2} in a police outfit',
-    'a {0} {1}{2} wearing pink glasses',
+    'a {0} {1}{2} wearing pink glasses',                                # 15
     'a {0} {1}{2} wearing a yellow shirt',
     'a {0} {1}{2} in a purple wizard outfit',
-    'a {0} red {1}{2}',                                                 # 20
+    'a {0} red {1}{2}',                                                 
     'a {0} purple {1}{2}',
-    'a {0} shiny {1}{2}',
+    'a {0} shiny {1}{2}',                                               # 20
     'a {0} wet {1}{2}',
     'a {0} cube shaped {1}{2}'
     ]

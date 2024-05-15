@@ -823,6 +823,7 @@ class UNetModel(nn.Module):
 
         return old_ca_flag_dict, old_trans_flag_dict
     
+    # context_in: passed in for debugging.
     def forward(self, x, timesteps=None, context=None, y=None, 
                 context_in=None, extra_info=None, **kwargs):
         """
@@ -853,7 +854,7 @@ class UNetModel(nn.Module):
         placeholder2indices         = extra_info.get('placeholder2indices', None)        if extra_info is not None else None
         img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
         compel_cfg_weight_level_range   = extra_info.get('compel_cfg_weight_level_range', None) if extra_info is not None else None
-        apply_compel_cfg_prob       = extra_info.get('apply_compel_cfg_prob', 0.5)   if extra_info is not None else 0.5
+        apply_compel_cfg_prob       = extra_info.get('apply_compel_cfg_prob', 0)   if extra_info is not None else 0
         empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
         debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
