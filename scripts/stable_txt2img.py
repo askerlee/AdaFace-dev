@@ -276,9 +276,7 @@ def parse_args():
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
     parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
-                        help="Scale of the extra words embeddings")    
-    parser.add_argument("--zs_subj_has_prompt_translator", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether the subject basis generator has a prompt translator")        
+                        help="Scale of the extra words embeddings")        
     parser.add_argument("--apply_arc2face_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
     parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
@@ -406,7 +404,6 @@ def main(opt):
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
-            config.model.params.personalization_config.params.zs_subj_has_prompt_translator = opt.zs_subj_has_prompt_translator
             config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
         else:
             ref_images = None

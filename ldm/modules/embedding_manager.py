@@ -972,7 +972,6 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_token_weights=None,
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
-            zs_subj_has_prompt_translator=False,
             zs_extra_words_scale=0.5,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
@@ -1088,14 +1087,7 @@ class EmbeddingManager(nn.Module):
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
-            self.zs_subj_has_prompt_translator = zs_subj_has_prompt_translator
             self.zs_extra_words_scale = zs_extra_words_scale
-            if self.zs_subj_has_prompt_translator:
-                zs_num_vecs_each_subj = self.number_vectors_each_subj * self.num_unet_ca_layers
-                # Maxinum number of output embeddings from prompt_translator is 73. This indicates a bug.
-                if zs_num_vecs_each_subj > 73:
-                    print(f"BUG: The number of vectors per subject {zs_num_vecs_each_subj} is beyond the capacity of prompt_translator.")
-                    breakpoint()
 
             self.arc2face_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
@@ -1179,7 +1171,6 @@ class EmbeddingManager(nn.Module):
                                                           image_embedding_dim = zs_image_emb_dim, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
-                                                          subj_has_prompt_translator   = self.zs_subj_has_prompt_translator,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
                                                           bg_prompt_translator_has_to_out_proj=False,
                                                           zs_extra_words_scale = self.zs_extra_words_scale)
@@ -1439,13 +1430,9 @@ class EmbeddingManager(nn.Module):
                         arc2face_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
-                    # If subj_has_prompt_translator:
-                    # static_zs_embs:   [BS, 16,  4, 768] if fg, or [BS,  16, 2, 768] if bg.
-                    # Otherwise:
                     # static_zs_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
                     static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
-                                                 list_extra_words=self.cls_delta_strings, 
                                                  is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
                                                  arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
@@ -1485,9 +1472,9 @@ class EmbeddingManager(nn.Module):
                             breakpoint()
                         subj_basis_generator0 = self.frozen_string_to_subj_basis_generator_dict[placeholder_string]
                         with torch.no_grad():
+                            # static_zs_embs0: ID embeddings from the frozen subj_basis_generator.
                             static_zs_embs0, placeholder_arc2face_inverse_prompt_embs0 = \
                                     subj_basis_generator0(zs_clip_features, zs_id_embs, arc2face_id_embs,
-                                                          list_extra_words=self.cls_delta_strings, 
                                                           is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
                                                           arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
