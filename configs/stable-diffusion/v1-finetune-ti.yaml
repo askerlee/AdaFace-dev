@@ -25,7 +25,6 @@ model:
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding: False
-    use_ada_embedding:       False
     # composition_regs includes prompt_delta_reg and composition_prompt_mix_reg.
     composition_regs_iter_gap: 3
     # typical delta reg loss: 0.75, * weight -> 7.5e-5

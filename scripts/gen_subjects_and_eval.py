@@ -58,10 +58,6 @@ def parse_args():
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
 
-    parser.add_argument("--emb_ema_as_pooling_probe",
-                        action="store_true", default=argparse.SUPPRESS,
-                        help="Use EMA embedding as the pooling probe")
-
     parser.add_argument("--prompt_set", type=str, default='all', choices=['dreambench', 'community'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
@@ -166,10 +162,6 @@ def parse_args():
 
     parser.add_argument("--prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")  
-
-    parser.add_argument("--ada_emb_weight",
-                        type=float, default=-1,
-                        help="Weight of ada embeddings (in contrast to static embeddings)")
     # --dryrun
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
@@ -463,10 +455,7 @@ if __name__ == "__main__":
         if hasattr(args, 'prompt_mix_scheme'):
             # Only specify the flags here. The actual reference prompt will be read from the prompt file.
             command_line += f" --prompt_mix_scheme {args.prompt_mix_scheme} --prompt_mix_weight {args.prompt_mix_weight}"
-        
-        if args.ada_emb_weight != -1:
-            command_line += f" --ada_emb_weight {args.ada_emb_weight}"
-            
+
         if args.method != 'db':
             command_line += f" --embedding_paths {emb_path}"
 
@@ -494,9 +483,6 @@ if __name__ == "__main__":
             command_line += f" --background_string {args.background_string} --num_vectors_per_bg_token {args.num_vectors_per_bg_token}"
         if hasattr(args, 'use_conv_attn_kernel_size'):
             command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
-
-        if hasattr(args, 'emb_ema_as_pooling_probe'):
-            command_line += f" --emb_ema_as_pooling_probe"
 
         if hasattr(args, 'neg_prompt'):
             command_line += f" --neg_prompt \"{args.neg_prompt}\""

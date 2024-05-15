@@ -23,7 +23,6 @@ model:
     model_lr: 1.0e-6
     is_dreambooth: true
     use_layerwise_embedding: false
-    use_ada_embedding: false
     # No compositional regularizations.
     composition_regs_iter_gap: None
 

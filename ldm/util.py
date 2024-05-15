@@ -670,8 +670,12 @@ def gen_spatial_weight_using_loss_std(pixelwise_loss, out_spatial_shape=(64, 64)
 # Return a new attn_mat with the same shape as attn_mat, but with the attention scores at subj_indices
 # replaced by the convolutional attention scores.
 def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_attn_kernel_size, H, 
-                              sim_scale, conv_attn_layer_scale=1, conv_attn_mix_weight=1,
+                              sim_scale, conv_attn_mix_weight=1,
                               shift_attn_maps_for_diff_embs=True):
+    
+    if conv_attn_kernel_size == 1:
+        return attn_mat
+        
     # input features x: [4, 4096, 320].
     # attn_mat: [32, 4096, 77]. 32: b * h. b = 4, h = 8.
     # q: [32, 4096, 40]. k: [32, 77, 40]. 32: b * h.
@@ -703,12 +707,6 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
     # Clone to make attn_mat2 a non-leaf node. Otherwise, 
     # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
     attn_mat2 = attn_mat.clone()
-    
-    if conv_attn_kernel_size == 1:
-        # If conv_attn_kernel_size == 1, simply apply conv_attn_layer_scale to subj attn rows.
-        attn_mat2[indices_B, :, :, indices_N] = attn_mat[indices_B, :, :, indices_N] * conv_attn_layer_scale
-        attn_mat2 = attn_mat2.reshape(attn_mat_shape)
-        return attn_mat2
 
     # q: [32, 4096, 40] => [4, 8, 4096, 40].
     # q is a projection of x, the image features.
@@ -786,7 +784,7 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
                              bias=None, groups=H)
         # sim_scale is to keep consistent to the original cross attention scores.
         # Note to scale attention scores by sim_scale, and further divide by NORM = M ** 0.75.
-        subj_attn = subj_attn * sim_scale * conv_attn_layer_scale / NORM
+        subj_attn = subj_attn * sim_scale / NORM
 
         if shift_attn_maps_for_diff_embs:
             # Shift subj_attn (with 0 padding) to yield ks*ks slightly different attention maps 
@@ -850,57 +848,6 @@ def replace_rows_by_conv_attn(attn_mat, q, k, subj_indices, infeat_size, conv_at
 
     # attn_mat2: [4, 8, 4096, 77] => [32, 4096, 77].
     return attn_mat2.reshape(attn_mat_shape)
-
-# dtype: sim.dtype.
-# During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
-# So we need to convert the type of ada_subj_attn_normed from float to sim.dtype. 
-def normalize_ada_subj_attn(ada_subj_attn, subj_attn_lb, num_heads, dtype):
-    # ada_subj_attn: [48, 1, 4096] -> [48, 4096, 1].
-    ada_subj_attn       = ada_subj_attn.transpose(1, 2)
-    # ada_subj_attn_mean: [48, 4096, 1] -> [48, 1, 1].
-    ada_subj_attn_mean  = ada_subj_attn.mean(dim=(1,2), keepdim=True)
-    
-    # subj_attn_is_nonzero: bool of [48].
-    # Due to the competition between subj fg attn and bg attn, some rows in ada_subj_attn
-    # may receive all-0 attn. So we need to exclude them from the normalization.
-    subj_attn_is_nonzero = ada_subj_attn_mean.squeeze() > 1e-4
-    ada_subj_attn_normed = torch.ones_like(ada_subj_attn)
-    if subj_attn_is_nonzero.sum() > 0:
-        # If ada_subj_attn[i] is almost 0 everywhere (subj_attn_is_nonzero[i] = False), 
-        # then no point to use ada_subj_attn to do reweighting, and keep ada_subj_attn_normed[i] to be all-1. 
-        ada_subj_attn_normed[subj_attn_is_nonzero] = ada_subj_attn[subj_attn_is_nonzero] / ada_subj_attn_mean[subj_attn_is_nonzero]
-
-    # clamp() max=1:   Only reduce the bg attn (of image tokens other than the subject area) 
-    # of the subject tokens, not to increase fg attn. So we cap the attn to 1.0.
-    # if training, subj_attn_lb = 0.4. If inference, subj_attn_lb = 0.1.
-    # subj_attn_lb=0.4: Don't scale down attn too much, in case the attn is inaccurate (esp. during training),
-    # and the model should have a chance to recover from the inaccurate attn.
-    ada_subj_attn_normed = torch.clamp(ada_subj_attn_normed, min=subj_attn_lb, max=1.0)
-    # ada_subj_attn_normed: [48, 4096, 1] -> [6, 8, 4096, 1].
-    ada_subj_attn_normed = rearrange(ada_subj_attn_normed, '(b h) i j -> b h i j', h=num_heads)
-    # During inference, sim.dtype is float16, while ada_subj_attn_normed.dtype is float32.
-    # So we need to convert the type of ada_subj_attn_normed from float to sim.dtype. 
-    ada_subj_attn_normed = ada_subj_attn_normed.type(dtype)
-
-    return ada_subj_attn_normed
-
-# attn_mat: [48, 4096, 77].
-# weight: ada_subj_attn_normed. [6, 8, 4096, 1].
-def reweight_attn_rows(attn_mat, weight, row_indices, num_heads):
-    # attn_mat_shape: [48, 4096, 77]
-    attn_mat_shape = attn_mat.shape
-    # attn_mat: [48, 4096, 77] => [6, 8, 4096, 77].
-    attn_mat = rearrange(attn_mat, '(b h) i j -> b h i j', h=num_heads)
-    # Clone to make attn_mat2 a non-leaf node. Otherwise, 
-    # we can't do in-place assignment like attn_mat[indices_b, :, :, indices_n] = subj_attn_dxys.    
-    attn_mat2 = attn_mat.clone()
-    indices_B, indices_N = row_indices
-    # attn_mat2[indices_B, :, :, indices_N]: [6, 8, 4096, 77] -> [2*9, 8, 4096].
-    # ada_subj_attn_normed[indices_B]: [6, 8, 4096, 1] -> [2*9, 8, 4096].
-    attn_mat2[indices_B, :, :, indices_N] = attn_mat[indices_B, :, :, indices_N] * weight[indices_B, :, :, 0]
-    attn_mat2 = attn_mat2.reshape(attn_mat_shape)          
-
-    return attn_mat2
 
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
@@ -2293,9 +2240,8 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
 # Textual inversion is supported, where static_embeddings is only one embedding.
 # static_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
 # embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mask,
-                               do_ada_prompt_delta_reg, cls_delta_grad_scale=0.05):
-    # static_embeddings / ada_embeddings contain 4 types of embeddings:
+def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_grad_scale=0.05):
+    # static_embeddings contains 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
     # static_embeddings: [4, 16, 77, 768].
     # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
@@ -2347,33 +2293,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, ada_embeddings, prompt_emb_mas
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
 
-    if do_ada_prompt_delta_reg and ada_embeddings is not None:
-        # ada_embeddings: [4, 16, 77, 768]
-        # ada_cls_single_emb, ada_cls_comp_emb should be the same as 
-        # static_cls_single_emb, static_cls_comp_emb, as class prompts do not contain 
-        # the subject token.
-        ada_subj_single_emb, ada_subj_comp_emb, ada_cls_single_emb, ada_cls_comp_emb \
-            = ada_embeddings.chunk(4)
-
-        if use_ortho_subtract:
-            ada_subj_delta  = ortho_subtract(ada_subj_comp_emb, ada_subj_single_emb)
-            ada_cls_delta   = ortho_subtract(ada_cls_comp_emb,  ada_cls_single_emb)
-        else:
-            ada_subj_delta  = ada_subj_comp_emb - ada_subj_single_emb
-            ada_cls_delta   = ada_cls_comp_emb  - ada_cls_single_emb
-
-        loss_ada_prompt_delta = \
-            calc_ref_cosine_loss(ada_subj_delta, ada_cls_delta, 
-                                 emb_mask=prompt_emb_mask_weighted,
-                                 do_demean_first=True,
-                                 first_n_dims_to_flatten=3,
-                                 ref_grad_scale=cls_delta_grad_scale,   # 0.05
-                                 aim_to_align=True)
-
-    else:
-        loss_ada_prompt_delta = 0
-
-    return loss_static_prompt_delta, loss_ada_prompt_delta
+    return loss_static_prompt_delta
 
 def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_scale_base_ratio=1, max_scale_base_ratio=2):
     # Setting loss_base to 0 will disable the loss.

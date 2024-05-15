@@ -510,8 +510,6 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
-                            'shift_attn_maps_for_diff_embs:layerwise':  [True] * 16,
-                            'subj2conv_attn_layer_scale:layerwise-dict':  {},
                             'save_attn_vars':                           False,
                             'is_training':                              True,
                            }
@@ -847,24 +845,17 @@ class UNetModel(nn.Module):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        use_layerwise_context = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
-        use_ada_context       = extra_info.get('use_ada_context', False)       if extra_info is not None else False
-        disable_ada_emb       = extra_info.get('disable_ada_emb', False)       if extra_info is not None else False
-        iter_type             = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
-        is_training           = extra_info.get('is_training', True)            if extra_info is not None else True
-        capture_distill_attn  = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
+        use_layerwise_context       = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
+        iter_type                   = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
+        is_training                 = extra_info.get('is_training', True)            if extra_info is not None else True
+        capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         use_conv_attn_kernel_size   = extra_info.get('use_conv_attn_kernel_size',  None) if extra_info is not None else None
-        subj2conv_attn_layer_scale  = extra_info.get('subj2conv_attn_layer_scale', {})   if extra_info is not None else {}
         placeholder2indices         = extra_info.get('placeholder2indices', None)        if extra_info is not None else None
-        img_mask              = extra_info.get('img_mask', None)               if extra_info is not None else None
-        emb_v_mixer           = extra_info.get('emb_v_mixer', None)            if extra_info is not None else None
-        emb_k_mixer           = extra_info.get('emb_k_mixer', None)            if extra_info is not None else None
-        emb_v_layers_cls_mix_scales = extra_info.get('emb_v_layers_cls_mix_scales', None)   if extra_info is not None else None
-        emb_k_layers_cls_mix_scales = extra_info.get('emb_k_layers_cls_mix_scales', None)   if extra_info is not None else None
+        img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
         compel_cfg_weight_level_range   = extra_info.get('compel_cfg_weight_level_range', None) if extra_info is not None else None
         apply_compel_cfg_prob       = extra_info.get('apply_compel_cfg_prob', 0.5)   if extra_info is not None else 0.5
         empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
-        debug_attn            = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
+        debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
         B = x.shape[0]
 
@@ -873,9 +864,8 @@ class UNetModel(nn.Module):
             # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
             context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
 
-        # If use_ada_context, return the average of static and ada contexts.
-        # Otherwise, return the static context.
-        def get_layer_context(layer_idx, layer_attn_components):
+        # Return the static context.
+        def get_layer_context(layer_idx):
             # print(h.shape)
             if not use_layerwise_context:
                 return context, None, None
@@ -902,88 +892,7 @@ class UNetModel(nn.Module):
             else:
                 layer_static_context_k = layer_static_context_v = layer_static_context
 
-            if use_ada_context and not disable_ada_emb:
-                ada_embedder   = extra_info['ada_embedder']
-                layer_attn_components['layer_static_prompt_embs'] = layer_static_context_v
-                # emb: time embedding. h: features from the previous layer.
-                # context_in: ['an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
-                #              'an illustration of a dirty z, , ,  swimming in the ocean, with backlight', 
-                #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight', 
-                #              'an illustration of a dirty cat, , ,  swimming in the ocean, with backlight']
-                # The 1st and 2nd, and 3rd and 4th prompts are the same, if it's a do_teacher_filter iteration.
-                layer_ada_context, ada_emb_weight, ada_subj_attn_dict \
-                    = ada_embedder(context_in, layer_idx, layer_attn_components, emb)
-                static_emb_weight = 1 - ada_emb_weight
-
-                # If static context is expanded by doing prompt mixing,
-                # we need to duplicate layer_ada_context along dim 1 (tokens dim) to match the token number.
-                # 'mix_' in iter_type: could be "mix_hijk" (training or inference).
-                if iter_type == 'mix_hijk':
-                    if layer_ada_context.shape[1] != layer_static_context.shape[1] // 2:
-                        breakpoint()
-                    # iter_type == 'mix_hijk'. layer_static_context has been split into v and k above.
-                    # The second half of a mix_hijk batch is always the mix instances,
-                    # even for twin comp sets.
-                    subj_layer_ada_context, cls_layer_ada_context = layer_ada_context.chunk(2)
-                    # In ddpm, distribute_embedding_to_M_tokens_by_dict() is applied on a text embedding whose 1st dim is the 16 layers.
-                    # Here, the 1st dim of cls_layer_ada_context is the batch.
-                    # But we can still use distribute_embedding_to_M_tokens_by_dict() without special processing, since
-                    # in both cases, the 2nd dim is the token dim, so distribute_embedding_to_M_tokens_by_dict() works in both cases.
-                    # cls_layer_ada_context: [2, 77, 768]. subj_indices_N: [6, 7, 8, 9, 6, 7, 8, 9]. 
-                    # Four embeddings (6,7,8,9) for each token.
-                    # If uncond (null) condition is active, then placeholder2indices[k] = None.
-                    cls_layer_ada_context = distribute_embedding_to_M_tokens_by_dict(cls_layer_ada_context, placeholder2indices)
-                    if emb_v_mixer is not None:
-                        # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
-                        # emb_v_cls_mix_scale: [2, 1]
-                        emb_v_cls_mix_scale   = emb_v_layers_cls_mix_scales[:, [emb_idx]]
-                        # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768]
-                        # emb_v_mixer is a partial function that implies mix_indices=all_subj_indices_1b.                            
-                        mix_layer_ada_context_v = emb_v_mixer(cls_layer_ada_context, subj_layer_ada_context, 
-                                                              c1_mix_scale=emb_v_cls_mix_scale)
-                    else:
-                        mix_layer_ada_context_v = cls_layer_ada_context
-                        emb_v_cls_mix_scale = 0
-                            
-                    layer_ada_context_v = torch.cat([subj_layer_ada_context, mix_layer_ada_context_v], dim=0)
-                    # layer_static_context_v, layer_ada_context_v: [2, 77, 768]
-                    # layer_hyb_context_v: hybrid (static and ada) layer context 
-                    # fed to the current UNet layer, [2, 77, 768]
-                    layer_hyb_context_v = layer_static_context_v * static_emb_weight \
-                                           + layer_ada_context_v * ada_emb_weight
-
-                    if emb_k_mixer is not None:
-                        # Mix subj ada emb into mix ada emb, in the same way as to static embeddings.
-                        # emb_v_cls_mix_scale: [2, 1]
-                        emb_k_cls_mix_scale   = emb_k_layers_cls_mix_scales[:, [emb_idx]]
-                        # subj_layer_ada_context, cls_layer_ada_context: [2, 77, 768].
-                        # emb_v_mixer is a partial function that implies mix_indices=all_subj_indices_1b.
-                        mix_layer_ada_context_k = emb_k_mixer(cls_layer_ada_context, subj_layer_ada_context, 
-                                                              c1_mix_scale=emb_k_cls_mix_scale)
-                    else:
-                        mix_layer_ada_context_k = cls_layer_ada_context 
-                        emb_k_cls_mix_scale = 0
-
-                    layer_ada_context_k = torch.cat([subj_layer_ada_context, mix_layer_ada_context_k], dim=0)
-
-                    # Replace layer_static_context with layer_static_context_k.
-                    layer_hyb_context_k = layer_static_context_k * static_emb_weight \
-                                           + layer_ada_context_k * ada_emb_weight
-                    
-                    # Pass both embeddings for hijacking the key of layer_hyb_context_v by layer_context_k.
-                    layer_context = (layer_hyb_context_v, layer_hyb_context_k)
-                else:
-                    # normal_recon iters. Only one copy of k/v.
-                    layer_hyb_context = layer_static_context * static_emb_weight \
-                                         + layer_ada_context * ada_emb_weight
-
-                    # Both the key and the value are layer_hyb_context. Only provide one.
-                    layer_context = layer_hyb_context
-
-            # Not use_ada_context.
-            else:
-                layer_context = (layer_static_context_v, layer_static_context_k)
-                ada_subj_attn_dict = None
+            layer_context = (layer_static_context_v, layer_static_context_k)
 
             if apply_compel_cfg_prob > 0:
                 # layer_context could be a tensor or a tuple of tensors.
@@ -1007,21 +916,19 @@ class UNetModel(nn.Module):
                 
             # placeholder2indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return placeholder2indices to cross attention layers for conv attn computation.
-            return layer_context, ada_subj_attn_dict, placeholder2indices
+            return layer_context, placeholder2indices
 
         use_conv_attn_kernel_sizes = np.ones(16, dtype=int) * use_conv_attn_kernel_size
-        # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
-        # But disable conv attn on layers 6-10, i.e., 12, 16, 17, 18, 19, 
-        # by setting the kernel size as 1 (don't set to -1, as the conv_attn_layerwise_scales 
-        # are still helpful for these layers. Setting to -1 will not do learnable attention scaling).
-        # This is based on the learned conv_attn_layerwise_scales, 
-        # these layers don't like 3x3 conv attn (conv_attn_layerwise_scales are driven to 0.5~0.7).
-        # Probably because the feature maps are too small (8x8 - 32x32), and a 3x3 conv attn head
-        # takes up too much space.
-        use_conv_attn_kernel_sizes[6:11] = 1
-
-        shift_attn_maps_for_diff_embs = np.ones(16, dtype=bool)
-        # shift_attn_maps_for_diff_embs[6:11] = False
+        if use_conv_attn_kernel_size > 0:
+            # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
+            # But disable conv attn on layers 6-10, i.e., 12, 16, 17, 18, 19, 
+            # by setting the kernel size as 1 (don't set to -1, as the conv_attn_layerwise_scales 
+            # are still helpful for these layers. Setting to -1 will not do learnable attention scaling).
+            # This is based on the learned conv_attn_layerwise_scales, 
+            # these layers don't like 3x3 conv attn (conv_attn_layerwise_scales are driven to 0.5~0.7).
+            # Probably because the feature maps are too small (8x8 - 32x32), and a 3x3 conv attn head
+            # takes up too much space.
+            use_conv_attn_kernel_sizes[6:11] = 1
 
         # ca_layer_indices = None: Apply conv attn on all layers. 
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
@@ -1029,9 +936,6 @@ class UNetModel(nn.Module):
         ca_flags_stack = []
         old_ca_flags, _ = \
             self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size:layerwise': use_conv_attn_kernel_sizes,
-                                                          'shift_attn_maps_for_diff_embs:layerwise': shift_attn_maps_for_diff_embs,
-                                                          'subj2conv_attn_layer_scale:layerwise-dict':
-                                                             subj2conv_attn_layer_scale,
                                                           'is_training': is_training },
                                        ca_layer_indices = None )
             

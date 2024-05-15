@@ -25,7 +25,6 @@ model:
     unfreeze_model: True
     model_lr: 1.0e-7
     use_layerwise_embedding: False
-    use_ada_embedding: False
     scheduler_config:
       target: ldm.lr_scheduler.LambdaWarmUpCosineScheduler
       params:

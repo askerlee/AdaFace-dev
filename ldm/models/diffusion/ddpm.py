@@ -107,10 +107,8 @@ class DDPM(pl.LightningModule):
                  learn_logvar=False,
                  logvar_init=0.,
                  use_layerwise_embedding=False,
-                 use_ada_embedding=False,
                  composition_regs_iter_gap=3,
                  static_embedding_reg_weight=0.,
-                 ada_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
                  padding_bg_fg_embs_align_loss_weight=0.,
                  subj_comp_key_ortho_loss_weight=0.,
@@ -120,7 +118,6 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 fg_bg_token_emb_ortho_loss_weight=0.,
                  compel_cfg_weight_level_range=[2,2],
                  apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
@@ -155,11 +152,8 @@ class DDPM(pl.LightningModule):
         self.use_layerwise_embedding = use_layerwise_embedding
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
 
-        self.use_ada_embedding = (use_layerwise_embedding and use_ada_embedding)
-
         self.do_zero_shot                = do_zero_shot
         self.static_embedding_reg_weight = static_embedding_reg_weight
-        self.ada_embedding_reg_weight    = ada_embedding_reg_weight
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
@@ -171,7 +165,6 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.fg_bg_token_emb_ortho_loss_weight      = fg_bg_token_emb_ortho_loss_weight
         # type(compel_cfg_weight_level_range) = ListConfig. So convert it to list.
         self.compel_cfg_weight_level_range          = list(compel_cfg_weight_level_range) if compel_cfg_weight_level_range is not None else None
         self.empty_context                          = None
@@ -904,13 +897,8 @@ class LatentDiffusion(DDPM):
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             src_placeholders = config.params.get("src_placeholders", None)
-            loaded_embedder_components   = config.params.get("loaded_embedder_components", None)
-            frozen_placeholder_set       = config.params.get("frozen_placeholder_set", None)
-            frozen_embedder_components   = config.params.get("frozen_embedder_components", None)
             model.load(config.params.embedding_manager_ckpt,
-                       src_placeholders, loaded_embedder_components,
-                       frozen_placeholder_set, frozen_embedder_components,
-                       self.extend_prompt2token_proj_attention_multiplier,
+                       src_placeholders, self.extend_prompt2token_proj_attention_multiplier,
                        self.load_old_embman_ckpt)
 
         return model
@@ -1078,14 +1066,9 @@ class LatentDiffusion(DDPM):
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
-                                'use_ada_context':               self.use_ada_embedding,
-                                'disable_ada_emb':               self.embedding_manager.get_ada_emb_weight(do_perturb=False) == 0,
                                 'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
                                 'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                                 'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
-                                # subj2conv_attn_layer_scale: a dict of subject strings, whose values are lists of 16 tensor scalars, 
-                                # used to scale conv attention at each CA layer.
-                                'subj2conv_attn_layer_scale':    self.embedding_manager.get_subj2conv_attn_layer_scale(),
                                 'is_training':                   self.embedding_manager.training,
                                 'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
                                 'apply_compel_cfg_prob':         apply_compel_cfg_prob,
@@ -1093,19 +1076,6 @@ class LatentDiffusion(DDPM):
                                 # Will set to True in p_losses() if in compositional iterations.
                                 'capture_distill_attn':          False,
                              }
-
-                if self.use_ada_embedding:
-                    ada_embedder = self.get_layer_ada_conditioning
-                    # Initialize the ada embedding cache, so that the subsequent calls to 
-                    # self.get_layer_ada_embedding() will store the ada embedding 
-                    # for each layer into the cache. 
-                    # It also updates the EMA of ada embeddings.
-                    # Since get_learned_conditioning() is always called before the loss computations,
-                    # it won't cause computation graph errors.
-                    # This call is redundant, as the cache has already been cleared in p_losses() 
-                    # after finishing each iteration.
-                    self.embedding_manager.clear_ada_prompt_embeddings_cache()
-                    extra_info['ada_embedder'] = ada_embedder
 
                 c = (static_prompt_embedding, cond_in, extra_info)
             else:
@@ -1115,47 +1085,6 @@ class LatentDiffusion(DDPM):
             c = getattr(self.cond_stage_model, self.cond_stage_forward)(cond_in)
 
         return c
-
-    # get_layer_ada_conditioning() is a callback function called iteratively by each layer in UNet.
-    # It returns the conditioning embedding (ada embedding & other token embeddings -> clip encoder) 
-    # for the current layer to UNet.
-    def get_layer_ada_conditioning(self, c_in, layer_idx, layer_attn_components, time_emb):
-        # We don't want to mess with the pipeline of cond_stage_model.encode(), so we pass
-        # c_in, layer_idx and layer_infeat directly to embedding_manager. They will be used implicitly
-        # when embedding_manager is called within cond_stage_model.encode().
-        self.embedding_manager.cache_layer_features_for_ada(layer_idx, layer_attn_components, time_emb)
-        # DO NOT call sample_last_layers_skip_weights() here, to make the ada embeddings are generated with 
-        # CLIP skip weights consistent with the static embeddings.
-        ada_prompt_embedding    = self.cond_stage_model.encode(c_in, embedding_manager=self.embedding_manager)
-        #print('ada', ada_prompt_embedding.abs().max())
-        emb_global_scales_dict  = self.embedding_manager.get_emb_global_scales_dict(regen=False)
-        # The scales of ada embeddings are fixed here.
-        # The scales of static subject embeddings are fixed in get_learned_conditioning().
-        # NOTE: If self.do_zero_shot, we shouldn't fix_emb_scale(). But since ada embeddings are disabled
-        # if do_zero_shot, we don't need to worry about this.
-        for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
-            emb_extra_global_scale = emb_global_scales_dict[placeholder]
-            if placeholder in self.embedding_manager.background_string_dict:
-                emb_extra_global_scale *= self.embedding_manager.background_extra_global_scale
-
-            ada_prompt_embedding = fix_emb_scale(ada_prompt_embedding, placeholder_indices,
-                                                  extra_scale=emb_extra_global_scale)
-            
-        # It doesn't matter either merge_cls_token_embeddings() first or fix_emb_scale first().
-        # If cls_delta_string_indices is not empty, then it must be a compositional 
-        # distillation iteration, and placeholder_indices only contains the indices of the subject 
-        # instances. Whereas cls_delta_string_indices only contains the indices of the
-        # class (mix) instances. Switching their order doesn't affect the results.
-        ada_prompt_embedding = merge_cls_token_embeddings(ada_prompt_embedding, 
-                                                          self.embedding_manager.cls_delta_string_indices,
-                                                          self.embedding_manager.subj_name_to_cls_delta_token_weights)
-                
-        ada_subj_attn_dict = self.embedding_manager.get_ada_subj_attn_dict()
-
-        # Cache the computed ada embedding of the current layer for delta loss computation.
-        # Before this call, clear_ada_prompt_embeddings_cache() should have been called somewhere.
-        self.embedding_manager.cache_ada_prompt_embedding(layer_idx, ada_prompt_embedding)
-        return ada_prompt_embedding, self.embedding_manager.get_ada_emb_weight(), ada_subj_attn_dict
 
     def meshgrid(self, h, w):
         y = torch.arange(0, h).view(h, 1, 1).repeat(1, w, 1)
@@ -2573,11 +2502,6 @@ class LatentDiffusion(DDPM):
         with torch.set_grad_enabled(unet_has_grad):
             model_output = self.apply_model(x_noisy, t, cond)
 
-        # Save ada embeddings generated during apply_model(), to be used in delta loss. 
-        # Otherwise it will be overwritten by uncond denoising.
-        # ada_prompt_embeddings: [4, 16, 77, 768] or None, if subj token doesn't appear in the prompts.
-        ada_prompt_embeddings = self.embedding_manager.get_cached_ada_prompt_embeddings_as_tensor()
-
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
         if do_pixel_recon:
@@ -2612,7 +2536,7 @@ class LatentDiffusion(DDPM):
         else:
             x_recon = None
         
-        return model_output, x_recon, ada_prompt_embeddings
+        return model_output, x_recon
 
     # Release part of the computation graph on unused instances to save RAM.
     def release_plosses_intermediates(self, local_vars):
@@ -2627,8 +2551,7 @@ class LatentDiffusion(DDPM):
 
     # t: steps.
     # cond: (c_static_emb, c_in, extra_info). c_in is the textual prompts. 
-    # extra_info: a dict that contains 'ada_embedder' and other fields. 
-    # ada_embedder: a function to convert c_in to ada embeddings.
+    # extra_info: a dict that contains various fields. 
     # ANCHOR[id=p_losses]
     def p_losses(self, x_start, cond, t, noise=None):
         # If noise is not None, then use the provided noise.
@@ -2984,7 +2907,7 @@ class LatentDiffusion(DDPM):
                      'uncond_context': uncond_context }
         
         if not self.iter_flags['use_arc2face_as_target']:
-            model_output, x_recon, ada_embeddings = \
+            model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                     unet_has_grad=not self.iter_flags['do_teacher_filter'], 
@@ -3079,7 +3002,7 @@ class LatentDiffusion(DDPM):
                         # Here pred_x0 is used as x_start.
                         # emb_man_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
                         # and the 'image_mask' is also for a half-batch.
-                        model_output2, x_recon2, ada_embeddings2 = \
+                        model_output2, x_recon2 = \
                             self.guided_denoise(pred_x0, noise2, t2, cond, 
                                                 emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                                 unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
@@ -3146,7 +3069,6 @@ class LatentDiffusion(DDPM):
                     # Cannot release the intermediates outside the "if" branch, as the intermediates
                     # will be used in a reuse_init_conds iter.
                     self.release_plosses_intermediates(locals())
-                    self.embedding_manager.clear_ada_prompt_embeddings_cache()
 
                     # Choose the x_start, noise, and t of the better candidate. 
                     # Repeat 4 times and use them as the condition to do denoising again.
@@ -3226,7 +3148,7 @@ class LatentDiffusion(DDPM):
                     # do classifier-free guidance, so that x_recon are better instances
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
-                    model_output, x_recon, ada_embeddings = \
+                    model_output, x_recon = \
                         self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
                                             emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                             unet_has_grad=True, 
@@ -3281,20 +3203,6 @@ class LatentDiffusion(DDPM):
                         # Delete a random element in the dict to save RAM.
                         del self.cached_inits[random.choice(list(self.cached_inits.keys()))]
                         
-                elif not self.iter_flags['is_teachable']:
-                    # If not is_teachable, do not do distillation this time 
-                    # (since both instances are not good teachers), 
-                    # NOTE: thus we can only compute emb reg and delta loss.
-
-                    # In an self.iter_flags['do_teacher_filter'], and not teachable instances are found.
-                    # guided_denoise() above is done on twin comp instances.
-                    # ada_embeddings = None => loss_ada_delta = 0.
-                    if self.iter_flags['do_teacher_filter']:
-                        ada_embeddings = None
-                    # Otherwise, it's an reuse_init_conds iter, and no teachable instances are found.
-                    # We've computed the ada embeddings for the 4-type instances, 
-                    # so just use the existing ada_embeddings (but avoid distillation).
-
                 # Otherwise, it's an reuse_init_conds iter, and a teachable instance is found.
                 # Do nothing.
                 else:
@@ -3330,64 +3238,29 @@ class LatentDiffusion(DDPM):
         
         # DISABLED: static and ada embedding reg losses are disabled when do_zero_shot. 
         # In this case they are not monitored.
-        if self.static_embedding_reg_weight + self.ada_embedding_reg_weight > 0:
+        if self.static_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
             if self.use_layerwise_embedding:
-                loss_static_emb_reg, loss_ada_emb_reg = loss_emb_reg
+                loss_static_emb_reg = loss_emb_reg
             else:
                 loss_static_emb_reg = loss_emb_reg
-                loss_ada_emb_reg    = 0
 
             if loss_static_emb_reg > 0:
                 loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach().item() })
-            if loss_ada_emb_reg > 0:
-                loss_dict.update({f'{prefix}/loss_ada_emb_reg':    loss_ada_emb_reg.mean().detach().item() })
 
-            ada_embedding_reg_scale = 0.1 if self.do_zero_shot else 1
-            loss_emb_reg = loss_static_emb_reg * self.static_embedding_reg_weight \
-                            + loss_ada_emb_reg  * self.ada_embedding_reg_weight * ada_embedding_reg_scale
-
+            loss_emb_reg = loss_static_emb_reg * self.static_embedding_reg_weight
             loss += loss_emb_reg * emb_reg_loss_scale
 
-        # DISABLED: fg_bg_token_emb_ortho loss is DISABLED if do_zero_shot, as it may hurt performance.
-        if self.fg_bg_token_emb_ortho_loss_weight > 0:
-            # If use_background_token, then loss_fg_bg_token_emb_ortho is nonzero.
-            # Otherwise, loss_fg_bg_token_emb_ortho is zero.
-            loss_fg_bg_token_emb_ortho = \
-                self.embedding_manager.calc_fg_bg_token_embs_ortho_loss(ada_grad_scale=0.1, fg_grad_scale=0.5)
-            if loss_fg_bg_token_emb_ortho > 0:
-                loss_dict.update({f'{prefix}/fg_bg_token_emb_ortho': loss_fg_bg_token_emb_ortho.mean().detach().item() })
-
-            loss += loss_fg_bg_token_emb_ortho * self.fg_bg_token_emb_ortho_loss_weight
-
         if self.iter_flags['do_static_prompt_delta_reg']:
-            # do_ada_prompt_delta_reg controls whether to do ada comp delta reg here.
-            loss_static_prompt_delta,  loss_ada_prompt_delta \
-                = calc_prompt_emb_delta_loss( 
-                        # 'c_static_emb_4b' is the staticc embedding before mixing.
-                        # ada_embeddings is the ada embedding after mixing.
-                        extra_info['c_static_emb_4b'], ada_embeddings,
-                        extra_info['prompt_emb_mask'],
-                        self.iter_flags['do_ada_prompt_delta_reg'],
-                    )
-
-            # The cached ada prompt embeddings are useless now, release them.
-            self.embedding_manager.clear_ada_prompt_embeddings_cache()
+            # 'c_static_emb_4b' is the static embedding before mixing.
+            loss_static_prompt_delta = calc_prompt_emb_delta_loss( 
+                        extra_info['c_static_emb_4b'], extra_info['prompt_emb_mask'])
 
             loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach().item() })
-            if loss_ada_prompt_delta != 0:
-                loss_dict.update({f'{prefix}/ada_prompt_delta':     loss_ada_prompt_delta.mean().detach().item() })
 
-            # loss_ada_prompt_delta is only applied every composition_regs_iter_gap iterations. 
-            # So it should be scaled up proportionally to composition_regs_iter_gap. 
-            # Divide it by 2 to reduce the proportion of ada emb loss relative to 
-            # loss_static_prompt_delta in the total loss.
-            ada_comp_loss_boost_ratio = self.composition_regs_iter_gap / 2
-            
             # prompt_emb_delta_loss_scale == 0.1 if do_zero_shot and use Prodigy. prompt_emb_delta_reg_weight is 2e-4.
             # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.
-            loss += (loss_static_prompt_delta + loss_ada_prompt_delta * ada_comp_loss_boost_ratio) \
-                     * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
+            loss += loss_static_prompt_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
         
             # DISABLED: padding_bg_fg_embs_align_loss_weight == 0. When it's disabled, we don't monitor loss_padding_subj_embs_align.
             if self.padding_bg_fg_embs_align_loss_weight > 0:
@@ -3407,16 +3280,15 @@ class LatentDiffusion(DDPM):
                 else:
                     subj_indices        = all_subj_indices_2b
                     bg_indices          = all_bg_indices_2b
-                    # Both static_embeddings and ada_embeddings are 4-type embeddings.
+                    # static_embeddings is 4-type embeddings.
                     static_embeddings   = extra_info['c_static_emb_4b']
                     # BLOCK_SIZE = 1, SSB_SIZE = 2.
                     SSB_SIZE = 2 * BLOCK_SIZE
 
                 loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align \
-                    = self.calc_padding_embs_align_loss(static_embeddings, ada_embeddings,
+                    = self.calc_padding_embs_align_loss(static_embeddings,
                                                         extra_info['prompt_emb_mask'],
                                                         subj_indices, bg_indices, SSB_SIZE, 
-                                                        extra_info['iter_type'],
                                                         self.iter_flags['is_compos_iter'])
 
                 if loss_padding_subj_embs_align != 0:
@@ -4870,9 +4742,9 @@ class LatentDiffusion(DDPM):
     # The subject sub-batch size SSB_SIZE = 3 (1 * BLOCK_SIZE, BLOCK_SIZE=3).
     # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 (2 * BLOCK_SIZE, BLOCK_SIZE=1).
     # (subj-single and subj-comp blocks).
-    def calc_padding_embs_align_loss(self, static_prompt_embeddings, ada_prompt_embeddings, 
+    def calc_padding_embs_align_loss(self, static_prompt_embeddings, 
                                      prompt_emb_mask, subj_indices, bg_indices,
-                                     SSB_SIZE, iter_type, is_compos_iter):
+                                     SSB_SIZE, is_compos_iter):
         # If do_normal_recon:
         # static_prompt_embeddings: [3, 16, 77, 768].
         # ada_prompt_embeddings:    [3, 16, 77, 768].
@@ -4881,14 +4753,7 @@ class LatentDiffusion(DDPM):
         # static_prompt_embeddings: [4, 16, 77, 768].
         # ada_prompt_embeddings:    [4, 16, 77, 768].
         # prompt_emb_mask:          [4, 77,   1].
-
-        if ada_prompt_embeddings is not None:
-            # During training, ada_emb_weight is randomly drawn from [0.4, 0.7].
-            ada_emb_weight = self.embedding_manager.get_ada_emb_weight(do_perturb=False) 
-            cond_prompt_embeddings = static_prompt_embeddings * (1 - ada_emb_weight) \
-                                      + ada_prompt_embeddings * ada_emb_weight
-        else:
-            cond_prompt_embeddings = static_prompt_embeddings
+        cond_prompt_embeddings = static_prompt_embeddings
         
         if not is_compos_iter:
             cond_prompt_embeddings_delta = cond_prompt_embeddings

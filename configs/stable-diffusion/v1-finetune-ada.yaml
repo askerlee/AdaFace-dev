@@ -26,7 +26,6 @@ model:
     unfreeze_model: False
     model_lr: 0.0
     use_layerwise_embedding:    True
-    use_ada_embedding:          True
     use_fp_trick:               True
     # Apply BN/LN on cross-attn Q and out features for loss computation.
     normalize_ca_q_and_outfeat: True
@@ -37,8 +36,6 @@ model:
     arc2face_distill_iter_prob:         0.1
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     static_embedding_reg_weight:        0 #2e-5
-    # typical loss_ada_em_reg is ~5e-2, * weight -> 5e-5.
-    ada_embedding_reg_weight:           0 #1e-3
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:        2e-4
     padding_bg_fg_embs_align_loss_weight:     0 #2e-4 
@@ -53,7 +50,6 @@ model:
     fg_bg_complementary_loss_weight:    2e-4
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight:   5e-5
-    fg_bg_token_emb_ortho_loss_weight:  0 #1e-4
     # Push the prompt embeddings slightly away from the null prompt embedding.
     compel_cfg_weight_level_range:      [2, 2]
     # compel_cfg is disabled if doing zero-shot, even if the prob > 0.
@@ -101,11 +97,6 @@ model:
         num_vectors_per_subj_token: 9
         use_layerwise_embedding: True
         layerwise_lora_rank: 10
-        ada_emb_weight: 0.5
-        emb_ema_as_pooling_probe_weight: 0.5  # Should be the same as ada_emb_weight.
-        ada_uses_attn_pooler: True
-        attn_pooler_feat_reduction_ratio: 2
-        conv_attn_layerwise_scale_learnable: True
         training_begin_add_noise_std_range:  [ 0.02, 0.04 ]
         training_end_add_noise_std_range:    [ 0.02, 0.04 ]
         # probs for recon_iter and compos_distill_iter, respectively
@@ -113,13 +104,10 @@ model:
                                      'arc2face_distill_iter': 0,
                                      'compos_distill_iter': 0.4 }
         # Scale the background embeddings by this factor.
-        background_extra_global_scale:     1 #0.5
-        # Share this set of attn poolers when training multiple subjects simultaneously.
-        shared_placeholder_set:       'subj,bg'
-        shared_embedder_components:   'pooler,layer_coeff_maps'
-        embedding_manager_ckpt:       null
+        background_extra_global_scale:      1 #0.5
+        embedding_manager_ckpt:             null
         # Load the ada components from these placeholders in the checkpoint.
-        src_placeholders:             null
+        src_placeholders:                   null
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

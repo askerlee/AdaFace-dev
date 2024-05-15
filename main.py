@@ -216,16 +216,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--src_placeholders",
         type=str, nargs="?", const='1,1', default=None,
         help="Load the embedder components from these placeholders in the checkpoint")
-    parser.add_argument("--loaded_embedder_components",
-        type=str, default=None, 
-        help="Embedder components to be loaded from the checkpoint (candidates: pooler,layer_coeff_maps)")
-    parser.add_argument("--frozen_placeholder_set",
-        type=str, default=None,
-        help="Freeze the embedder components of this set of placeholders (candidates: subj,bg)")
-    parser.add_argument("--frozen_embedder_components",
-        type=str, default=None, 
-        help="Embedder components to be frozen after loading from the checkpoint (candidates: pooler,layer_coeff_maps)")
-
     parser.add_argument("--emb_reg_loss_scale",
         type=float, default=1,
         help="Scale of the pre-specified embedding regularization loss")
@@ -298,25 +288,13 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
         help="Layerwise lora rank")
-    parser.add_argument("--attn_pooler_feat_reduction_ratio",
-        type=float, default=argparse.SUPPRESS,
-        help="Feature reduction ratio adopted by the attention pooler")
-    
+
     parser.add_argument("--static_embedding_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Static embedding regularization weight")
-    parser.add_argument("--ada_embedding_reg_weight",
-        type=float, default=argparse.SUPPRESS,
-        help="Ada embedding regularization weight")
-        
-    parser.add_argument("--ada_emb_weight",
-        type=float, default=argparse.SUPPRESS,
-        help="Weight of ada embeddings (in contrast to static embeddings)")
-
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
-
     parser.add_argument("--padding_bg_fg_embs_align_loss_weight",
         type=float, default=argparse.SUPPRESS,
         help="Weight of the loss of padding and bg embeddings aligning with fg embeddings")
@@ -982,8 +960,6 @@ if __name__ == "__main__":
             zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
             zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-
-            config.model.params.personalization_config.params.emb_ema_as_pooling_probe_weight = 0
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
             config.model.params.personalization_config.params.zs_subj_has_prompt_translator = opt.zs_subj_has_prompt_translator
@@ -1013,8 +989,6 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'static_embedding_reg_weight'):
             config.model.params.static_embedding_reg_weight = opt.static_embedding_reg_weight
-        if hasattr(opt, 'ada_embedding_reg_weight'):
-            config.model.params.ada_embedding_reg_weight = opt.ada_embedding_reg_weight
 
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):
@@ -1059,13 +1033,6 @@ if __name__ == "__main__":
         # Personalization config
         config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
 
-        if hasattr(opt, 'attn_pooler_feat_reduction_ratio'):
-            config.model.params.personalization_config.params.attn_pooler_feat_reduction_ratio \
-                = opt.attn_pooler_feat_reduction_ratio
-            
-        if hasattr(opt, 'ada_emb_weight'):
-            config.model.params.personalization_config.params.ada_emb_weight = opt.ada_emb_weight
-
         if hasattr(opt, 'use_conv_attn_kernel_size') and opt.use_conv_attn_kernel_size > 0:
             K = opt.use_conv_attn_kernel_size
             assert opt.num_vectors_per_subj_token >= K * K, \
@@ -1074,10 +1041,7 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.use_conv_attn_kernel_size     = opt.use_conv_attn_kernel_size
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.src_placeholders              = opt.src_placeholders
-        config.model.params.personalization_config.params.loaded_embedder_components    = opt.loaded_embedder_components
-        config.model.params.personalization_config.params.frozen_placeholder_set        = opt.frozen_placeholder_set
-        config.model.params.personalization_config.params.frozen_embedder_components    = opt.frozen_embedder_components
-        config.model.params.personalization_config.params.emb_reg_loss_scale = opt.emb_reg_loss_scale
+        config.model.params.personalization_config.params.emb_reg_loss_scale            = opt.emb_reg_loss_scale
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])

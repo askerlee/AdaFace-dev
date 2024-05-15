@@ -195,10 +195,6 @@ def parse_args():
         type=str, default=None,
         help="One or more paths to pre-trained embedding manager checkpoints")
 
-    parser.add_argument("--ada_emb_weight",
-        type=float, default=-1,
-        help="Weight of adaptive embeddings (in contrast to static embeddings)")
-
     parser.add_argument(
         "--init_img_paths",
         type=str,
@@ -271,10 +267,6 @@ def parse_args():
                         type=int, default=None,
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
-
-    parser.add_argument("--emb_ema_as_pooling_probe",
-                        action="store_true", default=argparse.SUPPRESS,
-                        help="Use EMA embedding as the pooling probe")
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning")                    
@@ -436,12 +428,6 @@ def main(opt):
             if ckpt_num_vectors_per_subj_token != opt.num_vectors_per_subj_token:
                 print(f"WARN: Number of vectors per token mismatch: command line {opt.num_vectors_per_subj_token} != ckpt {ckpt_num_vectors_per_subj_token}.")
 
-        if hasattr(opt, 'emb_ema_as_pooling_probe'):
-            model.embedding_manager.set_emb_ema_as_pooling_probe(opt.emb_ema_as_pooling_probe)
-
-        if opt.ada_emb_weight != -1 and model.embedding_manager is not None:
-            model.embedding_manager.ada_emb_weight = opt.ada_emb_weight
-        
         if model.embedding_manager.extended_token_embeddings is not None:
             model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
                 extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
@@ -705,12 +691,6 @@ def main(opt):
                             shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                             # During inference, the batch size is *doubled*. 
                             # The first half contains negative samples, and the second half positive.
-                            # When ada embedding is used, c is a tuple of (cond, ada_embedder).
-                            # When both unconditional and conditional guidance are passed to ddim sampler, 
-                            # ada_embedder of the conditional guidance is applied on both 
-                            # unconditional and conditional embeddings within UNetModel.forward(). 
-                            # But since unconditional prompt doesn't contain the placeholder token,
-                            # ada_embedder won't change the unconditional embedding uc.
                             # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
                             samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
                                                             conditioning=c,

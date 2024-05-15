@@ -36,7 +36,6 @@ def generate(*args):
     opt.n_rows = args[15]
     opt.seed = args[16]
     opt.precision = args[17]
-    opt.ada_emb_weight = args[18]
     opt.mask_weight = 0.0
     opt.broad_class = args[19]
     opt.clip_last_layers_skip_weights = (args[20], args[21])
@@ -72,7 +71,7 @@ def generate(*args):
     
 
 with gr.Blocks() as demo:
-    gr.Markdown("# AdaPrompt")
+    gr.Markdown("# AdaFace")
     model_subfolders = os.listdir('models/')
     model_entries = [ os.path.join("models", model_subfolder, model_filename) for model_subfolder in model_subfolders for model_filename in os.listdir('models/' + model_subfolder) ]
     print(model_entries)
@@ -136,7 +135,6 @@ with gr.Blocks() as demo:
                 with gr.Row():
                     precision = gr.Dropdown(['autocast', 'float32', 'float64'], label='Precision',value='autocast')
                 with gr.Row() as row6:
-                    ada_emb_weight = gr.Slider(minimum=-1, maximum=10, value=0.5, label="Ada Emb Weight", step=0.1)
                     # mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
                     broad_class = gr.Slider(minimum=0, maximum=10, value=0, label="Broad Class", step=1)
                     clip_last_layer_skip_weight1 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Last Layer Skip Weight", step=0.1)
@@ -163,7 +161,7 @@ with gr.Blocks() as demo:
                 button1.click(generate, outputs=output, inputs=[ \
                     prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
                     embedding_paths, H, W, bs, n_repeat, n_rows, seed, precision, \
-                    ada_emb_weight, broad_class, \
+                    broad_class, \
                     clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plms, fixed_code, no_preview])
                 
                 # button2.click(close)
