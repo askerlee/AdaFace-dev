@@ -249,8 +249,8 @@ class CrossAttention(nn.Module):
             self.cached_activations['q'] = rearrange(q,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
             # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
-            self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
-            self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
             self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
             self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
 

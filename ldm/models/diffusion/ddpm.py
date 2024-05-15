@@ -110,7 +110,6 @@ class DDPM(pl.LightningModule):
                  composition_regs_iter_gap=3,
                  static_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
-                 padding_bg_fg_embs_align_loss_weight=0.,
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
@@ -120,7 +119,7 @@ class DDPM(pl.LightningModule):
                  apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=True,
-                 num_candidate_teachers=4,
+                 num_candidate_teachers=2,
                  use_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -155,7 +154,6 @@ class DDPM(pl.LightningModule):
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
         self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
-        self.padding_bg_fg_embs_align_loss_weight     = padding_bg_fg_embs_align_loss_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
@@ -3257,55 +3255,6 @@ class LatentDiffusion(DDPM):
             # prompt_emb_delta_loss_scale == 0.1 if do_zero_shot and use Prodigy. prompt_emb_delta_reg_weight is 2e-4.
             # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.
             loss += loss_static_prompt_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
-        
-            # DISABLED: padding_bg_fg_embs_align_loss_weight == 0. When it's disabled, we don't monitor loss_padding_subj_embs_align.
-            if self.padding_bg_fg_embs_align_loss_weight > 0:
-                if self.iter_flags['do_normal_recon']:
-                    subj_indices        = all_subj_indices_1b
-                    bg_indices          = all_bg_indices_1b
-                    # c_static_emb_1b is generated from batch['captions']. 
-                    # Do not use c_static_emb_4b, which corresponds to the 4-type prompts.
-                    static_embeddings   = extra_info['c_static_emb_1b']
-                    # SSB_SIZE: subject sub-batch size.
-                    # If do_normal_recon, then both instances are subject instances. 
-                    # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
-                    # If is_compos_iter, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
-                    # (subj-single and subj-comp instances).
-                    # BLOCK_SIZE = 1, SSB_SIZE = 1.
-                    SSB_SIZE = BLOCK_SIZE
-                else:
-                    subj_indices        = all_subj_indices_2b
-                    bg_indices          = all_bg_indices_2b
-                    # static_embeddings is 4-type embeddings.
-                    static_embeddings   = extra_info['c_static_emb_4b']
-                    # BLOCK_SIZE = 1, SSB_SIZE = 2.
-                    SSB_SIZE = 2 * BLOCK_SIZE
-
-                loss_padding_subj_embs_align, loss_padding_cls_embs_align, loss_bg_subj_embs_align \
-                    = self.calc_padding_embs_align_loss(static_embeddings,
-                                                        extra_info['prompt_emb_mask'],
-                                                        subj_indices, bg_indices, SSB_SIZE, 
-                                                        self.iter_flags['is_compos_iter'])
-
-                if loss_padding_subj_embs_align != 0:
-                    loss_dict.update({f'{prefix}/padding_subj_embs_align': loss_padding_subj_embs_align.mean().detach().item() })
-                # Monitor loss_padding_cls_embs_align, viewed as a reference to loss_padding_subj_embs_align.
-                # We don't optimize loss_padding_cls_embs_align.
-                if loss_padding_cls_embs_align != 0:
-                    loss_dict.update({f'{prefix}/padding_cls_embs_align': loss_padding_cls_embs_align.mean().detach().item() })
-                if loss_bg_subj_embs_align != 0:
-                    loss_dict.update({f'{prefix}/bg_subj_embs_align': loss_bg_subj_embs_align.mean().detach().item() })
-                
-                padding_subj_embs_align_loss_scale = 0.2
-                bg_subj_embs_align_loss_scale  = 0.1
-                # NOTE: loss_padding_cls_embs_align is not optimized, but we still add it with scale 0 
-                # to release the computation graph.
-                loss_padding_bg_fg_embs_align = (loss_padding_subj_embs_align * padding_subj_embs_align_loss_scale \
-                                                 + loss_bg_subj_embs_align   * bg_subj_embs_align_loss_scale \
-                                                 + loss_padding_cls_embs_align * 0)
-
-                # padding_bg_fg_embs_align_loss_weight == 0, i.e., padding_embs_align_loss and bg_subj_embs_align_loss are disabled.
-                loss += loss_padding_bg_fg_embs_align * self.padding_bg_fg_embs_align_loss_weight
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
@@ -4694,6 +4643,7 @@ class LatentDiffusion(DDPM):
                loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
                
 
+    # DISABLED: No obvious improvement.
     # SSB_SIZE: subject sub-batch size.
     # If do_normal_recon, then both instances are subject instances. 
     # The subject sub-batch size SSB_SIZE = 3 (1 * BLOCK_SIZE, BLOCK_SIZE=3).
