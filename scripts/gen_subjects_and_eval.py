@@ -58,7 +58,7 @@ def parse_args():
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
 
-    parser.add_argument("--prompt_set", type=str, default='all', choices=['dreambench', 'community'],
+    parser.add_argument("--prompt_set", type=str, default='all', choices=['dreambench', 'community', 'all'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     
     parser.add_argument("--prompt", type=str, default=None,

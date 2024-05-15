@@ -403,7 +403,7 @@ def parse_range_str(range_str, fix_1_offset=True):
             result.append(a)
     return result
 
-# set_name: 'dreambench' or 'community'. 
+# set_name: 'dreambench', 'community', 'all'.
 # 'hard' means the set_name of prompts based on which it's hard to generate images.
 def get_prompt_list(subject_string, z_prefix, z_suffix, background_string, 
                     class_token, class_long_token, 
@@ -465,15 +465,18 @@ def get_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     'a {0} purple {1}{2}',
     'a {0} shiny {1}{2}',                                               # 20
     'a {0} wet {1}{2}',
-    'a {0} cube shaped {1}{2}'
     ]
 
     # humans/animals and cartoon characters.
     if broad_class == 1 or broad_class == 2:
         if set_name == 'community':
             orig_prompt_list = community_prompt_list
-        else:
+        elif set_name == 'dreambench':
             orig_prompt_list = animal_prompt_list
+        elif set_name == 'all':
+            orig_prompt_list = animal_prompt_list + community_prompt_list
+        else:
+            breakpoint()
     else:
         # object.
         orig_prompt_list = object_prompt_list
