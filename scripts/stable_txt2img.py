@@ -284,7 +284,7 @@ def parse_args():
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
-                        help="Reference image for zero-shot learning")
+                        help="Reference image(s) for zero-shot learning. Each item could be a path to an image or a directory.")
     
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
@@ -394,7 +394,13 @@ def main(opt):
 
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
-            ref_images = [ np.array(Image.open(ref_image)) for ref_image in opt.ref_images ]
+            ref_image_paths = []
+            for ref_image in opt.ref_images:
+                if os.path.isdir(ref_image):
+                    ref_image_paths.extend([ os.path.join(ref_image, f) for f in os.listdir(ref_image) ])
+                else:
+                    ref_image_paths.append(ref_image)
+            ref_images = [ np.array(Image.open(ref_image)) for ref_image in ref_image_paths ]
             zs_clip_type = 'openai'
             # image_emb_dim is not the output dim but the second last layer dim. 
             # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
