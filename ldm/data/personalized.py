@@ -251,7 +251,7 @@ class PersonalizedBase(Dataset):
 
             # image_paths and mask_paths are full paths.
             all_file_paths      = [os.path.join(subj_root, file_path) for file_path in all_filenames]
-            all_file_paths      = set(all_file_paths)
+            all_file_path_set   = set(all_file_paths)
             image_paths         = list(filter(lambda x: filter_non_image(x) and os.path.splitext(x)[1].lower() != '.txt', all_file_paths))
             # Limit the number of images for each subject to 100, to speed up loading.
             if (not base_folder_is_mix_subj) and max_num_images_per_subject > 0:
@@ -263,10 +263,10 @@ class PersonalizedBase(Dataset):
                 continue
 
             fg_mask_paths       = [ os.path.splitext(x)[0] + "_mask.png" for x in image_paths ]
-            fg_mask_paths       = list(map(lambda x: x if x in all_file_paths else None, fg_mask_paths))
+            fg_mask_paths       = list(map(lambda x: x if x in all_file_path_set else None, fg_mask_paths))
             num_valid_fg_masks  = sum([ 1 if x is not None else 0 for x in fg_mask_paths ])
             caption_paths       = [ os.path.splitext(x)[0] + ".txt" for x in image_paths ]
-            caption_paths       = list(map(lambda x: x if x in all_file_paths else None, caption_paths))
+            caption_paths       = list(map(lambda x: x if x in all_file_path_set else None, caption_paths))
             num_valid_captions  = sum([ 1 if x is not None else 0 for x in caption_paths ])
 
             self.subject_names.append(subject_name)

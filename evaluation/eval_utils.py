@@ -50,7 +50,7 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
         num_samples = -1
     else:
         sample_data_loader = PersonalizedBase(samples_dir, set_name='evaluation', size=256, max_num_images_per_subject=-1, flip_p=0.0)
-
+        
     sample_start_idx = 0 if num_samples == -1 else sample_data_loader.num_images - num_samples
     sample_range     = range(sample_start_idx, sample_data_loader.num_images)
     # sample_filenames = [sample_data_loader.image_paths[i] for i in sample_range]
@@ -59,7 +59,10 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     gt_images = [torch.from_numpy(gt_data_loader[i]["image"]).permute(2, 0, 1) for i in range(gt_data_loader.num_images)]
     gt_images = torch.stack(gt_images, axis=0)
     sample_images = [torch.from_numpy(sample_data_loader[i]["image"]).permute(2, 0, 1) for i in sample_range]
+    sample_image_paths = [sample_data_loader[i]["image_path"] for i in sample_range]
     sample_images = torch.stack(sample_images, axis=0)
+    #print(f"prompt: {prompt}")
+    #print("Sampel paths:", sample_image_paths)
 
     with torch.no_grad():
         sim_img, sim_text = clip_evator.evaluate(sample_images, gt_images, prompt)
