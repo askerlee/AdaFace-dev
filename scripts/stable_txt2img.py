@@ -352,6 +352,12 @@ def load_img(path, h, w):
     return 2.*image - 1.
 
 
+def filter_image(x):
+    x = x.lower()
+    inclusion_pats = [ ".jpg", ".jpeg", ".png", ".bmp" ]
+    exclusion_pats = [ "_mask.png" ]
+    return any([ pat in x for pat in inclusion_pats ]) and not any([ pat in x for pat in exclusion_pats ])
+
 def main(opt):
 
     # No GPUs detected. Use CPU instead.
@@ -400,6 +406,7 @@ def main(opt):
                     ref_image_paths.extend([ os.path.join(ref_image, f) for f in os.listdir(ref_image) ])
                 else:
                     ref_image_paths.append(ref_image)
+            ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
             ref_images = [ np.array(Image.open(ref_image)) for ref_image in ref_image_paths ]
             zs_clip_type = 'openai'
             # image_emb_dim is not the output dim but the second last layer dim. 
