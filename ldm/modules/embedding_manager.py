@@ -1449,14 +1449,14 @@ class EmbeddingManager(nn.Module):
                             print(f"Repeat static_zs_embs from {static_zs_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
 
                     if self.do_zero_shot and not placeholder_is_bg:
-                      if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter':
-                        # NOTE: arc2face_embs is the Arc2Face forward embeddings, while 
-                        # arc2face_inverse_prompt_embs is the Arc2Face inverse embeddings.
-                        # arc2face_embs: [BS, 77, 768].
-                        self.arc2face_embs = placeholder_arc2face_embs
-                    if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'compos_distill_iter':
-                        assert placeholder_arc2face_inverse_prompt_embs is not None
-                        arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
+                        if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter':
+                            # NOTE: arc2face_embs is the Arc2Face forward embeddings, while 
+                            # arc2face_inverse_prompt_embs is the Arc2Face inverse embeddings.
+                            # arc2face_embs: [BS, 77, 768].
+                            self.arc2face_embs = placeholder_arc2face_embs
+                        if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'compos_distill_iter':
+                            assert placeholder_arc2face_inverse_prompt_embs is not None
+                            arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
 
                     # NOTE: the condition iter_type == 'compos_distill_iter' is vital, as a recon_iter with delta loss 
                     # also has the 4-type prompt structure.

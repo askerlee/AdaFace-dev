@@ -1543,7 +1543,7 @@ class LatentDiffusion(DDPM):
             
             # Mainly use background token on recon iters.
             if self.iter_flags['is_compos_iter']:
-                p_use_background_token  = 0
+                p_use_background_token  = 0.5
             else:
                 # Recon iters.
                 if self.iter_flags['use_wds_comp']:
