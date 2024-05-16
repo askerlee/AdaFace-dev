@@ -5406,6 +5406,7 @@ class Arc2FaceWrapper(pl.LightningModule):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         
     def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None, gen_neg_prompt=False):
+        # if pre_face_embs is None, generate random face embeddings [BS, 512].
         # Returns faceid_embeds, arc2face_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
                                            extract_faceid_embeds=False, 

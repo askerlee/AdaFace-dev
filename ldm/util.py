@@ -1202,6 +1202,7 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
 
     return return_prompts
 
+# if pre_face_embs is None, generate random face embeddings [BS, 512].
 def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, text_encoder, 
                                 extract_faceid_embeds, pre_face_embs, 
                                 image_folder, image_paths, images_np,
