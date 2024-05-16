@@ -507,8 +507,8 @@ def main(opt):
         assert opt.prompt is not None
         prompt = opt.prompt
         if opt.zs_cls_delta_string is not None:
-            # Insert zls_cls_delta_string after the subject string (including placeholder commas).
-            prompt = re.sub(" " + opt.subject_string + r"(, )*", r"\g<0> " + opt.zs_cls_delta_string + " ", prompt)
+            # Insert zls_cls_delta_string **before** the subject string (including placeholder commas).
+            prompt = re.sub(" " + opt.subject_string + r"(, )*", " a " + opt.zs_cls_delta_string + r"\g<0> ", prompt)
 
         all_prompts = [prompt] * opt.n_samples
         # By default, batch_size = n_samples. In this case, chunking turns all_prompts into a list of length 1,
@@ -556,8 +556,9 @@ def main(opt):
                 # The number of prompts in batched_prompts has to match the number of samples.
                 # So we need to repeat the prompt by n_repeat times.
                 if opt.zs_cls_delta_string is not None:
-                    # Insert zls_cls_delta_string after the subject string (including placeholder commas).
-                    prompt = re.sub(" " + opt.subject_string + r"(, )*", r"\g<0> " + opt.zs_cls_delta_string + " ", prompt)
+                    # Insert zls_cls_delta_string **before** the subject string (including placeholder commas).
+                    prompt = re.sub(" " + opt.subject_string + r"(, )*", " a " + opt.zs_cls_delta_string + r"\g<0> ", prompt)
+
                 prompts_repeated = [prompt] * n_repeat
                 n_batches = n_repeat // batch_size
                 if n_repeat % batch_size != 0:
