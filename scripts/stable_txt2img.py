@@ -70,9 +70,8 @@ def parse_args():
     )
     parser.add_argument(
         "--indiv_subdir",
-        type=str,
+        type=str, default=None,
         help="subdir to write individual images to",
-        default="samples"
     )
     parser.add_argument(
         "--skip_grid",
@@ -506,6 +505,9 @@ def main(opt):
         # and the sole elment is a list containing "prompt" repeated n_samples times,
         # e.g. [ ['z', 'z', 'z', 'z'] ]. Then tqdm() will finish it in one iteration.
         batched_prompts = list(chunk(all_prompts, batch_size))
+        if opt.indiv_subdir is None:
+            opt.indiv_subdir = prompt.replace(" ", "-")
+            
         batched_subdirs = [ opt.indiv_subdir ] * len(batched_prompts)
         # Append None to the end of batched_subdirs, for indiv_subdir change detection.
         batched_subdirs.append(None)
