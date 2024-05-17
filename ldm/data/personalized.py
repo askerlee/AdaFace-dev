@@ -226,7 +226,7 @@ class PersonalizedBase(Dataset):
         # are_mix_subj_folders: a list of boolean values, indicating whether the subjects in the 
         # base_folder are mixed, indexed by subject_idx in __getitem__().
         self.are_mix_subj_folders = []
-        assert len(self.subj_roots) > 0, f"No data found in data_roots={data_roots}!"
+        # assert len(self.subj_roots) > 0, f"No data found in data_roots={data_roots}!"
 
         self.image_paths_by_subj    = []
         self.image_count_by_subj    = []
@@ -316,6 +316,8 @@ class PersonalizedBase(Dataset):
         for base_folder in data_roots:
             if not os.path.isdir(base_folder):
                 self.image_paths.append(base_folder)
+                self.fg_mask_paths.append(None)
+                self.caption_paths.append(None)
 
         print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
               f"{total_num_valid_captions} captions")
