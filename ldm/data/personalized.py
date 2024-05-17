@@ -188,6 +188,9 @@ class PersonalizedBase(Dataset):
         base_folders_are_mix_subj = {}
 
         for base_folder in data_roots:
+            if not os.path.isdir(base_folder):
+                print(f"WARNING: {base_folder} is not a valid folder, skip")
+                continue
             subfolders = [ f.path for f in os.scandir(base_folder) if f.is_dir() ]
             # If base_folder contains subfolders, then expand them.
             if len(subfolders) > 0:
@@ -307,6 +310,13 @@ class PersonalizedBase(Dataset):
         self.image_paths   = sum(self.image_paths_by_subj, [])
         self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
         self.caption_paths = sum(self.caption_paths_by_subj, [])
+
+        # During evaluation, some paths in data_roots may be image files, not folders.
+        # We append them to self.image_paths.
+        for base_folder in data_roots:
+            if not os.path.isdir(base_folder):
+                self.image_paths.append(base_folder)
+
         print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
               f"{total_num_valid_captions} captions")
   
