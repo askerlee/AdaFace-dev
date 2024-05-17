@@ -383,7 +383,7 @@ class SubjBasisGenerator(nn.Module):
         placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         zs_extra_words_scale: float = 0.5,     # Scale for extra words in the prompt2token_proj.
-        learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer, per-channel.
+        learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer.
         bg_prompt_translator_has_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.
     ):
         super().__init__()
@@ -566,15 +566,10 @@ class SubjBasisGenerator(nn.Module):
             # hidden_state_layer_weights: [3, 1].
             self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [2.0], [4.0]], device=device),
                                                             requires_grad=True)
-            self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(2)
-            print("hidden_state_layer_weights initialized as per-layer   [1, 2, 4], with grad scaler 2.")
-        elif learnable_hidden_state_weights_scheme == 'per-channel':
-            # 'per-channel': Different weights for different channel in different layers.
-            # hidden_state_layer_weights: [3, 768].
-            self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [2.0], [4.0]], device=device).repeat(1, 768),
-                                                           requires_grad=True)
-            self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(6)
-            print("hidden_state_layer_weights initialized as per-channel [1, 2, 4], with grad scaler 4.")
+            self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(5)
+            print("hidden_state_layer_weights initialized as per-layer [1, 2, 4], with grad scaler 5.")
+        else:
+            breakpoint()
 
     def generate_pad_embeddings(self):
         # clip_embeddings: CLIPTextEmbeddings instance. pad_embeddings is generated after 
