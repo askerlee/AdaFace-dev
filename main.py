@@ -257,7 +257,7 @@ def get_parser(**parser_kwargs):
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
-    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
                         help="Gradient scale of the prompt2token projection layer")   

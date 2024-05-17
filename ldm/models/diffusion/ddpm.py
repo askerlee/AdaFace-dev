@@ -124,7 +124,7 @@ class DDPM(pl.LightningModule):
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
-                 do_zero_shot=False,
+                 do_zero_shot=True,
                  arc2face_distill_iter_prob=0.1,
                  apply_arc2face_inverse_embs=False,
                  p_gen_arc2face_rand_face=0.4,

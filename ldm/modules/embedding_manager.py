@@ -965,7 +965,7 @@ class EmbeddingManager(nn.Module):
             use_conv_attn_kernel_size=None,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
-            do_zero_shot=False,
+            do_zero_shot=True,
             zs_image_emb_dim=1280,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string=None,

@@ -168,7 +168,7 @@ class PersonalizedBase(Dataset):
                  subj_info_filepaths=None,
                  load_meta_subj2person_type_cache_path=None,
                  save_meta_subj2person_type_cache_path=None,
-                 do_zero_shot=False,
+                 do_zero_shot=True,
                  wds_db_path=None,    # Path to a folder containing webdatabase .tar files
                  use_wds_prompts=False, # Use or ignore the prompts (when the prompts are noisy) in the webdataset.
                  verbose=False, 

@@ -270,7 +270,7 @@ def parse_args():
                         help="Use convolutional attention of subject tokens with this kernel size."
                              "Default: None, not specified.")
 
-    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
                         help="Class delta string for zero-shot learning")
