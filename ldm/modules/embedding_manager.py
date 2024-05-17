@@ -1445,8 +1445,8 @@ class EmbeddingManager(nn.Module):
                     if static_zs_embs.shape[0] < REAL_OCCURS_IN_BATCH:
                         static_zs_embs_orig_bs = static_zs_embs.shape[0]
                         static_zs_embs = static_zs_embs.repeat(REAL_OCCURS_IN_BATCH // static_zs_embs.shape[0], 1, 1, 1)
-                        if rank == 0:
-                            print(f"Repeat static_zs_embs from {static_zs_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
+                        #if rank == 0:
+                        #    print(f"Repeat static_zs_embs from {static_zs_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
 
                     if self.do_zero_shot and not placeholder_is_bg:
                         if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter':
@@ -1494,7 +1494,7 @@ class EmbeddingManager(nn.Module):
                                                               + static_zs_embs[:NUM_HALF_SUBJS] * 0.1
                             
                             if rank == 0:
-                                print(f"Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
+                                print(f"compos_distill_iter. Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
                 else:
                     static_zs_embs = None
 

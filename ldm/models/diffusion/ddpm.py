@@ -1685,6 +1685,8 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_mix_prompt_distillation']:
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+            # After image_unnorm is repeated, the extracted zs_clip_features and zs_id_embs, extracted from image_unnorm,
+            # will be repeated automatically. Therefore, we don't need to manually repeat them later.
             batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
                 repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
                                           x_start, img_mask, fg_mask, batch_have_fg_mask)
@@ -2815,13 +2817,7 @@ class LatentDiffusion(DDPM):
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
             # 'do_teacher_filter' branch.
             cond = (c_static_emb_vk, cond[1], extra_info)
-            # emb_k_layers_cls_mix_scales, emb_v_layers_cls_mix_scales: [4, 16]. 
-            # Each set of scales (for 16 layers) is for an instance.
-            extra_info['emb_k_mixer'], extra_info['emb_k_layers_cls_mix_scales'] = \
-                emb_k_mixer, emb_k_layers_cls_mix_scales
-            extra_info['emb_v_mixer'], extra_info['emb_v_layers_cls_mix_scales'] = \
-                emb_v_mixer, emb_v_layers_cls_mix_scales            
-            
+
         # It's a RECON iter.
         else:
             assert self.iter_flags['do_normal_recon']
@@ -3078,13 +3074,6 @@ class LatentDiffusion(DDPM):
                                                  K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
                                                  V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
 
-                    # emb_k_layers_cls_mix_scales, emb_v_layers_cls_mix_scales: [2, 16]. 
-                    # Each set of scales (for 16 layers) is for an instance.
-                    # Different from the emb_v_layers_cls_mix_scales above, which is for the twin comp instances.
-                    extra_info['emb_k_mixer'], extra_info['emb_k_layers_cls_mix_scales'] = \
-                        emb_k_mixer, emb_k_layers_cls_mix_scales
-                    extra_info['emb_v_mixer'], extra_info['emb_v_layers_cls_mix_scales'] = \
-                        emb_v_mixer, emb_v_layers_cls_mix_scales
                     # Update c_static_emb.
                     cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
 
