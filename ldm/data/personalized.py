@@ -303,14 +303,6 @@ class PersonalizedBase(Dataset):
                 if num_valid_captions > 0 and num_valid_captions < len(image_paths):
                     print("WARNING: {} captions are missing!".format(len(image_paths) - num_valid_captions))
 
-        self.num_subjects = len(self.subject_names)
-        # self.image_paths, ...         are for the one-level indexing, i.e., directly indexing into a particular image.
-        # self.image_paths_by_subj, ... are for the two-level indexing, i.e., first indexing into a subject, then
-        # indexing into an image within that subject.
-        self.image_paths   = sum(self.image_paths_by_subj, [])
-        self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
-        self.caption_paths = sum(self.caption_paths_by_subj, [])
-
         # During evaluation, some paths in data_roots may be image files, not folders.
         # We append them to self.image_paths.
         for base_folder in data_roots:
@@ -318,6 +310,16 @@ class PersonalizedBase(Dataset):
                 self.image_paths.append(base_folder)
                 self.fg_mask_paths.append(None)
                 self.caption_paths.append(None)
+                # Full path is used as the subject name.
+                self.subject_names.append(base_folder)
+
+        self.num_subjects = len(self.subject_names)
+        # self.image_paths, ...         are for the one-level indexing, i.e., directly indexing into a particular image.
+        # self.image_paths_by_subj, ... are for the two-level indexing, i.e., first indexing into a subject, then
+        # indexing into an image within that subject.
+        self.image_paths   = sum(self.image_paths_by_subj, [])
+        self.fg_mask_paths = sum(self.fg_mask_paths_by_subj, [])
+        self.caption_paths = sum(self.caption_paths_by_subj, [])
 
         print(f"Found {len(self.image_paths)} images in {len(self.subj_roots)} folders, {total_num_valid_fg_masks} fg masks, " \
               f"{total_num_valid_captions} captions")
