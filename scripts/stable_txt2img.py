@@ -410,7 +410,7 @@ def main(opt):
                 else:
                     ref_image_paths.append(ref_image)
             ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
-            ref_images = [ np.array(Image.open(ref_image)) for ref_image in ref_image_paths ]
+            ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
             zs_clip_type = 'openai'
             # image_emb_dim is not the output dim but the second last layer dim. 
             # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.

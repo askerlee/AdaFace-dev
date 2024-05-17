@@ -42,7 +42,7 @@ if __name__ == "__main__":
                 print("Self comparing %s:" %(args.path1))
                 compare_face_folders_fast(args.path1, args.path1)
         else:            
-            compare_face_folders_fast(args.path1, args.path2, verbose=False)
+            compare_face_folders_fast(args.path1, args.path2)
     else:
         subdirs = sorted(os.listdir(args.path1))
         for subdir in subdirs:

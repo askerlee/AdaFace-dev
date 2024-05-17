@@ -974,7 +974,7 @@ class LatentDiffusion(DDPM):
                 # We don't update the zs_clip_features in this case.
                 # If iter_flags['add_noise_to_real_id_embs'], then 
                 # noise has been added to zs_id_embs. Don't add noise again.
-                if self.do_zero_shot and (zs_clip_features is not None or zs_id_embs is not None):
+                if zs_clip_features is not None or zs_id_embs is not None:
                     self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs, 
                                                                  add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
                     
@@ -1721,10 +1721,11 @@ class LatentDiffusion(DDPM):
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
                 zs_clip_features, zs_id_embs, faceless_img_count = \
                     self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
+                                                         image_paths=image_paths,
                                                          # iter_flags['is_face'] is a list of 0/1 elements.
                                                          is_face=self.iter_flags['is_face'][0],
-                                                         calc_avg=self.iter_flags['same_subject_in_batch'],
-                                                         image_paths=image_paths)
+                                                         calc_avg=self.iter_flags['same_subject_in_batch'])
+                
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
                 p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_arc2face_distill'] else 0                
@@ -2300,11 +2301,11 @@ class LatentDiffusion(DDPM):
 
     # images: numpy.ndarray or torch.Tensor.
     # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
-    # is_face: whether the images are faces. If True, then face embedding will be extracted. 
+    # is_face: whether all the images are faces. If True, then face embeddings will be extracted. 
     # Otherwise, DINO embedding will be extracted.
     # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, is_face, size=(512, 512), 
-                                        calc_avg=False, skip_non_faces=False, image_paths=None):
+    def encode_zero_shot_image_features(self, images, fg_masks, image_paths=None, is_face=True, 
+                                        size=(512, 512), calc_avg=False, skip_non_faces=False):
         if not self.zs_image_encoders_instantiated:
             self.instantiate_zero_shot_image_encoders()
 
