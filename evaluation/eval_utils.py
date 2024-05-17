@@ -7,12 +7,13 @@ import re
 import glob
 import time
 import numpy as np
+from PIL import Image
+import cv2
 
 from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.dino_eval import DINOEvaluator
 from evaluation.community_prompts import community_prompt_list
-from deepface import DeepFace
-from deepface.commons import functions as deepface_functions
+from insightface.app import FaceAnalysis
 
 def set_tf_gpu(gpu_id):
     import tensorflow as tf
@@ -84,14 +85,14 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     print(f"Image/text/dino sim: {sim_img:.3f} {sim_text:.3f} {sim_dino:.3f}")
     return sim_img, sim_text, sim_dino
 
-def deepface_embed_folder(img_paths, model_name='ArcFace', detector_backend='retinaface', 
+def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='retinaface', 
                           enforce_detection=True,
                           align=True, normalization="base"):
     """
     This function extracts faces from a list of images, and embeds them as embeddings. 
 
     Parameters:
-            img_paths: exact image paths as a list of strings. numpy array (BGR) or based64 encoded
+            image_paths: exact image paths as a list of strings. numpy array (BGR) or based64 encoded
             images are also welcome. If one of pair has more than one face, then we will compare the
             face pair with max similarity.
 
@@ -109,12 +110,14 @@ def deepface_embed_folder(img_paths, model_name='ArcFace', detector_backend='ret
             Returns a list of embeddings.
 
     """
+    from deepface import DeepFace
+    from deepface.commons import functions as deepface_functions
 
     # --------------------------------
     target_size = deepface_functions.find_target_size(model_name=model_name)
     all_embeddings = []
 
-    for img_path in img_paths:
+    for img_path in image_paths:
         embeddings = []
 
         try:
@@ -146,6 +149,63 @@ def deepface_embed_folder(img_paths, model_name='ArcFace', detector_backend='ret
         
         embeddings = np.array(embeddings)
         all_embeddings.append(embeddings)
+
+    return all_embeddings
+
+def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 512)):
+    """
+    This function extracts faces from a list of images, and embeds them as embeddings. 
+
+    Parameters:
+            image_paths: exact image paths as a list of strings. numpy array (BGR) or based64 encoded
+            images are also welcome. If one of pair has more than one face, then we will compare the
+            face pair with max similarity.
+
+            model_name (str): VGG-Face, Facenet, Facenet512, OpenFace, DeepFace, DeepID, Dlib
+            , ArcFace and SFace
+
+            enforce_detection (boolean): If no face could not be detected in an image, then this
+            function will return exception by default. Set this to False not to have this exception.
+            This might be convenient for low resolution images.
+
+            detector_backend (string): set face detector backend to opencv, retinaface, mtcnn, ssd,
+            dlib or mediapipe
+
+    Returns:
+            Returns a list of embeddings.
+
+    """
+
+    images_np = []
+    for image_path in image_paths:
+        image_np = np.array(Image.open(image_path))
+        images_np.append(image_np)
+
+    for i, image_np in enumerate(images_np):
+        image_obj = Image.fromarray(image_np).resize((512, 512), Image.NEAREST)
+        image_np = cv2.cvtColor(np.array(image_obj), cv2.COLOR_RGB2BGR)
+
+    # Only for one-off call. Otherwise it will be very slow.
+    if insightface_app is None:
+        insightface_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
+
+    all_embeddings = []
+    for idx, image in enumerate(images_np):
+        # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
+        # PersonalizedBase dataset class.
+        image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))   
+        face_infos = insightface_app.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        if len(face_infos) > 0:
+            face_info = sorted(face_infos, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
+            # face_info.normed_embedding: [512,]. Already np.array, so no need to convert.
+            all_embeddings.append([face_info.normed_embedding])
+        else:
+            # len(face_info) == 0 and skip_non_faces.
+            # Skip images without faces.
+            print(f'Skip image without face: {image_paths[idx]}')
+            # Append an empty list to indicate that there is no face in this image.
+            all_embeddings.append([])
 
     return all_embeddings
 
@@ -201,7 +261,9 @@ def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
 
     return mean_similarity, src_no_face_img_count, dst_no_face_img_count
 
-def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, verbose=False):
+def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
+                              face_engine="deepface", insightface_app=None):
+
     img_extensions = [ "jpg", "jpeg", "png", "bmp" ]
 
     if os.path.isfile(src_path):
@@ -225,8 +287,34 @@ def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_sa
     if dst_num_samples > 0:
         dst_paths = dst_paths[-dst_num_samples:]
 
-    src_list_embeds = deepface_embed_folder(src_paths, model_name="ArcFace", detector_backend = "retinaface")
-    dst_list_embeds = deepface_embed_folder(dst_paths, model_name="ArcFace", detector_backend = "retinaface")
+    if   face_engine == "deepface":
+        src_list_embeds = deepface_embed_folder(src_paths, model_name="ArcFace", detector_backend = "retinaface")
+        dst_list_embeds = deepface_embed_folder(dst_paths, model_name="ArcFace", detector_backend = "retinaface")
+    elif face_engine == "insightface":
+        src_list_embeds = insightface_embed_folder(insightface_app, src_paths)
+        dst_list_embeds = insightface_embed_folder(insightface_app, dst_paths)
+    else:
+        breakpoint()
+
+    '''
+    if face_engine == "deepface":
+        (Pdb) calc_faces_mean_similarity(src_list_embeds, dst_list_embeds)
+        (0.471041, 0, 0)
+        (Pdb) calc_faces_mean_similarity(src_list_embeds, src_list_embeds)
+        (0.622069, 0, 0)
+        (Pdb) calc_faces_mean_similarity(dst_list_embeds, dst_list_embeds)
+        (0.660250, 0, 0)
+    if face_engine == "insightface":
+        (Pdb) calc_faces_mean_similarity(src_list_embeds, dst_list_embeds)
+        (0.339248, 0, 0)
+        (Pdb) calc_faces_mean_similarity(src_list_embeds, src_list_embeds)
+        (0.689450, 0, 0)
+        (Pdb) calc_faces_mean_similarity(dst_list_embeds, dst_list_embeds)
+        (0.480570, 0, 0)
+    Seems that insightface embeddings are very sensitive to details like lightning, pose and tone.
+    Therefore, by default we use deepface embeddings, as they only focus on face characteristics.
+    '''
+
     avg_similarity, src_no_face_img_count, dst_no_face_img_count =\
         calc_faces_mean_similarity(src_list_embeds, dst_list_embeds)
     
@@ -242,6 +330,8 @@ def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_sa
     return avg_similarity, dst_normal_img_count, dst_no_face_img_count
 
 def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, verbose=False):
+    from deepface import DeepFace
+
     if os.path.isfile(src_path):
         src_paths = [ src_path ]
     else:

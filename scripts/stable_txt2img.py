@@ -22,6 +22,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
+from insightface.app import FaceAnalysis
 from ldm.data.personalized import PersonalizedBase
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -232,9 +233,11 @@ def parse_args():
     parser.add_argument("--calc_face_sim", action="store_true",
                         help="If specified, assume the generated samples are human faces, "
                              "and compute face similarities with the groundtruth")
-        
+    parser.add_argument("--face_engine", type=str, default="deepface", choices=["deepface", "insightface"],
+                        help="Face engine to use for face similarity calculation")
+    
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use. Set to -1 to use CPU (slow).')
-    parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
+    #parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
     parser.add_argument("--compare_with", type=str, default=None,
                         help="Evaluate the similarity of generated samples with reference images in this folder")
@@ -588,10 +591,16 @@ def main(opt):
             all_sims_face = []
             all_normal_img_counts = []
             all_except_img_counts = []
-            if hasattr(opt, 'tfgpu'):
-                set_tf_gpu(opt.tfgpu)
+            if opt.face_engine == "insightface":
+                insightface_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+                insightface_app.prepare(ctx_id=opt.gpu, det_size=(512, 512))
             else:
-                set_tf_gpu(opt.gpu)
+                insightface_app = None
+                if hasattr(opt, 'tfgpu'):
+                    set_tf_gpu(opt.tfgpu)
+                else:
+                    set_tf_gpu(opt.gpu)
+
     else:
         clip_evator, dino_evator = None, None
 
@@ -811,7 +820,8 @@ def main(opt):
 
                                     if opt.calc_face_sim:
                                         sim_face, normal_img_count, except_img_count = \
-                                            compare_face_folders_fast(opt.compare_with, sample_dir, dst_num_samples=len(prompts))
+                                            compare_face_folders_fast(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
+                                                                      face_engine=opt.face_engine, insightface_app=insightface_app)
                                         # sim_face is a float, so no need to detach().cpu().numpy().
                                         all_sims_face.append(sim_face)
                                         all_normal_img_counts.append(normal_img_count)

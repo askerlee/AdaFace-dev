@@ -180,7 +180,7 @@ class DDPM(pl.LightningModule):
         self.load_old_embman_ckpt                   = load_old_embman_ckpt
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
-        self.face_encoder                           = None  # FaceAnalysis arc2face encoder.
+        self.insightface_app                        = None  # FaceAnalysis app.
         self.dino_encoder                           = None  # ViTModel 'facebook/dino-vits16'
         self.zs_image_encoders_instantiated         = False
 
@@ -919,8 +919,8 @@ class LatentDiffusion(DDPM):
          'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
         # Use the same model as Arc2Face.
-        self.face_encoder = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.face_encoder.prepare(ctx_id=gpu_id, det_size=(512, 512))
+        self.insightface_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        self.insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
         self.dino_encoder = self.dino_encoder.to(self.device)
@@ -2324,13 +2324,13 @@ class LatentDiffusion(DDPM):
             clip_image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt").pixel_values
             image_pixel_values.append(clip_image_pixel_values)
 
-            if is_face and self.face_encoder is not None:
+            if is_face and self.insightface_app is not None:
                 if isinstance(image, torch.Tensor):
                     image = image.cpu().numpy().transpose(1, 2, 0)
                 # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
                 # PersonalizedBase dataset class.
                 image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))   
-                face_info = self.face_encoder.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+                face_info = self.insightface_app.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
                 if len(face_info) == 0 and not skip_non_faces:
                     print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
                     # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
@@ -2362,7 +2362,7 @@ class LatentDiffusion(DDPM):
         # image_pixel_values: [BS, 3, 224, 224]
         image_pixel_values = torch.cat(image_pixel_values, dim=0)
         image_pixel_values = image_pixel_values.to(self.device)
-        if self.face_encoder is not None:
+        if self.insightface_app is not None:
             # all_id_embs: [BS, 512] if is_face, or [BS, 384] if not is_face.
             all_id_embs = torch.stack(all_id_embs, dim=0)
         else:
@@ -2443,7 +2443,7 @@ class LatentDiffusion(DDPM):
                 id_embs = all_id_embs.mean(dim=0, keepdim=True)
                 # Without normalization, id_embs.norm(dim=1) is ~0.9. So normalization doesn't have much effect.
                 id_embs = F.normalize(id_embs, p=2, dim=-1)
-            # id_embs is None only if face_encoder is None, i.e., disabled by the user.
+            # id_embs is None only if insightface_app is None, i.e., disabled by the user.
         else:
             # Don't do average of all_id_embs.
             id_embs = all_id_embs
