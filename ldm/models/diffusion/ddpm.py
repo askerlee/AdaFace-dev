@@ -1017,7 +1017,7 @@ class LatentDiffusion(DDPM):
                 # as the location of the subject embeddings is still indexed by placeholder_indices.
                 # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
                 # and scaling them down may hurt subject fidelity.
-                if zs_out_id_embs_scale < 1 and not apply_arc2face_embs:
+                if zs_out_id_embs_scale != 1 and not apply_arc2face_embs:
                     emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():

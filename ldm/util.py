@@ -1071,12 +1071,19 @@ def fix_emb_scale(text_embedding, placeholder_indices, num_layers=1,
     text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
     scale_mask = torch.ones_like(text_embedding)
     
-    SCALE_STEP = (1 - scale) / (num_layers - 1)
-    # Linearly increase the scale of the subject embeddings from 0.5 to 1.0, 
-    # [0.5000, 0.5333, 0.5667, 0.6000, 0.6333, 0.6667, 0.7000, 0.7333, 
-    #  0.7667, 0.8000, 0.8333, 0.8667, 0.9000, 0.9333, 0.9667, 1.0000]
+    if scale < 1:
+        SCALE_STEP = (1 - scale) / (num_layers - 1)
+        # Linearly increase the scale of the subject embeddings from 0.5 to 1.0, 
+        # [0.5000, 0.5333, 0.5667, 0.6000, 0.6333, 0.6667, 0.7000, 0.7333, 
+        #  0.7667, 0.8000, 0.8333, 0.8667, 0.9000, 0.9333, 0.9667, 1.0000]
+        scales = scale + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
+    else:
+        SCALE_STEP = (scale - 1) / (num_layers - 1)
+        # Linearly increase the scale of the subject embeddings from 1.0 to 2.0,
+        # [1.0000, 1.0667, 1.1333, 1.2000, 1.2667, 1.3333, 1.4000, 1.4667,
+        #  1.5333, 1.6000, 1.6667, 1.7333, 1.8000, 1.8667, 1.9333, 2.0000]
+        scales = 1 + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
 
-    scales = scale + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
     scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scales
 
     scaled_text_embedding = text_embedding * scale_mask
