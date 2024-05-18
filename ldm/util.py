@@ -1040,8 +1040,8 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_
 # If text_embedding is static embedding, then num_layers=16, 
 # we need to reshape it to [B0, num_layers, N, D].
 def fix_emb_scale(text_embedding, placeholder_indices, num_layers=1, 
-                   scale=-1, extra_scale=1):
-    if placeholder_indices is None:
+                   scale_range=(1.0, 1.0), extra_scale=1):
+    if placeholder_indices is None or scale_range == (1.0, 1.0):
         return text_embedding
     
     placeholder_indices_B, placeholder_indices_N = placeholder_indices
@@ -1049,17 +1049,9 @@ def fix_emb_scale(text_embedding, placeholder_indices, num_layers=1,
     B = text_embedding.shape[0]
     B0      = B // num_layers
     B_IND   = len(torch.unique(placeholder_indices_B))
-    
-    # The default scale is 1 / sqrt(M).
-    if scale == -1:
-        scale = 1 / np.sqrt(M)
 
-    scale = scale * extra_scale
-    
-    # scale == 1: No need to do scaling.
-    if scale == 1:
-        return text_embedding
-    
+    scale_range = (scale_range[0] * extra_scale, scale_range[1] * extra_scale)
+
     if B_IND > B0:
         breakpoint()
     
@@ -1071,18 +1063,11 @@ def fix_emb_scale(text_embedding, placeholder_indices, num_layers=1,
     text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
     scale_mask = torch.ones_like(text_embedding)
     
-    if scale < 1:
-        SCALE_STEP = (1 - scale) / (num_layers - 1)
-        # Linearly increase the scale of the subject embeddings from 0.5 to 1.0, 
-        # [0.5000, 0.5333, 0.5667, 0.6000, 0.6333, 0.6667, 0.7000, 0.7333, 
-        #  0.7667, 0.8000, 0.8333, 0.8667, 0.9000, 0.9333, 0.9667, 1.0000]
-        scales = scale + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
-    else:
-        SCALE_STEP = (scale - 1) / (num_layers - 1)
-        # Linearly increase the scale of the subject embeddings from 1.0 to 2.0,
-        # [1.0000, 1.0667, 1.1333, 1.2000, 1.2667, 1.3333, 1.4000, 1.4667,
-        #  1.5333, 1.6000, 1.6667, 1.7333, 1.8000, 1.8667, 1.9333, 2.0000]
-        scales = 1 + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
+    SCALE_STEP = (scale_range[1] - scale_range[0]) / (num_layers - 1)
+    # Linearly increase the scale of the subject embeddings from 0.5 to 1.5, in 16 steps
+    # [0.5000, 0.5625, 0.6250, 0.6875, 0.7500, 0.8125, 0.8750, 0.9375, 
+    #  1.0000, 1.0625, 1.1250, 1.1875, 1.2500, 1.3125, 1.3750, 1.4375]
+    scales = scale_range[0] + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
 
     scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scales
 
