@@ -1070,7 +1070,15 @@ def fix_emb_scale(text_embedding, placeholder_indices, num_layers=1,
     # compositional distillation iteration.
     text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
     scale_mask = torch.ones_like(text_embedding)
-    scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scale
+    
+    SCALE_STEP = (1 - scale) / (num_layers - 1)
+    # Linearly increase the scale of the subject embeddings from 0.5 to 1.0, 
+    # [0.5000, 0.5333, 0.5667, 0.6000, 0.6333, 0.6667, 0.7000, 0.7333, 
+    #  0.7667, 0.8000, 0.8333, 0.8667, 0.9000, 0.9333, 0.9667, 1.0000]
+
+    scales = scale + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
+    scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scales
+
     scaled_text_embedding = text_embedding * scale_mask
     # Change back to the original shape.
     scaled_text_embedding = scaled_text_embedding.reshape(text_embedding_shape)
