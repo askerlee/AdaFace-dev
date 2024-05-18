@@ -962,13 +962,13 @@ class EmbeddingManager(nn.Module):
             training_begin_add_noise_std_range=None,
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
-            use_conv_attn_kernel_size=None,
+            use_conv_attn_kernel_size=-1,
             background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
             do_zero_shot=True,
-            zs_image_emb_dim=1280,
+            zs_image_emb_dim=1024,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
-            zs_cls_delta_string=None,
+            zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
             zs_prompt2token_proj_grad_scale=0.4,
             zs_load_subj_basis_generators_from_ckpt=True,
@@ -1188,7 +1188,7 @@ class EmbeddingManager(nn.Module):
         self.clear_prompt_adhoc_info()
         # 'recon_iter', 'compos_distill_iter', 'arc2face_inverse_clip_iter', 'arc2face_clip_iter', 'empty'.
         self.iter_type = None       
-        if self.do_zero_shot and zs_cls_delta_string is not None:
+        if self.do_zero_shot:
             self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
         else:
             self.curr_batch_subj_names = []
@@ -1219,6 +1219,7 @@ class EmbeddingManager(nn.Module):
 
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
+        self.zs_out_id_embs_scale = 1.0
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}".format(
                self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank))
@@ -1433,6 +1434,7 @@ class EmbeddingManager(nn.Module):
                     # static_zs_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
                     static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
                             subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
+                                                 self.zs_out_id_embs_scale,
                                                  is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
                                                  arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
@@ -1667,7 +1669,8 @@ class EmbeddingManager(nn.Module):
                 
         # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
         # curr_subj_is_face. 
-        # During inference, we set curr_subj_is_face directly.
+        # During inference, curr_batch_subj_names = ['zs_default'], which maps to True in subj_name_to_being_faces,
+        # so curr_subj_is_face == True.
         # BUG: if there are multiple subjects in the same batch, then is_face is only 
         # about the first subject. But now we only support one subject in a batch.
         if len(self.curr_batch_subj_names) > 0:
@@ -1753,7 +1756,7 @@ class EmbeddingManager(nn.Module):
 
         return emb_global_scales_dict
 
-    def set_conv_attn_kernel_size(self, use_conv_attn_kernel_size=None):
+    def set_conv_attn_kernel_size(self, use_conv_attn_kernel_size=-1):
         # The first time use_conv_attn_kernel_size is set.
         if not hasattr(self, 'use_conv_attn_kernel_size'):
             self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
@@ -1780,7 +1783,7 @@ class EmbeddingManager(nn.Module):
                                         )
             self.arc2face_text_encoder.to(device)
             
-    def set_zs_image_features(self, zs_clip_features, zs_id_embs, add_noise_to_zs_id_embs=False):
+    def set_zs_image_features(self, zs_clip_features, zs_id_embs, zs_out_id_embs_scale=1.0, add_noise_to_zs_id_embs=False):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         # zs_id_embs: [1, 512] or [2, 16, 768]
@@ -1801,6 +1804,7 @@ class EmbeddingManager(nn.Module):
 
         self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
                                     'id':   zs_id_embs }
+        self.zs_out_id_embs_scale = zs_out_id_embs_scale
 
         # Clear the basis_vecs and bias saved in embedders.
         for placeholder_string in self.placeholder_strings:

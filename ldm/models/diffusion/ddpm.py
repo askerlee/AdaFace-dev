@@ -958,7 +958,7 @@ class LatentDiffusion(DDPM):
     # NOTE: the delta prompts consumes extram RAM.
     # If do_normal_recon without delta loss, then 1 call.
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
-    def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
+    def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, zs_out_id_embs_scale=1.0,
                                  randomize_clip_weights=False, apply_arc2face_inverse_embs=False, 
                                  apply_arc2face_embs=False, embman_iter_type=None):
         if self.cond_stage_forward is None:
@@ -976,6 +976,7 @@ class LatentDiffusion(DDPM):
                 # noise has been added to zs_id_embs. Don't add noise again.
                 if zs_clip_features is not None or zs_id_embs is not None:
                     self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs, 
+                                                                 zs_out_id_embs_scale=zs_out_id_embs_scale,
                                                                  add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
                     
                     # When do_zero_shot, never apply compel_cfg (applied in UNet), as compel cfg has been applied in embedding manager.

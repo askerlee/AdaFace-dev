@@ -17,14 +17,13 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import instantiate_from_config, save_grid, extend_nn_embedding, get_b_core_e_embeddings
+from ldm.util import save_grid, extend_nn_embedding, get_b_core_e_embeddings, load_model_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 from insightface.app import FaceAnalysis
 from ldm.data.personalized import PersonalizedBase
-from safetensors.torch import load_file as safetensors_load_file
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -272,7 +271,7 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--zs_cls_delta_string", type=str, default=None,
+    parser.add_argument("--zs_cls_delta_string", type=str, default='person',
                         help="Class delta string for zero-shot learning")
     parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
@@ -312,35 +311,6 @@ def chunk(it, size):
     it = iter(it)
     return iter(lambda: tuple(islice(it, size)), ())
 
-
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    if ckpt.endswith(".ckpt"):
-        pl_sd = torch.load(ckpt, map_location="cpu")
-        sd = pl_sd["state_dict"]
-        if "global_step" in pl_sd:
-            print(f"Global Step: {pl_sd['global_step']}")
-    elif ckpt.endswith(".safetensors"):
-        sd = safetensors_load_file(ckpt, device="cpu")
-        pl_sd = None
-    else:
-        print(f"Unknown checkpoint format: {ckpt}")
-        sys.exit(1)
-
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
-
-    model.eval()
-    # Release some RAM. Not sure if it really works.
-    del sd, pl_sd
-
-    return model
 
 # copied from img2img.py
 def load_img(path, h, w):

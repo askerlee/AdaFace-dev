@@ -42,7 +42,7 @@ def parse_args():
  
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning") 
-    parser.add_argument("--zs_cls_delta_string", type=str, default=None,
+    parser.add_argument("--zs_cls_delta_string", type=str, default='person',
                         help="Class delta string for zero-shot learning")    
     parser.add_argument("--no_id_emb", action="store_true",
                         help="Do not use face/DINO embeddings for zero-shot generation")

@@ -21,6 +21,8 @@ import random, math
 from torch.optim.lr_scheduler import SequentialLR
 from bisect import bisect_right
 import cv2
+from safetensors.torch import load_file as safetensors_load_file
+import sys
 
 class SequentialLR2(SequentialLR):
     def step(self):
@@ -109,6 +111,34 @@ def instantiate_from_config(config, **kwargs):
         raise KeyError("Expected key `target` to instantiate.")
     return get_obj_from_str(config["target"])(**config.get("params", dict()), **kwargs)
 
+def load_model_from_config(config, ckpt, verbose=False):
+    print(f"Loading model from {ckpt}")
+    if ckpt.endswith(".ckpt"):
+        pl_sd = torch.load(ckpt, map_location="cpu")
+        sd = pl_sd["state_dict"]
+        if "global_step" in pl_sd:
+            print(f"Global Step: {pl_sd['global_step']}")
+    elif ckpt.endswith(".safetensors"):
+        sd = safetensors_load_file(ckpt, device="cpu")
+        pl_sd = None
+    else:
+        print(f"Unknown checkpoint format: {ckpt}")
+        sys.exit(1)
+
+    model = instantiate_from_config(config.model)
+    m, u = model.load_state_dict(sd, strict=False)
+    if len(m) > 0 and verbose:
+        print("missing keys:")
+        print(m)
+    if len(u) > 0 and verbose:
+        print("unexpected keys:")
+        print(u)
+
+    model.eval()
+    # Release some RAM. Not sure if it really works.
+    del sd, pl_sd
+
+    return model
 
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
@@ -226,7 +256,6 @@ def parallel_data_prefetch(
         return out
     else:
         return gather_res
-
 
 def calc_stats(emb_name, embeddings, mean_dim=0):
     print("%s:" %emb_name)
