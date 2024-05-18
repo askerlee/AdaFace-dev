@@ -125,7 +125,7 @@ class DDPM(pl.LightningModule):
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=True,
-                 arc2face_distill_iter_prob=0.1,
+                 arc2face_distill_iter_prob=0,
                  apply_arc2face_inverse_embs=False,
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,

@@ -17,6 +17,7 @@ model:
     scale_factor: 0.18215
     use_ema: False
     use_layerwise_embedding: True
+    arc2face_distill_iter_prob: 0
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
