@@ -963,7 +963,6 @@ class EmbeddingManager(nn.Module):
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=-1,
-            background_extra_global_scale=1.,
             emb_reg_loss_scale=1,
             do_zero_shot=True,
             zs_image_emb_dim=1024,
@@ -1202,7 +1201,6 @@ class EmbeddingManager(nn.Module):
         self.text_embedder  = text_embedder
         self.tokenizer      = text_embedder.tokenizer
         self.emb_global_scales_dict = None
-        self.background_extra_global_scale = background_extra_global_scale
         self.emb_reg_loss_scale = emb_reg_loss_scale
         # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
         # in loss computation in ddpm.py, and not used in this script.

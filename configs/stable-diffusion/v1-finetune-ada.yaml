@@ -99,8 +99,6 @@ model:
         training_add_noise_prob:   { 'recon_iter': 0.6, 
                                      'arc2face_distill_iter': 0,
                                      'compos_distill_iter': 0.4 }
-        # Scale the background embeddings by this factor.
-        background_extra_global_scale:      1 #0.5
         embedding_manager_ckpt:             null
         # Load the ada components from these placeholders in the checkpoint.
         src_placeholders:                   null

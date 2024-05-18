@@ -38,7 +38,7 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         replace_prompt_comp_extra, extend_indices_B_by_n_times, repeat_selected_instances, \
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
-                        get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding
+                        get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding, fix_emb_scale
                         # split_indices_by_instance, calc_layer_subj_comp_k_or_v_ortho_loss
                                               
 from ldm.modules.ema import LitEma
@@ -976,7 +976,7 @@ class LatentDiffusion(DDPM):
                 # noise has been added to zs_id_embs. Don't add noise again.
                 if zs_clip_features is not None or zs_id_embs is not None:
                     self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs, 
-                                                                 zs_out_id_embs_scale=zs_out_id_embs_scale,
+                                                                 #zs_out_id_embs_scale=zs_out_id_embs_scale,
                                                                  add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
                     
                     # When do_zero_shot, never apply compel_cfg (applied in UNet), as compel cfg has been applied in embedding manager.
@@ -1011,6 +1011,22 @@ class LatentDiffusion(DDPM):
                 if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
                     static_prompt_embedding = static_prompt_embedding.mode()
 
+                # If apply_arc2face_embs, the location of the subject embeddings is not 
+                # indexed by placeholder_indices, so no point to fix the scale of the embeddings.
+                # But if apply_arc2face_inverse_embs, in theory we can still fix the scale of the embeddings,
+                # as the location of the subject embeddings is still indexed by placeholder_indices.
+                # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
+                # and scaling them down may hurt subject fidelity.
+                if zs_out_id_embs_scale < 1 and not apply_arc2face_embs:
+                    emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
+                    # Fix the scales of the static subject embeddings.
+                    for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
+                        emb_extra_global_scale = emb_global_scales_dict[placeholder]
+                        static_prompt_embedding = fix_emb_scale(static_prompt_embedding, placeholder_indices,
+                                                                num_layers=self.N_CA_LAYERS,
+                                                                scale=zs_out_id_embs_scale,
+                                                                extra_scale=emb_extra_global_scale)
+
                 # If apply_arc2face_inverse_embs, there's no cls_delta_string in the prompt embeddings,
                 # so no point to merge them.
                 if self.training and not apply_arc2face_inverse_embs:
@@ -1029,15 +1045,6 @@ class LatentDiffusion(DDPM):
 
                 # Otherwise, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
                 # we do nothing to the static_prompt_embedding.
-
-                '''
-                'subj_indices':                  filter_dict_by_key(self.embedding_manager.placeholder2indices,
-                                                                    self.embedding_manager.subject_strings),
-                # copy.copy(self.embedding_manager.placeholder_indices_fg),
-                'bg_indices':                   filter_dict_by_key(self.embedding_manager.placeholder2indices,
-                                                                    self.embedding_manager.background_strings),
-                #copy.copy(self.embedding_manager.placeholder_indices_bg),
-                '''
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
