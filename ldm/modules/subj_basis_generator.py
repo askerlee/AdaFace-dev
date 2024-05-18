@@ -548,8 +548,9 @@ class SubjBasisGenerator(nn.Module):
         else:
             # core_id_embs: [BS, 18, 768] -> [BS, 1, 18, 768] -> [BS, 16, 18, 768]
             id_embs_out = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
-            output_embs = id_embs_out * out_id_embs_scale
-            
+            output_embs = id_embs_out
+        
+        output_embs = output_embs * out_id_embs_scale
         return output_embs, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
