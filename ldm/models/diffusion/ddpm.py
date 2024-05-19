@@ -803,6 +803,10 @@ class LatentDiffusion(DDPM):
             # For DreamBooth.
             self.embedding_manager = None
 
+        empty_context_info = self.get_learned_conditioning([""], embman_iter_type='empty')
+        # empty_context: [16, 77, 768] -> [1, 77, 768]
+        self.empty_context = empty_context_info[0][[0]]
+
         self.generation_cache = []
         self.generation_cache_img_colors = []
         self.cache_start_iter = 0
@@ -825,9 +829,6 @@ class LatentDiffusion(DDPM):
             # empty_context_tea_filter is only used for clip teacher filtering.
             self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers, embman_iter_type='empty')
             self.empty_context_2b = self.get_learned_conditioning([""] * 2, embman_iter_type='empty')
-            empty_context_info = self.get_learned_conditioning([""], embman_iter_type='empty')
-            # empty_context: [16, 77, 768] -> [1, 77, 768]
-            self.empty_context = empty_context_info[0][[0]]
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -967,6 +968,8 @@ class LatentDiffusion(DDPM):
                 # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 self.cond_stage_model.device = self.device
+                if self.empty_context is not None:
+                    self.empty_context = self.empty_context.to(self.device)
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
@@ -1021,7 +1024,9 @@ class LatentDiffusion(DDPM):
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
                         emb_extra_global_scale = emb_global_scales_dict[placeholder]
-                        static_prompt_embedding = fix_emb_scale(static_prompt_embedding, placeholder_indices,
+                        static_prompt_embedding = fix_emb_scale(static_prompt_embedding, 
+                                                                placeholder_indices,
+                                                                empty_context=self.empty_context,
                                                                 num_layers=self.N_CA_LAYERS,
                                                                 scale_range=zs_out_id_embs_scale_range,
                                                                 extra_scale=emb_extra_global_scale)
