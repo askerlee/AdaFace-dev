@@ -373,7 +373,7 @@ class SubjBasisGenerator(nn.Module):
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
         num_heads=6,                       
         num_id_vecs={ 'subj': 77, 'bg': 257 }, # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
-        num_out_embs_per_layer=4,             # num_out_embs. subj: 4. bg: 2.
+        num_out_embs_per_layer=4,             # num_out_embs. subj: 16. bg: 4.
         num_out_layers=16,                    # number of layers of output embeddings.
         image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
         # DINO vits16 has 6 attention heads:
@@ -507,10 +507,13 @@ class SubjBasisGenerator(nn.Module):
 
                 if self.pad_embeddings is None:
                     self.generate_pad_embeddings()
+                else:
+                    self.pad_embeddings = self.pad_embeddings.to(arc2face_id_embs.device)
 
                 with torch.set_grad_enabled(self.prompt2token_proj_grad_scale != 0):
-                    # core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
+                    # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                     # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
+                    # If list_extra_words is None, then core_id_embs: [BS, 16, 768], the 16 identity tokens in full_prompt_embs.
                     arc2face_inverse_prompt_embs, core_id_embs = \
                         arc2face_inverse_face_prompt_embs(clip_tokenizer, 
                                                           self.prompt2token_proj, 
@@ -546,11 +549,14 @@ class SubjBasisGenerator(nn.Module):
             id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
             output_embs = id_embs_out * self.output_scale    # * 0.036
         else:
-            # core_id_embs: [BS, 18, 768] -> [BS, 1, 18, 768] -> [BS, 16, 18, 768]
+            # core_id_embs: [BS, 16, 768] -> [BS, 1, 16, 768] -> [BS, 16, 16, 768]
             id_embs_out = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
             output_embs = id_embs_out
         
-        output_embs = output_embs * out_id_embs_scale
+        # pad_embeddings: [77, 768] -> [1, 16, 768].
+        output_embs =     output_embs                                                       * out_id_embs_scale \
+                        + self.pad_embeddings[2:2+self.num_out_embs_per_layer].unsqueeze(0) * (1 - out_id_embs_scale)
+        
         return output_embs, arc2face_inverse_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):

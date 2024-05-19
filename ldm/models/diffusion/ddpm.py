@@ -979,6 +979,7 @@ class LatentDiffusion(DDPM):
                 # noise has been added to zs_id_embs. Don't add noise again.
                 if zs_clip_features is not None or zs_id_embs is not None:
                     self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs, 
+                                                                 zs_out_id_embs_scale_range=zs_out_id_embs_scale_range,
                                                                  add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
                     
                     # When do_zero_shot, never apply compel_cfg (applied in UNet), as compel cfg has been applied in embedding manager.
@@ -1019,6 +1020,7 @@ class LatentDiffusion(DDPM):
                 # as the location of the subject embeddings is still indexed by placeholder_indices.
                 # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
                 # and scaling them down may hurt subject fidelity.
+                '''
                 if zs_out_id_embs_scale_range != (1.0, 1.0) and not apply_arc2face_embs:
                     emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
@@ -1030,6 +1032,7 @@ class LatentDiffusion(DDPM):
                                                                 num_layers=self.N_CA_LAYERS,
                                                                 scale_range=zs_out_id_embs_scale_range,
                                                                 extra_scale=emb_extra_global_scale)
+                '''
 
                 # If apply_arc2face_inverse_embs, there's no cls_delta_string in the prompt embeddings,
                 # so no point to merge them.

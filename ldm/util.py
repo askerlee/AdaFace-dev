@@ -1202,8 +1202,9 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
     # 20:22 are embeddings of the (at most) two extra words.
     # [N, 77, 768] -> [N, 18, 768]
     core_prompt_embs = prompt_embeds[:, 4:20]
-    extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
-    core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
+    if list_extra_words is not None:
+        extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
+        core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
 
     return_prompts = []
     for emb_type in return_emb_types:
