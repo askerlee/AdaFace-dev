@@ -277,7 +277,9 @@ def parse_args():
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
     parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
-                        help="Scale of the extra words embeddings")        
+                        help="Scale of the extra words embeddings")
+    parser.add_argument("--zs_out_id_embs_scale_range", type=float, nargs=2, default=[1.0, 1.0],
+                        help="Range of the scale of the output id embeddings")
     parser.add_argument("--apply_arc2face_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
     parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
@@ -662,6 +664,7 @@ def main(opt):
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
+                                                               zs_out_id_embs_scale_range=opt.zs_out_id_embs_scale_range,
                                                                apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
                                                                apply_arc2face_embs=apply_arc2face_embs)
 
