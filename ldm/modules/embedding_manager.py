@@ -1576,6 +1576,7 @@ class EmbeddingManager(nn.Module):
                 # In an arc2face_inverse_clip_iter, inversed arc2face prompt embeddings is used as the prompt embeddings.
                 # The updated embedded_text above is ignored. But subj_static_embeddings is 
                 # still involved in delta-loss computation.
+                # embedded_text: [1, 77, 768]
                 embedded_text = arc2face_inverse_prompt_embs
             # NOTE: if self.iter_type == 'arc2face_clip_iter', we CANNOT return self.arc2face_embs
             # as the updated embedded_text, since the returned embedded_text will be encoded again by the text encoder.
