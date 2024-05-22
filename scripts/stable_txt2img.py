@@ -889,6 +889,9 @@ def main(opt):
             else:
                 emb_sig  = "unknown"
 
+            if opt.zeroshot:
+                emb_sig = subjname_method + "-" + emb_sig
+
             scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
             scores   = [ f"{score:.4f}" for score in scores ]
             SCORES_CSV.writerow([emb_sig] + scores)

@@ -42,7 +42,7 @@ def parse_args():
  
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use zero-shot learning") 
-    parser.add_argument("--zs_cls_delta_string", type=str, default='person',
+    parser.add_argument("--zs_cls_delta_string", type=str, default=None,
                         help="Class delta string for zero-shot learning")    
     parser.add_argument("--no_id_emb", action="store_true",
                         help="Do not use face/DINO embeddings for zero-shot generation")
@@ -470,6 +470,8 @@ if __name__ == "__main__":
                 command_line += f" --no_id_emb"
             if args.zs_cls_delta_string is not None:
                 command_line += f" --zs_cls_delta_string \"{args.zs_cls_delta_string}\""
+            else:
+                command_line += f" --zs_cls_delta_string \"{cls_delta_string}\""
                 
         if hasattr(args, 'num_vectors_per_subj_token'):
             command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
@@ -505,8 +507,9 @@ if __name__ == "__main__":
                 if isinstance(args.ref_images, (list, tuple)):
                     args.ref_images = " ".join(args.ref_images)
                 elif args.ref_images is None:
-                    args.ref_images = subject_gt_dir
-                command_line += f" --ref_images {args.ref_images}"
+                    command_line += f" --ref_images {subject_gt_dir}"
+                else:
+                    command_line += f" --ref_images {args.ref_images}"
                             
         if args.n_rows > 0:
             command_line += f" --n_rows {args.n_rows}"
