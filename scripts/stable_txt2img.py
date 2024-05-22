@@ -389,7 +389,7 @@ def main(opt):
             zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
             zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-            config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string
+            config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string or 'person'
             config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
             config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
         else:
