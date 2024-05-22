@@ -575,6 +575,6 @@ def get_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     z_suffix += background_string
     # z_prefix is usually "portrait of" or "face portrait of"
     prompt_list            = [ prompt.format(z_prefix, subject_string,   z_suffix)  for prompt in orig_prompt_list ]
-    orig_short_prompt_list = [ prompt.format(z_prefix, class_token,      z_suffix)  for prompt in orig_prompt_list ]
-    orig_long_prompt_list  = [ prompt.format(z_prefix, class_long_token, z_suffix)  for prompt in orig_prompt_list ]
+    orig_short_prompt_list = [ prompt.format(z_prefix, class_token,      background_string)  for prompt in orig_prompt_list ]
+    orig_long_prompt_list  = [ prompt.format(z_prefix, class_long_token, background_string)  for prompt in orig_prompt_list ]
     return prompt_list, orig_short_prompt_list, orig_long_prompt_list
