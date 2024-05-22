@@ -5478,7 +5478,32 @@ class Arc2FaceWrapper(pl.LightningModule):
         # Remove the original x_start from pred_x0s.
         pred_x0s = x_starts[1:]
         return noise_preds, pred_x0s, noises, ts
-    
+
+'''
+# ConsistentID requires torch 2.0, which is not compatible with the current version of pytorch_lightning.
+# Will fix this issue in a future commit.
+
+class ConsistentIDWrapper(pl.LightningModule):
+    def __init__(self, **kwargs):
+        super().__init__()
+        ### Load base model
+        from pipline_StableDiffusion_ConsistentID import ConsistentIDStableDiffusionPipeline
+        pipe = ConsistentIDStableDiffusionPipeline.from_pretrained(
+            base_model_path, 
+            torch_dtype=torch.float16, 
+            use_safetensors=True, 
+            variant="fp16"
+        ).to(device)
+
+        ### Load consistentID_model checkpoint
+        pipe.load_ConsistentID_model(
+            os.path.dirname(consistentID_path),
+            subfolder="",
+            weight_name=os.path.basename(consistentID_path),
+            trigger_word="img",
+        )     
+'''
+
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
         super().__init__()

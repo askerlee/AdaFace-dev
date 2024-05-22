@@ -53,4 +53,7 @@ InstantID
 movetrash.sh
 *.pt
 /ID-Animator
+AdaFace-Animate/*
 AdaFace-Animate
+ConsistentID/*
+ConsistentID

@@ -49,11 +49,7 @@ def parse_args():
       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
-    parser.add_argument("--ref_masks",  type=str, nargs='+', default=None,
-                        help="Reference mask for zero-shot learning")
-    parser.add_argument("--ignore_ref_masks", action="store_true",
-                        help="Ignore reference masks for zero-shot learning")
-    
+
     parser.add_argument("--use_conv_attn_kernel_size",
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
@@ -469,16 +465,7 @@ if __name__ == "__main__":
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
         if args.zeroshot:            
-            if isinstance(args.ref_images, (list, tuple)):
-                args.ref_images = " ".join(args.ref_images)
-            if isinstance(args.ref_masks, (list, tuple)):
-                args.ref_masks  = " ".join(args.ref_masks)
-
-            command_line += f" --zeroshot --ref_images {args.ref_images}"
-            if args.ref_masks is not None:
-                command_line += f" --ref_masks {args.ref_masks}"
-            if args.ignore_ref_masks:
-                command_line += f" --ignore_ref_masks"
+            command_line += f" --zeroshot"
             if args.no_id_emb:
                 command_line += f" --no_id_emb"
             if args.zs_cls_delta_string is not None:
@@ -514,6 +501,13 @@ if __name__ == "__main__":
                 # Tell stable_txt2img.py to do face-specific evaluation.
                 command_line += f" --calc_face_sim"
 
+            if args.zeroshot:
+                if isinstance(args.ref_images, (list, tuple)):
+                    args.ref_images = " ".join(args.ref_images)
+                elif args.ref_images is None:
+                    args.ref_images = subject_gt_dir
+                command_line += f" --ref_images {args.ref_images}"
+                            
         if args.n_rows > 0:
             command_line += f" --n_rows {args.n_rows}"
             
