@@ -470,9 +470,9 @@ if __name__ == "__main__":
                 command_line += f" --no_id_emb"
             if args.zs_cls_delta_string is not None:
                 command_line += f" --zs_cls_delta_string \"{args.zs_cls_delta_string}\""
-            else:
-                command_line += f" --zs_cls_delta_string \"{cls_delta_string}\""
-                
+            #else:
+            #    command_line += f" --zs_cls_delta_string \"{cls_delta_string}\""
+
         if hasattr(args, 'num_vectors_per_subj_token'):
             command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
         if hasattr(args, 'num_vectors_per_bg_token'):
