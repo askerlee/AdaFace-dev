@@ -39,6 +39,7 @@ def init_evaluators(gpu_id):
     dino_evator = DINOEvaluator(device)
     return clip_evator, dino_evator
 
+# gt_dir: the reference image folder, or the path of a single reference image.
 # num_samples: only evaluate the last (latest) num_samples images. 
 # If -1, then evaluate all images
 def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_samples=-1, gt_self_compare=False):
@@ -261,6 +262,7 @@ def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
 
     return mean_similarity, src_no_face_img_count, dst_no_face_img_count
 
+# src_path, dst_path: a folder or a single image path
 def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
                               face_engine="deepface", insightface_app=None):
 
