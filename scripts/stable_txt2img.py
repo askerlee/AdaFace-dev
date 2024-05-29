@@ -213,13 +213,6 @@ def parse_args():
         default=0.1,
         help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
     )
-    parser.add_argument(
-        "--init_mask_paths",
-        type=str,
-        nargs='+', 
-        default=None,
-        help="path to the initial mask(s)",
-    )      
     # No preview
     parser.add_argument(
         "--no_preview",
@@ -239,7 +232,7 @@ def parse_args():
     #parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
     parser.add_argument("--compare_with", type=str, default=None,
-                        help="Evaluate the similarity of generated samples with reference images in this folder")
+                        help="A folder of reference images, or a single reference image, used to evaluate the similarity of generated samples")
     parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
@@ -395,8 +388,6 @@ def main(opt):
         else:
             ref_images = None
 
-        ref_masks  = None
-
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
             model.embedding_manager.load(opt.embedding_paths, load_old_embman_ckpt=opt.load_old_embman_ckpt)
@@ -435,7 +426,7 @@ def main(opt):
             # zs_clip_features: [1, 514, 1280]. 
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
             zs_clip_features, zs_id_embs, _ = \
-                model.encode_zero_shot_image_features(ref_images, ref_masks,
+                model.encode_zero_shot_image_features(ref_images, fg_masks=None,
                                                       is_face=opt.calc_face_sim,
                                                       calc_avg=True, skip_non_faces=True,
                                                       image_paths=opt.ref_images)
@@ -584,35 +575,22 @@ def main(opt):
 
     if opt.use_first_gt_img_as_init:
         # Cannot specify init_img_paths and use_first_gt_img_as_init at the same time.
-        assert opt.init_img_paths is None and opt.init_mask_paths is None, \
-            "Cannot use 'init_img_paths'/'init_mask_paths' and 'use_first_gt_img_as_init' at the same time."
+        assert opt.init_img_paths is None, \
+            "Cannot use 'init_img_paths' and 'use_first_gt_img_as_init' at the same time."
         assert opt.compare_with is not None, "Must specify --compare_with when using use_first_gt_img_as_init."
         gt_data_loader  = PersonalizedBase(opt.compare_with, set_name='evaluation', size=opt.H, max_num_images_per_subject=-1, flip_p=0.0)
         opt.init_img_paths  = gt_data_loader.image_paths
-        opt.init_mask_paths = gt_data_loader.fg_mask_paths
         
     if opt.init_img_paths is not None:
-        if opt.init_mask_paths is None:
-            opt.init_mask_paths = [None] * len(opt.init_img_paths)
-
         avg_x_T = torch.zeros([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-        for init_img_path, init_mask_path in zip(opt.init_img_paths, opt.init_mask_paths):
+        for init_img_path in opt.init_img_paths:
             init_img = load_img(init_img_path, opt.H, opt.W)
             print(f"Image {init_img_path}, as the init image, weight {opt.init_img_weight}")
 
             # init_img: [4, 3, 512, 512], [b c h w]
             init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
-
-            if init_mask_path is not None:
-                mask_obj = Image.open(init_mask_path).convert("L")
-                print(f"Applied mask {init_mask_path}")
-                mask     = torch.from_numpy(np.array(mask_obj)) / 255
-                mask     = F.interpolate(mask[None, None], size=(opt.H // opt.f, opt.W // opt.f), mode='nearest')
-                mask     = mask.repeat(batch_size, 1, 1, 1).to(device)
-                mask_dict = { 'fg_mask': mask, 'aug_mask': None }
-            else:
-                mask = torch.ones_like(avg_x_T)
-                mask_dict = None
+            mask = torch.ones_like(avg_x_T)
+            mask_dict = None
 
             # move avg_init_img to latent space
             # x_T: [4, 4, 64, 64]

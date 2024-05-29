@@ -130,6 +130,7 @@ def filter_non_image(x):
 class PersonalizedBase(Dataset):
     def __init__(self,
                  # a list of folders containing subfolders, each subfolder containing images of a subject.
+                 # data_roots can also be a list or a single path, each pointing to a single image file.
                  data_roots,
                  # a list of folders containing no subfolders, but only images of multiple subjects.
                  # Their cls_delta_string are all set to the default 'person', as their genders are unknown.
