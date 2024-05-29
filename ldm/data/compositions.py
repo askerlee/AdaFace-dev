@@ -87,9 +87,9 @@ all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "ste
                "as a crochet figure", "as a 3d model", "closeup shot", "close view", "D&D sci-fi",
                "pop art", "portrait art", "watercolour painting", "chalk art", "concepture art", "bauhaus style", 
                "photorealistic painting", "surrealism painting", "impressionism", "expressionism", "abstract art", "minimalism",
-               "low poly", "cubism style",
+               "low poly", "cubism style", "funko pop"
              ]
-# concept art|realistic painting|character design|anime sketch|trending in artstation|hyper realistic|vivid colors|clear face|detailed face
+# other style modifiers.
 all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
                   "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
                   "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
@@ -111,7 +111,7 @@ all_light = [ "daylight", "moonlight", "night sky", "natural light", "front ligh
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
                "mark ryden", "hayao miyazaki", 
                #add artist 
-               "agnes Lawrence","disney animation studio"]
+               "agnes Lawrence", "disney animation studio"]
 
 #add background prompts
 all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", "a theme park",

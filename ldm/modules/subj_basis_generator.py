@@ -554,8 +554,9 @@ class SubjBasisGenerator(nn.Module):
             output_embs = id_embs_out
         
         # pad_embeddings: [77, 768] -> [1, 16, 768].
-        output_embs =     output_embs                                                       * out_id_embs_scale \
-                        + self.pad_embeddings[2:2+self.num_out_embs_per_layer].unsqueeze(0) * (1 - out_id_embs_scale)
+        if out_id_embs_scale > 1:
+            output_embs =     output_embs                                                       * out_id_embs_scale \
+                            + self.pad_embeddings[2:2+self.num_out_embs_per_layer].unsqueeze(0) * (1 - out_id_embs_scale)
         
         return output_embs, arc2face_inverse_prompt_embs
 

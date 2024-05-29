@@ -1477,6 +1477,7 @@ class EmbeddingManager(nn.Module):
                             # static_zs_embs0: ID embeddings from the frozen subj_basis_generator.
                             static_zs_embs0, placeholder_arc2face_inverse_prompt_embs0 = \
                                     subj_basis_generator0(zs_clip_features, zs_id_embs, arc2face_id_embs,
+                                                          self.zs_out_id_embs_scale_range[0],
                                                           is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
                                                           arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
