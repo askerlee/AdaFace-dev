@@ -266,7 +266,7 @@ def parse_args():
                         help="Whether to use zero-shot learning")                    
     parser.add_argument("--zs_cls_delta_string", type=str, default=None,
                         help="Class delta string for zero-shot learning")
-    parser.add_argument("--zs_arc2face_inverse_prompt_embs_inf_type", type=str, default='full_half_pad',
+    parser.add_argument("--zs_adaface_prompt_embs_inf_type", type=str, default='full_half_pad',
                         choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
                         help="Inverse prompt embeddings type during inference under zero-shot learning")
     parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
@@ -383,7 +383,7 @@ def main(opt):
             zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
             config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string or 'person'
-            config.model.params.personalization_config.params.zs_arc2face_inverse_prompt_embs_inf_type = opt.zs_arc2face_inverse_prompt_embs_inf_type
+            config.model.params.personalization_config.params.zs_adaface_prompt_embs_inf_type = opt.zs_adaface_prompt_embs_inf_type
             config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
         else:
             ref_images = None

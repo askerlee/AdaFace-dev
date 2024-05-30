@@ -94,7 +94,15 @@ if __name__ == "__main__":
 
         else:
             subject_name = os.path.basename(image_folder)
-            image_paths = glob.glob(os.path.join(image_folder, "*.jpg"))
+            image_types = ["*.jpg", "*.png", "*.jpeg"]
+            alltype_image_paths = []
+            for image_type in image_types:
+                # glob returns the full path.
+                image_paths = glob.glob(os.path.join(image_folder, image_type))
+                if len(image_paths) > 0:
+                    alltype_image_paths.extend(image_paths)
+            # image_paths contain at most args.example_image_count full image paths.
+            image_paths = alltype_image_paths[:args.example_image_count]
     else:
         subject_name = None
         image_paths = None
@@ -105,7 +113,7 @@ if __name__ == "__main__":
     
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
     rand_face_embs=torch.randn(1, 512)
-    num_images = args.out_image_count
+    id_batch_size = args.out_image_count
 
     input_max_length = 22
 
@@ -114,14 +122,14 @@ if __name__ == "__main__":
     for noise_level in (0, 0.03, 0.06):
         pre_face_embs = rand_face_embs if args.randface else None
 
+        # id_prompt_emb, neg_id_prompt_emb are in the image prompt space.
         faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
             = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
                                             extract_faceid_embeds=not args.randface,
                                             pre_face_embs=pre_face_embs,
                                             image_folder=image_folder, image_paths=image_paths,
                                             images_np=None,
-                                            example_image_count=args.example_image_count, 
-                                            out_image_count=num_images,
+                                            id_batch_size=id_batch_size,
                                             device='cuda',
                                             input_max_length=input_max_length,
                                             noise_level=noise_level,
@@ -143,7 +151,7 @@ if __name__ == "__main__":
         negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
         # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
         prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
-                                                                        do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+                                                                         do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         pipeline.text_encoder = text_encoder
 
         if test_core_embs:

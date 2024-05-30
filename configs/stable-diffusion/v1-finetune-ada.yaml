@@ -25,34 +25,36 @@ model:
     use_ema: False
     unfreeze_model: False
     model_lr: 0.0
-    use_layerwise_embedding:    True
-    use_fp_trick:               True
-    do_clip_teacher_filtering:         True
-    num_candidate_teachers:             2
-    composition_regs_iter_gap:          3
-    do_zero_shot:                       True
-    arc2face_distill_iter_prob:         0.1
+    use_layerwise_embedding:          True
+    use_fp_trick:                     True
+    do_clip_teacher_filtering:        True
+    num_candidate_teachers:           2
+    composition_regs_iter_gap:        3
+    do_zero_shot:                     True
+    # The percentage of arc2face_distill_iter among do_normal_recon iters.
+    arc2face_distill_iter_prob:       0.1
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
-    static_embedding_reg_weight:        0 #2e-5
+    # Disabled under zero-shot setting.
+    static_embedding_reg_weight:      0 #2e-5
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
-    prompt_emb_delta_reg_weight:        2e-4
+    prompt_emb_delta_reg_weight:      2e-4
     # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
-    mix_prompt_distill_weight:          1e-4
+    mix_prompt_distill_weight:        1e-4
     # Apply BN/LN on cross-attn Q and out features for loss computation.
-    normalize_ca_q_and_outfeat: True
-    comp_fg_bg_preserve_loss_weight:    1e-3
+    normalize_ca_q_and_outfeat:       True
+    comp_fg_bg_preserve_loss_weight:  1e-3
     # fg_bg_comple: used in non-wds recon iters.
     # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
-    fg_bg_complementary_loss_weight:    2e-4
+    fg_bg_complementary_loss_weight:  2e-4
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
-    fg_bg_xlayer_consist_loss_weight:   5e-5
+    fg_bg_xlayer_consist_loss_weight: 5e-5
     # Push the prompt embeddings slightly away from the null prompt embedding.
-    compel_cfg_weight_level_range:      [2, 2]
+    compel_cfg_weight_level_range:    [2, 2]
     # compel_cfg is disabled if doing zero-shot, even if the prob > 0.
-    apply_compel_cfg_prob:              0.5
+    apply_compel_cfg_prob:            0.5
     # fg_wds_comple: used in wds recon iters.
-    fg_wds_complementary_loss_weight:   0 #1e-4
-    wds_bg_recon_discount:              0.05
+    fg_wds_complementary_loss_weight: 0 #1e-4
+    wds_bg_recon_discount:            0.05
     
     optimizer_type: Prodigy      # NAdam     # AdamW, NAdam, Prodigy, ProdigyAdamW
     grad_clip:  0.5

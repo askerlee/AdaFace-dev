@@ -310,18 +310,15 @@ def get_parser(**parser_kwargs):
                         type=int, default=argparse.SUPPRESS,
                         help="Gaps between iterations for composition regularization. "
                              "Set to -1 to disable for ablation.")
-
-    # num_compositions_per_image: a value > 1 leads to better performance on prompt compositions
-    parser.add_argument("--num_compositions_per_image",
-                        type=int, default=1,
-                        help="Number of composition samples for each image in a batch (default: 2)")
     parser.add_argument("--broad_class", type=int, default=1,
                         help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
     # nargs="?" and const=True: --use_fp_trick or --use_fp_trick True or --use_fp_trick 1 
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-
+    parser.add_argument("--do_clip_teacher_filtering", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to filter the teacher's output using CLIP")
+    
     parser.add_argument("--wds_db_path", type=str, default=None,
                         help="Path to the composition webdatabase .tar file")
     parser.add_argument("--wds_background_string", 
@@ -906,7 +903,7 @@ if __name__ == "__main__":
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
         config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
-        config.data.params.train.params.wds_db_path                   = opt.wds_db_path
+        config.data.params.train.params.wds_db_path                     = opt.wds_db_path
 
         if opt.background_string is not None:
             config.data.params.train.params.background_string           = opt.background_string
@@ -916,7 +913,6 @@ if __name__ == "__main__":
             config.data.params.train.params.bg_init_string              = opt.bg_init_string
             config.data.params.validation.params.bg_init_string         = opt.bg_init_string
 
-        config.data.params.train.params.num_compositions_per_image = opt.num_compositions_per_image
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
         
         # config.data:
@@ -927,8 +923,8 @@ if __name__ == "__main__":
         #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set_name': 'val', 'repeats': 10, 
         #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}}}
-        config.data.params.train.params.data_roots       = opt.data_roots
-        config.data.params.validation.params.data_roots  = opt.data_roots
+        config.data.params.train.params.data_roots               = opt.data_roots
+        config.data.params.validation.params.data_roots          = opt.data_roots
         config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
         config.data.params.validation.params.mix_subj_data_roots = opt.mix_subj_data_roots
         config.data.params.train.params.load_meta_subj2person_type_cache_path = opt.load_meta_subj2person_type_cache_path

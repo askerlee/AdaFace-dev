@@ -495,9 +495,9 @@ class StaticLayerwiseEmbedding(nn.Module):
         print(f"{zero_shot_sig} StaticLayerwiseEmbedding {token_string} initialized with {self.K} total embs, {self.N} init vectors ({init_string}), {self.r} basis vectors")
 
     # Return static embeddings of all layers together.
-    # static_zs_embs: [BS, 16, K, 768]. 
+    # adaface_subj_embs: [BS, 16, K, 768]. 
     # 16: number of layers. K: number of vectors per token. 
-    def forward(self, static_zs_embs=None):
+    def forward(self, adaface_subj_embs=None):
         with torch.autocast(device_type=self.device_type, enabled=False):
             # self.basis_comm_weights: [1, K, r] broadcasted to [16, K, r].
             basis_weights   = self.basis_rand_weights   + self.basis_comm_weights
@@ -506,12 +506,12 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             if self.do_zero_shot:
                 # (i0, e0), (i0, e1), ..., (i0, e15), (i1, e0), (i1, e1), ..., (i1, e15), ..., (iB, e15).
-                static_zs_embs = rearrange(static_zs_embs, 'b l k d -> (b l) k d')
-                # Copy to bias, so that static_zs_embs is regularized by layerwise_embedding_norm_loss().
-                self.bias = static_zs_embs
-                # Make sure static_zs_embs is regularized by layerwise_embedding_norm_loss().
+                adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d')
+                # Copy to bias, so that adaface_subj_embs is regularized by layerwise_embedding_norm_loss().
+                self.bias = adaface_subj_embs
+                # Make sure adaface_subj_embs is regularized by layerwise_embedding_norm_loss().
                 self.has_bias = True
-                return static_zs_embs
+                return adaface_subj_embs
             
             # self.N: number of pre_vecs.
             if self.N > 0:
@@ -975,7 +975,7 @@ class EmbeddingManager(nn.Module):
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
-            zs_arc2face_inverse_prompt_embs_inf_type='full_half_pad',
+            zs_adaface_prompt_embs_inf_type='full_half_pad',
             # A few args, like embedding_manager_ckpt, are used in ddpm.py, but ignored here.
             **kwargs
     ):
@@ -1094,7 +1094,7 @@ class EmbeddingManager(nn.Module):
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            self.zs_arc2face_inverse_prompt_embs_inf_type = zs_arc2face_inverse_prompt_embs_inf_type
+            self.zs_adaface_prompt_embs_inf_type = zs_adaface_prompt_embs_inf_type
             # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceWrapper instance 
             # is initialized, so as to save some RAM.
             self.arc2face_text_encoder = None
@@ -1332,7 +1332,7 @@ class EmbeddingManager(nn.Module):
         static_subj_embs_dict = {}
         self.cls_delta_string_indices = []
 
-        arc2face_inverse_prompt_embs = None
+        adaface_prompt_embs = None
         if dist.is_initialized():
             rank = dist.get_rank()
         else:
@@ -1429,36 +1429,37 @@ class EmbeddingManager(nn.Module):
                         arc2face_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
-                    # static_zs_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
-                    static_zs_embs, placeholder_arc2face_inverse_prompt_embs = \
-                            subj_basis_generator(zs_clip_features, zs_id_embs, arc2face_id_embs,
+                    # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
+                    adaface_subj_embs, placeholder_adaface_prompt_embs = \
+                            subj_basis_generator(arc2face_id_embs,
+                                                 zs_clip_features, zs_id_embs, 
                                                  # Only scale with the lower bound.
                                                  # TODO: more granular, layerwise scaling.
                                                  self.zs_out_id_embs_scale_range[0],
                                                  is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
-                                                 arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
+                                                 adaface_prompt_embs_inf_type=self.zs_adaface_prompt_embs_inf_type)
                     # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
                     # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
-                    # But static_zs_embs is generated from the subject-single instance only.
-                    # Repeating at dim 0 is correct even if static_zs_embs has a batch size > 1:
+                    # But adaface_subj_embs is generated from the subject-single instance only.
+                    # Repeating at dim 0 is correct even if adaface_subj_embs has a batch size > 1:
                     # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
                     # matching the batch structure of (subject-single, subject-single, ...).
-                    if static_zs_embs.shape[0] < REAL_OCCURS_IN_BATCH:
-                        static_zs_embs_orig_bs = static_zs_embs.shape[0]
-                        static_zs_embs = static_zs_embs.repeat(REAL_OCCURS_IN_BATCH // static_zs_embs.shape[0], 1, 1, 1)
+                    if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
+                        adaface_subj_embs_orig_bs = adaface_subj_embs.shape[0]
+                        adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
                         #if rank == 0:
-                        #    print(f"Repeat static_zs_embs from {static_zs_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
+                        #    print(f"Repeat adaface_subj_embs from {adaface_subj_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
 
                     if self.do_zero_shot and not placeholder_is_bg:
                         if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'arc2face_clip_iter':
                             # NOTE: arc2face_embs is the Arc2Face forward embeddings, while 
-                            # arc2face_inverse_prompt_embs is the Arc2Face inverse embeddings.
+                            # adaface_prompt_embs is the Arc2Face inverse embeddings.
                             # arc2face_embs: [BS, 77, 768].
                             self.arc2face_embs = placeholder_arc2face_embs
                         if self.iter_type == 'arc2face_inverse_clip_iter' or self.iter_type == 'compos_distill_iter':
-                            assert placeholder_arc2face_inverse_prompt_embs is not None
-                            arc2face_inverse_prompt_embs = placeholder_arc2face_inverse_prompt_embs
+                            assert placeholder_adaface_prompt_embs is not None
+                            adaface_prompt_embs = placeholder_adaface_prompt_embs
 
                     # NOTE: the condition iter_type == 'compos_distill_iter' is vital, as a recon_iter with delta loss 
                     # also has the 4-type prompt structure.
@@ -1474,18 +1475,18 @@ class EmbeddingManager(nn.Module):
                             breakpoint()
                         subj_basis_generator0 = self.frozen_string_to_subj_basis_generator_dict[placeholder_string]
                         with torch.no_grad():
-                            # static_zs_embs0: ID embeddings from the frozen subj_basis_generator.
-                            static_zs_embs0, placeholder_arc2face_inverse_prompt_embs0 = \
-                                    subj_basis_generator0(zs_clip_features, zs_id_embs, arc2face_id_embs,
+                            # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
+                            adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
+                                    subj_basis_generator0(arc2face_id_embs, zs_clip_features, zs_id_embs, 
                                                           self.zs_out_id_embs_scale_range[0],
                                                           is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
-                                                          arc2face_inverse_prompt_embs_inf_type=self.zs_arc2face_inverse_prompt_embs_inf_type)
+                                                          adaface_prompt_embs_inf_type=self.zs_adaface_prompt_embs_inf_type)
                             
-                        # static_zs_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
-                        static_zs_embs0 = static_zs_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
-                        # static_zs_embs0: [2, 16, 16, 768] -> [32, 16, 768].
-                        self.static_zs_embs0 = rearrange(static_zs_embs0, 'b l k d -> (b l) k d')
+                        # adaface_subj_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
+                        adaface_subj_embs0 = adaface_subj_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
+                        # adaface_subj_embs0: [2, 16, 16, 768] -> [32, 16, 768].
+                        self.adaface_subj_embs0 = rearrange(adaface_subj_embs0, 'b l k d -> (b l) k d')
                         # Only replace the subject-single embeddings in the compos_distill_iter.
                         # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
                         # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
@@ -1493,17 +1494,17 @@ class EmbeddingManager(nn.Module):
                             NUM_HALF_SUBJS = REAL_OCCURS_IN_BATCH // 2
                             # Still allow a small inference from the updated subj-single embeddings, 
                             # maybe this will make the images more natural?
-                            static_zs_embs[:NUM_HALF_SUBJS] = static_zs_embs0.to(static_zs_embs.dtype) * 0.9 \
-                                                              + static_zs_embs[:NUM_HALF_SUBJS] * 0.1
+                            adaface_subj_embs[:NUM_HALF_SUBJS] = adaface_subj_embs0.to(adaface_subj_embs.dtype) * 0.9 \
+                                                              + adaface_subj_embs[:NUM_HALF_SUBJS] * 0.1
                             
                             if rank == 0:
                                 print(f"compos_distill_iter. Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
                 else:
-                    static_zs_embs = None
+                    adaface_subj_embs = None
 
                 # static_embedder essentially only does:
-                # >> static_zs_embs = rearrange(static_zs_embs, 'b l k d -> (b l) k d')
-                subj_static_embedding = static_embedder(static_zs_embs)
+                # >> adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d')
+                subj_static_embedding = static_embedder(adaface_subj_embs)
                 subj_static_embedding = subj_static_embedding.to(embedded_text.dtype)
             else:
                 # static_embedder is already the embedding vectors.
@@ -1578,7 +1579,7 @@ class EmbeddingManager(nn.Module):
                 # The updated embedded_text above is ignored. But subj_static_embeddings is 
                 # still involved in delta-loss computation.
                 # embedded_text: [1, 77, 768]
-                embedded_text = arc2face_inverse_prompt_embs
+                embedded_text = adaface_prompt_embs
             # NOTE: if self.iter_type == 'arc2face_clip_iter', we CANNOT return self.arc2face_embs
             # as the updated embedded_text, since the returned embedded_text will be encoded again by the text encoder.
             # Instead, we replace the prompt embeddings with the arc2face_embs in ddpm.py:get_learned_conditioning().

@@ -1082,11 +1082,11 @@ def fix_emb_scale(text_embedding, placeholder_indices, empty_context=None,
     return scaled_text_embedding
 
 #@torch.autocast(device_type="cuda")
-def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs, 
+def arc2face_forward_face_embs(tokenizer, arc2face_text_encoder, face_embs, 
                                input_max_length=77, return_full_and_core_embs=True):
 
     '''
-    text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
+    arc2face_text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
     face_embs: (N, 512) normalized ArcFace embeddings.
     return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
                                If False, return only the core embeddings.
@@ -1106,13 +1106,13 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
     # input_ids: [1, 77] or [3, 77].
     input_ids = input_ids.repeat(len(face_embs), 1)
     face_embs_dtype = face_embs.dtype
-    face_embs = face_embs.to(text_encoder.dtype)
+    face_embs = face_embs.to(arc2face_text_encoder.dtype)
     # face_embs_padded: [1, 512] -> [1, 768].
-    face_embs_padded = F.pad(face_embs, (0, text_encoder.config.hidden_size - face_embs.shape[-1]), "constant", 0)
-    token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
+    face_embs_padded = F.pad(face_embs, (0, arc2face_text_encoder.config.hidden_size - face_embs.shape[-1]), "constant", 0)
+    token_embs = arc2face_text_encoder(input_ids=input_ids, return_token_embs=True)
     token_embs[input_ids==arcface_token_id] = face_embs_padded
 
-    prompt_embeds = text_encoder(
+    prompt_embeds = arc2face_text_encoder(
         input_ids=input_ids,
         input_token_embs=token_embs,
         return_token_embs=False
@@ -1127,7 +1127,7 @@ def arc2face_forward_face_embs(tokenizer, text_encoder, face_embs,
         # [N, 77, 768] -> [N, 16, 768]
         return prompt_embeds, prompt_embeds[:, 4:20]
     else:
-        # [N, 77, 768]
+        # [N, 16, 768]
         return prompt_embeds[:, 4:20]
 
 def get_b_core_e_embeddings(prompt_embeds, length=22):
@@ -1135,12 +1135,13 @@ def get_b_core_e_embeddings(prompt_embeds, length=22):
     return b_core_e_embs
 
 # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra', 'b_core_e'].
-def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_embs, list_extra_words,
+def arc2face_inverse_face_prompt_embs(clip_tokenizer, inverse_text_encoder, face_prompt_embs, list_extra_words,
                                       return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
                                       input_max_length=77, zs_extra_words_scale=0.5):
 
     '''
-    text_encoder: arc2face_models.py CLIPTextModelWrapper instance.
+    inverse_text_encoder: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
+    inverse_text_encoder is NOT the original arc2face text encoder, but retrained to do inverse mapping.
     face_prompt_embs: (BS, 16, 768). Only the core embeddings, no paddings.
     list_extra_words: [s_1, ..., s_BS], each s_i is a list of extra words to be added to the prompt.
     return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
@@ -1180,15 +1181,15 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
         ).input_ids.to(face_prompt_embs.device)
 
     face_prompt_embs_dtype = face_prompt_embs.dtype
-    face_prompt_embs = face_prompt_embs.to(text_encoder.dtype)
+    face_prompt_embs = face_prompt_embs.to(inverse_text_encoder.dtype)
 
     # token_embs: [1, 77, 768].
-    token_embs = text_encoder(input_ids=input_ids, return_token_embs=True)
+    token_embs = inverse_text_encoder(input_ids=input_ids, return_token_embs=True)
     # token 4: first ", " in the template prompt.
     # Replace embeddings of 16 placeholder ", " with face_prompt_embs.
     token_embs[:, 4:20] = face_prompt_embs
 
-    prompt_embeds = text_encoder(
+    prompt_embeds = inverse_text_encoder(
         input_ids=input_ids,
         input_token_embs=token_embs,
         hidden_state_layer_weights=hidden_state_layer_weights,
@@ -1237,12 +1238,14 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, text_encoder, face_prompt_
     return return_prompts
 
 # if pre_face_embs is None, generate random face embeddings [BS, 512].
-def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, text_encoder, 
+# image_folder is passed only for logging purpose. image_paths contains the paths of the images.
+def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder, 
                                 extract_faceid_embeds, pre_face_embs, 
                                 image_folder, image_paths, images_np,
-                                example_image_count, out_image_count,
-                                device, input_max_length=77, noise_level=0.0, 
-                                gen_neg_prompt=True, verbose=False):
+                                id_batch_size, device, 
+                                input_max_length=77, noise_level=0.0, 
+                                return_core_id_embs=False,
+                                gen_neg_prompt=False, verbose=False):
     if extract_faceid_embeds:
         image_count = 0
         faceid_embeds = []
@@ -1267,8 +1270,6 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, text_encoder,
             # Each faceid_embed: [1, 512]
             faceid_embeds.append(torch.from_numpy(face_info.normed_embedding).unsqueeze(0))
             image_count += 1
-            if image_count >= example_image_count:
-                break
 
         if verbose and image_folder is not None:
             print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
@@ -1279,43 +1280,53 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, text_encoder,
 
         # faceid_embeds: [10, 512]
         faceid_embeds = torch.cat(faceid_embeds, dim=0)
-        # faceid_embeds: [10, 512] -> [1, 512] -> [BS, 512].
+        # faceid_embeds: [10, 512] -> [1, 512].
         # and the resulted prompt embeddings are the same.
         faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
-        faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
-        
-        faceid_embeds += torch.randn_like(faceid_embeds) * noise_level        
+        if noise_level > 0:
+            faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
         if pre_face_embs is None:
-            faceid_embeds = torch.randn(out_image_count, 512)
+            faceid_embeds = torch.randn(id_batch_size, 512)
             if noise_level > 0:
                 faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
         else:
             faceid_embeds = pre_face_embs
+            if pre_face_embs.shape[0] == 1:
+                faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
+            # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
+            if noise_level > 0:
+                faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
+                
         faceid_embeds = faceid_embeds.to(torch.float16).to(device)
 
     faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
     # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
     with torch.no_grad():
-        arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(clip_tokenizer, text_encoder, 
+        arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(clip_tokenizer, arc2face_text_encoder, 
                                                                  faceid_embeds, input_max_length=input_max_length,
                                                                  return_full_and_core_embs=True)
+        if return_core_id_embs:
+            arc2face_pos_prompt_emb = arc2face_pos_prompt_emb[:, 4:20]
     # If extract_faceid_embeds, we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
     # So we need to repeat faceid_embeds.
     if extract_faceid_embeds:
-        faceid_embeds = faceid_embeds.repeat(out_image_count, 1)
-        arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(out_image_count, 1, 1)
+        faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
+        arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(id_batch_size, 1, 1)
 
     if gen_neg_prompt:
         with torch.no_grad():
-            arc2face_neg_prompt_emb, _ = arc2face_forward_face_embs(clip_tokenizer, text_encoder, 
+            arc2face_neg_prompt_emb, _ = arc2face_forward_face_embs(clip_tokenizer, arc2face_text_encoder, 
                                                                     torch.zeros_like(faceid_embeds),
                                                                     input_max_length=input_max_length,
                                                                     return_full_and_core_embs=True)
+            if return_core_id_embs:
+                arc2face_neg_prompt_emb = arc2face_neg_prompt_emb[:, 4:20]
+
         #if extract_faceid_embeds:
-        #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(out_image_count, 1, 1)
+        #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(id_batch_size, 1, 1)
         return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
     else:
         return faceid_embeds, arc2face_pos_prompt_emb

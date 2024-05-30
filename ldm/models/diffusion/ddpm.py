@@ -1636,21 +1636,15 @@ class LatentDiffusion(DDPM):
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
             if REPEATS == 1 or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
-                # When this iter computes ada prompt delta loss / prompt mixing loss, 
-                # only use the first of the composition prompts (in effect num_compositions_per_image=1),
-                # otherwise it will use more than 40G RAM.
                 subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
                 cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
             else:
+                # Too complicated and not helpful. Disabled
+                breakpoint()
+                '''
                 subj_comp_prompts2 = []
                 cls_prompt_comp2   = []
-                # Suppose R = num_compositions_per_image, and B the batch size.
-                # Each of subj_comp_prompts, cls_comp_prompts is like [ (p1_1,..., p1_R), ..., (pB_1,..., pB_R) ].
-                # Interlace the list of composition prompt lists into one list:
-                # [ p1_1, p2_1, ..., pB_1, p1_2, p2_2, ..., pB_2, ..., p1_R, p2_R, ..., pB_R ].
-                # Interlacing makes it easy to choose the first B prompts (just as for a normal batch). 
-                # Do not simply concatenate along B.
                 for prompts in zip(*subj_comp_prompts):
                     subj_comp_prompts2 += prompts
                 for prompts in zip(*cls_comp_prompts):
@@ -1661,6 +1655,7 @@ class LatentDiffusion(DDPM):
                 subj_single_prompts = subj_single_prompts * REPEATS
                 cls_single_prompts  = cls_single_prompts * REPEATS
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                '''
 
             if self.iter_flags['use_wds_comp']:
                 # TODO: Currently only support REPEATS == 1.
@@ -2090,8 +2085,6 @@ class LatentDiffusion(DDPM):
                         # do_normal_recon. The original scheme. 
                         extra_info['iter_type']      = 'normal_recon'
                         # Use the original "captions" prompts and embeddings.
-                        # When num_compositions_per_image > 1, subj_single_prompts contains repeated prompts,
-                        # so we only keep the first N_EMBEDS embeddings and the first ORIG_BS prompts.
                         c_in2         = captions
                         # captions == subj_single_prompts should always hold.
                         # They are not the same, if bg/fg overlay is used (???). In that case, we need to generate 
@@ -2124,9 +2117,9 @@ class LatentDiffusion(DDPM):
                                                                              *c_static_emb.shape[1:])
                                                 
                         # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
-                        # As static_zs_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
+                        # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
                         # to do the replacement.
-                        # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.static_zs_embs0
+                        # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
                                             
                         ##### End of normal_recon with static delta loss iters. #####
 
@@ -3217,7 +3210,7 @@ class LatentDiffusion(DDPM):
             # as it might make learning slow.
             prompt_emb_delta_loss_scale /= 5
         
-        # DISABLED: static and ada embedding reg losses are disabled when do_zero_shot. 
+        # DISABLED: static and ada **token** embedding reg losses are disabled when do_zero_shot. 
         # In this case they are not monitored.
         if self.static_embedding_reg_weight > 0:
             loss_emb_reg = self.embedding_manager.embedding_reg_loss()
@@ -5422,8 +5415,8 @@ class Arc2FaceWrapper(pl.LightningModule):
                                            extract_faceid_embeds=False, 
                                            pre_face_embs=pre_face_embs,
                                            image_folder=None, image_paths=None,
-                                           images_np=None, example_image_count=0,
-                                           out_image_count=batch_size,
+                                           images_np=None, 
+                                           id_batch_size=batch_size,
                                            device=self.device,
                                            input_max_length=21, # Remove all paddings.
                                            gen_neg_prompt=gen_neg_prompt, 
