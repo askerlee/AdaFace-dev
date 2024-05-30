@@ -1283,33 +1283,31 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
         # faceid_embeds: [10, 512] -> [1, 512].
         # and the resulted prompt embeddings are the same.
         faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
-        if noise_level > 0:
-            faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
         if pre_face_embs is None:
             faceid_embeds = torch.randn(id_batch_size, 512)
-            if noise_level > 0:
-                faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
         else:
             faceid_embeds = pre_face_embs
             if pre_face_embs.shape[0] == 1:
                 faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
-            # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
-            if noise_level > 0:
-                faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
-                
+
         faceid_embeds = faceid_embeds.to(torch.float16).to(device)
+
+    if noise_level > 0:
+        # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
+        faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
 
     faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
     # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
     with torch.no_grad():
-        arc2face_pos_prompt_emb, _  = arc2face_forward_face_embs(clip_tokenizer, arc2face_text_encoder, 
-                                                                 faceid_embeds, input_max_length=input_max_length,
-                                                                 return_full_and_core_embs=True)
+        arc2face_pos_prompt_emb, arc2face_pos_core_prompt_emb  = \
+             arc2face_forward_face_embs(clip_tokenizer, arc2face_text_encoder, 
+                                        faceid_embeds, input_max_length=input_max_length,
+                                        return_full_and_core_embs=True)
         if return_core_id_embs:
-            arc2face_pos_prompt_emb = arc2face_pos_prompt_emb[:, 4:20]
+            arc2face_pos_prompt_emb = arc2face_pos_core_prompt_emb
     # If extract_faceid_embeds, we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
     # So we need to repeat faceid_embeds.
     if extract_faceid_embeds:
@@ -1318,12 +1316,13 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
 
     if gen_neg_prompt:
         with torch.no_grad():
-            arc2face_neg_prompt_emb, _ = arc2face_forward_face_embs(clip_tokenizer, arc2face_text_encoder, 
-                                                                    torch.zeros_like(faceid_embeds),
-                                                                    input_max_length=input_max_length,
-                                                                    return_full_and_core_embs=True)
+            arc2face_neg_prompt_emb, arc2face_neg_core_prompt_emb = \
+                arc2face_forward_face_embs(clip_tokenizer, arc2face_text_encoder, 
+                                           torch.zeros_like(faceid_embeds),
+                                           input_max_length=input_max_length,
+                                           return_full_and_core_embs=True)
             if return_core_id_embs:
-                arc2face_neg_prompt_emb = arc2face_neg_prompt_emb[:, 4:20]
+                arc2face_neg_prompt_emb = arc2face_neg_core_prompt_emb
 
         #if extract_faceid_embeds:
         #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(id_batch_size, 1, 1)
