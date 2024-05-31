@@ -9,14 +9,14 @@ from diffusers import (
 )
 from insightface.app import FaceAnalysis
 from ldm.modules.arc2face_models import CLIPTextModelWrapper
-import re
+import re, os
 from ldm.util import get_arc2face_id_prompt_embs
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, base_model_name, embman_ckpt, subject_string, num_vectors, device, 
+    def __init__(self, base_model_path, embman_ckpt, subject_string, num_vectors, device, 
                  num_inference_steps=50, guidance_scale=4.0, negative_prompt=None):
         super().__init__()
-        self.base_model_name = base_model_name
+        self.base_model_path = base_model_path
         self.embman_ckpt = embman_ckpt
         self.subject_string = subject_string
         self.num_vectors = num_vectors
@@ -56,15 +56,27 @@ class AdaFaceWrapper(nn.Module):
         )
         self.arc2face_text_encoder = arc2face_text_encoder.to(self.device)
 
+        # The 840000-step vae model is slightly better in face details than the original vae model.
+        # https://huggingface.co/stabilityai/sd-vae-ft-mse-original
         vae = AutoencoderKL.from_single_file("models/diffusers/sd-vae-ft-mse-original/vae-ft-mse-840000-ema-pruned.ckpt", torch_dtype=torch.float16)
+        # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
+        # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
         text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", torch_dtype=torch.float16)
-        pipeline = StableDiffusionPipeline.from_pretrained(
-                self.base_model_name,
-                text_encoder=text_encoder,
-                vae=vae,
-                torch_dtype=torch.float16,
-                safety_checker=None
-            )
+        if os.path.isfile(self.base_model_path):
+            pipeline = StableDiffusionPipeline.from_single_file(
+                self.base_model_path, 
+                text_encoder=text_encoder, 
+                vae=vae, 
+                torch_dtype=torch.float16
+                )
+        else:
+            pipeline = StableDiffusionPipeline.from_pretrained(
+                    self.base_model_path,
+                    text_encoder=text_encoder,
+                    vae=vae,
+                    torch_dtype=torch.float16,
+                    safety_checker=None
+                )
 
         noise_scheduler = DDIMScheduler(
             num_train_timesteps=1000,

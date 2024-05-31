@@ -36,7 +36,7 @@ def seed_everything(seed):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_model_name", type=str, default='runwayml/stable-diffusion-v1-5', 
+    parser.add_argument("--base_model_path", type=str, default='runwayml/stable-diffusion-v1-5', 
                         help="Type of checkpoints to use (default: SD 1.5)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     if re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
 
-    adaface = AdaFaceWrapper(args.base_model_name, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
+    adaface = AdaFaceWrapper(args.base_model_path, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
 
     if not args.randface:
         image_folder = args.subject
