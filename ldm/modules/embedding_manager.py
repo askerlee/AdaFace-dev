@@ -1782,7 +1782,7 @@ class EmbeddingManager(nn.Module):
             from ldm.modules.arc2face_models import CLIPTextModelWrapper
             print("arc2face_text_encoder is None. Initialize it as a private copy.")
             self.arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
-                                            'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
+                                            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
                                         )
             self.arc2face_text_encoder.to(device)
             

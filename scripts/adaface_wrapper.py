@@ -52,7 +52,7 @@ class AdaFaceWrapper(nn.Module):
         # arc2face_text_encoder maps the face analysis embedding to 16 face embeddings 
         # in the UNet image space.
         arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
-            'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
+            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
         )
         self.arc2face_text_encoder = arc2face_text_encoder.to(self.device)
 
@@ -78,8 +78,9 @@ class AdaFaceWrapper(nn.Module):
 
         pipeline.scheduler = noise_scheduler
         self.pipeline = pipeline.to(self.device)
-
-        self.face_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+        # Note the second "model" in the path.
+        self.face_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         # Patch the missing tokenizer in the subj_basis_generator.
         if not hasattr(self.subj_basis_generator, 'clip_tokenizer'):

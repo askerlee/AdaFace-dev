@@ -19,7 +19,8 @@ parser.add_argument("--noise", type=float, default=0)
 args = parser.parse_args()
 
 from ip_adapter.ip_adapter.ip_adapter_faceid_separate import IPAdapterFaceID
-
+# FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+# Note the second "model" in the path.
 app = FaceAnalysis(name="buffalo_l", providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 app.prepare(ctx_id=0, det_size=(512, 512))
 

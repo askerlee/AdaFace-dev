@@ -188,7 +188,9 @@ def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 
 
     # Only for one-off call. Otherwise it will be very slow.
     if insightface_app is None:
-        insightface_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+        # Note the second "model" in the path.        
+        insightface_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
     all_embeddings = []

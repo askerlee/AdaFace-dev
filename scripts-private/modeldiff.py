@@ -22,7 +22,7 @@ def find_top_k_most_different_parameter(model1, model2, topk=100):
         print(f"{name}: {diff:.3f}")
 
 arc2face = UNet2DConditionModel.from_pretrained(
-    'arc2face/models', subfolder="arc2face", torch_dtype=torch.float32
+    'models/arc2face', subfolder="arc2face", torch_dtype=torch.float32
 )
 
 unet = UNet2DConditionModel.from_pretrained(

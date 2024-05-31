@@ -51,14 +51,14 @@ if __name__ == "__main__":
     base_model = 'runwayml/stable-diffusion-v1-5'
 
     text_encoder = CLIPTextModelWrapper.from_pretrained(
-        'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
+        'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
     )
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     
     orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
 
     unet = UNet2DConditionModel.from_pretrained(
-        'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16
+        'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
     )
 
     pipeline = StableDiffusionPipeline.from_pretrained(
@@ -108,7 +108,9 @@ if __name__ == "__main__":
         image_paths = None
         image_folder = None
 
-    face_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+    # Note the second "model" in the path.
+    face_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     face_app.prepare(ctx_id=0, det_size=(512, 512))
     
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name

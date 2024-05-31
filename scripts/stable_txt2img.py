@@ -555,7 +555,9 @@ def main(opt):
             all_normal_img_counts = []
             all_except_img_counts = []
             if opt.face_engine == "insightface":
-                insightface_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+                # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+                # Note the second "model" in the path.
+                insightface_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
                 insightface_app.prepare(ctx_id=opt.gpu, det_size=(512, 512))
             else:
                 insightface_app = None

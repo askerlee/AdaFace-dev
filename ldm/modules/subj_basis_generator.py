@@ -30,6 +30,39 @@ def reshape_tensor(x, num_heads):
     x = x.reshape(bs, num_heads, length, -1)
     return x
 
+# FFN. Added a Dropout layer at the end, so that it can still load the old ckpt.
+def FeedForward(dim, mult=4, p_dropout=0.1):
+    inner_dim = int(dim * mult)
+    return nn.Sequential(
+        nn.LayerNorm(dim),
+        nn.Linear(dim, inner_dim, bias=False),
+        nn.GELU(),
+        nn.Linear(inner_dim, dim, bias=False),
+        nn.Dropout(p_dropout),
+    )
+
+# IP-Adapter FaceID class. Only used in knn-faces.py.
+# From: https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/ip_adapter_faceid_separate.py
+class IP_MLPProjModel(nn.Module):
+    def __init__(self, cross_attention_dim=768, id_embeddings_dim=512, num_tokens=4):
+        super().__init__()
+
+        self.cross_attention_dim = cross_attention_dim
+        self.num_tokens = num_tokens
+
+        self.proj = nn.Sequential(
+            nn.Linear(id_embeddings_dim, id_embeddings_dim*2),
+            nn.GELU(),
+            nn.Linear(id_embeddings_dim*2, cross_attention_dim*num_tokens),
+        )
+        self.norm = nn.LayerNorm(cross_attention_dim)
+
+    def forward(self, id_embeds):
+        x = self.proj(id_embeds)
+        x = x.reshape(-1, self.num_tokens, self.cross_attention_dim)
+        x = self.norm(x)
+        return x
+    
 # group_dim: the tensor dimension that corresponds to the multiple groups.
 class LearnedSoftAggregate(nn.Module):
     def __init__(self, num_feat, group_dim, keepdim=False):

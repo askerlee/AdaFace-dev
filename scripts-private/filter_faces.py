@@ -26,9 +26,9 @@ args = parser.parse_args()
 
 base_folder  = args.base_folder
 trash_folder = args.trash_folder
-#face_encoder = insightface.model_zoo.get_model('models/insightface/model.onnx', 
-#                                               providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-face_encoder = FaceAnalysis(name="antelopev2", root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+# FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+# Note the second "model" in the path.
+face_encoder = FaceAnalysis(name="antelopev2", root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
 face_encoder.prepare(ctx_id=args.gpu_id, det_size=(512, 512))
 
 face_encoder.prepare(ctx_id=args.gpu_id)

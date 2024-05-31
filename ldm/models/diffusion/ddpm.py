@@ -920,7 +920,9 @@ class LatentDiffusion(DDPM):
          'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
         # Use the same model as Arc2Face.
-        self.insightface_app = FaceAnalysis(name='antelopev2', root='arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
+        # Note the second "model" in the path.        
+        self.insightface_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
@@ -5401,10 +5403,10 @@ class Arc2FaceWrapper(pl.LightningModule):
 
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
-                        'arc2face/models', subfolder="arc2face", torch_dtype=torch.float16
+                        'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
                     )
         self.text_encoder = CLIPTextModelWrapper.from_pretrained(
-                            'arc2face/models', subfolder="encoder", torch_dtype=torch.float16
+                            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         
