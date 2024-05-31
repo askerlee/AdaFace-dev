@@ -6,20 +6,19 @@
 import math
 
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPVisionModel, CLIPTokenizer, CLIPTextModel
+from transformers import CLIPVisionModel, CLIPTokenizer
+
 import numpy as np
 from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from ldm.util import anneal_value, gen_gradient_scaler, arc2face_inverse_face_prompt_embs
+from ldm.util import gen_gradient_scaler, arc2face_inverse_face_prompt_embs
 from ldm.modules.arc2face_models import CLIPTextModelWrapper
-
-clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -30,50 +29,6 @@ def reshape_tensor(x, num_heads):
     # (bs, n_heads, length, dim_per_head) --> (bs*n_heads, length, dim_per_head)
     x = x.reshape(bs, num_heads, length, -1)
     return x
-
-
-def masked_mean(t, *, dim, mask=None):
-    if mask is None:
-        return t.mean(dim=dim)
-
-    denom = mask.sum(dim=dim, keepdim=True)
-    mask = rearrange(mask, "b n -> b n 1")
-    masked_t = t.masked_fill(~mask, 0.0)
-
-    return masked_t.sum(dim=dim) / denom.clamp(min=1e-5)
-
-
-# FFN. Added a Dropout layer at the end, so that it can still load the old ckpt.
-def FeedForward(dim, mult=4, p_dropout=0.1):
-    inner_dim = int(dim * mult)
-    return nn.Sequential(
-        nn.LayerNorm(dim),
-        nn.Linear(dim, inner_dim, bias=False),
-        nn.GELU(),
-        nn.Linear(inner_dim, dim, bias=False),
-        nn.Dropout(p_dropout),
-    )
-    
-# From: https://github.com/tencent-ailab/IP-Adapter/blob/main/ip_adapter/ip_adapter_faceid_separate.py
-class IP_MLPProjModel(nn.Module):
-    def __init__(self, cross_attention_dim=768, id_embeddings_dim=512, num_tokens=4):
-        super().__init__()
-        
-        self.cross_attention_dim = cross_attention_dim
-        self.num_tokens = num_tokens
-        
-        self.proj = nn.Sequential(
-            nn.Linear(id_embeddings_dim, id_embeddings_dim*2),
-            nn.GELU(),
-            nn.Linear(id_embeddings_dim*2, cross_attention_dim*num_tokens),
-        )
-        self.norm = nn.LayerNorm(cross_attention_dim)
-        
-    def forward(self, id_embeds):
-        x = self.proj(id_embeds)
-        x = x.reshape(-1, self.num_tokens, self.cross_attention_dim)
-        x = self.norm(x)
-        return x
 
 # group_dim: the tensor dimension that corresponds to the multiple groups.
 class LearnedSoftAggregate(nn.Module):
@@ -401,6 +356,7 @@ class SubjBasisGenerator(nn.Module):
         self.pos_embs_ln = nn.LayerNorm(output_dim)
         self.zs_extra_words_scale = zs_extra_words_scale
         self.output_scale           = output_dim ** -0.5
+        self.clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -422,29 +378,6 @@ class SubjBasisGenerator(nn.Module):
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.pad_embeddings = None
             self.bg_proj_in = None
-
-            clip_text_model = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14')
-            ''' 
-            prompt_translator: CLIPEncoder
-            # https://github.com/huggingface/transformers/blob/1872bde7fc6a5d6796bd742bc2dc38eaf8069c5d/src/transformers/models/clip/modeling_clip.py#L566
-            # CLIPEncoder.layers: 12 layers of CLIPEncoderLayer, each being
-                (0): CLIPEncoderLayer(
-                    (self_attn): CLIPAttention(
-                        (k_proj): Linear(in_features=768, out_features=768, bias=True)
-                        (v_proj): Linear(in_features=768, out_features=768, bias=True)
-                        (q_proj): Linear(in_features=768, out_features=768, bias=True)
-                        (out_proj): Linear(in_features=768, out_features=768, bias=True)
-                    )
-                    (layer_norm1): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
-                    (mlp): CLIPMLP(
-                        (activation_fn): QuickGELUActivation()
-                        (fc1): Linear(in_features=768, out_features=3072, bias=True)
-                        (fc2): Linear(in_features=3072, out_features=768, bias=True)
-                    )
-                    (layer_norm2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
-                )
-            '''
-
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
@@ -473,6 +406,26 @@ class SubjBasisGenerator(nn.Module):
                                 num_q=0, # When not q_aware_to_v, num_q is not referenced.
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
+            ''' 
+            prompt_translator: CLIPEncoder
+            # https://github.com/huggingface/transformers/blob/1872bde7fc6a5d6796bd742bc2dc38eaf8069c5d/src/transformers/models/clip/modeling_clip.py#L566
+            # CLIPEncoder.layers: 12 layers of CLIPEncoderLayer, each being
+                (0): CLIPEncoderLayer(
+                    (self_attn): CLIPAttention(
+                        (k_proj): Linear(in_features=768, out_features=768, bias=True)
+                        (v_proj): Linear(in_features=768, out_features=768, bias=True)
+                        (q_proj): Linear(in_features=768, out_features=768, bias=True)
+                        (out_proj): Linear(in_features=768, out_features=768, bias=True)
+                    )
+                    (layer_norm1): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+                    (mlp): CLIPMLP(
+                        (activation_fn): QuickGELUActivation()
+                        (fc1): Linear(in_features=768, out_features=3072, bias=True)
+                        (fc2): Linear(in_features=3072, out_features=768, bias=True)
+                    )
+                    (layer_norm2): LayerNorm((768,), eps=1e-05, elementwise_affine=True)
+                )
+            '''
 
         print(repr(self))
 
@@ -515,7 +468,7 @@ class SubjBasisGenerator(nn.Module):
                     # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
                     # If list_extra_words is None, then core_id_embs: [BS, 16, 768], the 16 identity tokens in full_prompt_embs.
                     adaface_prompt_embs, core_id_embs = \
-                        arc2face_inverse_face_prompt_embs(clip_tokenizer, 
+                        arc2face_inverse_face_prompt_embs(self.clip_tokenizer, 
                                                           self.prompt2token_proj, 
                                                           arc2face_id_embs, 
                                                           list_extra_words=None,
@@ -588,7 +541,7 @@ class SubjBasisGenerator(nn.Module):
         # clip_embeddings() adds positional embeddings, while clip_embeddings.token_embedding() doesn't.
         # Adding positional embeddings seems to help somewhat.
         # pad_embeddings: [77, 768].
-        pad_tokens = torch.tensor([clip_tokenizer.pad_token_id]).to(clip_embeddings.token_embedding.weight.device).repeat(77)
+        pad_tokens = torch.tensor([self.clip_tokenizer.pad_token_id]).to(clip_embeddings.token_embedding.weight.device).repeat(77)
         pad_embeddings = clip_embeddings(pad_tokens)[0]
         # We don't allow face recon to influence the pad embeddings. 
         # Otherwise, face identity will leak into the pad embeddings.
@@ -727,6 +680,7 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
             # [BS, 1, 257] -> [BS, 257, 1]
             attn_mask=attn_mask.permute(0, 2, 1) if attn_mask is not None else None
         )
+
 
 class CLIPVisionModelWithMask(CLIPVisionModel):
     def __init__(self, config):

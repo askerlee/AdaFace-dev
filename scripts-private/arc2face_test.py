@@ -150,7 +150,7 @@ if __name__ == "__main__":
 
         negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
         # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = num_images,
+        prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = args.out_image_count,
                                                                          do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         pipeline.text_encoder = text_encoder
 
@@ -169,7 +169,7 @@ if __name__ == "__main__":
             pos_prompt_emb = id_prompt_emb
             neg_prompt_emb = neg_id_prompt_emb
 
-        noise = torch.randn(num_images, 4, 64, 64).cuda()
+        noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
         negative_prompt_embeds_ = negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]]
 
         for guidance_scale in [2, 4]:
