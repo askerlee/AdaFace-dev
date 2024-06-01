@@ -500,7 +500,7 @@ def parse_range_str(range_str, fix_1_offset=True):
 
 # set_name: 'dreambench', 'community', 'all'.
 # 'hard' means the set_name of prompts based on which it's hard to generate images.
-def get_prompt_list(subject_string, z_prefix, z_suffix, background_string, 
+def get_prompt_list(subject_string, z_prefix, z_affix, background_string, 
                     class_token, class_long_token, 
                     broad_class, set_name='all'):
     object_prompt_list = [
@@ -576,9 +576,41 @@ def get_prompt_list(subject_string, z_prefix, z_suffix, background_string,
         # object.
         orig_prompt_list = object_prompt_list
 
-    z_suffix += background_string
+    z_affix += background_string
     # z_prefix is usually "portrait of" or "face portrait of"
-    prompt_list            = [ prompt.format(z_prefix, subject_string,   z_suffix)  for prompt in orig_prompt_list ]
+    prompt_list            = [ prompt.format(z_prefix, subject_string,   z_affix)  for prompt in orig_prompt_list ]
     orig_short_prompt_list = [ prompt.format(z_prefix, class_token,      background_string)  for prompt in orig_prompt_list ]
     orig_long_prompt_list  = [ prompt.format(z_prefix, class_long_token, background_string)  for prompt in orig_prompt_list ]
     return prompt_list, orig_short_prompt_list, orig_long_prompt_list
+
+# affix_type: z_prefix_type or z_suffix_type.
+def reformat_z_affix(args, affix_type, broad_class, class_name, cls_delta_string):
+    if not hasattr(args, affix_type):
+        if broad_class == 1:
+            # For ada/TI, if not human faces / animals, and z_affix_type is not specified, 
+            # then use class_name as the z suffix, to make sure the subject is always expressed.
+            z_affix_type = '' 
+        else:
+            z_affix_type = 'class_name'
+    else:
+        z_affix_type = args.z_affix_type
+
+    if z_affix_type == 'cls_delta_string':
+        # DreamBooth always uses cls_delta_string as z_affix.
+        z_affix = " " + cls_delta_string
+    elif z_affix_type == 'class_name':
+        # For Ada/TI, if we append class token to "z" -> "z dog", 
+        # the chance of occasional under-expression of the subject may be reduced.
+        # (This trick is not needed for human faces)
+        # Prepend a space to class_name to avoid "a zcat" -> "a z cat"
+        z_affix = " " + class_name
+    else:
+        # z_affix_type contains the actual z_affix.
+        if re.match(r"^[a-zA-Z0-9_]", z_affix_type):
+            # If z_affix_type starts with a word, prepend a space to avoid "a zcat" -> "a z cat"
+            z_affix = " " + z_affix_type
+        else:
+            # z_affix_type starts with a punctuation, e.g., ",".
+            z_affix = z_affix_type
+
+    return z_affix

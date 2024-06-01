@@ -4,7 +4,7 @@ import re
 import numpy as np
 import csv
 from evaluation.eval_utils import parse_subject_file, parse_range_str, \
-                                  get_prompt_list, find_first_match
+                                  get_prompt_list, find_first_match, reformat_z_affix
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -70,15 +70,16 @@ def parse_args():
         help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
     )
 
+    # Possible z_prefix_type: '' (none), 'class_name', or any user-specified string.
+    parser.add_argument("--z_prefix_type", type=str, default=argparse.SUPPRESS,
+                        help="Prefix to prepend to z")
     # Possible z_suffix_type: '' (none), 'class_name', or any user-specified string.
-    parser.add_argument("--z_suffix_type", default=argparse.SUPPRESS, 
+    parser.add_argument("--z_suffix_type", type=str, default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
     # extra_z_suffix: usually reduces the similarity of generated images to the real images.
     parser.add_argument("--extra_z_suffix", type=str, default="",
                         help="Extra suffix to append to the z suffix")
-    parser.add_argument("--z_prefix", type=str, default=argparse.SUPPRESS,
-                        help="Prefix to prepend to z")
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
     # prompt_suffix: usually reduces the similarity.
@@ -184,20 +185,6 @@ if __name__ == "__main__":
     if hasattr(args, 'num_vectors_per_subj_token') and args.num_vectors_per_subj_token > 1:
         args.subject_string += ", " * (args.num_vectors_per_subj_token - 1)
 
-    z_prefixes_by_class     = [""] * 3
-    z_prefixes_by_subject   = None
-    if hasattr(args, 'z_prefix'):
-        # * 3 for 3 broad classes, i.e., all classes use the same args.z_prefix.
-        z_prefixes_by_class = [args.z_prefix] * 3    
-    else:
-        if 'z_prefix_keys' in subj_info and args.prompt is None:
-            z_prefixes_by_subject = { k: subj_info['z_prefix_values'][i] for i, k in enumerate(subj_info['z_prefix_keys']) }
-        if 'inf_z_prefixes' in subj_info and args.prompt is None:
-            # Use inf_z_prefixes from the subject info file if it exists, 
-            # but only if it's not manual prompt generation
-            z_prefixes_by_class = subj_info['inf_z_prefixes']
-            assert len(z_prefixes_by_class) == 3
-
     if hasattr(args, 'is_face'):
         are_faces = [args.is_face] * len(subjects)
     elif 'are_faces' in subj_info:
@@ -236,53 +223,18 @@ if __name__ == "__main__":
     for subject_idx in subject_indices:
         if args.skipselset and subject_idx in sel_set:
             continue
-        subject_name    = subjects[subject_idx]
-        class_name      = class_names[subject_idx]
-        broad_class     = broad_classes[subject_idx]
-        is_face         = are_faces[subject_idx]
-        cls_delta_string      = cls_delta_strings[subject_idx]
-
-        # z_prefixes_by_subject is only for selected subjects. So in most cases,
-        # subject_name is not in z_prefixes_by_subject. 
-        # Then we resort to z_prefixes_by_class.
-        if z_prefixes_by_subject is not None and subject_name in z_prefixes_by_subject:
-            z_prefix = z_prefixes_by_subject[subject_name]
-        else:
-            z_prefix = z_prefixes_by_class[broad_class]
+        subject_name        = subjects[subject_idx]
+        class_name          = class_names[subject_idx]
+        broad_class         = broad_classes[subject_idx]
+        is_face             = are_faces[subject_idx]
+        cls_delta_string    = cls_delta_strings[subject_idx]
 
         print("Generating samples for subject: " + subject_name)
-
-        if not hasattr(args, 'z_suffix_type'):
-            if broad_class == 1:
-                # For ada/TI, if not human faces / animals, and z_suffix_type is not specified, 
-                # then use class_name as the z suffix, to make sure the subject is always expressed.
-                z_suffix_type = '' 
-            else:
-                z_suffix_type = 'class_name'
-        else:
-            z_suffix_type = args.z_suffix_type
-
-        if z_suffix_type == 'cls_delta_string':
-            # DreamBooth always uses cls_delta_string as z_suffix.
-            z_suffix = " " + cls_delta_string
-        elif z_suffix_type == 'class_name':
-            # For Ada/TI, if we append class token to "z" -> "z dog", 
-            # the chance of occasional under-expression of the subject may be reduced.
-            # (This trick is not needed for human faces)
-            # Prepend a space to class_name to avoid "a zcat" -> "a z cat"
-            z_suffix = " " + class_name
-        else:
-            # z_suffix_type contains the actual z_suffix.
-            if re.match(r"^[a-zA-Z0-9_]", z_suffix_type):
-                # If z_suffix_type starts with a word, prepend a space to avoid "a zcat" -> "a z cat"
-                z_suffix = " " + z_suffix_type
-            else:
-                # z_suffix_type starts with a punctuation, e.g., ",".
-                z_suffix = z_suffix_type
+        z_prefix = reformat_z_affix(args, 'z_prefix_type', broad_class, class_name, cls_delta_string)
+        z_suffix = reformat_z_affix(args, 'z_suffix_type', broad_class, class_name, cls_delta_string)
 
         if len(args.extra_z_suffix) > 0:
             z_suffix += " " + args.extra_z_suffix + ","
-
 
         if args.background_string and args.include_bg_string:
             background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
