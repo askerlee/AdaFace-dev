@@ -103,7 +103,6 @@ model:
                                      'compos_distill_iter': 0.4 }
         embedding_manager_ckpt:             null
         # Load the ada components from these placeholders in the checkpoint.
-        src_placeholders:                   null
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

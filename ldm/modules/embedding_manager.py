@@ -963,7 +963,6 @@ class EmbeddingManager(nn.Module):
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             use_conv_attn_kernel_size=-1,
-            emb_reg_loss_scale=1,
             do_zero_shot=True,
             zs_image_emb_dim=1024,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
@@ -1201,7 +1200,6 @@ class EmbeddingManager(nn.Module):
         self.text_embedder  = text_embedder
         self.tokenizer      = text_embedder.tokenizer
         self.emb_global_scales_dict = None
-        self.emb_reg_loss_scale = emb_reg_loss_scale
         # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
         # in loss computation in ddpm.py, and not used in this script.
         ca_q_bns = {}
@@ -1821,11 +1819,11 @@ class EmbeddingManager(nn.Module):
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
-        torch.save({ "string_to_token":                 self.string_to_token_dict,
-                     "string_to_static_embedder":       self.string_to_static_embedder_dict,
+        torch.save({ "string_to_token":                  self.string_to_token_dict,
+                     "string_to_static_embedder":        self.string_to_static_embedder_dict,
                      "string_to_subj_basis_generator_dict": self.string_to_subj_basis_generator_dict,
-                     "token2num_vectors":               self.token2num_vectors,
-                     "emb_global_scale_scores":         self.emb_global_scale_scores,
+                     "token2num_vectors":                self.token2num_vectors,
+                     "emb_global_scale_scores":          self.emb_global_scale_scores,
                      "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
                      "placeholder_strings":              self.placeholder_strings,
                      "subject_strings":                  self.subject_strings,
@@ -1836,13 +1834,8 @@ class EmbeddingManager(nn.Module):
                    }, 
                     ckpt_path)
 
-    # load custom tokens and their learned embeddings from "embeddings_gs-4200.pt".
-    # If src_placeholders = None, then load the whole embedding manager. Otherwise, src_placeholders should 
-    # be two strings, either "subject_string,background_string", or "1,1" which means the first subject and
-    # the first background string.
-    def load(self, ckpt_paths, src_placeholders=None, 
-             extend_prompt2token_proj_attention_multiplier=-1, load_old_embman_ckpt=False):
-
+    # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
+    def load(self, ckpt_paths, extend_prompt2token_proj_attention_multiplier=-1, load_old_embman_ckpt=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
@@ -2188,13 +2181,7 @@ class EmbeddingManager(nn.Module):
 
                 loss_static = loss_static + curr_loss * static_l2_loss_boost
 
-        # emb_reg_loss_scale is set to 1 by default.
-        # If loading a ckpt trained on a different subject, emb_reg_loss_scale is set to 0.1,
-        # to avoid emb_reg_loss becoming too large.
-        # The equation below is actually: loss_static * emb_reg_loss_scale / (num_out_embeddings / 2).
-        # num_out_embeddings counts both the embeddings of the static part and the dynamic part.
-        # It's the twice of the actual number of embeddings. So divide by 2.
-        loss_static *= self.emb_reg_loss_scale * 2 / num_out_embeddings
+        loss_static /= num_out_embeddings
 
         return loss_static
 

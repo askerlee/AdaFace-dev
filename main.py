@@ -213,13 +213,7 @@ def get_parser(**parser_kwargs):
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
-    parser.add_argument("--src_placeholders",
-        type=str, nargs="?", const='1,1', default=None,
-        help="Load the embedder components from these placeholders in the checkpoint")
-    parser.add_argument("--emb_reg_loss_scale",
-        type=float, default=1,
-        help="Scale of the pre-specified embedding regularization loss")
-    
+
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
@@ -1028,8 +1022,6 @@ if __name__ == "__main__":
             
         config.model.params.personalization_config.params.use_conv_attn_kernel_size     = opt.use_conv_attn_kernel_size
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
-        config.model.params.personalization_config.params.src_placeholders              = opt.src_placeholders
-        config.model.params.personalization_config.params.emb_reg_loss_scale            = opt.emb_reg_loss_scale
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])

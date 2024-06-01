@@ -890,9 +890,8 @@ class LatentDiffusion(DDPM):
         model = instantiate_from_config(config, text_embedder=text_embedder)
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
-            src_placeholders = config.params.get("src_placeholders", None)
             model.load(config.params.embedding_manager_ckpt,
-                       src_placeholders, self.extend_prompt2token_proj_attention_multiplier,
+                       self.extend_prompt2token_proj_attention_multiplier,
                        self.load_old_embman_ckpt)
 
         return model
