@@ -4,7 +4,7 @@ import re
 import numpy as np
 import csv
 from evaluation.eval_utils import parse_subject_file, parse_range_str, \
-                                  get_prompt_list, find_first_match, reformat_z_affix
+                                  format_prompt_list, find_first_match, reformat_z_affix
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -54,7 +54,8 @@ def parse_args():
                         type=int, default=argparse.SUPPRESS, 
                         help="Use convolutional attention at subject tokens")
 
-    parser.add_argument("--prompt_set", type=str, default='all', choices=['dreambench', 'community', 'all'],
+    parser.add_argument("--prompt_set", dest='prompt_set_name', type=str, default='all', 
+                        choices=['dreambench', 'community', 'all'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     parser.add_argument("--gen_prompt_set_only", action="store_true",
                         help="Generate prompt set and exit")
@@ -73,6 +74,8 @@ def parse_args():
     # Possible z_prefix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_prefix_type", type=str, default=argparse.SUPPRESS,
                         help="Prefix to prepend to z")
+    parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use the 'face portrait' trick for the subject")
     # Possible z_suffix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_suffix_type", type=str, default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder string during inference "
@@ -251,12 +254,13 @@ if __name__ == "__main__":
                 args.n_samples = 4
             if args.bs == -1:
                 args.bs = 4
-            # E.g., get_prompt_list(placeholder="z", z_suffix="cat", cls_delta_string="tabby cat", broad_class=1)
+            # Usually cls_delta_string == class_name. But we can specify more fine-grained cls_delta_string.
+            # E.g., format_prompt_list(placeholder="z", z_suffix="cat", cls_delta_string="tabby cat", broad_class=1)
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
-                get_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
-                                class_name, cls_delta_string, 
-                                broad_class, args.prompt_set)
-            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set}{bg_suffix}-{args.num_vectors_per_subj_token}.txt"
+                format_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
+                                    class_name, cls_delta_string, 
+                                    broad_class, args.prompt_set_name, args.use_fp_trick)
+            prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set_name}{bg_suffix}-{args.num_vectors_per_subj_token}.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
             if args.n_samples == -1:
