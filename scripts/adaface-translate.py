@@ -66,7 +66,7 @@ if __name__ == "__main__":
     args = parse_args()
     if args.seed != -1:
         seed_everything(args.seed)
-
+ 
 # screen -dm -L -Logfile trans_rv4-2.txt accelerate launch --multi_gpu --num_processes=2 scripts/adaface-translate.py 
 # --embman_ckpt logs/subjects-celebrity2024-05-16T17-22-46_zero3-ada/checkpoints/embeddings_gs-30000.pt 
 # --base_model_path models/realisticvision/realisticVisionV40_v40VAE.safetensors --in_folder /data/shaohua/VGGface2_HQ_masks/ 

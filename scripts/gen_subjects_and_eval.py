@@ -398,7 +398,7 @@ if __name__ == "__main__":
             elif args.bb_type == 'ar-v16':
                 ckpt_path   = "models/absolutereality/ar-v1-6.safetensors"
             elif args.bb_type == 'rv-v4':
-                ckpt_path   = "models/realisticvision/realisticVisionV40Fp16.cTYR.safetensors"
+                ckpt_path   = "models/realisticvision/realisticVisionV40_v40VAE.safetensors"
             elif args.bb_type == 'v14':
                 ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
             elif args.bb_type == 'v15':
