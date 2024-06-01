@@ -906,6 +906,7 @@ class LatentDiffusion(DDPM):
         self.clip_preprocessor  = CLIPImageProcessor.from_pretrained(clip_model_tag)
         self.clip_image_encoder = self.clip_image_encoder.to(self.device)
         self.clip_image_encoder.eval()
+        self.clip_image_encoder.half()
         print(f'{clip_model_tag} image encoder loaded on {self.device}.')
 
         # BUG: If device='cpu', then it will throw an exception.
@@ -927,6 +928,7 @@ class LatentDiffusion(DDPM):
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
         self.dino_encoder = self.dino_encoder.to(self.device)
         self.dino_encoder.eval()
+        self.dino_encoder.half()
         self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
         print(f'Face and DINO encoders loaded on {self.device}.')
 
@@ -2415,17 +2417,17 @@ class LatentDiffusion(DDPM):
             if self.neg_image_features is None:
                 # neg_pixel_values: [1, 3, 224, 224]
                 neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=self.device)
-                self.neg_image_features = self.clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
+                self.neg_image_features = self.clip_image_encoder(neg_pixel_values.half(), attn_mask=None, output_hidden_states=True).hidden_states[-2]
 
             # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-            image_fg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
+            image_fg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=fg_masks2.half(), output_hidden_states=True)
             # attn_mask: [BS, 1, 257]
             image_fg_features = image_fg_dict.hidden_states[-2] - self.neg_image_features
             if image_fg_dict.attn_mask is not None:
                 image_fg_features = image_fg_features * image_fg_dict.attn_mask
 
             # A negative mask is used to extract the background features.
-            image_bg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
+            image_bg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=1-fg_masks2.half(), output_hidden_states=True)
             image_bg_features = image_bg_dict.hidden_states[-2] - self.neg_image_features
             if image_bg_dict.attn_mask is not None:
                 image_bg_features = image_bg_features * image_bg_dict.attn_mask        
@@ -2433,6 +2435,7 @@ class LatentDiffusion(DDPM):
         # clip_features: [BS, 514, 1280].
         # all_id_embs:   [BS, 512].
         clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
+        clip_features = clip_features.to(image_pixel_values.dtype)
 
         if calc_avg:
             # clip_features: [BS, 514, 1280] -> [1, 514, 1280].

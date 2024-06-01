@@ -681,7 +681,7 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
             attn_mask = attn_mask.flatten(2)
             # Prepend 1 to the mask: [BS, 1, 256] => [BS, 1, 257]. 
             # This 1 corresponds to class_embeds, which is always attended to.
-            attn_mask = torch.cat([torch.ones(*attn_mask.shape[:2], 1).to(attn_mask.device), attn_mask], dim=-1)
+            attn_mask = torch.cat([torch.ones_like(attn_mask[:, :, :1]), attn_mask], dim=-1)
             attn_mask_pairs = torch.matmul(attn_mask.transpose(-1, -2), attn_mask).unsqueeze(1)
         else:
             attn_mask_pairs = None

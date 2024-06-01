@@ -49,8 +49,8 @@ model:
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight: 5e-5
     # Push the prompt embeddings slightly away from the null prompt embedding.
+    # NOTE: compel_cfg is disabled if doing zero-shot, even if apply_compel_cfg_prob > 0.
     compel_cfg_weight_level_range:    [2, 2]
-    # compel_cfg is disabled if doing zero-shot, even if the prob > 0.
     apply_compel_cfg_prob:            0.5
     # fg_wds_comple: used in wds recon iters.
     fg_wds_complementary_loss_weight: 0 #1e-4
@@ -74,9 +74,9 @@ model:
     prodigy_config:
       betas:    [0.985, 0.993]  # Faster to converge than zs_betas.
       zs_betas: [0.9,  0.999]   # Slower to converge than betas.
-      d_coef: 10
+      d_coef:           2
       warm_up_steps:    500
-      # 2 cycles after the warm_up_steps.
+      # 1 cycle after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
       scheduler_cycles: 1 #2
       # CyclicLR, CosineAnnealingWarmRestarts, Linear. 
@@ -98,9 +98,9 @@ model:
         training_begin_add_noise_std_range:  [ 0.02, 0.04 ]
         training_end_add_noise_std_range:    [ 0.02, 0.04 ]
         # probs for recon_iter and compos_distill_iter, respectively
-        training_add_noise_prob:   { 'recon_iter': 0.6, 
+        training_add_noise_prob:   { 'recon_iter':            0.6, 
                                      'arc2face_distill_iter': 0,
-                                     'compos_distill_iter': 0.4 }
+                                     'compos_distill_iter':   0.4 }
         embedding_manager_ckpt:             null
         # Load the ada components from these placeholders in the checkpoint.
 
