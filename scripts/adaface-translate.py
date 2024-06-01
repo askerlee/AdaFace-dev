@@ -54,6 +54,7 @@ def parse_args():
                         help="Number of images to display in a row in the output grid image.")
     parser.add_argument("--num_inference_steps", type=int, default=50,
                         help="Number of DDIM inference steps")
+    parser.add_argument("--num_gpus", type=int, default=1, help="Number of GPUs to use. If num_gpus > 1, use accelerate for distributed execution.")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on")
     parser.add_argument("--seed", type=int, default=42, 
                         help="the seed (for reproducible sampling). Set to -1 to disable.")
@@ -66,8 +67,19 @@ if __name__ == "__main__":
     if args.seed != -1:
         seed_everything(args.seed)
 
-    if re.match(r"^\d+$", args.device):
+# screen -dm -L -Logfile trans_rv4-2.txt accelerate launch --multi_gpu --num_processes=2 scripts/adaface-translate.py 
+# --embman_ckpt logs/subjects-celebrity2024-05-16T17-22-46_zero3-ada/checkpoints/embeddings_gs-30000.pt 
+# --base_model_path models/realisticvision/realisticVisionV40_v40VAE.safetensors --in_folder /data/shaohua/VGGface2_HQ_masks/ 
+# --is_mix_subj_folder 0 --out_folder /data/shaohua/VGGface2_HQ_masks_rv4a --copy_masks --num_gpus 2
+    if args.num_gpus > 1:
+        from accelerate import PartialState
+        distributed_state = PartialState()
+        args.device = distributed_state.device
+        process_index = distributed_state.process_index
+    elif re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
+        distributed_state = None
+        process_index = 0
 
     adaface = AdaFaceWrapper("img2img", args.base_model_path, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
 
@@ -121,6 +133,12 @@ if __name__ == "__main__":
     out_mask_count  = 0
     if not args.out_folder.endswith("/"):
         args.out_folder += "/"
+
+    if args.num_gpus > 1:
+        # Split the subjects across the GPUs.
+        subject_folders = subject_folders[process_index::args.num_gpus]
+        images_by_subject = images_by_subject[process_index::args.num_gpus]
+        #subject_folders, images_by_subject = distributed_state.split_between_processes(zip(subject_folders, images_by_subject))
 
     for (subject_folder, image_paths) in zip(subject_folders, images_by_subject):
         # If is_mix_subj_folder, then image_paths only contains 1 image, and we use the file name as the signature of the image.
@@ -179,7 +197,7 @@ if __name__ == "__main__":
                         else:
                             mask_filename_stem = image_filename_stem
                             shutil.copy(mask_path, os.path.join(subject_out_folder, f"{mask_filename_stem}_{copy_i}_mask.png"))
-                            
+
                         out_mask_count += 1
 
             out_image_count += len(out_images)
