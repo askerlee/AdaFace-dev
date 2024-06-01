@@ -72,7 +72,7 @@ if __name__ == "__main__":
     if re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
 
-    adaface = AdaFaceWrapper(args.base_model_path, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
+    adaface = AdaFaceWrapper("text2img", args.base_model_path, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
 
     if not args.randface:
         image_folder = args.subject
@@ -116,5 +116,5 @@ if __name__ == "__main__":
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     adaface_subj_embs = adaface.generate_adaface_embeddings(image_folder, image_paths, pre_face_embs, args.randface, 
                                                             args.noise_level, update_text_encoder=True)    
-    images = adaface(noise, args.prompt, args.out_image_count)
+    images = adaface(noise, args.prompt, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.noise_level)

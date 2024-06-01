@@ -3,6 +3,7 @@ import torch.nn as nn
 from transformers import CLIPTextModel
 from diffusers import (
     StableDiffusionPipeline,
+    StableDiffusionImg2ImgPipeline,
     UNet2DConditionModel,
     DDIMScheduler,
     AutoencoderKL,
@@ -13,9 +14,10 @@ import re, os
 from ldm.util import get_arc2face_id_prompt_embs
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, base_model_path, embman_ckpt, subject_string, num_vectors, device, 
+    def __init__(self, pipeline_name, base_model_path, embman_ckpt, subject_string, num_vectors, device, 
                  num_inference_steps=50, guidance_scale=4.0, negative_prompt=None):
         super().__init__()
+        self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
         self.embman_ckpt = embman_ckpt
         self.subject_string = subject_string
@@ -62,15 +64,23 @@ class AdaFaceWrapper(nn.Module):
         # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
         # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
         text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", torch_dtype=torch.float16)
+
+        if self.pipeline_name == "img2img":
+            PipelineClass = StableDiffusionImg2ImgPipeline
+        elif self.pipeline_name == "text2img":
+            PipelineClass = StableDiffusionPipeline
+        else:
+            raise ValueError(f"Unknown pipeline name: {self.pipeline_name}")
+        
         if os.path.isfile(self.base_model_path):
-            pipeline = StableDiffusionPipeline.from_single_file(
+            pipeline = PipelineClass.from_single_file(
                 self.base_model_path, 
                 text_encoder=text_encoder, 
                 vae=vae, 
                 torch_dtype=torch.float16
                 )
         else:
-            pipeline = StableDiffusionPipeline.from_pretrained(
+            pipeline = PipelineClass.from_pretrained(
                     self.base_model_path,
                     text_encoder=text_encoder,
                     vae=vae,
@@ -189,7 +199,8 @@ class AdaFaceWrapper(nn.Module):
             self.update_text_encoder_subj_embs(adaface_subj_embs)
         return adaface_subj_embs
 
-    def forward(self, noise, prompt, out_image_count=4, verbose=True):
+    # ref_img_strength is used only in the img2img pipeline.
+    def forward(self, noise, prompt, out_image_count=4, ref_img_strength=0.8, verbose=False):
         prompt = self.update_prompt(prompt)
         if verbose:
             print(f"Prompt: {prompt}")
@@ -200,12 +211,14 @@ class AdaFaceWrapper(nn.Module):
             self.pipeline.encode_prompt(prompt, device=self.device, num_images_per_prompt = out_image_count,
                                         do_classifier_free_guidance=True, negative_prompt=self.negative_prompt)
 
+        # When the pipeline is text2img, strength is ignored.
         images = self.pipeline(image=noise,
                                prompt_embeds=prompt_embeds_, 
                                negative_prompt_embeds=negative_prompt_embeds_, 
                                num_inference_steps=self.num_inference_steps, 
                                guidance_scale=self.guidance_scale, 
-                               num_images_per_prompt=1).images
+                               num_images_per_prompt=1,
+                               strength=ref_img_strength).images
         # images: [BS, 3, 512, 512]
         return images
     
