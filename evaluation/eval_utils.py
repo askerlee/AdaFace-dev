@@ -593,7 +593,7 @@ def reformat_z_affix(args, affix_type, broad_class, class_name, cls_delta_string
         else:
             z_affix_type = 'class_name'
     else:
-        z_affix_type = args.z_affix_type
+        z_affix_type = getattr(args, z_affix_type)
 
     if z_affix_type == 'cls_delta_string':
         # DreamBooth always uses cls_delta_string as z_affix.
