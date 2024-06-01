@@ -470,7 +470,9 @@ class SubjBasisGenerator(nn.Module):
         
         BS = arc2face_id_embs.shape[0]
         adaface_prompt_embs = None
-
+        if not hasattr(self, 'clip_tokenizer'):
+            self.clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+            
         # No need to use raw_id_embs if placeholder_is_bg.
         if not self.placeholder_is_bg:
             if is_face:
