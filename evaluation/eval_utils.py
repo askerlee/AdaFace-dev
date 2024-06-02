@@ -581,9 +581,10 @@ def format_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     if len(z_prefix) > 0 and not z_prefix.endswith(" "):
         z_prefix = z_prefix + " "
 
+    # Shift the content of z_prefix to the beginning of subject_string.
+    subject_string = z_prefix + subject_string
+    z_prefix = ""
     if use_fp_trick:
-        # Shift the content of z_prefix to the beginning of subject_string.
-        subject_string = z_prefix + subject_string
         # z_prefix only contains "face portrait of ".
         z_prefix = "face portrait of "
     
