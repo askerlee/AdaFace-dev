@@ -229,11 +229,6 @@ class DDPM(pl.LightningModule):
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
-        if self.arc2face_distill_iter_prob > 0:
-            self.arc2face = Arc2FaceWrapper()
-        else:
-            self.arc2face = None
-
         self.loss_type = loss_type
 
         self.learn_logvar = learn_logvar
@@ -346,6 +341,8 @@ class DDPM(pl.LightningModule):
             print(f"Missing Keys: {missing}")
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
+
+        breakpoint()
 
     def q_mean_variance(self, x_start, t):
         """
@@ -739,6 +736,8 @@ class LatentDiffusion(DDPM):
         # Not sure why it's compared with a string
         if cond_stage_config == '__is_unconditional__':
             conditioning_key = None
+            
+        # ckpt_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
         ckpt_path = kwargs.pop("ckpt_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
@@ -761,11 +760,18 @@ class LatentDiffusion(DDPM):
         self.clip_denoised = False
         self.bbox_tokenizer = None  
 
-        self.restarted_from_ckpt = False
+        self.restarted_from_ckpt = (ckpt_path is not None)
+        # ckpt_path is popped from kwargs, so that it won't be passed to the base class DDPM.
+        # As a result, the model weight is only loaded here, not in DDPM.
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
-            self.restarted_from_ckpt = True
-
+            
+        if self.arc2face_distill_iter_prob > 0:
+            # arc2face is initialized after the model is loaded from ckpt,
+            # to avoid warning of many missing keys.
+            self.arc2face = Arc2FaceWrapper()
+        else:
+            self.arc2face = None
 
         if not self.unfreeze_model:
             # cond_stage_model = FrozenCLIPEmbedder training = False.

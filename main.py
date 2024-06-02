@@ -8,13 +8,13 @@ import pytorch_lightning as pl
 
 from packaging import version
 from omegaconf import OmegaConf
-from torch.utils.data import random_split, DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset
 from functools import partial
 from PIL import Image
 
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
+from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 
@@ -22,33 +22,6 @@ from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
 from ldm.util import instantiate_from_config, extend_nn_embedding
 import re
-from safetensors.torch import load_file as safetensors_load_file
-
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    if ckpt.endswith(".ckpt"):
-        pl_sd = torch.load(ckpt, map_location="cpu")
-        sd = pl_sd["state_dict"]
-    elif ckpt.endswith(".safetensors"):
-        sd = safetensors_load_file(ckpt, device="cpu")
-        pl_sd = None
-    else:
-        print(f"Unknown checkpoint format: {ckpt}")
-        sys.exit(1)
-
-    config.model.params.ckpt_path = ckpt
-    model = instantiate_from_config(config.model)
-    m, u = model.load_state_dict(sd, strict=False)
-    if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
-    if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
-
-    # Release some RAM. Not sure if it really works.
-    del sd, pl_sd
-    return model
 
 def get_parser(**parser_kwargs):
     def str2bool(v):
@@ -1027,9 +1000,10 @@ if __name__ == "__main__":
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 
         if opt.actual_resume:
-            model = load_model_from_config(config, opt.actual_resume)
-        else:
-            model = instantiate_from_config(config.model)
+            config.model.params.ckpt_path = opt.actual_resume
+        # model will be loaded by ddpm.init_from_ckpt(). No need to load manually.
+        model = instantiate_from_config(config.model)
+
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
         # model.cond_stage_model: FrozenCLIPEmbedder = text_embedder
         # Extend the token embeddings in CLIP text encoder for the new cls strings.
