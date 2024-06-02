@@ -88,7 +88,7 @@ if __name__ == "__main__":
         subject_folders = [ os.path.dirname(in_folder) ]
         images_by_subject = [[in_folder]]
     else:
-        if args.is_mix_subj_folder:
+        if not args.is_mix_subj_folder:
             in_folders = [in_folder]
         else:
             in_folders = [ os.path.join(in_folder, subfolder) for subfolder in sorted(os.listdir(in_folder)) ]
@@ -181,9 +181,10 @@ if __name__ == "__main__":
             out_images = adaface(in_images, args.prompt, num_out_images, ref_img_strength=args.ref_img_strength)
 
             for img_i, img in enumerate(out_images):
-                subj_i = img_i // args.out_count_per_input_image
+                # out_images: subj_1, subj_2, ..., subj_n, subj_1, subj_2, ..., subj_n, ...
+                subj_i = img_i %  len(in_images) 
+                copy_i = img_i // len(in_images)
                 image_filename_stem, image_fileext = os.path.splitext(os.path.basename(image_paths[subj_i]))
-                copy_i = img_i % args.out_count_per_input_image
                 if copy_i == 0:
                     img.save(os.path.join(subject_out_folder, f"{image_filename_stem}{image_fileext}"))
                 else:
