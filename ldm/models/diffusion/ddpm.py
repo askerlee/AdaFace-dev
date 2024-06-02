@@ -342,8 +342,6 @@ class DDPM(pl.LightningModule):
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
 
-        breakpoint()
-
     def q_mean_variance(self, x_start, t):
         """
         Get the distribution q(x_t | x_0).
@@ -736,7 +734,7 @@ class LatentDiffusion(DDPM):
         # Not sure why it's compared with a string
         if cond_stage_config == '__is_unconditional__':
             conditioning_key = None
-            
+
         # ckpt_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
         ckpt_path = kwargs.pop("ckpt_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
