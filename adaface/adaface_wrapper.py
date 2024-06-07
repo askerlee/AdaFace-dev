@@ -14,12 +14,13 @@ from adaface.util import get_arc2face_id_prompt_embs
 import re, os
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, pipeline_name, base_model_path, embman_ckpt, subject_string, num_vectors, device, 
+    def __init__(self, pipeline_name, base_model_path, embman_ckpt_path, device, 
+                 subject_string='z', num_vectors=16, 
                  num_inference_steps=50, guidance_scale=4.0, negative_prompt=None):
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
-        self.embman_ckpt = embman_ckpt
+        self.embman_ckpt_path = embman_ckpt_path
         self.subject_string = subject_string
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
@@ -36,8 +37,8 @@ class AdaFaceWrapper(nn.Module):
         else:
             self.negative_prompt = negative_prompt
 
-    def initialize_pipeline(self):
-        ckpt = torch.load(self.embman_ckpt, map_location=self.device)
+    def load_subj_basis_generator(self, embman_ckpt_path):
+        ckpt = torch.load(embman_ckpt_path, map_location=self.device)
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
             print(f"Subject '{self.subject_string}' not found in the embedding manager.")
@@ -47,10 +48,12 @@ class AdaFaceWrapper(nn.Module):
         # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
         # But we don't do layerwise embeddings here, so we set it to 1.
         self.subj_basis_generator.num_out_layers = 1
-            
         print(f"Loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
+        self.subj_basis_generator.to(self.device)
 
+    def initialize_pipeline(self):
+        self.load_subj_basis_generator(self.embman_ckpt_path)
         # arc2face_text_encoder maps the face analysis embedding to 16 face embeddings 
         # in the UNet image space.
         arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
@@ -64,11 +67,15 @@ class AdaFaceWrapper(nn.Module):
         # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
         # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
         text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", torch_dtype=torch.float16)
+        remove_unet = False
 
         if self.pipeline_name == "img2img":
             PipelineClass = StableDiffusionImg2ImgPipeline
         elif self.pipeline_name == "text2img":
             PipelineClass = StableDiffusionPipeline
+        elif self.pipeline_name is None:
+            PipelineClass = StableDiffusionPipeline
+            remove_unet = True
         else:
             raise ValueError(f"Unknown pipeline name: {self.pipeline_name}")
         
@@ -87,6 +94,11 @@ class AdaFaceWrapper(nn.Module):
                     torch_dtype=torch.float16,
                     safety_checker=None
                 )
+
+        if remove_unet:
+            # Remove unet and vae to release RAM. Only keep tokenizer and text_encoder.
+            pipeline.unet = None
+            pipeline.vae  = None
 
         noise_scheduler = DDIMScheduler(
             num_train_timesteps=1000,
@@ -157,8 +169,9 @@ class AdaFaceWrapper(nn.Module):
             comp_prompt = re.sub(r'\b' + self.subject_string + r'\b', self.placeholder_tokens_str, prompt)
         return comp_prompt
 
-    def generate_adaface_embeddings(self, image_folder, image_paths, pre_face_embs, gen_rand_face, 
-                                    noise_level, update_text_encoder=True):
+    def generate_adaface_embeddings(self, image_paths, image_folder=None, 
+                                    pre_face_embs=None, gen_rand_face=False, 
+                                    noise_level=0, update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512).
         # If extract_faceid_embeds is True, faceid_embeds is an embedding repeated by BS times.
         # Otherwise, faceid_embeds is a batch of out_image_count random embeddings, different from each other.
@@ -199,18 +212,26 @@ class AdaFaceWrapper(nn.Module):
             self.update_text_encoder_subj_embs(adaface_subj_embs)
         return adaface_subj_embs
 
-    # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, out_image_count=4, ref_img_strength=0.8, verbose=False):
+    def encode_prompt(self, prompt, verbose=False):
         prompt = self.update_prompt(prompt)
         if verbose:
             print(f"Prompt: {prompt}")
+        # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
+        prompt_embeds_, negative_prompt_embeds_ = \
+            self.pipeline.encode_prompt(prompt, device=self.device, num_images_per_prompt=1,
+                                        do_classifier_free_guidance=True, negative_prompt=self.negative_prompt)
+        return prompt_embeds_, negative_prompt_embeds_
+    
+    # ref_img_strength is used only in the img2img pipeline.
+    def forward(self, noise, prompt, out_image_count=4, ref_img_strength=0.8, verbose=False):
+        # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
+        prompt_embeds_, negative_prompt_embeds_ = self.encode_prompt(prompt, verbose=verbose)
+
+        # Repeat the prompt embeddings for all images in the batch.
+        prompt_embeds_          = prompt_embeds_.repeat(out_image_count, 1, 1)
+        negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
 
         # noise: [BS, 4, 64, 64]
-        # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = \
-            self.pipeline.encode_prompt(prompt, device=self.device, num_images_per_prompt = out_image_count,
-                                        do_classifier_free_guidance=True, negative_prompt=self.negative_prompt)
-
         # When the pipeline is text2img, strength is ignored.
         images = self.pipeline(image=noise,
                                prompt_embeds=prompt_embeds_, 

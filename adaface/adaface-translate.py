@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
         print(f"Translating {images_sig}...")
         with torch.no_grad():
-            adaface_subj_embs = adaface.generate_adaface_embeddings(subject_folder, image_paths, None, False, 
+            adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, subject_folder, None, False, 
                                                                     args.noise_level, update_text_encoder=True)
 
         # Replace the first occurrence of "in_folder" with "out_folder" in the path of the subject_folder.

@@ -114,7 +114,7 @@ if __name__ == "__main__":
     noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
     # args.noise_level: the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
-    adaface_subj_embs = adaface.generate_adaface_embeddings(image_folder, image_paths, pre_face_embs, args.randface, 
+    adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, image_folder, pre_face_embs, args.randface, 
                                                             args.noise_level, update_text_encoder=True)    
     images = adaface(noise, args.prompt, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.noise_level)
