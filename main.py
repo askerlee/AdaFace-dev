@@ -15,6 +15,9 @@ from PIL import Image
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import Callback
+# Do not remove ModelCheckpoint and LearningRateMonitor from import. 
+# They are USED in default_modelckpt_cfg and default_callbacks_cfg.
+from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
 from pytorch_lightning.utilities.distributed import rank_zero_only
 from pytorch_lightning.utilities import rank_zero_info
 

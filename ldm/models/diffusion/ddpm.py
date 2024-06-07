@@ -12,7 +12,6 @@ import torch.nn.functional as F
 
 import os
 import numpy as np
-import math
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR, \
                                      PolynomialLR, CosineAnnealingWarmRestarts, CyclicLR
@@ -22,7 +21,6 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.distributed import rank_zero_only
-from ldm.modules.subj_basis_generator import CLIPVisionModelWithMask
 from transformers import CLIPImageProcessor, CLIPTokenizer, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
@@ -38,9 +36,8 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         replace_prompt_comp_extra, extend_indices_B_by_n_times, repeat_selected_instances, \
                         halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
-                        get_arc2face_id_prompt_embs, anneal_add_noise_to_embedding, fix_emb_scale
-                        # split_indices_by_instance, calc_layer_subj_comp_k_or_v_ortho_loss
-                                              
+                        anneal_add_noise_to_embedding
+
 from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
@@ -48,6 +45,10 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
+
+from adaface.subj_basis_generator import CLIPVisionModelWithMask
+from adaface.util import get_arc2face_id_prompt_embs
+
 import copy
 from functools import partial
 import random
@@ -5405,7 +5406,7 @@ class Arc2FaceWrapper(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
         from diffusers import UNet2DConditionModel
-        from ldm.modules.arc2face_models import CLIPTextModelWrapper
+        from adaface.arc2face_models import CLIPTextModelWrapper
 
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"

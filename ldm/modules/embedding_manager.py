@@ -2,22 +2,25 @@ import torch
 from torch import nn, einsum
 import torch.distributed as dist
 from einops import rearrange, repeat
-from ldm.modules.ema import LitEma
-from ldm.modules.subj_basis_generator import SubjBasisGenerator
+from adaface.subj_basis_generator import SubjBasisGenerator
+import sys
+sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
+sys.modules['ldm.modules.arc2face_models'] = sys.modules['adaface.arc2face_models']
+from adaface.util import arc2face_forward_face_embs
 
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import masked_mean, gen_gradient_scaler, extract_first_index_in_each_instance, \
+from ldm.util import gen_gradient_scaler, extract_first_index_in_each_instance, \
                      anneal_add_noise_to_embedding, calc_ref_cosine_loss, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings, torch_uniform, extend_indices_N_by_n_times, \
-                     extend_clip_text_embedder, calc_init_word_embeddings, calc_stats, \
-                     arc2face_forward_face_embs
+                     scan_cls_delta_strings, torch_uniform, \
+                     extend_clip_text_embedder, calc_init_word_embeddings, calc_stats
+                     
 
 from functools import partial
 from collections import OrderedDict
-import random, os, copy
+import copy
 
 # When debugging, make the printed tensors less messy.
 torch.set_printoptions(precision=4, sci_mode=False)
@@ -1777,7 +1780,7 @@ class EmbeddingManager(nn.Module):
 
     def check_arc2face_text_encoder(self, device):
         if self.arc2face_text_encoder is None:
-            from ldm.modules.arc2face_models import CLIPTextModelWrapper
+            from adaface.arc2face_models import CLIPTextModelWrapper
             print("arc2face_text_encoder is None. Initialize it as a private copy.")
             self.arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
                                             'models/arc2face', subfolder="encoder", torch_dtype=torch.float16

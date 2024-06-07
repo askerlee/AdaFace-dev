@@ -9,9 +9,9 @@ from diffusers import (
     AutoencoderKL,
 )
 from insightface.app import FaceAnalysis
-from ldm.modules.arc2face_models import CLIPTextModelWrapper
+from adaface.arc2face_models import CLIPTextModelWrapper
+from adaface.util import get_arc2face_id_prompt_embs
 import re, os
-from ldm.util import get_arc2face_id_prompt_embs
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, embman_ckpt, subject_string, num_vectors, device, 

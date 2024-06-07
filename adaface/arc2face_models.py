@@ -9,7 +9,7 @@ from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 _make_causal_mask = AttentionMaskConverter._make_causal_mask
 _expand_mask = AttentionMaskConverter._expand_mask
 
-from ldm.util import add_noise_to_tensor
+from adaface.util import add_noise_to_tensor
 
 # Extend CLIPAttention by using multiple k_proj and v_proj in each head.
 # To avoid too much increase of computation, we don't extend q_proj.

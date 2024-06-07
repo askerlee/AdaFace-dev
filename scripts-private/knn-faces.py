@@ -1,6 +1,6 @@
 import insightface
 from insightface.app import FaceAnalysis
-from ldm.modules.subj_basis_generator import IP_MLPProjModel
+from adaface.subj_basis_generator import IP_MLPProjModel
 
 import torch
 import torch.nn.functional as F

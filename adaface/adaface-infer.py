@@ -1,4 +1,4 @@
-from scripts.adaface_wrapper import AdaFaceWrapper
+from adaface.adaface_wrapper import AdaFaceWrapper
 import torch
 #import torch.nn.functional as F
 from PIL import Image

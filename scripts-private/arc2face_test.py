@@ -4,17 +4,14 @@ from diffusers import (
     DDIMScheduler,
 )
 from transformers import CLIPTextModel, CLIPTokenizer
-from ldm.modules.arc2face_models import CLIPTextModelWrapper
 from insightface.app import FaceAnalysis
+from adaface.arc2face_models import CLIPTextModelWrapper
 
 import torch
-import torch.nn.functional as F
 from PIL import Image
-import numpy as np
-import os, argparse, sys, glob, cv2
-from ldm.util import get_arc2face_id_prompt_embs
+import os, argparse, glob
+from adaface.util import get_arc2face_id_prompt_embs
 
-    
 def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
     
     os.makedirs(save_dir, exist_ok=True)
