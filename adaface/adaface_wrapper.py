@@ -171,7 +171,7 @@ class AdaFaceWrapper(nn.Module):
 
     def generate_adaface_embeddings(self, image_paths, image_folder=None, 
                                     pre_face_embs=None, gen_rand_face=False, 
-                                    noise_level=0, update_text_encoder=True):
+                                    out_id_embs_scale=1., noise_level=0, update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512).
         # If extract_faceid_embeds is True, faceid_embeds is an embedding repeated by BS times.
         # Otherwise, faceid_embeds is a batch of out_image_count random embeddings, different from each other.
@@ -184,26 +184,27 @@ class AdaFaceWrapper(nn.Module):
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
         faceid_embeds, id_prompt_emb \
             = get_arc2face_id_prompt_embs(self.face_app, self.pipeline.tokenizer, self.arc2face_text_encoder,
-                                        extract_faceid_embeds=not gen_rand_face,
-                                        pre_face_embs=pre_face_embs,
-                                        # image_folder is passed only for logging purpose. 
-                                        # image_paths contains the paths of the images.
-                                        image_folder=image_folder, image_paths=image_paths,
-                                        images_np=None,
-                                        id_batch_size=1,
-                                        device=self.device,
-                                        # input_max_length == 22: only keep the first 22 tokens, 
-                                        # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
-                                        input_max_length=22,
-                                        noise_level=noise_level,
-                                        return_core_id_embs=True,
-                                        gen_neg_prompt=False, 
-                                        verbose=True)
+                                          extract_faceid_embeds=not gen_rand_face,
+                                          pre_face_embs=pre_face_embs,
+                                          # image_folder is passed only for logging purpose. 
+                                          # image_paths contains the paths of the images.
+                                          image_folder=image_folder, image_paths=image_paths,
+                                          images_np=None,
+                                          id_batch_size=1,
+                                          device=self.device,
+                                          # input_max_length == 22: only keep the first 22 tokens, 
+                                          # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
+                                          input_max_length=22,
+                                          noise_level=noise_level,
+                                          return_core_id_embs=True,
+                                          gen_neg_prompt=False, 
+                                          verbose=True)
         
         # adaface_subj_embs: [1, 1, 16, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
         adaface_subj_embs, adaface_prompt_embs = \
-            self.subj_basis_generator(id_prompt_emb, None, None,
+            self.subj_basis_generator(id_prompt_emb, None, None, 
+                                      out_id_embs_scale=out_id_embs_scale,
                                       is_face=True, is_training=False,
                                       adaface_prompt_embs_inf_type='full_half_pad')
         # adaface_subj_embs: [16, 768]
