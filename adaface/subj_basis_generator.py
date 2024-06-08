@@ -547,7 +547,8 @@ class SubjBasisGenerator(nn.Module):
             id_embs_out = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
             adaface_subj_embs = id_embs_out
         
-        if out_id_embs_scale > 1:
+        # If out_id_embs_scale < 1, adaface_subj_embs is a mix of adaface_subj_embs and pad_embeddings.
+        if out_id_embs_scale != 1:
             # pad_embeddings: [77, 768] -> [16, 768] -> [1, 1, 16, 768].
             pad_embeddings = self.pad_embeddings[2:2+self.num_out_embs_per_layer].unsqueeze(0).unsqueeze(0)
             adaface_subj_embs =   adaface_subj_embs    * out_id_embs_scale \
