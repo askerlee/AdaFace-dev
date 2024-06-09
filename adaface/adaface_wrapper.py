@@ -16,7 +16,7 @@ import re, os
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, embman_ckpt_path, device, 
                  subject_string='z', num_vectors=16, 
-                 num_inference_steps=50, guidance_scale=4.0, negative_prompt=None):
+                 num_inference_steps=50, negative_prompt=None):
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
@@ -24,7 +24,6 @@ class AdaFaceWrapper(nn.Module):
         self.subject_string = subject_string
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
-        self.guidance_scale = guidance_scale
         self.device = device
         self.initialize_pipeline()
         self.extend_tokenizer_and_text_encoder()
@@ -94,11 +93,13 @@ class AdaFaceWrapper(nn.Module):
                     torch_dtype=torch.float16,
                     safety_checker=None
                 )
+        print(f"Loaded pipeline from {self.base_model_path}.")
 
         if remove_unet:
             # Remove unet and vae to release RAM. Only keep tokenizer and text_encoder.
             pipeline.unet = None
             pipeline.vae  = None
+            print("Removed UNet and VAE from the pipeline.")
 
         noise_scheduler = DDIMScheduler(
             num_train_timesteps=1000,
@@ -140,10 +141,15 @@ class AdaFaceWrapper(nn.Module):
                 f"The tokenizer already contains the token {self.subject_string}. Please pass a different"
                 " `subject_string` that is not already in the tokenizer.")
 
+        print(f"Added {num_added_tokens} tokens ({self.placeholder_tokens_str}) to the tokenizer.")
+        
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.placeholder_tokens)
         # print(self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
+        old_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.data.shape
         self.pipeline.text_encoder.resize_token_embeddings(len(tokenizer))
+        new_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.data.shape
+        print(f"Resized text encoder token embeddings from {old_weight_shape} to {new_weight_shape}.")
 
     # Extend pipeline.text_encoder with the adaface subject emeddings.
     # subj_embs: [16, 768].
@@ -153,7 +159,7 @@ class AdaFaceWrapper(nn.Module):
         with torch.no_grad():
             for i, token_id in enumerate(self.placeholder_token_ids):
                 token_embeds[token_id] = subj_embs[i]
-            print(f"Updated {len(self.placeholder_token_ids)} tokens in the text encoder.")
+            print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.placeholder_tokens_str}) in the text encoder.")
 
     def update_prompt(self, prompt):
         # If the placeholder tokens are already in the prompt, then return the prompt as is.
@@ -179,7 +185,7 @@ class AdaFaceWrapper(nn.Module):
         # id_prompt_emb is in the image prompt space.
         # faceid_embeds: [1, 512]. NOT used later.
         # id_prompt_emb: [1, 16, 768]. 
-        # Since return_core_id_embs is True, id_prompt_emb is only the 16 core ID embeddings.
+        # NOTE: Since return_core_id_embs is True, id_prompt_emb is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
         faceid_embeds, id_prompt_emb \
@@ -224,7 +230,7 @@ class AdaFaceWrapper(nn.Module):
         return prompt_embeds_, negative_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, out_image_count=4, ref_img_strength=0.8, verbose=False):
+    def forward(self, noise, prompt, guidance_scale=4.0, out_image_count=4, ref_img_strength=0.8, verbose=False):
         # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
         prompt_embeds_, negative_prompt_embeds_ = self.encode_prompt(prompt, verbose=verbose)
 
@@ -238,7 +244,7 @@ class AdaFaceWrapper(nn.Module):
                                prompt_embeds=prompt_embeds_, 
                                negative_prompt_embeds=negative_prompt_embeds_, 
                                num_inference_steps=self.num_inference_steps, 
-                               guidance_scale=self.guidance_scale, 
+                               guidance_scale=guidance_scale, 
                                num_images_per_prompt=1,
                                strength=ref_img_strength).images
         # images: [BS, 3, 512, 512]

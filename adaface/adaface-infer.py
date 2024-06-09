@@ -6,7 +6,11 @@ import numpy as np
 import os, argparse, glob, re
 
 def save_images(images, num_images_per_row, subject_name, prompt, noise_level, save_dir = "samples-ada"):
+    if num_images_per_row > len(images):
+        num_images_per_row = len(images)
+        
     os.makedirs(save_dir, exist_ok=True)
+        
     num_columns = int(np.ceil(len(images) / num_images_per_row))
     # Save 4 images as a grid image in save_dir
     grid_image = Image.new('RGB', (512 * num_images_per_row, 512 * num_columns))
@@ -71,8 +75,10 @@ if __name__ == "__main__":
 
     if re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
+    print(f"Using device {args.device}")
 
-    adaface = AdaFaceWrapper("text2img", args.base_model_path, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
+    adaface = AdaFaceWrapper("text2img", args.base_model_path, args.embman_ckpt, args.device, 
+                             args.subject_string, args.num_vectors, args.num_inference_steps)
 
     if not args.randface:
         image_folder = args.subject
@@ -114,7 +120,9 @@ if __name__ == "__main__":
     noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
     # args.noise_level: the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
+    # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
     adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, image_folder, pre_face_embs, args.randface, 
-                                                            args.noise_level, update_text_encoder=True)    
-    images = adaface(noise, args.prompt, args.out_image_count, verbose=True)
+                                                            out_id_embs_scale=1, noise_level=args.noise_level, 
+                                                            update_text_encoder=True)    
+    images = adaface(noise, args.prompt, args.guidance_scale, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.noise_level)

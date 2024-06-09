@@ -508,6 +508,9 @@ class SubjBasisGenerator(nn.Module):
                     # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                     # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
                     # If list_extra_words is None, then core_id_embs: [BS, 16, 768], the 16 identity tokens in full_prompt_embs.
+                    # hidden_state_layer_weights: [[0.9163], [0.9483], [2.0762]]
+                    # zs_extra_words_scale is only effective when list_extra_words is not None.
+                    # adaface_prompt_embs: [BS, 77, 768], core_id_embs: [BS, 16, 768].
                     adaface_prompt_embs, core_id_embs = \
                         arc2face_inverse_face_prompt_embs(self.clip_tokenizer, 
                                                           self.prompt2token_proj, 
@@ -543,16 +546,15 @@ class SubjBasisGenerator(nn.Module):
             id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
             adaface_subj_embs = id_embs_out * self.output_scale    # * 0.036
         else:
-            # core_id_embs: [BS, 16, 768] -> [BS, 1, 16, 768] -> [BS, 16, 16, 768]
-            id_embs_out = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
-            adaface_subj_embs = id_embs_out
+            # adaface_subj_embs: [BS, 16, 768] -> [BS, 1, 16, 768] -> [BS, 16, 16, 768]
+            adaface_subj_embs = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
         
         # If out_id_embs_scale < 1, adaface_subj_embs is a mix of adaface_subj_embs and pad_embeddings.
         if out_id_embs_scale != 1:
             # pad_embeddings: [77, 768] -> [16, 768] -> [1, 1, 16, 768].
             pad_embeddings = self.pad_embeddings[2:2+self.num_out_embs_per_layer].unsqueeze(0).unsqueeze(0)
-            adaface_subj_embs =   adaface_subj_embs    * out_id_embs_scale \
-                                + pad_embeddings * (1 - out_id_embs_scale)
+            adaface_subj_embs =   adaface_subj_embs * out_id_embs_scale \
+                                + pad_embeddings    * (1 - out_id_embs_scale)
         
         return adaface_subj_embs, adaface_prompt_embs
 

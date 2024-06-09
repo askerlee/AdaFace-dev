@@ -1431,6 +1431,7 @@ class EmbeddingManager(nn.Module):
 
                     # zs_clip_features: [BS, 257, 1280]
                     # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
+                    # zs_id_embs: the low-level ID embeddings from FaceAnalysis. Not actually used.
                     adaface_subj_embs, placeholder_adaface_prompt_embs = \
                             subj_basis_generator(arc2face_id_embs,
                                                  zs_clip_features, zs_id_embs, 
@@ -1469,7 +1470,7 @@ class EmbeddingManager(nn.Module):
                     # the model will learn nothing from the recon loss.
                     # One potential issue is the delta loss may slowly degrade the identity information in the embeddings.
                     # So we will replace the subject-single embeddings when computing the delta loss in ddpm.py later.
-                    if not placeholder_is_bg and self.iter_type in ['compos_distill_iter']: #, 'recon_iter']:
+                    if self.training and not placeholder_is_bg and self.iter_type in ['compos_distill_iter']: #, 'recon_iter']:
                         # compos_distill_iter is with same_subject_in_batch=True. 
                         # So zs_id_embs: [1, 512].
                         if zs_id_embs.shape[0] != 1:
@@ -1791,7 +1792,7 @@ class EmbeddingManager(nn.Module):
                               add_noise_to_zs_id_embs=False):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
-        # zs_id_embs: [1, 512] or [2, 16, 768]
+        # zs_id_embs: [1, 512]. 
         zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
 
         # Add noise to all_id_embs during training with probability 0.5.

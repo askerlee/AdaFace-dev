@@ -81,7 +81,8 @@ if __name__ == "__main__":
         distributed_state = None
         process_index = 0
 
-    adaface = AdaFaceWrapper("img2img", args.base_model_path, args.embman_ckpt, args.subject_string, args.num_vectors, args.device)
+    adaface = AdaFaceWrapper("img2img", args.base_model_path, args.embman_ckpt, args.device, 
+                             args.subject_string, args.num_vectors, args.num_inference_steps)
 
     in_folder = args.in_folder
     if os.path.isfile(in_folder):
@@ -148,7 +149,8 @@ if __name__ == "__main__":
         print(f"Translating {images_sig}...")
         with torch.no_grad():
             adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, subject_folder, None, False, 
-                                                                    args.noise_level, update_text_encoder=True)
+                                                                    out_id_embs_scale=1, noise_level=args.noise_level, 
+                                                                    update_text_encoder=True)
 
         # Replace the first occurrence of "in_folder" with "out_folder" in the path of the subject_folder.
         subject_out_folder = subject_folder.replace(args.in_folder, args.out_folder, 1)
@@ -178,7 +180,7 @@ if __name__ == "__main__":
             # A noise level of 0.08 could change gender, but 0.06 is usually safe.
             # The returned adaface_subj_embs are already incorporated in the text encoder, and not used explicitly.
             # NOTE: We assume out_count_per_input_image == 1, so that the output images are of the same number as the input images.
-            out_images = adaface(in_images, args.prompt, num_out_images, ref_img_strength=args.ref_img_strength)
+            out_images = adaface(in_images, args.prompt, args.guidance_scale, num_out_images, ref_img_strength=args.ref_img_strength)
 
             for img_i, img in enumerate(out_images):
                 # out_images: subj_1, subj_2, ..., subj_n, subj_1, subj_2, ..., subj_n, ...

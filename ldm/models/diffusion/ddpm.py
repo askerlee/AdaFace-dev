@@ -2326,7 +2326,7 @@ class LatentDiffusion(DDPM):
     # Otherwise, DINO embedding will be extracted.
     # fg_masks: a list of [Hi, Wi].
     def encode_zero_shot_image_features(self, images, fg_masks, image_paths=None, is_face=True, 
-                                        size=(512, 512), calc_avg=False, skip_non_faces=False):
+                                        size=(512, 512), calc_avg=False, skip_non_faces=False, verbose=False):
         if not self.zs_image_encoders_instantiated:
             self.instantiate_zero_shot_image_encoders()
 
@@ -2380,6 +2380,9 @@ class LatentDiffusion(DDPM):
                 # [1, 197, 384] -> [384,]
                 id_emb = last_hidden_states[0, 0]
                 all_id_embs.append(id_emb)
+
+        if verbose:
+            print(f'{len(all_id_embs)} face images identified, {faceless_img_count} faceless images.')
 
         # image_pixel_values: [BS, 3, 224, 224]
         image_pixel_values = torch.cat(image_pixel_values, dim=0)

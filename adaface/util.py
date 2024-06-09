@@ -23,6 +23,7 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
     return ts
 
 #@torch.autocast(device_type="cuda")
+# In AdaFaceWrapper, input_max_length is 22.
 def arc2face_forward_face_embs(tokenizer, arc2face_text_encoder, face_embs, 
                                input_max_length=77, return_full_and_core_embs=True):
 
@@ -34,6 +35,7 @@ def arc2face_forward_face_embs(tokenizer, arc2face_text_encoder, face_embs,
 
     '''
 
+    # arcface_token_id: 1014
     arcface_token_id = tokenizer.encode("id", add_special_tokens=False)[0]
 
     # This step should be quite fast, and there's no need to cache the input_ids.
@@ -44,12 +46,14 @@ def arc2face_forward_face_embs(tokenizer, arc2face_text_encoder, face_embs,
             max_length=input_max_length, #tokenizer.model_max_length,
             return_tensors="pt",
         ).input_ids.to(face_embs.device)
-    # input_ids: [1, 77] or [3, 77].
+    # input_ids: [1, 77] or [3, 77] (during training).
     input_ids = input_ids.repeat(len(face_embs), 1)
     face_embs_dtype = face_embs.dtype
     face_embs = face_embs.to(arc2face_text_encoder.dtype)
     # face_embs_padded: [1, 512] -> [1, 768].
     face_embs_padded = F.pad(face_embs, (0, arc2face_text_encoder.config.hidden_size - face_embs.shape[-1]), "constant", 0)
+    # arc2face_text_encoder(input_ids=input_ids, ...) is called twice. The first is only to get the token embeddings (the shallowest mapping).
+    # The second call does the ordinary CLIP text encoding pass.
     token_embs = arc2face_text_encoder(input_ids=input_ids, return_token_embs=True)
     token_embs[input_ids==arcface_token_id] = face_embs_padded
 
@@ -198,7 +202,10 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
 
         for i, image_np in enumerate(images_np):
             image_obj = Image.fromarray(image_np).resize((512, 512), Image.NEAREST)
+            # This seems NOT a bug. The input image should be in BGR format, as per 
+            # https://github.com/deepinsight/insightface/issues/524
             image_np = cv2.cvtColor(np.array(image_obj), cv2.COLOR_RGB2BGR)
+            image_np = np.array(image_obj)
 
             face_infos = face_app.get(image_np)
             if verbose and image_paths is not None:

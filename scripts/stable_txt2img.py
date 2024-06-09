@@ -17,7 +17,8 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import save_grid, extend_nn_embedding, get_b_core_e_embeddings, load_model_from_config
+from ldm.util import save_grid, extend_nn_embedding, load_model_from_config
+from adaface.util import get_b_core_e_embeddings
 from ldm.models.diffusion.ddim import DDIMSampler
 from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
@@ -429,7 +430,7 @@ def main(opt):
                 model.encode_zero_shot_image_features(ref_images, fg_masks=None,
                                                       is_face=opt.calc_face_sim,
                                                       calc_avg=True, skip_non_faces=True,
-                                                      image_paths=opt.ref_images)
+                                                      image_paths=opt.ref_images, verbose=True)
         else:
             zs_clip_features, zs_id_embs = None, None
 
