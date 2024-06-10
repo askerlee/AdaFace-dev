@@ -219,8 +219,11 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
             faceid_embeds.append(torch.from_numpy(face_info.normed_embedding).unsqueeze(0))
             image_count += 1
 
-        if verbose and image_folder is not None:
-            print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+        if verbose:
+            if image_folder is not None:
+                print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+            else:
+                print(f"Extracted ID embeddings from {image_count} images")
 
         if len(faceid_embeds) == 0:
             print("No face detected")
