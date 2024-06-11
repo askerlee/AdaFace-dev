@@ -14,7 +14,7 @@ from adaface.util import get_arc2face_id_prompt_embs
 import re, os
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, pipeline_name, base_model_path, embman_ckpt_path, device, 
+    def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, device, 
                  subject_string='z', num_vectors=16, 
                  num_inference_steps=50, negative_prompt=None, is_training=False):
         '''
@@ -24,7 +24,7 @@ class AdaFaceWrapper(nn.Module):
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
-        self.embman_ckpt_path = embman_ckpt_path
+        self.adaface_ckpt_path = adaface_ckpt_path
         self.subject_string = subject_string
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
@@ -41,8 +41,8 @@ class AdaFaceWrapper(nn.Module):
         else:
             self.negative_prompt = negative_prompt
 
-    def load_subj_basis_generator(self, embman_ckpt_path):
-        ckpt = torch.load(embman_ckpt_path, map_location=self.device)
+    def load_subj_basis_generator(self, adaface_ckpt_path):
+        ckpt = torch.load(adaface_ckpt_path, map_location=self.device)
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
             print(f"Subject '{self.subject_string}' not found in the embedding manager.")
@@ -61,7 +61,7 @@ class AdaFaceWrapper(nn.Module):
             self.subj_basis_generator.eval()
 
     def initialize_pipeline(self):
-        self.load_subj_basis_generator(self.embman_ckpt_path)
+        self.load_subj_basis_generator(self.adaface_ckpt_path)
         # arc2face_text_encoder maps the face analysis embedding to 16 face embeddings 
         # in the UNet image space.
         arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
