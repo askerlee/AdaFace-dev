@@ -483,20 +483,24 @@ class SubjBasisGenerator(nn.Module):
         if not self.placeholder_is_bg:
             if is_face:
                 assert arc2face_id_embs is not None
-                # arc2face_embs is projected to the prompt embedding space by arc2face_forward_face_embs
+                # arc2face_embs has been projected to the (modified) prompt embedding space 
+                # by arc2face_forward_face_embs. This prompt embedding space is modified because Arc2Face finetuned
+                # the text encoder and the U-Net.
                 # in embedding_manager: [BS, 16, 768] -> [BS, 77, 768].
                 # arc2face_id_embs is part of arc2face_embs: [BS, 77, 768] -> [BS, 16, 768].
-                # adaface_prompt_embs is projected to the token embedding spaces.
+                # adaface_prompt_embs is projected to the prompt embedding spaces. This is the 
+                # original U-Net prompt embedding space.
+
+                # hidden_state_layer_weights: [[0.9163], [0.9483], [2.0762]]
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
                 # return_emb_types: a list of strings, each string is among 
                 # ['full', 'core', 'full_pad', 'full_half_pad', 'full_zeroed_extra', 'b_core_e'].
                 # Using b_core_e is more computationally efficient than using full_zeroed_extra. 
-                # But there is an unknow BUG that causes crash when using b_core_e. Therefore, we use full_zeroed_extra.
+                # But there is an unknow BUG that causes crash when using b_core_e. 
                 if is_training:
                     return_emb_types = ['full_pad', 'core']
                 else:
                     # adaface_prompt_embs_inf_type: default is full_half_pad, same as training.
-                    # But it doesn't matter, if zs_subj_has_prompt_translator is False.
                     return_emb_types = [adaface_prompt_embs_inf_type, 'core']
 
                 if self.pad_embeddings is None:
@@ -504,7 +508,7 @@ class SubjBasisGenerator(nn.Module):
                 else:
                     self.pad_embeddings = self.pad_embeddings.to(arc2face_id_embs.device)
 
-                with torch.set_grad_enabled(self.prompt2token_proj_grad_scale != 0):
+                with torch.set_grad_enabled(self.training and self.prompt2token_proj_grad_scale != 0):
                     # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                     # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
                     # If list_extra_words is None, then core_id_embs: [BS, 16, 768], the 16 identity tokens in full_prompt_embs.
@@ -541,7 +545,10 @@ class SubjBasisGenerator(nn.Module):
             # If bg, we don't have to use a specific attn layer for each 4-vec set. Instead, one attn layer can generate 257 embs, 
             # and we take the first 16*4=64.             
             # Output of prompt_translator is exactly num_out_embs == 64 tokens. id_embs_out: [BS, 64, 768].
-            id_embs_out = self.prompt_translator(latent_queries, id_embs)
+            # prompt_translator: better named as bg_prompt_translator. It maps the bg features 
+            # to bg prompt embeddings.
+            with torch.set_grad_enabled(self.training):
+                id_embs_out = self.prompt_translator(latent_queries, id_embs)
             # [BS, 64, 768] -> [BS, 16, 4, 768]
             id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
             adaface_subj_embs = id_embs_out * self.output_scale    # * 0.036
@@ -584,8 +591,10 @@ class SubjBasisGenerator(nn.Module):
         # clip_embeddings() and clip_embeddings.token_embedding() differ in that 
         # clip_embeddings() adds positional embeddings, while clip_embeddings.token_embedding() doesn't.
         # Adding positional embeddings seems to help somewhat.
-        # pad_embeddings: [77, 768].
+        # pad_tokens: pad_token_id 49407 repeated 77 times.
+        # pad_token_id is the EOS token. But BOS is 49406.
         pad_tokens = torch.tensor([self.clip_tokenizer.pad_token_id]).to(clip_embeddings.token_embedding.weight.device).repeat(77)
+        # pad_embeddings: [77, 768]. 
         pad_embeddings = clip_embeddings(pad_tokens)[0]
         # We don't allow face recon to influence the pad embeddings. 
         # Otherwise, face identity will leak into the pad embeddings.
@@ -652,7 +661,8 @@ class BaseModelOutputWithPooling2(ModelOutput):
     attentions: Optional[Tuple[torch.FloatTensor]] = None
     attn_mask: Optional[torch.FloatTensor] = None
 
-# Revised from CLIPVisionTransformer. self: a CLIPVisionTransformer instance.
+# Revised from CLIPVisionTransformer to support attention mask. 
+# self: a CLIPVisionTransformer instance.
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L821
 # pixel_values: preprocessed B*C*H*W images. [BS, 3, 224, 224]
 # attn_mask: B*H*W attention mask.

@@ -109,31 +109,32 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, inverse_text_encoder, face
         for extra_words in list_extra_words:
             assert len(extra_words.split()) <= 2, "Each extra_words string should consist of at most 2 words."
         # 16 ", " are placeholders for face_prompt_embs.
-        prompts = [ "photo of a " + ", " * 16 + list_extra_words[i] for i in range(len(list_extra_words)) ]
+        prompt_templates = [ "photo of a " + ", " * 16 + list_extra_words[i] for i in range(len(list_extra_words)) ]
     else:
         # 16 ", " are placeholders for face_prompt_embs.
         # No extra words are added to the prompt.
-        prompts = [ "photo of a " + ", " * 16 for _ in range(len(face_prompt_embs)) ]
+        prompt_templates = [ "photo of a " + ", " * 16 for _ in range(len(face_prompt_embs)) ]
 
     # This step should be quite fast, and there's no need to cache the input_ids.
     # input_ids: [BS, 77].
     input_ids = clip_tokenizer(
-            prompts,
+            prompt_templates,
             truncation=True,
             padding="max_length",
             max_length=input_max_length,
             return_tensors="pt",
         ).input_ids.to(face_prompt_embs.device)
 
-    face_prompt_embs_dtype = face_prompt_embs.dtype
-    face_prompt_embs = face_prompt_embs.to(inverse_text_encoder.dtype)
+    face_prompt_embs_dtype  = face_prompt_embs.dtype
+    face_prompt_embs        = face_prompt_embs.to(inverse_text_encoder.dtype)
 
-    # token_embs: [1, 77, 768].
+    # token_embs: [1, 77, 768]. This call is only to get the template token embeddings (the shallowest mapping).
     token_embs = inverse_text_encoder(input_ids=input_ids, return_token_embs=True)
     # token 4: first ", " in the template prompt.
     # Replace embeddings of 16 placeholder ", " with face_prompt_embs.
     token_embs[:, 4:20] = face_prompt_embs
 
+    # This call does the ordinary CLIP text encoding pass.
     prompt_embeds = inverse_text_encoder(
         input_ids=input_ids,
         input_token_embs=token_embs,
@@ -146,9 +147,10 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, inverse_text_encoder, face
     # token 4: first ", " in the template prompt.
     # 4:20 are the most important 16 embeddings that contain the subject's identity.
     # 20:22 are embeddings of the (at most) two extra words.
-    # [N, 77, 768] -> [N, 18, 768]
+    # [N, 77, 768] -> [N, 16, 768]
     core_prompt_embs = prompt_embeds[:, 4:20]
     if list_extra_words is not None:
+        # [N, 16, 768] -> [N, 18, 768]
         extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
         core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
 
@@ -158,23 +160,27 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, inverse_text_encoder, face
             return_prompts.append(prompt_embeds)
         elif emb_type == 'full_half_pad':
             prompt_embeds2 = prompt_embeds.clone()
-            PADS  = prompt_embeds2.shape[1] - 25 
+            PADS  = prompt_embeds2.shape[1] - 23
             if PADS >= 2:
-                prompt_embeds2[:, 24:24+PADS//2] = pad_embeddings[24:24+PADS//2]
+                # Fill half of the remaining embeddings with pad embeddings.
+                prompt_embeds2[:, 22:22+PADS//2] = pad_embeddings[22:22+PADS//2]
             return_prompts.append(prompt_embeds2)
         elif emb_type == 'full_pad':
             prompt_embeds2 = prompt_embeds.clone()
-            prompt_embeds2[:, 24:-1] = pad_embeddings[24:-1]
+            # Fill the 22nd to the second last embeddings with pad embeddings.
+            prompt_embeds2[:, 22:-1] = pad_embeddings[22:-1]
             return_prompts.append(prompt_embeds2)
         elif emb_type == 'core':
             return_prompts.append(core_prompt_embs)
         elif emb_type == 'full_zeroed_extra':
             prompt_embeds2 = prompt_embeds.clone()
+            # Only add two pad embeddings. The remaining embeddings are set to 0.
             # Make the positional embeddings align with the actual positions.
             prompt_embeds2[:, 22:24] = pad_embeddings[22:24]
             prompt_embeds2[:, 24:-1] = 0
             return_prompts.append(prompt_embeds2)
         elif emb_type == 'b_core_e':
+            # The first 22 embeddings, plus the last EOS embedding.
             b_core_e_embs = get_b_core_e_embeddings(prompt_embeds, length=22)
             return_prompts.append(b_core_e_embs)
         else:

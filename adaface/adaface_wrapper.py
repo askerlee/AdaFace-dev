@@ -16,7 +16,11 @@ import re, os
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, embman_ckpt_path, device, 
                  subject_string='z', num_vectors=16, 
-                 num_inference_steps=50, negative_prompt=None):
+                 num_inference_steps=50, negative_prompt=None, is_training=False):
+        '''
+        pipeline_name: "text2img" or "img2img" or None. If None, the unet and vae are
+        removed from the pipeline to release RAM.
+        '''
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
@@ -25,6 +29,7 @@ class AdaFaceWrapper(nn.Module):
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
         self.device = device
+        self.is_training = is_training
         self.initialize_pipeline()
         self.extend_tokenizer_and_text_encoder()
         if negative_prompt is None:
@@ -50,6 +55,10 @@ class AdaFaceWrapper(nn.Module):
         print(f"Loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
         self.subj_basis_generator.to(self.device)
+        if self.is_training:
+            self.subj_basis_generator.train()
+        else:
+            self.subj_basis_generator.eval()
 
     def initialize_pipeline(self):
         self.load_subj_basis_generator(self.embman_ckpt_path)
@@ -143,6 +152,7 @@ class AdaFaceWrapper(nn.Module):
 
         print(f"Added {num_added_tokens} tokens ({self.placeholder_tokens_str}) to the tokenizer.")
         
+        # placeholder_token_ids: [49408, ..., 49423].
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.placeholder_tokens)
         # print(self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
@@ -175,14 +185,16 @@ class AdaFaceWrapper(nn.Module):
             comp_prompt = re.sub(r'\b' + self.subject_string + r'\b', self.placeholder_tokens_str, prompt)
         return comp_prompt
 
+    # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, image_folder=None, 
                                     pre_face_embs=None, gen_rand_face=False, 
                                     out_id_embs_scale=1., noise_level=0, update_text_encoder=True):
-        # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512).
-        # If extract_faceid_embeds is True, faceid_embeds is an embedding repeated by BS times.
-        # Otherwise, faceid_embeds is a batch of out_image_count random embeddings, different from each other.
+        # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
+        # If extract_faceid_embeds is True, faceid_embeds is *the same* embedding repeated by id_batch_size times.
+        # Otherwise, faceid_embeds is a batch of random embeddings, each instance is different.
         # The same applies to id_prompt_emb.
-        # id_prompt_emb is in the image prompt space.
+        # faceid_embeds is in the face analysis embeddings. id_prompt_emb is in the image prompt space.
+        # Here id_batch_size = 1, so
         # faceid_embeds: [1, 512]. NOT used later.
         # id_prompt_emb: [1, 16, 768]. 
         # NOTE: Since return_core_id_embs is True, id_prompt_emb is only the 16 core ID embeddings.
@@ -200,6 +212,7 @@ class AdaFaceWrapper(nn.Module):
                                           device=self.device,
                                           # input_max_length == 22: only keep the first 22 tokens, 
                                           # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
+                                          # The results are indistinguishable from input_max_length=77.
                                           input_max_length=22,
                                           noise_level=noise_level,
                                           return_core_id_embs=True,
@@ -240,7 +253,7 @@ class AdaFaceWrapper(nn.Module):
 
         # noise: [BS, 4, 64, 64]
         # When the pipeline is text2img, strength is ignored.
-        images = self.pipeline(image=noise,
+        images = self.pipeline(image=noise.to(self.device),
                                prompt_embeds=prompt_embeds_, 
                                negative_prompt_embeds=negative_prompt_embeds_, 
                                num_inference_steps=self.num_inference_steps, 
