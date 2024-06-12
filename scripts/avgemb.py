@@ -53,7 +53,7 @@ def main():
         sel_checkpoint_filenames += checkpoint_filenames
     
     avg_ckpt = {}
-    avg_count = 0
+    avg_counts = {}
     for i, c in enumerate(sel_checkpoint_filenames):
         if c.endswith(".safetensors"):
             checkpoint = safetensors_load_file(c)
@@ -68,6 +68,7 @@ def main():
             if k not in avg_ckpt:
                 avg_ckpt[k] = checkpoint[k]
                 print(f"Copy {k}")
+                avg_counts[k] = 1
             # Another occurrence of a previously seen nn.Module.
             elif isinstance(checkpoint[k], nn.Module):
                 #print(f"nn.Module: {k}")
@@ -81,26 +82,26 @@ def main():
                         avg_state_dict[m_k].data += m_v
                         print(f"Accumulate {k}.{m_k}")
                 avg_ckpt[k].load_state_dict(avg_state_dict)
+                avg_counts[k] = 1
             # Another occurrence of a previously seen nn.Parameter.
             elif isinstance(checkpoint[k], (nn.Parameter, torch.Tensor)):
                 #print(f"nn.Parameter: {k}")
                 avg_ckpt[k].data += checkpoint[k].data
+                avg_counts[k] += 1
             else:
                 print(f"NOT copying {type(checkpoint[k])}: {k}")
                 pass
-
-        avg_count += 1
     
     for k in avg_ckpt:
         # safetensors use torch.Tensor instead of nn.Parameter.
         if isinstance(avg_ckpt[k], (nn.Parameter, torch.Tensor)):
             print(f"Averaging nn.Parameter: {k}")
-            avg_ckpt[k].data /= avg_count
+            avg_ckpt[k].data /= avg_counts[k]
         elif isinstance(avg_ckpt[k], nn.Module):
             print(f"Averaging nn.Module: {k}")
             avg_state_dict = avg_ckpt[k].state_dict()
             for m_k, m_v in avg_state_dict.items():
-                m_v.data = (m_v.data / avg_count).to(m_v.data.dtype)
+                m_v.data = (m_v.data / avg_counts[k]).to(m_v.data.dtype)
             avg_ckpt[k].load_state_dict(avg_state_dict)
         else:
             print(f"NOT averaging {type(avg_ckpt[k])}: {k}")
