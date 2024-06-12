@@ -20,6 +20,8 @@ import hashlib
 from collections import OrderedDict, defaultdict
 import re
 import copy
+from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import save_file as safetensors_save_file
 
 parser = argparse.ArgumentParser(description='PyTorch Checkpoint Averager')
 parser.add_argument('--input', default='', nargs="+", type=str, metavar='PATHS',
@@ -43,11 +45,6 @@ def main():
             pattern += args.suffix
 
         checkpoint_filenames = glob.glob(pattern, recursive=True)
-        checkpoint_filenames = filter(lambda x: int(re.search(r"(\d+).pt", x).group(1)) >= args.min, checkpoint_filenames)
-        if args.max > 0:
-            checkpoint_filenames = filter(lambda x: int(re.search(r"(\d+).pt", x).group(1)) <= args.max, checkpoint_filenames)
-        checkpoint_filenames = filter(lambda x: 'avg_' not in x, checkpoint_filenames)
-        checkpoint_filenames = sorted(checkpoint_filenames, key=lambda x: int(re.search(r"(\d+).pt", x).group(1)))
         if len(checkpoint_filenames) == 0:
             print("WARNING: No checkpoints matching '{}' and iteration >= {} in '{}'".format(
                     pattern, args.min, args.input))
@@ -58,10 +55,16 @@ def main():
     avg_ckpt = {}
     avg_count = 0
     for i, c in enumerate(sel_checkpoint_filenames):
-        checkpoint = torch.load(c, map_location='cpu')
+        if c.endswith(".safetensors"):
+            checkpoint = safetensors_load_file(c)
+        else:
+            checkpoint = torch.load(c, map_location='cpu')
         print(c)
 
         for k in checkpoint:
+            # Skip ema weights
+            if k.startswith("model_ema."):
+                continue
             if k not in avg_ckpt:
                 avg_ckpt[k] = checkpoint[k]
                 print(f"Copy {k}")
@@ -79,7 +82,7 @@ def main():
                         print(f"Accumulate {k}.{m_k}")
                 avg_ckpt[k].load_state_dict(avg_state_dict)
             # Another occurrence of a previously seen nn.Parameter.
-            elif isinstance(checkpoint[k], nn.Parameter):
+            elif isinstance(checkpoint[k], (nn.Parameter, torch.Tensor)):
                 #print(f"nn.Parameter: {k}")
                 avg_ckpt[k].data += checkpoint[k].data
             else:
@@ -89,7 +92,8 @@ def main():
         avg_count += 1
     
     for k in avg_ckpt:
-        if isinstance(avg_ckpt[k], nn.Parameter):
+        # safetensors use torch.Tensor instead of nn.Parameter.
+        if isinstance(avg_ckpt[k], (nn.Parameter, torch.Tensor)):
             print(f"Averaging nn.Parameter: {k}")
             avg_ckpt[k].data /= avg_count
         elif isinstance(avg_ckpt[k], nn.Module):
@@ -101,7 +105,10 @@ def main():
         else:
             print(f"NOT averaging {type(avg_ckpt[k])}: {k}")
 
-    torch.save(avg_ckpt, args.output)
+    if args.output.endswith(".safetensors"):
+        safetensors_save_file(avg_ckpt, args.output)
+    else:
+        torch.save(avg_ckpt, args.output)
 
     print("=> Saved state_dict to '{}'".format(args.output))
 
