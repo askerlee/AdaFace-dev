@@ -208,6 +208,9 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
 
         for i, image_np in enumerate(images_np):
             image_obj = Image.fromarray(image_np).resize((512, 512), Image.NEAREST)
+            # Remove alpha channel if it exists.
+            if image_obj.mode == 'RGBA':
+                image_obj = image_obj.convert('RGB')
             # This seems NOT a bug. The input image should be in BGR format, as per 
             # https://github.com/deepinsight/insightface/issues/524
             image_np = cv2.cvtColor(np.array(image_obj), cv2.COLOR_RGB2BGR)
