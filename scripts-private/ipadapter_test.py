@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from diffusers import StableDiffusionPipeline, DDIMScheduler, AutoencoderKL
 from PIL import Image
 import sys
-#sys.path.append("/home/shaohua/ip_adapter")
+#sys.path.append("/home/username/ip_adapter")
 import os, glob
 import argparse
 import numpy as np

@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from PIL import Image
@@ -21,6 +22,54 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
         ts = ts + noise
         
     return ts
+
+
+# Revised from RevGrad, by removing the grad negation.
+class ScaleGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_, alpha_, debug=False):
+        ctx.save_for_backward(alpha_, debug)
+        output = input_
+        if debug:
+            print(f"input: {input_.abs().mean().item()}")
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):  # pragma: no cover
+        # saved_tensors returns a tuple of tensors.
+        alpha_, debug = ctx.saved_tensors
+        if ctx.needs_input_grad[0]:
+            grad_output2 = grad_output * alpha_
+            if debug:
+                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+        else:
+            grad_output2 = None
+        return grad_output2, None, None
+
+class GradientScaler(nn.Module):
+    def __init__(self, alpha=1., debug=False, *args, **kwargs):
+        """
+        A gradient scaling layer.
+        This layer has no parameters, and simply scales the gradient in the backward pass.
+        """
+        super().__init__(*args, **kwargs)
+
+        self._alpha = torch.tensor(alpha, requires_grad=False)
+        self._debug = torch.tensor(debug, requires_grad=False)
+
+    def forward(self, input_):
+        _debug = self._debug if hasattr(self, '_debug') else False
+        return ScaleGrad.apply(input_, self._alpha.to(input_.device), _debug)
+
+def gen_gradient_scaler(alpha, debug=False):
+    if alpha == 1:
+        return nn.Identity()
+    if alpha > 0:
+        return GradientScaler(alpha, debug=debug)
+    else:
+        assert alpha == 0
+        # Don't use lambda function here, otherwise the object can't be pickled.
+        return torch.detach
 
 #@torch.autocast(device_type="cuda")
 # In AdaFaceWrapper, input_max_length is 22.

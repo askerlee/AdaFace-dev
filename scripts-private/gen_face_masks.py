@@ -2,7 +2,7 @@
 # -*- encoding: utf-8 -*-
 import sys
 # git clone https://github.com/zllrunning/face-parsing.PyTorch face_parsing
-sys.path.append('/data/shaohua/face_parsing')
+sys.path.append('/data/username/face_parsing')
 from model import BiSeNet
 
 import torch
@@ -173,14 +173,14 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
                                 save_path=osp.join(result_path, subj_dir, img_path))
 
 if __name__ == "__main__":
-    ckpt_path = osp.join('/data/shaohua/face_parsing/res/cp', '79999_iter.pth')
+    ckpt_path = osp.join('/data/username/face_parsing/res/cp', '79999_iter.pth')
     '''
-    gen_masks(ckpt_path, src_paths='/data/shaohua/VGGface2_HQ', 
-             result_path='/data/shaohua/VGGface2_HQ_masks2', 
-             exist_path='/data/shaohua/VGGface2_HQ_masks',
+    gen_masks(ckpt_path, src_paths='/data/username/VGGface2_HQ', 
+             result_path='/data/username/VGGface2_HQ_masks2', 
+             exist_path='/data/username/VGGface2_HQ_masks',
              max_imgs_per_person=-1)
     '''
     # The FFHQ folder doesn't have subfolders. Therefore, we need to put it in a list/tuple.
-    gen_masks(ckpt_path, src_paths=['/data/shaohua/FFHQ'], 
-              result_path='/data/shaohua/FFHQ_masks')
+    gen_masks(ckpt_path, src_paths=['/data/username/FFHQ'], 
+              result_path='/data/username/FFHQ_masks')
         

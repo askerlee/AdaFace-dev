@@ -17,8 +17,7 @@ from torch import einsum
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
-from ldm.util import gen_gradient_scaler
-from adaface.util import arc2face_inverse_face_prompt_embs
+from adaface.util import arc2face_inverse_face_prompt_embs, gen_gradient_scaler
 from adaface.arc2face_models import CLIPTextModelWrapper
 
 def reshape_tensor(x, num_heads):

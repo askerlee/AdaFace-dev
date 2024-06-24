@@ -69,8 +69,8 @@ if __name__ == "__main__":
  
 # screen -dm -L -Logfile trans_rv4-2.txt accelerate launch --multi_gpu --num_processes=2 scripts/adaface-translate.py 
 # --embman_ckpt logs/subjects-celebrity2024-05-16T17-22-46_zero3-ada/checkpoints/embeddings_gs-30000.pt 
-# --base_model_path models/realisticvision/realisticVisionV40_v40VAE.safetensors --in_folder /data/shaohua/VGGface2_HQ_masks/ 
-# --is_mix_subj_folder 0 --out_folder /data/shaohua/VGGface2_HQ_masks_rv4a --copy_masks --num_gpus 2
+# --base_model_path models/realisticvision/realisticVisionV40_v40VAE.safetensors --in_folder /data/username/VGGface2_HQ_masks/ 
+# --is_mix_subj_folder 0 --out_folder /data/username/VGGface2_HQ_masks_rv4a --copy_masks --num_gpus 2
     if args.num_gpus > 1:
         from accelerate import PartialState
         distributed_state = PartialState()
