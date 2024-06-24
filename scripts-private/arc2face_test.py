@@ -105,9 +105,9 @@ if __name__ == "__main__":
         image_paths = None
         image_folder = None
 
-    # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
-    # Note the second "model" in the path.
-    face_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+    # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
+    # Note there's a second "model" in the path.
+    face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
     face_app.prepare(ctx_id=0, det_size=(512, 512))
     
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name

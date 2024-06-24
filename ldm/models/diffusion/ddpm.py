@@ -925,9 +925,9 @@ class LatentDiffusion(DDPM):
          'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
         # Use the same model as Arc2Face.
-        # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
-        # Note the second "model" in the path.        
-        self.insightface_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
+        # Note there's a second "model" in the path.        
+        self.insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')

@@ -122,9 +122,9 @@ class AdaFaceWrapper(nn.Module):
 
         pipeline.scheduler = noise_scheduler
         self.pipeline = pipeline.to(self.device)
-        # FaceAnalysis will try to find the ckpt in: models/arc2face/models/antelopev2. 
-        # Note the second "model" in the path.
-        self.face_app = FaceAnalysis(name='antelopev2', root='models/arc2face', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
+        # Note there's a second "model" in the path.
+        self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         # Patch the missing tokenizer in the subj_basis_generator.
         if not hasattr(self.subj_basis_generator, 'clip_tokenizer'):
