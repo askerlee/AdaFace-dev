@@ -8,7 +8,6 @@ class DictI(dict):
         self.indiv_subdir='samples'
         self.skip_grid=False
         self.ddim_steps=20
-        self.plms=False
         self.skip_save=False
         self.laion400m=False
         self.fixed_code=False

@@ -1019,10 +1019,6 @@ class LatentDiffusion(DDPM):
                 # If apply_arc2face_inverse_embs, the static_prompt_embedding is the CLIP-encoded Arc2Face inverse embeddings,
                 # which has been returned from self.cond_stage_model.encode(). So no need to replace it.
 
-                # static_prompt_embedding is tensor. So the following statement is False.
-                if isinstance(static_prompt_embedding, DiagonalGaussianDistribution):
-                    static_prompt_embedding = static_prompt_embedding.mode()
-
                 # If apply_arc2face_embs, the location of the subject embeddings is not 
                 # indexed by placeholder_indices, so no point to fix the scale of the embeddings.
                 # But if apply_arc2face_inverse_embs, in theory we can still fix the scale of the embeddings,

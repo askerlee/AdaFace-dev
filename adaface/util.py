@@ -284,14 +284,14 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
                 print(f"Extracted ID embeddings from {image_count} images")
 
         if len(faceid_embeds) == 0:
-            print("No face detected")
-            breakpoint()
-
-        # faceid_embeds: [10, 512]
-        faceid_embeds = torch.cat(faceid_embeds, dim=0)
-        # faceid_embeds: [10, 512] -> [1, 512].
-        # and the resulted prompt embeddings are the same.
-        faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(torch.float16).to(device)
+            print("No face detected. Use a random face instead.")
+            faceid_embeds = torch.randn(id_batch_size, 512).to(device=device, dtype=torch.float16)
+        else:
+            # faceid_embeds: [10, 512]
+            faceid_embeds = torch.cat(faceid_embeds, dim=0)
+            # faceid_embeds: [10, 512] -> [1, 512].
+            # and the resulted prompt embeddings are the same.
+            faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(device=device, dtype=torch.float16)
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
         if pre_face_embs is None:
@@ -301,7 +301,7 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
             if pre_face_embs.shape[0] == 1:
                 faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
 
-        faceid_embeds = faceid_embeds.to(torch.float16).to(device)
+        faceid_embeds = faceid_embeds.to(device=device, dtype=torch.float16)
 
     if noise_level > 0:
         # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.

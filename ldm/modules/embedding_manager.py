@@ -5,7 +5,7 @@ from einops import rearrange, repeat
 from adaface.subj_basis_generator import SubjBasisGenerator
 import sys
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
-sys.modules['ldm.modules.arc2face_models'] = sys.modules['adaface.arc2face_models']
+sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
 from adaface.util import arc2face_forward_face_embs
 
 import torch.nn.functional as F
@@ -17,7 +17,6 @@ from ldm.util import gen_gradient_scaler, extract_first_index_in_each_instance, 
                      scan_cls_delta_strings, torch_uniform, \
                      extend_clip_text_embedder, calc_init_word_embeddings, calc_stats
                      
-
 from functools import partial
 from collections import OrderedDict
 import copy

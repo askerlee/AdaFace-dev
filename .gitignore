@@ -4,14 +4,6 @@ __pycache__/
 /logs/*
 /logs
 /commercial/*
-/data-extra/*
-/data-extra
-/data-256/*
-/data-256
-/data_unused/*
-/data_unused
-/outputs/*
-/generations/*
 /samples*
 /samples*/*
 /models/*
@@ -57,8 +49,5 @@ AdaFace-Animate/*
 AdaFace-Animate
 ConsistentID/*
 ConsistentID
-test*/*
-test*
 animatediff/*
 animatediff
-

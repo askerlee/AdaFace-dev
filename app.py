@@ -39,7 +39,6 @@ def generate(*args):
     opt.mask_weight = 0.0
     opt.broad_class = args[19]
     opt.clip_last_layers_skip_weights = (args[20], args[21])
-    opt.plms = args[22]
     opt.fixed_code = args[23]
     opt.no_preview = args[24]
     opt.bb_type = ""
@@ -143,7 +142,6 @@ with gr.Blocks() as demo:
                     
                 with gr.Row() as row7:
                     # skip_grid = gr.Checkbox(label="Skip Grid", info="Skip Grid")
-                    plms = gr.Checkbox(label="PLMS Sampler")
                     # skip_save = gr.Checkbox(label="Skip Save", info="Skip Save")
                     
                     fixed_code = gr.Checkbox(label="Fixed Code")
@@ -162,7 +160,7 @@ with gr.Blocks() as demo:
                     prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
                     embedding_paths, H, W, bs, n_repeat, n_rows, seed, precision, \
                     broad_class, \
-                    clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, plms, fixed_code, no_preview])
+                    clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, fixed_code, no_preview])
                 
                 # button2.click(close)
     with gr.Tab(label="Training") as tab0:

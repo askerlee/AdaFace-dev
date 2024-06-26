@@ -20,7 +20,6 @@ from contextlib import nullcontext
 from ldm.util import save_grid, extend_nn_embedding, load_model_from_config
 from adaface.util import get_b_core_e_embeddings
 from ldm.models.diffusion.ddim import DDIMSampler
-from ldm.models.diffusion.plms import PLMSSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 from insightface.app import FaceAnalysis
@@ -89,11 +88,6 @@ def parse_args():
         type=int,
         default=50,
         help="number of ddim sampling steps",
-    )
-    parser.add_argument(
-        "--plms",
-        action='store_true',
-        help="use plms sampling",
     )
     parser.add_argument(
         "--fixed_code",
@@ -434,10 +428,7 @@ def main(opt):
         else:
             zs_clip_features, zs_id_embs = None, None
 
-        if opt.plms:
-            sampler = PLMSSampler(model)
-        else:
-            sampler = DDIMSampler(model)
+        sampler = DDIMSampler(model)
 
         if opt.neg_prompt == "" and opt.use_pre_neg_prompt:
             # negative prompt borrowed from BLIP-Diffusion.
