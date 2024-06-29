@@ -246,8 +246,9 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
                                 input_max_length=77, noise_level=0.0, 
                                 return_core_id_embs=False,
                                 gen_neg_prompt=False, verbose=False):
+    face_image_count = 0
+
     if extract_faceid_embeds:
-        image_count = 0
         faceid_embeds = []
         if image_paths is not None:
             images_np = []
@@ -275,13 +276,13 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
             face_info = sorted(face_infos, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1]
             # Each faceid_embed: [1, 512]
             faceid_embeds.append(torch.from_numpy(face_info.normed_embedding).unsqueeze(0))
-            image_count += 1
+            face_image_count += 1
 
         if verbose:
             if image_folder is not None:
-                print(f"Extracted ID embeddings from {image_count} images in {image_folder}")
+                print(f"Extracted ID embeddings from {face_image_count} images in {image_folder}")
             else:
-                print(f"Extracted ID embeddings from {image_count} images")
+                print(f"Extracted ID embeddings from {face_image_count} images")
 
         if len(faceid_embeds) == 0:
             print("No face detected. Use a random face instead.")
@@ -335,7 +336,7 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
 
         #if extract_faceid_embeds:
         #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(id_batch_size, 1, 1)
-        return faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
+        return face_image_count, faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
     else:
-        return faceid_embeds, arc2face_pos_prompt_emb
+        return face_image_count, faceid_embeds, arc2face_pos_prompt_emb
     

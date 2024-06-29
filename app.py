@@ -1,258 +1,203 @@
-import gradio as gr
-import os
-import yaml
-from scripts.stable_txt2img import main
-from webuiParamClass import DictI, DictT
+import sys
+sys.path.append('./')
+
+from adaface.adaface_wrapper import AdaFaceWrapper
+import torch
+from insightface.app import FaceAnalysis
+from PIL import Image
+import numpy as np
 import random
 
+import gradio as gr
+import spaces
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--adaface_ckpt_path', type=str, 
+                    default='models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt')
+parser.add_argument('--gpu', type=int, default=None)
+parser.add_argument('--ip', type=str, default="0.0.0.0")
+args = parser.parse_args()
 
-opt = DictI() # create an instance containing default param for Inference
+# global variable
+MAX_SEED = np.iinfo(np.int32).max
+if torch.cuda.is_available():
+    device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
+else:
+    device = "cpu"
+dtype = torch.float16
 
-with open('webui-setting-config.yaml','r') as f: # open config file to load pre settings
-    setting = yaml.load(f, Loader=yaml.FullLoader)
-    for key, value in setting.items():
-        setattr(opt, key, value)
-    print(setting)
+# base_model_path is only used for initialization, not really used in the inference.
+adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path="models/sar/sar.safetensors",
+                         adaface_ckpt_path=args.adaface_ckpt_path, device=device)
 
+def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
+    if randomize_seed:
+        seed = random.randint(0, MAX_SEED)
+    return seed
 
-def generate(*args):
-    opt.prompt = args[0]
-    opt.class_prompt = args[1]
-    opt.config = args[2]
-    opt.ckpt = args[3]
-    opt.scale = args[4]
-    opt.n_iters = args[5]
-    opt.ddim_eta = args[6]
-    opt.n_samples = args[7]
-    opt.ddim_steps = args[8]
-    opt.gpu = int(args[9])
-    opt.embedding_paths = args[10]
-    opt.H = args[11]
-    opt.W = args[12]
-    opt.C = 4
-    opt.f = 8
-    opt.bs = args[13]
-    opt.n_repeat = args[14]
-    opt.n_rows = args[15]
-    opt.seed = args[16]
-    opt.precision = args[17]
-    opt.mask_weight = 0.0
-    opt.broad_class = args[19]
-    opt.clip_last_layers_skip_weights = (args[20], args[21])
-    opt.fixed_code = args[23]
-    opt.no_preview = args[24]
-    opt.bb_type = ""
+def swap_to_gallery(images):
+    # Update uploaded_files_gallery, show files, hide clear_button_column
+    # Or:
+    # Update uploaded_init_img_gallery, show init_img_files, hide init_clear_button_column
+    return gr.update(value=images, visible=True), gr.update(visible=True), gr.update(value=images, visible=False)
 
-    if opt.init_img == '':
-        opt.init_img = None
-    if opt.seed == -1: 
-        opt.seed = random.randint(0,100000)
-        with open('webui-setting-config.yaml', 'r') as f:
-            settings = yaml.safe_load(f)
-        settings['seed'] = opt.seed
-        with open('webui-setting-config.yaml','w') as f:
-            yaml.dump(settings, f)
-            print(f'saved latest seed = {opt.seed} to webui-setting-config.yaml')
-        
-  
-    print(opt)
-    img = main(opt)
-    return img
+def remove_back_to_files():
+    # Hide uploaded_files_gallery,    show clear_button_column,      hide files,           reset init_img_selected_idx
+    # Or:
+    # Hide uploaded_init_img_gallery, hide init_clear_button_column, show init_img_files,  reset init_img_selected_idx
+    return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True)
 
+def update_out_gallery(images):
+    #rows = (len(images) + 1) // 2  # Calculate the number of rows needed
+    return gr.update(height=600)
 
-# def random_num_gen():
-#     #generate random number 
-#     print("Generating random number")
-#     #change seed slider value 
-#     # return random.randint(0,9999999)
-#     current_random_num = random.randint(0,9999999)
-#     return current_random_num
+@spaces.GPU
+def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale,
+                   num_images, prompt, negative_prompt, seed, progress=gr.Progress(track_tqdm=True)):
+
+    if image_paths is None or len(image_paths) == 0:
+        raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
     
+    if prompt is None:
+        prompt = ""
 
-with gr.Blocks() as demo:
-    gr.Markdown("# AdaFace")
-    model_subfolders = os.listdir('models/')
-    model_entries = [ os.path.join("models", model_subfolder, model_filename) for model_subfolder in model_subfolders for model_filename in os.listdir('models/' + model_subfolder) ]
-    print(model_entries)
+    adaface_subj_embs = \
+        adaface.generate_adaface_embeddings(image_folder=None, image_paths=image_paths,
+                                            out_id_embs_scale=adaface_id_cfg_scale, update_text_encoder=True)
+    
+    if adaface_subj_embs is None:
+        raise gr.Error(f"Failed to detect any faces! Please try with other images")
+
+    generator = torch.Generator(device=device).manual_seed(seed)
+    print(f"Manual seed: {seed}")
+    # Generate two images each time for the user to select from.
+    noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
+    #print(noise.abs().sum())
+    # samples: A list of PIL Image instances.
+    samples = adaface(noise, prompt, negative_prompt, guidance_scale=guidance_scale, out_image_count=num_images, generator=generator, verbose=True)
+    return samples
+
+### Description
+title = r"""
+<h1>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</h1>
+"""
+
+description = r"""
+<b>Official demo</b> for our NeurIPS 2024 submission <b>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</b>.<br>
+
+❗️**Tips**❗️
+1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
+2. Increase <b>AdaFace CFG Scale</b> (preferred) or <b>Guidance scale</b> and/or to highlight fine facial features.
+3. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
+  AdaFace-Animate 
+  <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
+</a>
+
+**TODO**
+- ControlNet integration.
+"""
+
+css = '''
+.gradio-container {width: 85% !important}
+'''
+with gr.Blocks(css=css) as demo:
+
+    # description
+    gr.Markdown(title)
+    gr.Markdown(description)
+
     with gr.Row():
-        with gr.Column(scale=1, min_width=200):
-            model = gr.Dropdown( model_entries, label='Model (checkpoint)',value = 'models/stable-diffusion-v-1-5/v1-5-dste.ckpt',info = 'under models/ directory') #add value ='preious selection from state
-            print(model)
-            # model = 'models/stable-diffusion/' + f'{model}' 
-            # print(model)
+        with gr.Column():
             
-        with gr.Column(scale=3):
-            pass
-    #add a drop down
-    # list of config is the item under the path, read all item under a directory
-    with gr.Tab(label="Inference") as tab1:
-        with gr.Row() as row0:
-            with gr.Column(scale=2) as col1:
-                prompt = gr.Textbox(lines=2, label="Prompt", placeholder="Enter a prompt...")
-                class_prompt = gr.Textbox(lines=2, label="Class Prompt", placeholder="Enter a class prompt...")
-                embedding_path_entries = os.listdir('releases/ada-0810')
-                embedding_path_entries = ['releases/ada-0810/' + path + '/embeddings_gs-4500.pt' for path in embedding_path_entries]
-                embedding_paths = gr.Dropdown (list(embedding_path_entries), label='Embedding Path', info='will add more later', multiselect=True)
-                with gr.Row() as row00:
-                    with gr.Column():
-                        config_entries = os.listdir('configs/stable-diffusion/')
-                        config_entries = ['configs/stable-diffusion/' + path for path in config_entries]
-                        config = gr.Dropdown( list(config_entries), label='Config', value ='configs/stable-diffusion/v1-inference-ada.yaml')
-                    with gr.Column():
-                        n_iters = gr.Slider(minimum=0, maximum=75, value=20, label="Number of Iterations", step=1)
-                with gr.Row() as row2:
-                    ddim_eta = gr.Slider(minimum=0, maximum=1, value=0.0, label="DDIM eta", step=0.1)
-                    ddim_steps = gr.Slider(minimum=0, maximum=250,value=50,  label="Number of DDIM Steps", step=1)
-                    # gpu = gr.Checkbox(label="Use GPU", value=True)
-                    gpu = gr.Dropdown( [0,1,2,3,4,-1], label="GPU", value = '0' , info='GPU id; -1 for CPU')
-                with gr.Row() as row3:
-                    with gr.Column():
-                        H = gr.Slider(minimum=0, maximum=1000, value=512, label="Height", step=1)
-                        W = gr.Slider(minimum=0, maximum=1000, value=512, label="Width", step=1)
-                    with gr.Column():
-                        n_samples = gr.Slider(minimum=0, maximum=20, value=8, label="Number of Samples", step=1)
-                        n_rows = gr.Slider(minimum=0, maximum=5, value=2, label="Number of Rows", step=1)
-                with gr.Row() as row:
-                    scale = gr.Slider(minimum=0, maximum=20, value=10.0 ,label="Scale", step=1)
-                with gr.Row() as row4:
-                    bs = gr.Slider(minimum=0, maximum=20, value=8, label="Batch Size", step=1)
-                    n_repeat = gr.Slider(minimum=0, maximum=20, value=1, label="n_repeat", step=1)
-                with gr.Row() as row5:
-                    with gr.Column(scale=0.8):
-                        seed = gr.Number(minimum=-1, maximum=100000, value=-1, label="Seed", step=1,interactive=True)
-                        # seed.change(compare,[seed,random_num],seed)
-                        random_num = gr.Number(value = -1, visible = False)
-                    with gr.Column(scale = 0.1):
-                        random_seed = gr.Button(value="🎲")
-                        random_seed.style(size='sm')
-                        random_seed.click(lambda x: x, random_num, seed)
-                    # with gr.Column(scale=0.1):
-                        previous_seed = gr.Button(value="♻️")
-                        previous_seed.style(size='sm')
-                        stored_seed = gr.Number(value = opt.seed,visible = False)
-                        previous_seed.click(lambda x: x, stored_seed,seed)
-                with gr.Row():
-                    precision = gr.Dropdown(['autocast', 'float32', 'float64'], label='Precision',value='autocast')
-                with gr.Row() as row6:
-                    # mask_weight = gr.Slider(minimum=0, maximum=10, value=0.0, label="Mask Weight", step=0.1)
-                    broad_class = gr.Slider(minimum=0, maximum=10, value=0, label="Broad Class", step=1)
-                    clip_last_layer_skip_weight1 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Last Layer Skip Weight", step=0.1)
-                    clip_last_layer_skip_weight2 = gr.Slider(minimum=0, maximum=1, value=0.5, label="Clip Second Last Layer Skip Weight", step=0.1)
-                    # clip_last_layers_skip_weights = [clip_last_layer_skip_weight1, clip_last_layer_skip_weight2]
-                    
-                with gr.Row() as row7:
-                    # skip_grid = gr.Checkbox(label="Skip Grid", info="Skip Grid")
-                    # skip_save = gr.Checkbox(label="Skip Save", info="Skip Save")
-                    
-                    fixed_code = gr.Checkbox(label="Fixed Code")
-                    no_preview = gr.Checkbox(label="No Preview")
-        
-               # add 'releases/' to everyting in the list
+            # upload face image
+            # img_file = gr.Image(label="Upload a photo with a face", type="filepath")
+            img_files = gr.File(
+                        label="Drag / Select 1 or more photos of a person's face",
+                        file_types=["image"],
+                        file_count="multiple"
+                    )
+            uploaded_files_gallery = gr.Gallery(label="Subject images", visible=False, columns=3, rows=1, height=300)
+            with gr.Column(visible=False) as clear_button_column:
+                remove_and_reupload = gr.ClearButton(value="Remove and upload subject images", components=img_files, size="sm")
 
-            with gr.Column(scale=1.5) as col2:
-                #add image output 
-                with gr.Row():
-                    button1 = gr.Button(value="Generate")
-                # button2 = gr.Button(value="Close")
-                with gr.Row():
-                    output = gr.Image(label="Output")
-                button1.click(generate, outputs=output, inputs=[ \
-                    prompt, class_prompt, config, model, scale, n_iters, ddim_eta, n_samples, ddim_steps, gpu, \
-                    embedding_paths, H, W, bs, n_repeat, n_rows, seed, precision, \
-                    broad_class, \
-                    clip_last_layer_skip_weight1, clip_last_layer_skip_weight2, fixed_code, no_preview])
-                
-                # button2.click(close)
-    with gr.Tab(label="Training") as tab0:
-        gr.Markdown('work in progress')
-        pass
-    with gr.Tab(label="Settings"):
-        gr.Markdown('work in progress')
-        with open('webui-setting-config.yaml','r') as config_settings:
-            settings = yaml.safe_load(config_settings)
-        def apply_settings(*args):
-            # change the setting values and save in a file so that the next time the app is opened, the settings are the same
-            # settings['skip_save'] =  args[0]
-            # settings['file_format'] = args[1]
-            # settings['image_file_pattern'] = args[2]
-            # settings['add_image_number'] = args[3]
-            # settings['skip_grid'] =  args[4]
-            # settings['file_format_grid'] = args[5]
-            # settings['entended_info'] = args[6]
-            # settings['from_file'] = args[7]
-            # settings['init_img'] = args[8]
-            # settings['calc_face_sim']= args[9]
-            # settings['compare_with']= args[10]
-            # settings['laion400m'] = args[11]
+            prompt = gr.Dropdown(label="Prompt",
+                       info="Try something like 'man/woman walking on the beach'. If the face is not in focus, try adding 'face portrait of' at the beginning.",
+                       value=None,
+                       allow_custom_value=True,
+                       filterable=False,
+                       choices=[
+                            "woman ((best quality)), ((masterpiece)), ((realistic)), long highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
+                            "woman walking on the beach, sunset, orange sky",
+                            "woman in a white apron and chef hat, garnishing a gourmet dish, full body view, long shot",
+                            "woman dancing pose among folks in a park, waving hands",
+                            "woman in iron man costume flying pose, the sky ablaze with hues of orange and purple, full body view, long shot",
+                            "woman jedi wielding a lightsaber, star wars, full body view, eye level shot",
+                            "woman playing guitar on a boat, ocean waves",
+                            "woman with a passion for reading, curled up with a book in a cozy nook near a window",
+                            "woman running pose in a park, eye level shot",
+                            "woman in superman costume flying pose, the sky ablaze with hues of orange and purple, full body view, long shot"
+                       ])
+            
+            submit = gr.Button("Submit", variant="primary")
 
-            with open('webui-setting-config.yaml','w') as f:
-                yaml.dump(settings, f)
-                print('saved settings to webui-setting-config.yaml')
+            negative_prompt = gr.Textbox(
+                label="Negative Prompt", 
+                value="flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, deformed eyeballs, cross-eyed, blurry, mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, nude, naked, nsfw, topless, bare breasts",
+            )
+                        
+            adaface_id_cfg_scale = gr.Slider(
+                    label="AdaFace CFG Scale",
+                    info="The CFG scale of the AdaFace ID embeddings (influencing fine facial features)",
+                    minimum=0.5,
+                    maximum=8.0,
+                    step=0.5,
+                    value=4.0,
+                )
+            
+            guidance_scale = gr.Slider(
+                label="Guidance scale",
+                minimum=0.5,
+                maximum=8.0,
+                step=0.5,
+                value=4.0,
+            )
 
-        with gr.Row():
-            with gr.Column(scale=6):
-                settings_submit = gr.Button(value="Apply settings", variant='primary', elem_id="settings_submit")
-            with gr.Column():
-                restart_gradio = gr.Button(value='Reload UI', variant='primary', elem_id="settings_restart_gradio")
+            num_images = gr.Slider(
+                label="Number of output images",
+                minimum=1,
+                maximum=6,
+                step=1,
+                value=4,
+            )
+            seed = gr.Slider(
+                label="Seed",
+                minimum=0,
+                maximum=MAX_SEED,
+                step=1,
+                value=0,
+            )
+            randomize_seed = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
 
-        with gr.TabItem("Saving images/grids", id="saving", elem_id="settings_tab_saving"):
-            settings['skip_save'] = gr.Checkbox(label="Skip to save images", info="Save images",value= settings['skip_save'])
-            settings['file_format'] = gr.Text(label="File format", info="File format to save images in",value = setting['file_format'])
-            settings['image_file_pattern'] = gr.Text(label="Image file pattern", info="File pattern to save images with",value = settings['image_file_pattern'])
-            settings['add_image_number']= gr.Checkbox(label="Add image number to file name", info="Add image number to file name", value = settings['add_image_number'])
-            settings['skip_grid'] = gr.Checkbox(label="Skip to save image grid", info="Save image grid",value= settings['skip_grid'])
-            settings['file_format_grid'] = gr.Text(label="File format", info="File format to save image grid in",value = settings['file_format_grid'] )
-            settings['entended_info'] = gr.Checkbox(label="Add extended info (seed,prompt) to file name",value = settings['entended_info'])
+        with gr.Column():
+            out_gallery = gr.Gallery(label="Generated Images", columns=2, rows=2, height=600)
 
-        with gr.TabItem("Image paths", id="image_paths", elem_id="settings_tab_image_paths"):
-            settings['from_file'] = gr.Textbox(lines=1, label="From File", info="The file path to load the model from",value = settings['from_file'])
-            settings['init_img'] = gr.Textbox(lines=1, label="Initial Image", info="The file path to load the initial image from", value = settings['init_img'])
+        img_files.upload(fn=swap_to_gallery, inputs=img_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
+        remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
 
-        with gr.TabItem("datasets", id="datasets"):
-            settings['laion400m'] = gr.Checkbox(label="Laion400m",value = settings['laion400m'])
-            settings['ref_prompt'] = gr.Textbox(lines=1, label="Reference Prompt", info = 'a class-level reference prompt to be mixed with the subject prompt', value = settings['ref_prompt'])
+        submit.click(
+            fn=randomize_seed_fn,
+            inputs=[seed, randomize_seed],
+            outputs=seed,
+            queue=False,
+            api_name=False,
+        ).then(
+            fn=generate_image,
+            inputs=[img_files, guidance_scale, adaface_id_cfg_scale, num_images, prompt, negative_prompt, seed],
+            outputs=[out_gallery]
+        ).then(
+            fn=update_out_gallery,
+            inputs=[out_gallery],
+            outputs=[out_gallery]
+        )
 
-        with gr.TabItem("comparisons", id="comparisons", elem_id="settings_tab_comparisons"):
-            settings['calc_face_sim'] = gr.Checkbox(label="Calc Face Sim",value= settings['calc_face_sim'])
-            settings['compare_with'] = gr.Textbox(lines=1, label="Compare With", info="Enter a file path...",value = settings['compare_with'])
-            settings['scores_csv'] = gr.Textbox(lines=1, label="Scores CSV", info="CSV file to save the evaluation scores", value = settings['scores_csv'])
-        settings_submit.click(apply_settings)
-
-
-        # with gr.TabItem("Actions", id="actions", elem_id="settings_tab_actions"):
-        #         request_notifications = gr.Button(value='Request browser notifications', elem_id="request_notifications")
-        #         download_localization = gr.Button(value='Download localization template', elem_id="download_localization")
-        #         reload_script_bodies = gr.Button(value='Reload custom script bodies (No ui updates, No restart)', variant='secondary', elem_id="settings_reload_script_bodies")
-        #         with gr.Row():
-        #             unload_sd_model = gr.Button(value='Unload SD checkpoint to free VRAM', elem_id="sett_unload_sd_model")
-        #             reload_sd_model = gr.Button(value='Reload the last SD checkpoint back into VRAM', elem_id="sett_reload_sd_model")
-        # with gr.TabItem("Licenses", id="licenses", elem_id="settings_tab_licenses"):
-        #         pass
-    
-    with gr.Tab(label = 'Generated Images'):
-        def display_images(dir):
-            #list images that ends with .jpg
-            images = os.listdir(dir)
-            print(dir)
-            images = [dir + i  for i in images if i.endswith('.jpg')]
-            print(images)
-            return images
-        
-        imgButton = gr.Button("Images")
-        imgDir = gr.Textbox(value ='./outputs/samples/', visible = False)
-            #display images from outputs/samples directory
-
-        gridButton = gr.Button("Grid")
-        gridDir = gr.Textbox(value = "./outputs/", visible=False)
-            #display images from outputs directory
-
-        gallery = gr.Gallery(
-            label="Generated images", show_label=False, elem_id="gallery"
-        ).style(columns=[2], height="auto")
-
-        imgButton.click(display_images,imgDir,gallery)
-        gridButton.click(display_images,gridDir,gallery)
-
-if __name__ == "__main__":
-    demo.launch(share=True, show_error = True)
-    # demo.launch()
+demo.launch(share=True, server_name=args.ip, ssl_verify=False)

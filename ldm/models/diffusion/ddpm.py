@@ -1787,19 +1787,17 @@ class LatentDiffusion(DDPM):
                 # Sometimes do_arc2face_distill is True but gen_arc2face_rand_face is False.
                 if self.iter_flags['do_arc2face_distill']:
                     # The returned zs_id_embs2 should be (almost) the same as the passed-in zs_id_embs.
-                    zs_id_embs2, arc2face_prompt_emb \
+                    face_image_count, zs_id_embs2, arc2face_prompt_emb \
                         = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
-                                                                 pre_face_embs=zs_id_embs,
-                                                                 gen_neg_prompt=False)
+                                                                 pre_face_embs=zs_id_embs)
 
             # gen_arc2face_rand_face == True. It implies it's not do_mix_prompt_distillation.
             else:
                 # Since it's a random face, the CLIP features are all zeros as a placeholder.
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. arc2face_prompt_emb: [4, 21, 768]
-                zs_id_embs, arc2face_prompt_emb \
-                    = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=None,
-                                                             gen_neg_prompt=False)
+                face_image_count, zs_id_embs, arc2face_prompt_emb \
+                    = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=None)
                 # On random faces, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None
@@ -5416,7 +5414,7 @@ class Arc2FaceWrapper(pl.LightningModule):
                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         
-    def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None, gen_neg_prompt=False):
+    def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None):
         # if pre_face_embs is None, generate random face embeddings [BS, 512].
         # Returns faceid_embeds, arc2face_prompt_emb.
         return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
@@ -5427,7 +5425,6 @@ class Arc2FaceWrapper(pl.LightningModule):
                                            id_batch_size=batch_size,
                                            device=self.device,
                                            input_max_length=21, # Remove all paddings.
-                                           gen_neg_prompt=gen_neg_prompt, 
                                            noise_level=0, verbose=False)
     
     # Only used for inference/distillation, so no_grad() is used.

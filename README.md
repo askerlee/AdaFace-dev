@@ -1,38 +1,40 @@
-# Teaching Diffusion Models New Concepts via Adaptive Prompts
+# AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization
 
-> Teaching Diffusion Models New Concepts via Adaptive Prompts
+> AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization
 >
-> Shaohua Li, Xiuchao Sui, Hong Yang, Weide Liu, Menghan Zhou, Xinxing Xu, Yong Liu, Rick Goh
+> Shaohua Li, Xiuchao Sui, Hong Yang, Pin Nean Lai, Weide Liu, Xinxing Xu, Yong Liu, Rick Siow Mong Goh
 >
-> Abstract: Large-scale diffusion models have the ability to vividly generate a wide range of items with text guidance. However, generating a concept that is new to the model, such as oneself or one's pet, is a highly challenging task that has yet to be explored extensively. This task, known as **Subject-Driven Generation**, is challenging due to the limited training images for the subject and the potential to compromise the existing capabilities of the model while capturing the subject's unique characteristics. This paper proposes Adaptive Prompts (AdaPrompt) that can guide the diffusion model to generate images of a **new concept** in various contexts. AdaPrompt effectively captures the subject's characteristics and closely guides the model to generate authentic images of the subject. Additionally, it preserves existing concepts by operating solely in the textual input space without modifying the pre-trained model weights. Moreover, AdaPrompt is regularized with a novel **Compositional Delta Loss** to preserve its compositionality for building complex prompts. The advantages of AdaPrompt over existing methods, DreamBooth and Textual Inversion, have been validated through experiments on a set of few-shot subject images.
+> Abstract: Since the advent of diffusion models, personalizing these models -- conditioning them to render novel subjects -- has been widely studied. Recently, several methods propose training a dedicated image encoder on a large variety of subject images. This encoder maps the images to identity embeddings (ID embeddings). During inference, these ID embeddings, combined with conventional prompts, condition a diffusion model to generate new images of the subject. However, such methods often face challenges in achieving a good balance between authenticity and compositionality -- accurately capturing the subject's likeness while effectively integrating them into varied and complex scenes. A primary source for this issue is that the ID embeddings reside in the *image token space* (``image prompts"), which is not fully composable with the text prompt encoded by the CLIP text encoder. In this work, we present AdaFace, an image encoder that maps human faces into the *text prompt space*. After being trained only on 400K face images with 2 GPUs, it achieves high authenticity of the generated subjects and high compositionality with various text prompts. In addition, as the ID embeddings are integrated in a normal text prompt, it is highly compatible with existing pipelines and can be used without modification to generate authentic videos. We showcase the generated images and videos of celebrities under various compositional prompts. 
 > 
 
-## Description
+## Online Demos
+- AdaFace text-to-image: <a href="https://huggingface.co/spaces/adaface-neurips/adaface" style="display: inline-flex; align-items: center;">
+  AdaFace 
+  <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
+  </a>
+- AdaFace text-to-video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
+  AdaFace-Animate
+  <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
+  </a>
 
-This repo contains the official code, data and sample generations for our AdaPrompt paper.
+## Repo Description
+
+This repo contains the official training and evaluation code, test data and sample generations for our AdaFace paper.
 
 ## Setup
 
-Our code builds on, and shares requirements with [Latent Diffusion Models (LDM)](https://github.com/CompVis/latent-diffusion). To set up the environment using conda, please run:
+Our code builds on, and shares requirements with [Latent Diffusion Models (LDM)](https://github.com/CompVis/latent-diffusion). To set up the environment using pip, please run:
 
 ```bash
-conda env create -f environment.yaml
-conda activate ldm
-```
-
-To set up the the environment using pip, please run
-
-```bash
+pip install -r requirements0.txt
 pip install -r requirements.txt
+pip install -e .
 ```
 
-Please also install fish with `apt install fish`, which is required for running batch training/test scripts.
+\[Optional\] 
+Some scripts are written for [fish shell](https://fishshell.com/). You can install it with `apt install fish`.
 
-You will also need the official Stable Diffusion downloadable at [https://huggingface.co/runwayml/stable-diffusion-v1-5](https://huggingface.co/runwayml/stable-diffusion-v1-5).
-
-## Usage
-
-### Inversion
+## Training
 
 To invert an image set, run:
 
@@ -43,18 +45,6 @@ python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml
          --data_root data/subject_images/
          --subject_string <subject_string>
          --cls_delta_string "word1 word2..." --subj_init_word_weights w1 w2...
-```
-
-Example:
-
-```jsx
-python3 main.py --base configs/stable-diffusion/v1-finetune-ada.yaml 
-         -t --actual_resume models/stable-diffusion-v-1-5/v1-5-pruned.ckpt          
-         -n alexachung-ada --gpus 0, --no-test 
-         --data_root data/alexachung/  
-         --subject_string "z"  
-         --cls_delta_string "young girl woman" 
-         --subj_init_word_weights 1 2 2
 ```
 
 where `subject_string` is a chosen uncommonly used single-token, such as ‘z’, ‘y’.
@@ -95,28 +85,3 @@ python3 scripts/stable_txt2img.py --config configs/stable-diffusion/v1-inference
    logs/lilbub2023-02-21T08-18-18_lilbub-ada/checkpoints/embeddings_gs-4500.pt 
 --prompt "a z hugging a y" --scale 10 --n_iter 2
 ```
-
-## Citation
-
-If you make use of our work, please cite our paper:
-
-```
-@misc{gal2022textual,
-      url = {https://arxiv.org/abs/xxxx.xxxx},
-      author = {Li, Shaohua and Sui, Xiuchao and Yang, Hong and Liu, Weide and Zhou, Menghan and Xu, Xinxing and Liu, Yong and Goh, Rick},
-      title = {Teach Diffusion Models New Concepts via Adaptive Prompts},
-      publisher = {arXiv},
-      year = {2023},
-      primaryClass={cs.CV}
-}
-```
-
-## Results
-
-Here are some sample results.
-
-![https://www.notion.soimg/teaser.jpg](https://www.notion.soimg/teaser.jpg)
-
-![https://www.notion.soimg/samples.jpg](https://www.notion.soimg/samples.jpg)
-
-![https://www.notion.soimg/style.jpg](https://www.notion.soimg/style.jpg)

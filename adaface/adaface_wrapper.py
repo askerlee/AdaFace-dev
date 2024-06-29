@@ -12,11 +12,14 @@ from insightface.app import FaceAnalysis
 from adaface.arc2face_models import CLIPTextModelWrapper
 from adaface.util import get_arc2face_id_prompt_embs
 import re, os
+import sys
+sys.modules['ldm'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, device, 
                  subject_string='z', num_vectors=16, 
-                 num_inference_steps=50, negative_prompt=None, is_training=False):
+                 num_inference_steps=50, negative_prompt=None,
+                 use_840k_vae=False, use_ds_text_encoder=False, is_training=False):
         '''
         pipeline_name: "text2img" or "img2img" or None. If None, the unet and vae are
         removed from the pipeline to release RAM.
@@ -25,6 +28,8 @@ class AdaFaceWrapper(nn.Module):
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
         self.adaface_ckpt_path = adaface_ckpt_path
+        self.use_840k_vae = use_840k_vae
+        self.use_ds_text_encoder = use_ds_text_encoder
         self.subject_string = subject_string
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
@@ -42,7 +47,7 @@ class AdaFaceWrapper(nn.Module):
             self.negative_prompt = negative_prompt
 
     def load_subj_basis_generator(self, adaface_ckpt_path):
-        ckpt = torch.load(adaface_ckpt_path, map_location=self.device)
+        ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
             print(f"Subject '{self.subject_string}' not found in the embedding manager.")
@@ -69,18 +74,27 @@ class AdaFaceWrapper(nn.Module):
         )
         self.arc2face_text_encoder = arc2face_text_encoder.to(self.device)
 
-        # The 840000-step vae model is slightly better in face details than the original vae model.
-        # https://huggingface.co/stabilityai/sd-vae-ft-mse-original
-        vae = AutoencoderKL.from_single_file("models/diffusers/sd-vae-ft-mse-original/vae-ft-mse-840000-ema-pruned.ckpt", torch_dtype=torch.float16)
-        # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
-        # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
-        text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", torch_dtype=torch.float16)
+        if self.use_840k_vae:
+            # The 840000-step vae model is slightly better in face details than the original vae model.
+            # https://huggingface.co/stabilityai/sd-vae-ft-mse-original
+            vae = AutoencoderKL.from_single_file("models/diffusers/sd-vae-ft-mse-original/vae-ft-mse-840000-ema-pruned.ckpt", torch_dtype=torch.float16)
+        else:
+            vae = None
+
+        if self.use_ds_text_encoder:
+            # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
+            # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
+            text_encoder = CLIPTextModel.from_pretrained("models/ds_text_encoder", torch_dtype=torch.float16)
+        else:
+            text_encoder = None
+
         remove_unet = False
 
         if self.pipeline_name == "img2img":
             PipelineClass = StableDiffusionImg2ImgPipeline
         elif self.pipeline_name == "text2img":
             PipelineClass = StableDiffusionPipeline
+        # pipeline_name is None means only use this instance to generate adaface embeddings, not to generate images.
         elif self.pipeline_name is None:
             PipelineClass = StableDiffusionPipeline
             remove_unet = True
@@ -90,19 +104,23 @@ class AdaFaceWrapper(nn.Module):
         if os.path.isfile(self.base_model_path):
             pipeline = PipelineClass.from_single_file(
                 self.base_model_path, 
-                text_encoder=text_encoder, 
-                vae=vae, 
                 torch_dtype=torch.float16
                 )
         else:
             pipeline = PipelineClass.from_pretrained(
                     self.base_model_path,
-                    text_encoder=text_encoder,
-                    vae=vae,
                     torch_dtype=torch.float16,
                     safety_checker=None
                 )
         print(f"Loaded pipeline from {self.base_model_path}.")
+
+        if self.use_840k_vae:
+            pipeline.vae = vae
+            print("Replaced the VAE with the 840k-step VAE.")
+            
+        if self.use_ds_text_encoder:
+            pipeline.text_encoder = text_encoder
+            print("Replaced the text encoder with the DreamShaper text encoder.")
 
         if remove_unet:
             # Remove unet and vae to release RAM. Only keep tokenizer and text_encoder.
@@ -128,7 +146,7 @@ class AdaFaceWrapper(nn.Module):
         self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         # Patch the missing tokenizer in the subj_basis_generator.
         if not hasattr(self.subj_basis_generator, 'clip_tokenizer'):
-            self.subj_basis_generator.clip_tokenizer = pipeline.tokenizer
+            self.subj_basis_generator.clip_tokenizer = self.pipeline.tokenizer
             print("Patched the missing tokenizer in the subj_basis_generator.")
 
     def extend_tokenizer_and_text_encoder(self):
@@ -156,10 +174,10 @@ class AdaFaceWrapper(nn.Module):
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.placeholder_tokens)
         # print(self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
-        old_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.data.shape
+        old_weight = self.pipeline.text_encoder.get_input_embeddings().weight
         self.pipeline.text_encoder.resize_token_embeddings(len(tokenizer))
-        new_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.data.shape
-        print(f"Resized text encoder token embeddings from {old_weight_shape} to {new_weight_shape}.")
+        new_weight = self.pipeline.text_encoder.get_input_embeddings().weight
+        print(f"Resized text encoder token embeddings from {old_weight.shape} to {new_weight.shape} on {new_weight.device}.")
 
     # Extend pipeline.text_encoder with the adaface subject emeddings.
     # subj_embs: [16, 768].
@@ -200,7 +218,7 @@ class AdaFaceWrapper(nn.Module):
         # NOTE: Since return_core_id_embs is True, id_prompt_emb is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
-        faceid_embeds, id_prompt_emb \
+        face_image_count, faceid_embeds, id_prompt_emb \
             = get_arc2face_id_prompt_embs(self.face_app, self.pipeline.tokenizer, self.arc2face_text_encoder,
                                           extract_faceid_embeds=not gen_rand_face,
                                           pre_face_embs=pre_face_embs,
@@ -219,6 +237,9 @@ class AdaFaceWrapper(nn.Module):
                                           gen_neg_prompt=False, 
                                           verbose=True)
         
+        if face_image_count == 0:
+            return None
+                
         # adaface_subj_embs: [1, 1, 16, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
         adaface_subj_embs, adaface_prompt_embs = \
@@ -232,34 +253,45 @@ class AdaFaceWrapper(nn.Module):
             self.update_text_encoder_subj_embs(adaface_subj_embs)
         return adaface_subj_embs
 
-    def encode_prompt(self, prompt, verbose=False):
+    def encode_prompt(self, prompt, negative_prompt=None, device="cuda", verbose=False):
+        if negative_prompt is None:
+            negative_prompt = self.negative_prompt
+                    
         prompt = self.update_prompt(prompt)
         if verbose:
             print(f"Prompt: {prompt}")
+
+        # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
+        # So we manually move it to GPU here.
+        self.pipeline.text_encoder.to(device)
         # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
         prompt_embeds_, negative_prompt_embeds_ = \
-            self.pipeline.encode_prompt(prompt, device=self.device, num_images_per_prompt=1,
-                                        do_classifier_free_guidance=True, negative_prompt=self.negative_prompt)
+            self.pipeline.encode_prompt(prompt, device=device, num_images_per_prompt=1,
+                                        do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         return prompt_embeds_, negative_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, guidance_scale=4.0, out_image_count=4, ref_img_strength=0.8, verbose=False):
+    def forward(self, noise, prompt, negative_prompt=None, guidance_scale=4.0, 
+                out_image_count=4, ref_img_strength=0.8, generator=None, verbose=False):
+        if negative_prompt is None:
+            negative_prompt = self.negative_prompt
         # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = self.encode_prompt(prompt, verbose=verbose)
-
+        prompt_embeds_, negative_prompt_embeds_ = self.encode_prompt(prompt, negative_prompt, device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_          = prompt_embeds_.repeat(out_image_count, 1, 1)
         negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
-
+        noise = noise.to(self.device).to(torch.float16)
+        
         # noise: [BS, 4, 64, 64]
         # When the pipeline is text2img, strength is ignored.
-        images = self.pipeline(image=noise.to(self.device),
+        images = self.pipeline(image=noise,
                                prompt_embeds=prompt_embeds_, 
                                negative_prompt_embeds=negative_prompt_embeds_, 
                                num_inference_steps=self.num_inference_steps, 
                                guidance_scale=guidance_scale, 
                                num_images_per_prompt=1,
-                               strength=ref_img_strength).images
+                               strength=ref_img_strength,
+                               generator=generator).images
         # images: [BS, 3, 512, 512]
         return images
     
