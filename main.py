@@ -229,7 +229,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")
-    parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=0.4,
+    parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=1,
                         help="Gradient scale of the prompt2token projection layer")   
     parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
                         help="Scale of the extra words embeddings")
@@ -255,7 +255,7 @@ def get_parser(**parser_kwargs):
                 
     parser.add_argument("--layerwise_lora_rank", 
         type=int, default=10,
-        help="Layerwise lora rank")
+        help="Layerwise lora rank (Useless under zero-shot settings)")
 
     parser.add_argument("--static_embedding_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -996,7 +996,8 @@ if __name__ == "__main__":
             assert opt.num_vectors_per_subj_token >= K * K, \
                     f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
             
-        config.model.params.personalization_config.params.use_conv_attn_kernel_size     = opt.use_conv_attn_kernel_size
+            config.model.params.personalization_config.params.use_conv_attn_kernel_size     = opt.use_conv_attn_kernel_size
+
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
 

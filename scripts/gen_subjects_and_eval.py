@@ -88,7 +88,7 @@ def parse_args():
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
-    parser.add_argument("--scale", type=float, nargs='+', default=[10, 4],
+    parser.add_argument("--scale", type=float, nargs='+', default=[4, 1],
                         help="the guidance scale")
     parser.add_argument(
         "--use_first_gt_img_as_init",

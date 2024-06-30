@@ -93,7 +93,7 @@ description = r"""
   <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
 </a>
 
-**TODO**
+**TODO:**
 - ControlNet integration.
 """
 

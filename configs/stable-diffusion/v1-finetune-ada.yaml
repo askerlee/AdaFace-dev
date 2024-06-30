@@ -56,7 +56,7 @@ model:
     fg_wds_complementary_loss_weight: 0 #1e-4
     wds_bg_recon_discount:            0.05
     
-    optimizer_type: Prodigy      # NAdam     # AdamW, NAdam, Prodigy, ProdigyAdamW
+    optimizer_type: Prodigy           # AdamW, NAdam, Prodigy, ProdigyAdamW
     grad_clip:  0.5
     # Add "manual_" prefix to distinguish from the default accumulate_grad_batches.
     manual_accumulate_grad_batches: 2
@@ -157,7 +157,7 @@ data:
     batch_size:  3
     num_workers: 1
     wrap: false
-    max_steps: 2000
+    max_steps: 60000
     train:
       target: ldm.data.personalized.PersonalizedBase
       params:
@@ -182,13 +182,13 @@ lightning:
     image_logger:
       target: main.ImageLogger
       params:
-        batch_frequency: 800000     # 800000 >> max_steps = 3500, effectively disabling image logger.
+        batch_frequency: 800000     # 800000 >> max_steps = 60000, effectively disabling image logger.
         max_images: 8
         increase_log_steps: False
 
   trainer:
     benchmark: True
-    max_steps: 2000
+    max_steps: 60000
     limit_val_batches: 0.0
     deterministic: False
     replace_sampler_ddp: False

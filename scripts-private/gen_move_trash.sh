@@ -1,5 +1,5 @@
-mkdir -p /data/username/trash
-rm /data/username/trash/*
+mkdir -p /path/to/trash
+rm /path/to/trash/*
 
 while read -l file_path
     # If $file_path doesn't exist
@@ -8,7 +8,7 @@ while read -l file_path
         continue
     end
     
-    # /data/username/VGGface2_HQ_masks/n001154/0342_01.jpg -> /data/username/trash/n001154-0342_01.jpg
+    # /path/to/VGGface2_HQ_masks/n001154/0342_01.jpg -> /path/to/trash/n001154-0342_01.jpg
     set trash_path (string replace "VGGface2_HQ_masks" "trash" $file_path)
     set trash_path (string replace "/0" -- "-0" $trash_path)
     echo $file_path - $trash_path >&2

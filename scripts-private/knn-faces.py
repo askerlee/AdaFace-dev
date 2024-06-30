@@ -12,7 +12,7 @@ import glob
 gpu_id = 0
 T = 0.65
 
-base_folder  = '/data/username/VGGface2_HQ_masks/'
+base_folder  = '/path/to/VGGface2_HQ_masks/'
 ip_model_ckpt_path = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
 # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
 # Note there's a second "model" in the path.

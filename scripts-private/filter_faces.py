@@ -13,8 +13,8 @@ T = 0.65
 
 # argparse to receive base_folder and trash_folder
 parser = argparse.ArgumentParser(description='Filter faces')
-parser.add_argument('--base_folder', type=str, default='/data/username/FFHQ_masks', help='Base folder')
-parser.add_argument('--trash_folder', type=str, default='/data/username/FFHQ_trash', help='Trash folder')
+parser.add_argument('--base_folder', type=str, default='/path/to/FFHQ_masks', help='Base folder')
+parser.add_argument('--trash_folder', type=str, default='/path/to/FFHQ_trash', help='Trash folder')
 parser.add_argument('--resumed_subj_folder', type=str, default=None, 
                     help='Resume filtering from this subject folder and skipp all subjects before')
 parser.add_argument('--resumed_image_path', type=str, default=None, 

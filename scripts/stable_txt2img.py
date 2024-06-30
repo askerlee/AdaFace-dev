@@ -232,7 +232,7 @@ def parse_args():
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
 
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[0.5, 0.5],
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
 
