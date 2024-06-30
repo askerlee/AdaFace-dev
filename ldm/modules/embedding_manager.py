@@ -1043,7 +1043,7 @@ class EmbeddingManager(nn.Module):
         # learned embeddings, an approach that is equivalent to describing
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
-        # and AdaPrompt also supports it for more expressive modeling.
+        # and AdaFace also supports it for more expressive modeling.
         self.skip_loading_token2num_vectors = skip_loading_token2num_vectors
         self.set_num_vectors_per_subj_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim

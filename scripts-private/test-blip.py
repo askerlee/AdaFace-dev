@@ -5,7 +5,7 @@ from lavis.models import load_model_and_preprocess
 import os
 
 model, vis_preprocess, txt_preprocess = load_model_and_preprocess("blip_diffusion", "base", device="cuda", is_eval=True)
-finetuned_ckpt = "/data/shaohua/adaprompt/blip-diffusion-models/checkpoint_40.pth"
+finetuned_ckpt = "/path/to/adaface/blip-diffusion-models/checkpoint_40.pth"
 model.load_checkpoint(finetuned_ckpt)
 cond_subject = "dog"
 tgt_subject = "dog"
