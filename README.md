@@ -100,3 +100,10 @@ python3 scripts/gen_subjects_and_eval.py --method ada --subjfile evaluation/info
 ```
 where `--subjfile` specifies the file containing the list of subjects, and `--range` specifies which subject to generate prompts for. In this case, the subject file is `evaluation/info-subjects.sh`, which corresponds to the subjects in the `subjects-celebrity` directory. The `--range 6` is the 6th subject in the directory, namely `iainarmitage`. If `--gen_prompt_set_only` is specified, only the prompt list file is generated without generating the images. Otherwise, it proceeds to generate the images as the previous command does.
 
+## Integration with Other Applications
+The AdaFace encoder is wrapped in the class [AdaFaceWrapper](/adaface/adaface_wrapper.py) for easy integration with other applications. 
+
+`AdaFace-Animate` is an example of integrating AdaFace with AnimateDiff and ID-Animator for subject-driven video generation. The code is available at [AdaFace-Animate](https://huggingface.co/spaces/adaface-neurips/adaface-animate/tree/main). The online demo is available at [AdaFace-Animate Demo](https://huggingface.co/spaces/adaface-neurips/adaface-animate).
+
+- TODO:
+Integration with ControlNet.
