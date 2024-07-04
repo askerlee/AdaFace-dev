@@ -84,7 +84,7 @@ class AdaFaceWrapper(nn.Module):
         if self.use_ds_text_encoder:
             # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
             # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
-            text_encoder = CLIPTextModel.from_pretrained("models/ds_text_encoder", torch_dtype=torch.float16)
+            text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", torch_dtype=torch.float16)
         else:
             text_encoder = None
 
@@ -190,6 +190,9 @@ class AdaFaceWrapper(nn.Module):
             print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.placeholder_tokens_str}) in the text encoder.")
 
     def update_prompt(self, prompt):
+        if prompt is None:
+            prompt = ""
+            
         # If the placeholder tokens are already in the prompt, then return the prompt as is.
         if self.placeholder_tokens_str in prompt:
             return prompt
@@ -253,10 +256,13 @@ class AdaFaceWrapper(nn.Module):
             self.update_text_encoder_subj_embs(adaface_subj_embs)
         return adaface_subj_embs
 
-    def encode_prompt(self, prompt, negative_prompt=None, device="cuda", verbose=False):
+    def encode_prompt(self, prompt, negative_prompt=None, device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
-                    
+        
+        if device is None:
+            device = self.device
+            
         prompt = self.update_prompt(prompt)
         if verbose:
             print(f"Prompt: {prompt}")
@@ -264,10 +270,22 @@ class AdaFaceWrapper(nn.Module):
         # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
         # So we manually move it to GPU here.
         self.pipeline.text_encoder.to(device)
-        # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = \
-            self.pipeline.encode_prompt(prompt, device=device, num_images_per_prompt=1,
-                                        do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+        # Compatible with older versions of diffusers.
+        if not hasattr(self.pipeline, "encode_prompt"):
+            # prompt_embeds_, negative_prompt_embeds_: [77, 768] -> [1, 77, 768].
+            prompt_embeds_, negative_prompt_embeds_ = \
+                self.pipeline._encode_prompt(prompt, device=device, num_images_per_prompt=1,
+                                             do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+            prompt_embeds_ = prompt_embeds_.unsqueeze(0)
+            negative_prompt_embeds_ = negative_prompt_embeds_.unsqueeze(0)
+        else:
+            # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
+            prompt_embeds_, negative_prompt_embeds_ = \
+                self.pipeline.encode_prompt(prompt, device=device, 
+                                            num_images_per_prompt=1, 
+                                            do_classifier_free_guidance=True,
+                                            negative_prompt=negative_prompt)
+
         return prompt_embeds_, negative_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
