@@ -1,4 +1,7 @@
-nvidia-cudnn-cu11==8.9.2.26
+setuptools>=68.0.0
+torch
+torchvision
+pytorch-lightning==1.9
 albumentations>=1.1.0
 opencv-python>=4.2.0.34
 pudb>=2019.2

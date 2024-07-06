@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities import rank_zero_only
 from transformers import CLIPImageProcessor, CLIPTokenizer, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 
@@ -82,7 +82,6 @@ class DDPM(pl.LightningModule):
                  ignore_keys=[],
                  load_only_unet=False,
                  monitor="val/loss",
-                 use_ema=True,
                  first_stage_key="image",
                  image_size=256,
                  channels=3,
@@ -201,10 +200,13 @@ class DDPM(pl.LightningModule):
         self.model = DiffusionWrapper(unet_config, conditioning_key)
 
         count_params(self.model, verbose=True)
-        self.use_ema = use_ema
+        self.use_ema = False
+        
+        '''
         if self.use_ema:
             self.model_ema = LitEma(self.model)
             print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
+        '''
 
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
@@ -646,10 +648,6 @@ class DDPM(pl.LightningModule):
         self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
         self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
-    def on_train_batch_end(self, *args, **kwargs):
-        if self.use_ema:
-            self.model_ema(self.model)
-
     def _get_rows_from_list(self, samples):
         n_imgs_per_row = len(samples)
         denoise_grid = rearrange(samples, 'n b c h w -> b n c h w')
@@ -824,7 +822,7 @@ class LatentDiffusion(DDPM):
 
     #@rank_zero_only
     @torch.no_grad()
-    def on_train_batch_start(self, batch, batch_idx, dataloader_idx):
+    def on_train_batch_start(self, batch, batch_idx):
         if self.global_step == 0:
             # Make the behavior deterministic for debugging purposes.
             # In normal runs, disable this statement.
