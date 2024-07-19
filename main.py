@@ -844,8 +844,14 @@ if __name__ == "__main__":
         if hasattr(opt, "bs"):
             config.data.params.batch_size = opt.bs
         trainer_opt.num_nodes = opt.num_nodes
+
+        # manual_accumulate_grad_batches: Default is 2, specified in v1-finetune-ada.yaml.
+        # If specified in command line, then override the default value.
+        if hasattr(opt, 'manual_accumulate_grad_batches'):
+            config.model.params.manual_accumulate_grad_batches = opt.manual_accumulate_grad_batches
+
         if opt.max_steps > 0:
-            trainer_opt.max_steps = opt.max_steps
+            trainer_opt.max_steps = opt.max_steps // config.model.params.manual_accumulate_grad_batches
             # max_steps: Used to initialize DataModuleFromConfig.
             config.data.params.max_steps = opt.max_steps
                     
@@ -973,8 +979,6 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type
-        if hasattr(opt, 'manual_accumulate_grad_batches'):
-            config.model.params.manual_accumulate_grad_batches = opt.manual_accumulate_grad_batches
 
         if hasattr(opt, 'warmup_steps'):
             if config.model.params.optimizer_type == 'Prodigy':

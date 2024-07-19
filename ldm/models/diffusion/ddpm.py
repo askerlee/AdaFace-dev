@@ -518,7 +518,7 @@ class DDPM(pl.LightningModule):
         self.init_iteration_flags()
         # global_step is updated every self.manual_accumulate_grad_batches iterations.
         # So training_percent is multiplied by self.manual_accumulate_grad_batches.
-        self.training_percent = (self.global_step * self.manual_accumulate_grad_batches) / self.trainer.max_steps
+        self.training_percent = self.global_step / self.trainer.max_steps
 
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []

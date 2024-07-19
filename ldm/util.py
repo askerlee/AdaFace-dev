@@ -1466,7 +1466,7 @@ def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
         return (ts * instance_weights * mask).sum(dim=dim, keepdim=keepdim) / mask_sum
 
 def anneal_value(training_percent, final_percent, value_range):
-    assert 0 - 1e-6 <= training_percent <= 1.2
+    assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
     v_init, v_final = value_range
     if training_percent < final_percent:
         v_annealed = v_init + (v_final - v_init) * training_percent
@@ -1736,7 +1736,7 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
 
     if len(t_frac) != BS:
         breakpoint()
-    assert 0 - 1e-6 <= training_percent <= 1.2
+    assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
 
     emb_v_mixer, emb_v_layers_cls_mix_scales = \
         gen_emb_mixer(BS, subj_indices_1b_N, V_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
