@@ -4,7 +4,7 @@ from transformers import CLIPTextModel
 from diffusers import (
     StableDiffusionPipeline,
     StableDiffusionImg2ImgPipeline,
-    UNet2DConditionModel,
+    StableDiffusion3Pipeline,
     DDIMScheduler,
     AutoencoderKL,
 )
@@ -94,6 +94,8 @@ class AdaFaceWrapper(nn.Module):
             PipelineClass = StableDiffusionImg2ImgPipeline
         elif self.pipeline_name == "text2img":
             PipelineClass = StableDiffusionPipeline
+        elif self.pipeline_name == "text2img3":
+            PipelineClass = StableDiffusion3Pipeline
         # pipeline_name is None means only use this instance to generate adaface embeddings, not to generate images.
         elif self.pipeline_name is None:
             PipelineClass = StableDiffusionPipeline
@@ -101,6 +103,13 @@ class AdaFaceWrapper(nn.Module):
         else:
             raise ValueError(f"Unknown pipeline name: {self.pipeline_name}")
         
+        if self.base_model_path is None:
+            base_model_path_dict = { 
+                'text2img':  'runwayml/stable-diffusion-v1-5',
+                'text2img3': 'stabilityai/stable-diffusion-3-medium-diffusers' 
+            }
+            self.base_model_path = base_model_path_dict[self.pipeline_name]
+
         if os.path.isfile(self.base_model_path):
             pipeline = PipelineClass.from_single_file(
                 self.base_model_path, 
@@ -112,6 +121,7 @@ class AdaFaceWrapper(nn.Module):
                     torch_dtype=torch.float16,
                     safety_checker=None
                 )
+        
         print(f"Loaded pipeline from {self.base_model_path}.")
 
         if self.use_840k_vae:
@@ -128,17 +138,19 @@ class AdaFaceWrapper(nn.Module):
             pipeline.vae  = None
             print("Removed UNet and VAE from the pipeline.")
 
-        noise_scheduler = DDIMScheduler(
-            num_train_timesteps=1000,
-            beta_start=0.00085,
-            beta_end=0.012,
-            beta_schedule="scaled_linear",
-            clip_sample=False,
-            set_alpha_to_one=False,
-            steps_offset=1,
-        )
+        if self.pipeline_name != "text2img3":
+            noise_scheduler = DDIMScheduler(
+                num_train_timesteps=1000,
+                beta_start=0.00085,
+                beta_end=0.012,
+                beta_schedule="scaled_linear",
+                clip_sample=False,
+                set_alpha_to_one=False,
+                steps_offset=1,
+            )
 
-        pipeline.scheduler = noise_scheduler
+            pipeline.scheduler = noise_scheduler
+
         self.pipeline = pipeline.to(self.device)
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.
@@ -262,7 +274,8 @@ class AdaFaceWrapper(nn.Module):
         
         if device is None:
             device = self.device
-            
+        
+        prompt_ = prompt
         prompt = self.update_prompt(prompt)
         if verbose:
             print(f"Prompt: {prompt}")
@@ -270,6 +283,8 @@ class AdaFaceWrapper(nn.Module):
         # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
         # So we manually move it to GPU here.
         self.pipeline.text_encoder.to(device)
+        pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = None, None
+
         # Compatible with older versions of diffusers.
         if not hasattr(self.pipeline, "encode_prompt"):
             # prompt_embeds_, negative_prompt_embeds_: [77, 768] -> [1, 77, 768].
@@ -279,37 +294,68 @@ class AdaFaceWrapper(nn.Module):
             prompt_embeds_ = prompt_embeds_.unsqueeze(0)
             negative_prompt_embeds_ = negative_prompt_embeds_.unsqueeze(0)
         else:
-            # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
-            prompt_embeds_, negative_prompt_embeds_ = \
-                self.pipeline.encode_prompt(prompt, device=device, 
-                                            num_images_per_prompt=1, 
-                                            do_classifier_free_guidance=True,
-                                            negative_prompt=negative_prompt)
+            if self.pipeline_name == "text2img3":
+                # prompt_embeds_, negative_prompt_embeds_: [1, 333, 4096]
+                # pooled_prompt_embeds_, negative_pooled_prompt_embeds_: [1, 2048]
+                # CLIP Text Encoder prompt uses a maximum sequence length of 77.
+                # T5 Text Encoder prompt uses a maximum sequence length of 256.
+                # 333 = 256 + 77.
+                prompt_embeds_, negative_prompt_embeds_, \
+                pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
+                    self.pipeline.encode_prompt(prompt, prompt_, prompt_, device=device, 
+                                                num_images_per_prompt=1, 
+                                                do_classifier_free_guidance=True,
+                                                negative_prompt=negative_prompt)
+            else:
+                # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
+                prompt_embeds_, negative_prompt_embeds_ = \
+                    self.pipeline.encode_prompt(prompt, device=device, 
+                                                num_images_per_prompt=1, 
+                                                do_classifier_free_guidance=True,
+                                                negative_prompt=negative_prompt)
 
-        return prompt_embeds_, negative_prompt_embeds_
+        return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
     def forward(self, noise, prompt, negative_prompt=None, guidance_scale=4.0, 
                 out_image_count=4, ref_img_strength=0.8, generator=None, verbose=False):
+        noise = noise.to(self.device).to(torch.float16)
+
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
         # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = self.encode_prompt(prompt, negative_prompt, device=self.device, verbose=verbose)
+        prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, \
+            negative_pooled_prompt_embeds_ = \
+                self.encode_prompt(prompt, negative_prompt, device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_          = prompt_embeds_.repeat(out_image_count, 1, 1)
         negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
-        noise = noise.to(self.device).to(torch.float16)
-        
-        # noise: [BS, 4, 64, 64]
-        # When the pipeline is text2img, strength is ignored.
-        images = self.pipeline(image=noise,
-                               prompt_embeds=prompt_embeds_, 
-                               negative_prompt_embeds=negative_prompt_embeds_, 
-                               num_inference_steps=self.num_inference_steps, 
-                               guidance_scale=guidance_scale, 
-                               num_images_per_prompt=1,
-                               strength=ref_img_strength,
-                               generator=generator).images
+
+        if self.pipeline_name == "text2img3":
+            pooled_prompt_embeds_           = pooled_prompt_embeds_.repeat(out_image_count, 1)
+            negative_pooled_prompt_embeds_  = negative_pooled_prompt_embeds_.repeat(out_image_count, 1)
+
+            # noise: [BS, 4, 64, 64]
+            # When the pipeline is text2img, strength is ignored.
+            images = self.pipeline(prompt_embeds=prompt_embeds_, 
+                                    negative_prompt_embeds=negative_prompt_embeds_, 
+                                    pooled_prompt_embeds=pooled_prompt_embeds_,
+                                    negative_pooled_prompt_embeds=negative_pooled_prompt_embeds_,
+                                    num_inference_steps=self.num_inference_steps, 
+                                    guidance_scale=guidance_scale, 
+                                    num_images_per_prompt=1,
+                                    generator=generator).images
+        else:
+            # noise: [BS, 4, 64, 64]
+            # When the pipeline is text2img, strength is ignored.
+            images = self.pipeline(image=noise,
+                                    prompt_embeds=prompt_embeds_, 
+                                    negative_prompt_embeds=negative_prompt_embeds_, 
+                                    num_inference_steps=self.num_inference_steps, 
+                                    guidance_scale=guidance_scale, 
+                                    num_images_per_prompt=1,
+                                    strength=ref_img_strength,
+                                    generator=generator).images
         # images: [BS, 3, 512, 512]
         return images
     

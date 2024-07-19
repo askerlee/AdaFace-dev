@@ -387,11 +387,10 @@ class SubjBasisGenerator(nn.Module):
         # num_id_vecs should be the number of core ID embs, 16.
         # However, in such case, pos_embs is not used. So it doesn't matter if it's wrongly set.
         self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['subj']
-        self.pos_embs    = nn.Parameter(torch.randn(1, self.num_id_vecs, output_dim))
-        self.pos_embs_ln = nn.LayerNorm(output_dim)
         self.zs_extra_words_scale = zs_extra_words_scale
         self.output_scale           = output_dim ** -0.5
         self.clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+        self.bg_prompt_translator_has_to_out_proj = bg_prompt_translator_has_to_out_proj
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
@@ -413,6 +412,7 @@ class SubjBasisGenerator(nn.Module):
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.pad_embeddings = None
             self.bg_proj_in = None
+            self.pos_embs = self.pos_embs_ln = self.latent_queries = self.latent_queries_ln = None
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
@@ -424,10 +424,11 @@ class SubjBasisGenerator(nn.Module):
                 nn.LayerNorm(output_dim),
             )
 
+            self.pos_embs           = nn.Parameter(torch.zeros(1, self.num_id_vecs, output_dim))
+            self.pos_embs_ln        = nn.LayerNorm(output_dim)
             self.latent_queries     = nn.Parameter(torch.randn(1, self.num_out_embs, output_dim))
             self.latent_queries_ln  = nn.LayerNorm(output_dim)
 
-            self.bg_prompt_translator_has_to_out_proj = bg_prompt_translator_has_to_out_proj
             identity_to_v   = False
             v_has_skip      = not identity_to_v                         # True
             identity_to_out = not bg_prompt_translator_has_to_out_proj  # True
@@ -620,13 +621,22 @@ class SubjBasisGenerator(nn.Module):
             print(f"{len(frozen_param_names)} params in Subj prompt2token_proj is frozen.")
             #print(f"Frozen parameters:\n{frozen_param_names}")
 
-    def __repr__(self):
-        type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
+    def patch_old_prompt2token_proj(self):
         # Fix compatability with the previous version.
         if not hasattr(self, 'bg_prompt_translator_has_to_out_proj'):
             self.bg_prompt_translator_has_to_out_proj = False
         if not hasattr(self, 'num_out_embs'):
             self.num_out_embs = -1
+        
+        if self.placeholder_is_bg:
+            if not hasattr(self, 'pos_embs') or self.pos_embs is None:
+                self.pos_embs = nn.Parameter(torch.zeros(1, self.num_id_vecs, self.output_dim))
+            if not hasattr(self, 'latent_queries') or self.latent_queries is None:        
+                self.latent_queries = nn.Parameter(torch.randn(1, self.num_out_embs, self.output_dim))
+
+    def __repr__(self):
+        type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
+
         return f"{type_sig} SubjBasisGenerator: num_out_embs={self.num_out_embs}, " \
                f"bg_prompt_translator_has_to_out_proj={self.bg_prompt_translator_has_to_out_proj}"
     

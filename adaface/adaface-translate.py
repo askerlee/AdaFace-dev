@@ -180,7 +180,7 @@ if __name__ == "__main__":
             # A noise level of 0.08 could change gender, but 0.06 is usually safe.
             # The returned adaface_subj_embs are already incorporated in the text encoder, and not used explicitly.
             # NOTE: We assume out_count_per_input_image == 1, so that the output images are of the same number as the input images.
-            out_images = adaface(in_images, args.prompt, args.guidance_scale, num_out_images, ref_img_strength=args.ref_img_strength)
+            out_images = adaface(in_images, args.prompt, None, args.guidance_scale, num_out_images, ref_img_strength=args.ref_img_strength)
 
             for img_i, img in enumerate(out_images):
                 # out_images: subj_1, subj_2, ..., subj_n, subj_1, subj_2, ..., subj_n, ...

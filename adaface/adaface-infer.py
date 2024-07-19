@@ -40,8 +40,11 @@ def seed_everything(seed):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_model_path", type=str, default='runwayml/stable-diffusion-v1-5', 
-                        help="Type of checkpoints to use (default: SD 1.5)")
+    parser.add_argument("--pipeline", type=str, default="text2img", 
+                        choices=["text2img", "img2img", "text2img3"],
+                        help="Type of pipeline to use (default: txt2img)")
+    parser.add_argument("--base_model_path", type=str, default=None, 
+                        help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
     parser.add_argument("--subject", type=str, required=True)
@@ -80,7 +83,7 @@ if __name__ == "__main__":
         args.device = f"cuda:{args.device}"
     print(f"Using device {args.device}")
 
-    adaface = AdaFaceWrapper("text2img", args.base_model_path, args.embman_ckpt, args.device, 
+    adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, args.embman_ckpt, args.device, 
                              args.subject_string, args.num_vectors, args.num_inference_steps)
 
     if not args.randface:
@@ -127,5 +130,5 @@ if __name__ == "__main__":
     adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, image_folder, pre_face_embs, args.randface, 
                                                             out_id_embs_scale=args.id_cfg_scale, noise_level=args.noise_level, 
                                                             update_text_encoder=True)    
-    images = adaface(noise, args.prompt, args.guidance_scale, args.out_image_count, verbose=True)
+    images = adaface(noise, args.prompt, None, args.guidance_scale, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.noise_level)

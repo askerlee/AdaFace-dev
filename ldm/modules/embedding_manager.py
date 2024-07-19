@@ -1882,6 +1882,7 @@ class EmbeddingManager(nn.Module):
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
             if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"] and self.zs_load_subj_basis_generators_from_ckpt:
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
+                    ret = None
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
                     if load_old_embman_ckpt:
                         print(f"Loading ckpt_subj_basis_generator {km}")
@@ -1902,12 +1903,12 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.obj_proj_in = None
                         ckpt_subj_basis_generator.proj_in = None
                         ckpt_subj_basis_generator.pos_embs = None
-                        self.string_to_subj_basis_generator_dict[km].pos_embs.data.zero_()
 
                     # No extension. So we just assign the ckpt to the current subj_basis_generator.
                     # TODO: fix the logic below thoroughly in the future.
                     if extend_prompt2token_proj_attention_multiplier == -1:
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
+                        self.string_to_subj_basis_generator_dict[km].patch_old_prompt2token_proj()
                         continue
 
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
@@ -1966,11 +1967,13 @@ class EmbeddingManager(nn.Module):
                     else:
                         breakpoint()
 
-                    if len(ret.missing_keys) > 0:
+                    if ret is not None and len(ret.missing_keys) > 0:
                         print(f"Missing keys: {ret.missing_keys}")
-                    if len(ret.unexpected_keys) > 0:
+                    if ret is not None and len(ret.unexpected_keys) > 0:
                         print(f"Unexpected keys: {ret.unexpected_keys}")
 
+                    # Fix missing variables in the old ckpt.
+                    self.string_to_subj_basis_generator_dict[km].patch_old_prompt2token_proj()
                     if self.zs_prompt2token_proj_grad_scale == 0:
                         # If it's for bg token, then freeze_prompt2token_proj() does nothing.
                         self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
