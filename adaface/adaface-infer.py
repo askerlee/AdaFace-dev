@@ -47,7 +47,7 @@ def parse_args():
                         help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
-    parser.add_argument("--subject", type=str, required=True)
+    parser.add_argument("--subject", type=str)
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4,  help="Number of images to generate")
     parser.add_argument("--prompt", type=str, default="a woman z in superman costume")

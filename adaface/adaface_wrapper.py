@@ -300,9 +300,10 @@ class AdaFaceWrapper(nn.Module):
                 # CLIP Text Encoder prompt uses a maximum sequence length of 77.
                 # T5 Text Encoder prompt uses a maximum sequence length of 256.
                 # 333 = 256 + 77.
+                prompt_t5 = prompt_ + "".join([", "] * 256)
                 prompt_embeds_, negative_prompt_embeds_, \
                 pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
-                    self.pipeline.encode_prompt(prompt, prompt_, prompt_, device=device, 
+                    self.pipeline.encode_prompt(prompt, prompt_, prompt_t5, device=device, 
                                                 num_images_per_prompt=1, 
                                                 do_classifier_free_guidance=True,
                                                 negative_prompt=negative_prompt)

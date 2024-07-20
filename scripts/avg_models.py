@@ -96,7 +96,12 @@ def main():
         # safetensors use torch.Tensor instead of nn.Parameter.
         if isinstance(avg_ckpt[k], (nn.Parameter, torch.Tensor)):
             print(f"Averaging nn.Parameter: {k}")
-            avg_ckpt[k].data /= avg_counts[k]
+            try:
+                avg_ckpt[k].data /= avg_counts[k]
+            except:
+                # num_batches_tracked in BatchNorm layers is long type.
+                avg_ckpt[k].data //= avg_counts[k]
+
         elif isinstance(avg_ckpt[k], nn.Module):
             print(f"Averaging nn.Module: {k}")
             avg_state_dict = avg_ckpt[k].state_dict()
