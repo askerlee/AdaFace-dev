@@ -1730,6 +1730,14 @@ class LatentDiffusion(DDPM):
 
             # 'gen_arc2face_rand_face' is only True in do_normal_recon iters.
             if not self.iter_flags['gen_arc2face_rand_face']:
+                # Don't always use the average embedding of the same subject in the batch.
+                # Otherwise, the model may memorize the subject embedding and tend to generate subjects
+                # who look like the subjects in the training data.
+                if self.iter_flags['same_subject_in_batch']:
+                    use_subj_avg_embedding = random.random() < 0.5
+                else:
+                    use_subj_avg_embedding = False
+
                 # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
                 # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
                 # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
@@ -1741,7 +1749,7 @@ class LatentDiffusion(DDPM):
                                                          image_paths=image_paths,
                                                          # iter_flags['is_face'] is a list of 0/1 elements.
                                                          is_face=self.iter_flags['is_face'][0],
-                                                         calc_avg=self.iter_flags['same_subject_in_batch'])
+                                                         calc_avg=use_subj_avg_embedding)
                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
