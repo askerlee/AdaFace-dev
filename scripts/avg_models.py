@@ -50,7 +50,7 @@ def main():
                     pattern, args.min, args.input))
             continue
 
-        sel_checkpoint_filenames += checkpoint_filenames
+        sel_checkpoint_filenames.extend(checkpoint_filenames)
     
     avg_ckpt = {}
     avg_counts = {}
