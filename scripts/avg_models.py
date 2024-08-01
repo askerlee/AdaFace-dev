@@ -14,62 +14,66 @@ Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 import torch
 import torch.nn as nn
 import argparse
-import os
 import glob
-import hashlib
-from collections import OrderedDict, defaultdict
 import re
 import copy
+import math
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
+from scripts.repl_lib import load_ckpt
 
 parser = argparse.ArgumentParser(description='PyTorch Checkpoint Averager')
-parser.add_argument('--input', default='', nargs="+", type=str, metavar='PATHS',
-                    help='path(s) to base input folder containing checkpoints')
+parser.add_argument('--input', nargs="+", type=str, metavar='PATHS', required=True,
+                    help='path(s) to base input folder containing checkpoints. The first is the base checkpoint.')
 parser.add_argument('--output', type=str, default='avgemb.pt', metavar='PATH',
                     help='output file name of the averaged checkpoint')
 parser.add_argument('--suffix', default='', type=str, metavar='WILDCARD',
                     help='checkpoint suffix')
+parser.add_argument("--mod_pattern", type=str, default=None, 
+                    help="Pattern in the modules to be implanted from the donor checkpoint")
 parser.add_argument('--min', type=int, default=500, help='Minimal iteration of checkpoints to average')
 parser.add_argument('--max', type=int, default=-1,  help='Maximum iteration of checkpoints to average')
 
 def main():
     args = parser.parse_args()
-    patterns = args.input
+    ckpt_patterns = args.input
     sel_checkpoint_filenames = []
 
-    for pattern in patterns:
+    for ckpt_pattern in ckpt_patterns:
         if args.suffix is not None:
             if not args.suffix.startswith('*'):
-                pattern += '*'
-            pattern += args.suffix
+                ckpt_pattern += '*'
+            ckpt_pattern += args.suffix
 
-        checkpoint_filenames = glob.glob(pattern, recursive=True)
+        checkpoint_filenames = glob.glob(ckpt_pattern, recursive=True)
         if len(checkpoint_filenames) == 0:
             print("WARNING: No checkpoints matching '{}' and iteration >= {} in '{}'".format(
-                    pattern, args.min, args.input))
+                  ckpt_pattern, args.min, args.input))
             continue
 
         sel_checkpoint_filenames.extend(checkpoint_filenames)
-    
+
     avg_ckpt = {}
     avg_counts = {}
-    for i, c in enumerate(sel_checkpoint_filenames):
-        if c.endswith(".safetensors"):
-            checkpoint = safetensors_load_file(c)
-        else:
-            checkpoint = torch.load(c, map_location='cpu')
-        print(c)
+    for i, ckpt_filename in enumerate(sel_checkpoint_filenames):
+        _, state_dict = load_ckpt(ckpt_filename)
+        checkpoint = state_dict
+        print(ckpt_filename)
 
         for k in checkpoint:
             # Skip ema weights
             if k.startswith("model_ema."):
                 continue
+            # First time seeing a module. Copy it from the base checkpoint 
+            # (assuming modules names in all checkpoints are the consistent)
             if k not in avg_ckpt:
                 avg_ckpt[k] = checkpoint[k]
                 print(f"Copy {k}")
                 avg_counts[k] = 1
-            # Another occurrence of a previously seen nn.Module.
+            # Skip accumulating modules which do not match the pattern
+            elif (args.mod_pattern is not None) and (not re.search(args.mod_pattern, k)):
+                continue
+            # A new occurrence of a previously seen nn.Module.
             elif isinstance(checkpoint[k], nn.Module):
                 #print(f"nn.Module: {k}")
                 avg_state_dict = avg_ckpt[k].state_dict()
@@ -82,12 +86,13 @@ def main():
                         avg_state_dict[m_k].data += m_v
                         print(f"Accumulate {k}.{m_k}")
                 avg_ckpt[k].load_state_dict(avg_state_dict)
-                avg_counts[k] = 1
+                avg_counts[k] += 1
             # Another occurrence of a previously seen nn.Parameter.
             elif isinstance(checkpoint[k], (nn.Parameter, torch.Tensor)):
                 #print(f"nn.Parameter: {k}")
-                avg_ckpt[k].data += checkpoint[k].data
+                avg_ckpt[k].data += checkpoint[k].data.to(avg_ckpt[k].dtype)
                 avg_counts[k] += 1
+                print(f"Accumulate {k}")
             else:
                 print(f"NOT copying {type(checkpoint[k])}: {k}")
                 pass
@@ -100,7 +105,7 @@ def main():
                 avg_ckpt[k].data /= avg_counts[k]
             except:
                 # num_batches_tracked in BatchNorm layers is long type.
-                avg_ckpt[k].data //= avg_counts[k]
+                avg_ckpt[k].data //= math.floor(avg_counts[k])
 
         elif isinstance(avg_ckpt[k], nn.Module):
             print(f"Averaging nn.Module: {k}")
