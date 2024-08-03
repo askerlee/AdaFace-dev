@@ -20,7 +20,7 @@ import copy
 import math
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
-from scripts.repl_lib import load_ckpt
+from scripts.ckpt_lib import load_ckpt
 
 parser = argparse.ArgumentParser(description='PyTorch Checkpoint Averager')
 parser.add_argument('--input', nargs="+", type=str, metavar='PATHS', required=True,
@@ -99,7 +99,7 @@ def main():
     
     for k in avg_ckpt:
         # safetensors use torch.Tensor instead of nn.Parameter.
-        if isinstance(avg_ckpt[k], (nn.Parameter, torch.Tensor)):
+        if isinstance(avg_ckpt[k], (nn.Parameter, torch.Tensor)) and avg_counts[k] > 1:
             print(f"Averaging nn.Parameter: {k}")
             try:
                 avg_ckpt[k].data /= avg_counts[k]
@@ -107,7 +107,7 @@ def main():
                 # num_batches_tracked in BatchNorm layers is long type.
                 avg_ckpt[k].data //= math.floor(avg_counts[k])
 
-        elif isinstance(avg_ckpt[k], nn.Module):
+        elif isinstance(avg_ckpt[k], nn.Module) and avg_counts[k] > 1:
             print(f"Averaging nn.Module: {k}")
             avg_state_dict = avg_ckpt[k].state_dict()
             for m_k, m_v in avg_state_dict.items():

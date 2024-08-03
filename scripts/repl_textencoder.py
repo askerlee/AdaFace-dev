@@ -1,5 +1,5 @@
 import argparse
-from scripts.repl_lib import save_ckpt, load_two_models
+from scripts.ckpt_lib import save_ckpt, load_two_models
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--base_ckpt", type=str, required=True, help="Path to the base checkpoint")

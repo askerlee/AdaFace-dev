@@ -1,5 +1,5 @@
 import argparse
-from scripts.repl_lib import save_ckpt, load_two_models, str2bool
+from scripts.ckpt_lib import save_ckpt, load_two_models, str2bool
 import re
 
 parser = argparse.ArgumentParser()
