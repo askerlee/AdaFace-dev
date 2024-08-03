@@ -9,9 +9,15 @@ args = parser.parse_args()
 
 # Load the checkpoint
 _, state_dict = load_ckpt(args.in_ckpt)
+state_dict2 = {}
 
 for k in state_dict:
+    # Skip ema weights
+    if k.startswith("model_ema."):
+        continue    
     if state_dict[k].dtype == torch.float32:
-        state_dict[k] = state_dict[k].half()
+        state_dict2[k] = state_dict[k].half()
+    else:
+        state_dict2[k] = state_dict[k]
 
-save_ckpt(None, state_dict, args.out_ckpt)
+save_ckpt(None, state_dict2, args.out_ckpt)
