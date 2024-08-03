@@ -20,7 +20,10 @@ def load_ckpt(ckpt_filepath):
         ckpt = None
     else:
         ckpt = torch.load(ckpt_filepath, map_location="cpu")
-        state_dict = ckpt["state_dict"]
+        if "state_dict" in ckpt:
+            state_dict = ckpt["state_dict"]
+        else:
+            state_dict = ckpt
     return ckpt, state_dict
 
 def save_ckpt(ckpt, ckpt_state_dict, ckpt_filepath):
