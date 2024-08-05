@@ -29,7 +29,6 @@ model:
         initializer_strings: [ "person", "unknown" ]
         num_vectors_per_subj_token: 9
         use_layerwise_embedding: True
-        layerwise_lora_rank: 10
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

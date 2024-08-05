@@ -6,7 +6,6 @@ from torch import nn, einsum
 from einops import rearrange, repeat
 
 from ldm.modules.diffusionmodules.util import checkpoint
-from ldm.util import replace_rows_by_conv_attn
 
 def exists(val):
     return val is not None
@@ -165,7 +164,6 @@ class CrossAttention(nn.Module):
         )
         self.save_attn_vars     = False
         self.cached_activations = None
-        self.use_conv_attn_kernel_size = -1
         self.infeat_size            = None
         self.is_training            = True
         
@@ -175,10 +173,7 @@ class CrossAttention(nn.Module):
         # x, q: [4, 4096, 320]
         q = self.to_q(x)
 
-        if exists(context):
-            context_provided = True
-        else:
-            context_provided = False
+        if not exists(context):
             context = x
 
         if callable(context):
@@ -197,27 +192,7 @@ class CrossAttention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
-                
-        # In-place replacement of the row(s) in the attention matrix sim corresponding to the subject tokens, 
-        # by attention scores computed with a convolutional attention mechanism.
-        # If uncond (null condition) is active, then returned placeholder2indices = None.
-        # Don't do conv attn if uncond is active.
-        # abs(self.conv_attn_layer_scale) >= 1e-6: 
-        # Sometimes conv_attn_layer_scale is a tiny negative number, and checking for equality with 0.0
-        # will fail.
-        if context_provided and placeholder2indices is not None and self.use_conv_attn_kernel_size > 0:
-            for subj_string in placeholder2indices:
-                subj_indices = placeholder2indices[subj_string]
-                # infeat_size is set in SpatialTransformer.forward().
-                # conv_attn_mix_weight=1: weight to mix conv attn with point-wise attn. 
-                # Setting to 1 disables point-wise attn.
-                sim = replace_rows_by_conv_attn(sim, q, k, subj_indices, self.infeat_size, 
-                                                self.use_conv_attn_kernel_size,
-                                                h, self.scale, conv_attn_mix_weight=1)
 
-        # if context_provided (cross attn with text prompt), then sim: [16, 4096, 77]. 
-        # Otherwise, it's self attention, sim: [16, 4096, 4096].
-        # img_mask should only be provided and applied if not context_provided. 
         # Otherwise, the whole column of 77 sim values will all be max_neg_value, 
         # which lead to nan after softmax.
         if exists(mask):

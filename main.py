@@ -138,7 +138,6 @@ def get_parser(**parser_kwargs):
         help="Batch size"
     )
     # num_nodes is inherent in Trainer class. No need to specify it here.
-    # max_steps is inherent in Trainer class. No need to specify it here.
     '''
     parser.add_argument(
         "--max_steps",
@@ -221,11 +220,6 @@ def get_parser(**parser_kwargs):
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
-        
-    parser.add_argument("--use_conv_attn_kernel_size",
-                        type=int, default=argparse.SUPPRESS,
-                        help="Use convolutional attention of subject tokens with this kernel size."
-                             "Default: None, not specified.")
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")
@@ -252,10 +246,6 @@ def get_parser(**parser_kwargs):
                         help="Use Arc2Face inverse CLIP embeddings")    
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
-                
-    parser.add_argument("--layerwise_lora_rank", 
-        type=int, default=10,
-        help="Layerwise lora rank (Useless under zero-shot settings)")
 
     parser.add_argument("--static_embedding_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -302,10 +292,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--randomize_clip_skip_weights", nargs="?", type=str2bool, const=True, default=False,
                         help="Whether to randomize the skip weights of CLIP text embedder. "
                              "If True, the weights are sampled from a Dirichlet distribution with clip_last_layers_skip_weights as the alpha.")
-    
-    parser.add_argument("--matmul_prec", type=str, default=argparse.SUPPRESS,
-                        help="Precision of the matmul operation in PyTorch")
-    
+
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
     return parser
@@ -811,11 +798,7 @@ if __name__ == "__main__":
         seed_everything(opt.seed, workers=True)
     #torch.backends.cudnn.deterministic = True
     #torch.backends.cudnn.benchmark = False
-
     torch.backends.cuda.matmul.allow_tf32 = True
-    if hasattr(opt, 'matmul_prec'):
-        torch.set_float32_matmul_precision(opt.matmul_prec)
-        print(f"Set PyTorch matmul precision to {opt.matmul_prec}")
 
     try:
         # init and save configs
@@ -921,15 +904,9 @@ if __name__ == "__main__":
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 
         if opt.zeroshot:
-            zs_clip_type = 'openai'
-            # image_emb_dim is not the output dim but the second last layer dim. 
-            # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-            zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
-            zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]
-            config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
             config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
             config.model.params.personalization_config.params.zs_load_subj_basis_generators_from_ckpt = opt.zs_load_subj_basis_generators_from_ckpt
-            config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
+            config.model.params.personalization_config.params.zs_extra_words_scale = 0.5
             config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
 
         # data: DataModuleFromConfig
@@ -993,15 +970,6 @@ if __name__ == "__main__":
             config.model.base_learning_rate = opt.lr
 
         # Personalization config
-        config.model.params.personalization_config.params.layerwise_lora_rank = opt.layerwise_lora_rank
-
-        if hasattr(opt, 'use_conv_attn_kernel_size') and opt.use_conv_attn_kernel_size > 0:
-            K = opt.use_conv_attn_kernel_size
-            assert opt.num_vectors_per_subj_token >= K * K, \
-                    f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
-            
-            config.model.params.personalization_config.params.use_conv_attn_kernel_size     = opt.use_conv_attn_kernel_size
-
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
 

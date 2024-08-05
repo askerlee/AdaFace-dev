@@ -913,27 +913,20 @@ class AdaEmbedding(nn.Module):
 
 # Initialize static embedders.
 def create_static_embedders(out_emb_dim, num_layers_per_embedder, num_vectors_per_subj_token, 
-                            layerwise_lora_rank, initializer_string, init_word_embeddings, 
+                            initializer_string, init_word_embeddings, 
                             init_word_weights, placeholder_string, avg_init_word_embedding_3d, 
                             do_zero_shot):
     # A static embedder can generate K embeddings.
-    # layerwise_lora_rank > 0 implies use_layerwise_embedding.
-    if layerwise_lora_rank > 0:
-        # num_layers_per_embedder = num_unet_ca_layers
-        token_static_embedder   = StaticLayerwiseEmbedding(num_layers_per_embedder, 
-                                                            num_vectors_per_subj_token, 
-                                                            out_emb_dim, 
-                                                            layerwise_lora_rank, 
-                                                            (0.1, 0.02), 
-                                                            initializer_string,
-                                                            init_word_embeddings, init_word_weights, 
-                                                            token_string=placeholder_string,
-                                                            do_zero_shot=do_zero_shot)
-    else:
-        # Degenerate to Textual Inversion. 
-        # ANCHOR[id=init_embed] : 16*K vectors are initialized with the same embedding.
-        token_static_embedder   = nn.Parameter(avg_init_word_embedding_3d, requires_grad=True)
-        print("Warning: Degenerate to Textual Inversion.")
+    # num_layers_per_embedder = num_unet_ca_layers
+    token_static_embedder   = StaticLayerwiseEmbedding(num_layers_per_embedder, 
+                                                        num_vectors_per_subj_token, 
+                                                        out_emb_dim, 
+                                                        10, 
+                                                        (0.1, 0.02), 
+                                                        initializer_string,
+                                                        init_word_embeddings, init_word_weights, 
+                                                        token_string=placeholder_string,
+                                                        do_zero_shot=do_zero_shot)
 
     return token_static_embedder
 
@@ -958,15 +951,12 @@ class EmbeddingManager(nn.Module):
             use_layerwise_embedding=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
-            layerwise_lora_rank=10,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             training_begin_add_noise_std_range=None,
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
-            use_conv_attn_kernel_size=-1,
             do_zero_shot=True,
-            zs_image_emb_dim=1024,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
@@ -976,7 +966,6 @@ class EmbeddingManager(nn.Module):
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
-            zs_adaface_prompt_embs_inf_type='full_half_pad',
             # A few args, like embedding_manager_ckpt, are used in ddpm.py, but ignored here.
             **kwargs
     ):
@@ -1024,8 +1013,6 @@ class EmbeddingManager(nn.Module):
         self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
                                           training_end_add_noise_std_range,
                                           training_add_noise_prob)
-        
-        self.set_conv_attn_kernel_size(use_conv_attn_kernel_size)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.ca_layer_idx2layer_idx = { v: k for k, v in layer_idx2ca_layer_idx.items() }
@@ -1058,7 +1045,6 @@ class EmbeddingManager(nn.Module):
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string = get_tokens_for_string
         self.get_embeddings_for_tokens = get_embeddings_for_tokens
-        str2lora_rank = {}
         # "," -> 267, "z": 345, "y": 344.
         self.subj_idx_to_cls_delta_tokens   = {}
         self.subj_idx_to_cls_delta_token_weights  = {}
@@ -1068,7 +1054,6 @@ class EmbeddingManager(nn.Module):
         if list_initializer_word_weights is None:
             list_initializer_word_weights = [ None ] * len(self.placeholder_strings)
         self.list_initializer_word_weights   = list_initializer_word_weights
-        self.layerwise_lora_rank = layerwise_lora_rank
 
         if self.do_zero_shot:
             # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
@@ -1095,7 +1080,6 @@ class EmbeddingManager(nn.Module):
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            self.zs_adaface_prompt_embs_inf_type = zs_adaface_prompt_embs_inf_type
             # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceWrapper instance 
             # is initialized, so as to save some RAM.
             self.arc2face_text_encoder = None
@@ -1134,7 +1118,6 @@ class EmbeddingManager(nn.Module):
             except:
                 breakpoint()
 
-            str2lora_rank[placeholder_string] = layerwise_lora_rank
             self.string_to_token_dict[placeholder_string] = placeholder_token
             # initial_embeddings are only used to compute the regularization loss.
             # Wrap with Parameter so that they will be saved to checkpoints.
@@ -1146,7 +1129,7 @@ class EmbeddingManager(nn.Module):
                 avg_init_word_embedding_3d = torch.zeros(self.num_layers_per_embedder, num_vectors_per_subj_token, 768)
 
             token_static_embedder = \
-                create_static_embedders(out_emb_dim, self.num_unet_ca_layers, num_vectors_per_subj_token, layerwise_lora_rank, 
+                create_static_embedders(out_emb_dim, self.num_unet_ca_layers, num_vectors_per_subj_token, 
                                         initializer_string, init_word_embeddings, init_word_weights, 
                                         placeholder_string, avg_init_word_embedding_3d, do_zero_shot)
 
@@ -1167,8 +1150,9 @@ class EmbeddingManager(nn.Module):
 
                 subj_basis_generator = SubjBasisGenerator(num_out_embs_per_layer = num_out_embs_per_layer,
                                                           num_out_layers = self.num_unet_ca_layers,
-                                                          # zs_image_emb_dim: laion: 1280, openai: 768.
-                                                          image_embedding_dim = zs_image_emb_dim, 
+                                                          # zs_image_emb_dim: laion: 1280, openai: 1024.
+                                                          # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
+                                                          image_embedding_dim = 1024, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
@@ -1219,8 +1203,8 @@ class EmbeddingManager(nn.Module):
         self.zs_image_feat_dict = {}
         self.zs_out_id_embs_scale_range = (1.0, 1.0)
 
-        print("EmbeddingManager on subj={}, bg={} init with {} vec(s), layerwise_lora_rank={}".format(
-               self.subject_strings, self.background_strings, self.token2num_vectors, str2lora_rank))
+        print("EmbeddingManager on subj={}, bg={} init with {} vec(s)".format(
+               self.subject_strings, self.background_strings, self.token2num_vectors))
         
         # Add the search span by 1, just to be safe.
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
@@ -1439,7 +1423,7 @@ class EmbeddingManager(nn.Module):
                                                  self.zs_out_id_embs_scale_range[0],
                                                  is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
-                                                 adaface_prompt_embs_inf_type=self.zs_adaface_prompt_embs_inf_type)
+                                                 adaface_prompt_embs_inf_type='full_half_pad')
                     # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
                     # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
                     # But adaface_subj_embs is generated from the subject-single instance only.
@@ -1482,7 +1466,7 @@ class EmbeddingManager(nn.Module):
                                                           self.zs_out_id_embs_scale_range[0],
                                                           is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
-                                                          adaface_prompt_embs_inf_type=self.zs_adaface_prompt_embs_inf_type)
+                                                          adaface_prompt_embs_inf_type='full_half_pad')
                             
                         # adaface_subj_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
                         adaface_subj_embs0 = adaface_subj_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
@@ -1760,24 +1744,6 @@ class EmbeddingManager(nn.Module):
 
         return emb_global_scales_dict
 
-    def set_conv_attn_kernel_size(self, use_conv_attn_kernel_size=-1):
-        # The first time use_conv_attn_kernel_size is set.
-        if not hasattr(self, 'use_conv_attn_kernel_size'):
-            self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
-        # use_conv_attn_kernel_size is the default value None.
-        elif self.use_conv_attn_kernel_size is None:
-            if use_conv_attn_kernel_size == -1:
-                print("DISABLED: Setting use_conv_attn_kernel_size = -1")
-                self.use_conv_attn_kernel_size = -1
-            else:
-                print(f"Setting use_conv_attn_kernel_size = {use_conv_attn_kernel_size}")
-                self.use_conv_attn_kernel_size = use_conv_attn_kernel_size
-        # use_conv_attn_kernel_size has been set before. Reject the new value.
-        else:
-            if self.use_conv_attn_kernel_size != use_conv_attn_kernel_size:
-                print(f"use_conv_attn_kernel_size has been set to {self.use_conv_attn_kernel_size}, "
-                       "refusing to change it to {use_conv_attn_kernel_size}")
-
     def check_arc2face_text_encoder(self, device):
         if self.arc2face_text_encoder is None:
             from adaface.arc2face_models import CLIPTextModelWrapper
@@ -1827,7 +1793,6 @@ class EmbeddingManager(nn.Module):
                      "string_to_subj_basis_generator_dict": self.string_to_subj_basis_generator_dict,
                      "token2num_vectors":                self.token2num_vectors,
                      "emb_global_scale_scores":          self.emb_global_scale_scores,
-                     "use_conv_attn_kernel_size":        self.use_conv_attn_kernel_size,
                      "placeholder_strings":              self.placeholder_strings,
                      "subject_strings":                  self.subject_strings,
                      "background_strings":               self.background_strings,
@@ -1870,9 +1835,6 @@ class EmbeddingManager(nn.Module):
                 ckpt_background_strings = ckpt["background_strings"]
             else:
                 ckpt_background_strings = []
-
-            use_conv_attn_kernel_size   = ckpt.get("use_conv_attn_kernel_size", None)
-            self.set_conv_attn_kernel_size(use_conv_attn_kernel_size)
 
             if "ca_q_bns" in ckpt:
                 self.ca_q_bns = ckpt["ca_q_bns"]

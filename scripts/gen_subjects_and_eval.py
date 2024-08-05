@@ -41,18 +41,12 @@ def parse_args():
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
  
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use zero-shot learning") 
-    parser.add_argument("--zs_cls_delta_string", type=str, default=None,
-                        help="Class delta string for zero-shot learning")    
+                        help="Whether to use zero-shot learning")  
     parser.add_argument("--no_id_emb", action="store_true",
                         help="Do not use face/DINO embeddings for zero-shot generation")
       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning")
-
-    parser.add_argument("--use_conv_attn_kernel_size",
-                        type=int, default=argparse.SUPPRESS, 
-                        help="Use convolutional attention at subject tokens")
 
     parser.add_argument("--prompt_set", dest='prompt_set_name', type=str, default='all', 
                         choices=['dreambench', 'community', 'all'],
@@ -424,17 +418,11 @@ if __name__ == "__main__":
             command_line += f" --zeroshot"
             if args.no_id_emb:
                 command_line += f" --no_id_emb"
-            if args.zs_cls_delta_string is not None:
-                command_line += f" --zs_cls_delta_string \"{args.zs_cls_delta_string}\""
-            #else:
-            #    command_line += f" --zs_cls_delta_string \"{cls_delta_string}\""
 
         if hasattr(args, 'num_vectors_per_subj_token'):
             command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
         if hasattr(args, 'num_vectors_per_bg_token'):
             command_line += f" --background_string {args.background_string} --num_vectors_per_bg_token {args.num_vectors_per_bg_token}"
-        if hasattr(args, 'use_conv_attn_kernel_size'):
-            command_line += f" --use_conv_attn_kernel_size {args.use_conv_attn_kernel_size}"
 
         if hasattr(args, 'neg_prompt'):
             command_line += f" --neg_prompt \"{args.neg_prompt}\""

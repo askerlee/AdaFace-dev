@@ -509,7 +509,6 @@ class UNetModel(nn.Module):
         self.debug_attn = False
 
         self.backup_vars = { 
-                            'use_conv_attn_kernel_size:layerwise':      [-1]   * 16,
                             'save_attn_vars':                           False,
                             'is_training':                              True,
                            }
@@ -850,7 +849,6 @@ class UNetModel(nn.Module):
         iter_type                   = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
         is_training                 = extra_info.get('is_training', True)            if extra_info is not None else True
         capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
-        use_conv_attn_kernel_size   = extra_info.get('use_conv_attn_kernel_size',  None) if extra_info is not None else None
         placeholder2indices         = extra_info.get('placeholder2indices', None)        if extra_info is not None else None
         img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
         compel_cfg_weight_level_range   = extra_info.get('compel_cfg_weight_level_range', None) if extra_info is not None else None
@@ -919,25 +917,12 @@ class UNetModel(nn.Module):
             # Return placeholder2indices to cross attention layers for conv attn computation.
             return layer_context, placeholder2indices
 
-        use_conv_attn_kernel_sizes = np.ones(16, dtype=int) * use_conv_attn_kernel_size
-        if use_conv_attn_kernel_size > 0:
-            # Most layers use use_conv_attn_kernel_size as the conv attn kernel size.
-            # But disable conv attn on layers 6-10, i.e., 12, 16, 17, 18, 19, 
-            # by setting the kernel size as 1 (don't set to -1, as the conv_attn_layerwise_scales 
-            # are still helpful for these layers. Setting to -1 will not do learnable attention scaling).
-            # This is based on the learned conv_attn_layerwise_scales, 
-            # these layers don't like 3x3 conv attn (conv_attn_layerwise_scales are driven to 0.5~0.7).
-            # Probably because the feature maps are too small (8x8 - 32x32), and a 3x3 conv attn head
-            # takes up too much space.
-            use_conv_attn_kernel_sizes[6:11] = 1
-
         # ca_layer_indices = None: Apply conv attn on all layers. 
         # Although layer 12 has small 8x8 feature maps, since we linearly combine 
         # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
         ca_flags_stack = []
         old_ca_flags, _ = \
-            self.set_cross_attn_flags( ca_flag_dict   = { 'use_conv_attn_kernel_size:layerwise': use_conv_attn_kernel_sizes,
-                                                          'is_training': is_training },
+            self.set_cross_attn_flags( ca_flag_dict   = { 'is_training': is_training },
                                        ca_layer_indices = None )
             
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).

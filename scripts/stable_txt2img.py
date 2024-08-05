@@ -54,12 +54,6 @@ def parse_args():
     )    
     parser.add_argument("--use_pre_neg_prompt", type=str2bool, const=True, default=True, nargs="?",
                         help="use predefined negative prompts")
-    parser.add_argument(
-        "--compel_cfg_weight_level",
-        type=float,
-        default=0,
-        help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
-    )
 
     parser.add_argument(
         "--outdir",
@@ -189,25 +183,6 @@ def parse_args():
         type=str, default=None,
         help="One or more paths to pre-trained embedding manager checkpoints")
 
-    parser.add_argument(
-        "--init_img_paths",
-        type=str,
-        nargs='+', 
-        default=None,
-        help="path to the initial image(s) (multiple images will be averaged)",
-    )  
-    parser.add_argument(
-        "--use_first_gt_img_as_init",
-        action='store_true',
-        help="use the first image in the groundtruth folder as the initial image",
-    )
-    # Anything between 0 and 1 will cause blended images.
-    parser.add_argument(
-        "--init_img_weight",
-        type=float,
-        default=0.1,
-        help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
-    )
     # No preview
     parser.add_argument(
         "--no_preview",
@@ -251,21 +226,9 @@ def parse_args():
                         help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
-    
-    parser.add_argument("--use_conv_attn_kernel_size",
-                        type=int, default=None,
-                        help="Use convolutional attention of subject tokens with this kernel size."
-                             "Default: None, not specified.")
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--zs_cls_delta_string", type=str, default=None,
-                        help="Class delta string for zero-shot learning")
-    parser.add_argument("--zs_adaface_prompt_embs_inf_type", type=str, default='full_half_pad',
-                        choices=['full_zeroed_extra', 'full', 'full_half_pad', 'full_pad', 'b_core_e'],
-                        help="Inverse prompt embeddings type during inference under zero-shot learning")
-    parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
-                        help="Scale of the extra words embeddings")
     parser.add_argument("--zs_out_id_embs_scale_range", type=float, nargs=2, default=[1.0, 1.0],
                         help="Range of the scale of the output id embeddings")
     parser.add_argument("--apply_arc2face_embs", action="store_true",
@@ -353,13 +316,6 @@ def main(opt):
             # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
-        
-        if opt.use_conv_attn_kernel_size is not None and opt.use_conv_attn_kernel_size > 0:
-            K = opt.use_conv_attn_kernel_size
-            assert opt.num_vectors_per_subj_token >= K * K, \
-                    f"--num_vectors_per_subj_token {opt.num_vectors_per_subj_token} should be at least {K*K}"
-        # This will override the conv_attn_kernel_size setting to be loaded from the checkpoint.
-        config.model.params.personalization_config.params.use_conv_attn_kernel_size = opt.use_conv_attn_kernel_size
 
         if opt.zeroshot:
             assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
@@ -371,15 +327,7 @@ def main(opt):
                     ref_image_paths.append(ref_image)
             ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
             ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
-            zs_clip_type = 'openai'
-            # image_emb_dim is not the output dim but the second last layer dim. 
-            # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-            zs_clip_type2image_emb_dim = { 'laion': 1280, 'openai': 1024 }
-            zs_image_emb_dim = zs_clip_type2image_emb_dim[zs_clip_type]            
-            config.model.params.personalization_config.params.zs_image_emb_dim = zs_image_emb_dim
-            config.model.params.personalization_config.params.zs_cls_delta_string = opt.zs_cls_delta_string or 'person'
-            config.model.params.personalization_config.params.zs_adaface_prompt_embs_inf_type = opt.zs_adaface_prompt_embs_inf_type
-            config.model.params.personalization_config.params.zs_extra_words_scale = opt.zs_extra_words_scale
+            config.model.params.personalization_config.params.zs_cls_delta_string = 'person'
         else:
             ref_images = None
 
@@ -471,10 +419,6 @@ def main(opt):
     if not opt.from_file:
         assert opt.prompt is not None
         prompt = opt.prompt
-        if opt.zs_cls_delta_string is not None:
-            # Insert zls_cls_delta_string **before** the subject string (including placeholder commas).
-            prompt = re.sub(" " + opt.subject_string + r"(, )*", " a " + opt.zs_cls_delta_string + r"\g<0> ", prompt)
-
         all_prompts = [prompt] * opt.n_samples
         # By default, batch_size = n_samples. In this case, chunking turns all_prompts into a list of length 1,
         # and the sole elment is a list containing "prompt" repeated n_samples times,
@@ -520,10 +464,6 @@ def main(opt):
                 class_short_prompt = class_short_prompts[i]
                 # The number of prompts in batched_prompts has to match the number of samples.
                 # So we need to repeat the prompt by n_repeat times.
-                if opt.zs_cls_delta_string is not None:
-                    # Insert zls_cls_delta_string **before** the subject string (including placeholder commas).
-                    prompt = re.sub(" " + opt.subject_string + r"(, )*", " a " + opt.zs_cls_delta_string + r"\g<0> ", prompt)
-
                 prompts_repeated = [prompt] * n_repeat
                 n_batches = n_repeat // batch_size
                 if n_repeat % batch_size != 0:
@@ -562,39 +502,9 @@ def main(opt):
         clip_evator, dino_evator = None, None
 
     if opt.fixed_code:
-        # If init_img_paths or use_first_gt_img_as_init is specified, then start_code will be overwritten.
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
     else:
         start_code = None
-
-    if opt.use_first_gt_img_as_init:
-        # Cannot specify init_img_paths and use_first_gt_img_as_init at the same time.
-        assert opt.init_img_paths is None, \
-            "Cannot use 'init_img_paths' and 'use_first_gt_img_as_init' at the same time."
-        assert opt.compare_with is not None, "Must specify --compare_with when using use_first_gt_img_as_init."
-        gt_data_loader  = PersonalizedBase(opt.compare_with, set_name='evaluation', size=opt.H, max_num_images_per_subject=-1, flip_p=0.0)
-        opt.init_img_paths  = gt_data_loader.image_paths
-        
-    if opt.init_img_paths is not None:
-        avg_x_T = torch.zeros([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-        for init_img_path in opt.init_img_paths:
-            init_img = load_img(init_img_path, opt.H, opt.W)
-            print(f"Image {init_img_path}, as the init image, weight {opt.init_img_weight}")
-
-            # init_img: [4, 3, 512, 512], [b c h w]
-            init_img = init_img.repeat(batch_size, 1, 1, 1).to(device)
-            mask = torch.ones_like(avg_x_T)
-            mask_dict = None
-
-            # move avg_init_img to latent space
-            # x_T: [4, 4, 64, 64]
-            x_T  = model.get_first_stage_encoding(model.encode_first_stage(init_img, mask_dict))  
-            avg_x_T += torch.where(mask.bool(), x_T, torch.randn_like(x_T))
-
-        # If approximating different images as indepent Gaussian variables, 
-        # then their sum has a STD of sqrt(N). Normalization requires dividing by sqrt(N), instead of N.
-        avg_x_T    /= np.sqrt(len(opt.init_img_paths))
-        start_code  = avg_x_T * opt.init_img_weight + torch.randn_like(avg_x_T) * (1 - opt.init_img_weight)
 
     if not opt.eval_blip:
         if opt.scale != 1.0:
@@ -648,20 +558,6 @@ def main(opt):
                                 if static_prompt_embedding.shape[1] < uc[0].shape[1]:
                                     uncond_prompt_embedding = get_b_core_e_embeddings(uc[0], length=static_prompt_embedding.shape[1] - 1)
                                     uc = (uncond_prompt_embedding, uc[1], uc[2])
-
-                            if opt.compel_cfg_weight_level != 0:
-                                c[2]['compel_cfg_weight_level_range'] = (opt.compel_cfg_weight_level, opt.compel_cfg_weight_level)
-                                c[2]['apply_compel_cfg_prob'] = 1.0
-                                # uc[0] is [16, 77, 768] (one embedding repeated 16 times). 
-                                # Only take one instance.
-                                c[2]['empty_context'] = uc[0][[0]]
-
-                                '''
-                                static_prompt_embs = c[0]
-                                compel_weight = 1.1 ** opt.compel_cfg_weight_level
-                                static_prompt_embs_weighted = (static_prompt_embs - uc[0]) * compel_weight + uc[0]
-                                c = (static_prompt_embs_weighted, c[1], c[2])
-                                '''
 
                             if opt.debug:
                                 c[2]['debug_attn'] = True

@@ -1062,7 +1062,6 @@ class LatentDiffusion(DDPM):
 
                 extra_info = { 
                                 'use_layerwise_context':         self.use_layerwise_embedding, 
-                                'use_conv_attn_kernel_size':     self.embedding_manager.use_conv_attn_kernel_size,
                                 'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                                 'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                                 'is_training':                   self.embedding_manager.training,
@@ -1730,13 +1729,18 @@ class LatentDiffusion(DDPM):
 
             # 'gen_arc2face_rand_face' is only True in do_normal_recon iters.
             if not self.iter_flags['gen_arc2face_rand_face']:
-                # Don't always use the average embedding of the same subject in the batch.
+                # When possible, don't always use the average embedding of the same subject in the batch.
                 # Otherwise, the model may memorize the subject embedding and tend to generate subjects
                 # who look like the subjects in the training data.
-                if self.iter_flags['same_subject_in_batch']:
+                if self.iter_flags['same_subject_in_batch'] and not self.iter_flags['do_mix_prompt_distillation']:
                     use_subj_avg_embedding = random.random() < 0.5
-                else:
+                # In mix prompt distillation iterations, we must use the average embedding of the same subject in the batch.
+                elif self.iter_flags['do_mix_prompt_distillation']:
+                    use_subj_avg_embedding = True
+                elif not self.iter_flags['same_subject_in_batch']:
                     use_subj_avg_embedding = False
+                else:
+                    breakpoint()
 
                 # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
                 # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].

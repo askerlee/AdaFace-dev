@@ -93,7 +93,6 @@ model:
         subj_name_to_cls_delta_word_weights: { 'z': [1.0] }
         num_vectors_per_subj_token: 9
         use_layerwise_embedding: True
-        layerwise_lora_rank: 10
         training_begin_add_noise_std_range:  [ 0.02, 0.04 ]
         training_end_add_noise_std_range:    [ 0.02, 0.04 ]
         # probs for recon_iter and compos_distill_iter, respectively
