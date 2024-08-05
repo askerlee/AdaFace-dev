@@ -23,7 +23,7 @@ def parse_args():
                         help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
     parser.add_argument("--method", default='ada', choices=["ada", "static-layerwise", "ti", "db"], type=str, 
-                        help="method to use for generating samples")
+                        help="method for generating samples")
     parser.add_argument("--subject_string", type=str, default="z", 
                         help="Subject placeholder string that represents the subject in prompts")
     parser.add_argument("--num_vectors_per_subj_token",
@@ -60,10 +60,6 @@ def parse_args():
                         help="Negative prompt to use for generating samples (default: None)")
     parser.add_argument("--use_pre_neg_prompt", type=str2bool, const=True, default=argparse.SUPPRESS, 
                         nargs="?", help="use predefined negative prompts")
-    parser.add_argument(
-        "--compel_cfg_weight_level", type=float, default=argparse.SUPPRESS,
-        help="compel-style prompt cfg weighting level (weight=1.1**L). Set to 0 to disable compel cfg",
-    )
 
     # Possible z_prefix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_prefix_type", type=str, default=argparse.SUPPRESS,
@@ -428,9 +424,6 @@ if __name__ == "__main__":
             command_line += f" --neg_prompt \"{args.neg_prompt}\""
         elif hasattr(args, 'use_pre_neg_prompt'):
             command_line += f" --use_pre_neg_prompt 1"
-
-        if hasattr(args, 'compel_cfg_weight_level'):
-            command_line += f" --compel_cfg_weight_level {args.compel_cfg_weight_level}"
 
         if args.use_first_gt_img_as_init:
             command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"

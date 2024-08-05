@@ -165,7 +165,6 @@ class CrossAttention(nn.Module):
         self.save_attn_vars     = False
         self.cached_activations = None
         self.infeat_size            = None
-        self.is_training            = True
         
     def forward(self, x, context=None, mask=None):
         h = self.heads

@@ -2,7 +2,7 @@ from abc import abstractmethod
 from functools import partial
 import math
 from typing import Iterable
-from ldm.util import distribute_embedding_to_M_tokens_by_dict, prob_apply_compel_cfg, extract_layerwise_value
+from ldm.util import distribute_embedding_to_M_tokens_by_dict, extract_layerwise_value
 
 import numpy as np
 import torch
@@ -510,7 +510,6 @@ class UNetModel(nn.Module):
 
         self.backup_vars = { 
                             'save_attn_vars':                           False,
-                            'is_training':                              True,
                            }
 
         time_embed_dim = model_channels * 4
@@ -847,13 +846,9 @@ class UNetModel(nn.Module):
 
         use_layerwise_context       = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         iter_type                   = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
-        is_training                 = extra_info.get('is_training', True)            if extra_info is not None else True
         capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         placeholder2indices         = extra_info.get('placeholder2indices', None)        if extra_info is not None else None
         img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
-        compel_cfg_weight_level_range   = extra_info.get('compel_cfg_weight_level_range', None) if extra_info is not None else None
-        apply_compel_cfg_prob       = extra_info.get('apply_compel_cfg_prob', 0)   if extra_info is not None else 0
-        empty_context               = extra_info.get('empty_context', None) if extra_info is not None else None
         debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
         B = x.shape[0]
@@ -893,41 +888,13 @@ class UNetModel(nn.Module):
 
             layer_context = (layer_static_context_v, layer_static_context_k)
 
-            if apply_compel_cfg_prob > 0:
-                # layer_context could be a tensor or a tuple of tensors.
-                compel_batch_mask = torch.ones(B, dtype=torch.float, device=x.device)
-                # If is_training, at 50% chance, only apply compel cfg to the mix instances, 
-                # not to the subject instances. At 50% chance, apply compel cfg to all instances.
-                # If not is_training, the second half of the batch is always the empty prompt instances.
-                # So only apply compel cfg to the first half of the batch.
-                if is_training:
-                    if random.random() < 0.5:
-                        compel_batch_mask[:B // 2] = 0
-                    # Otherwise, compel_batch_mask is all 1s, i.e., compel cfg is applied to all instances.
-                else:
-                    # Inference. Only apply compel cfg to the first half of the batch.
-                    compel_batch_mask[B // 2:] = 0
-
-                layer_context = prob_apply_compel_cfg(layer_context, empty_context, 
-                                                      apply_compel_cfg_prob, compel_cfg_weight_level_range,
-                                                      skipped_token_indices=None,
-                                                      batch_mask=compel_batch_mask)
-                
             # placeholder2indices is passed from extra_info, which was obtained when generating static embeddings.
             # Return placeholder2indices to cross attention layers for conv attn computation.
             return layer_context, placeholder2indices
 
-        # ca_layer_indices = None: Apply conv attn on all layers. 
-        # Although layer 12 has small 8x8 feature maps, since we linearly combine 
-        # pointwise attn with conv attn, we still apply conv attn (3x3) on it.
-        ca_flags_stack = []
-        old_ca_flags, _ = \
-            self.set_cross_attn_flags( ca_flag_dict   = { 'is_training': is_training },
-                                       ca_layer_indices = None )
-            
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
-        ca_flags_stack.append([ old_ca_flags, None, None, None ])
+        ca_flags_stack = []
         
         if capture_distill_attn or debug_attn:
             # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.

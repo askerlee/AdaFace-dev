@@ -114,8 +114,6 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 compel_cfg_weight_level_range=[2,2],
-                 apply_compel_cfg_prob=0.,
                  wds_bg_recon_discount=1.,
                  do_clip_teacher_filtering=True,
                  num_candidate_teachers=2,
@@ -158,10 +156,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        # type(compel_cfg_weight_level_range) = ListConfig. So convert it to list.
-        self.compel_cfg_weight_level_range          = list(compel_cfg_weight_level_range) if compel_cfg_weight_level_range is not None else None
         self.empty_context                          = None
-        self.apply_compel_cfg_prob                  = apply_compel_cfg_prob
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
@@ -988,11 +983,6 @@ class LatentDiffusion(DDPM):
                                                                  zs_out_id_embs_scale_range=zs_out_id_embs_scale_range,
                                                                  add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
                     
-                    # When do_zero_shot, never apply compel_cfg (applied in UNet), as compel cfg has been applied in embedding manager.
-                    apply_compel_cfg_prob = 0
-                else:
-                    apply_compel_cfg_prob = self.apply_compel_cfg_prob
-
                 if embman_iter_type is None:
                     if self.iter_flags['is_compos_iter']:
                         embman_iter_type = 'compos_distill_iter'
@@ -1065,9 +1055,6 @@ class LatentDiffusion(DDPM):
                                 'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                                 'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                                 'is_training':                   self.embedding_manager.training,
-                                'compel_cfg_weight_level_range': self.compel_cfg_weight_level_range,
-                                'apply_compel_cfg_prob':         apply_compel_cfg_prob,
-                                'empty_context':                 self.empty_context,
                                 # Will set to True in p_losses() if in compositional iterations.
                                 'capture_distill_attn':          False,
                              }
@@ -2579,13 +2566,9 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.background_string_dict)
         all_subj_indices_1b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
                                                                    self.embedding_manager.subject_string_dict)
-        all_bg_indices_1b   = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
-                                                                   self.embedding_manager.background_string_dict)
         if self.iter_flags['is_compos_iter']:
             all_subj_indices_2b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                                        self.embedding_manager.subject_string_dict)
-            all_bg_indices_2b   = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
-                                                                       self.embedding_manager.background_string_dict)
         
         if self.do_zero_shot:
             # If do_zero_shot, then mix more of the subject embeddings into the class embeddings.

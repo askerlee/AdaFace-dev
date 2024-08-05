@@ -1636,39 +1636,6 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
     
     return c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, emb_k_mixer, emb_k_layers_cls_mix_scales
 
-def prob_apply_compel_cfg(layer_context, empty_context, apply_compel_cfg_prob, compel_cfg_weight_level_or_range,
-                          skipped_token_indices=None, batch_mask=None):
-    if (empty_context is None) or (compel_cfg_weight_level_or_range is None) \
-      or (random.random() > apply_compel_cfg_prob):
-        return layer_context
-        
-    if isinstance(compel_cfg_weight_level_or_range, (list, tuple)):
-        compel_cfg_weight_level = random.uniform(*compel_cfg_weight_level_or_range)
-    else:
-        compel_cfg_weight_level = compel_cfg_weight_level_or_range
-
-    compel_cfg_weight = 1.1 ** compel_cfg_weight_level
-    if isinstance(layer_context, (list, tuple)):
-        # Already determined to apply compel cfg weight. So set apply_compel_cfg_prob = 1.
-        layer_context3 = [ prob_apply_compel_cfg(e, empty_context, 1, compel_cfg_weight_level, 
-                                                 skipped_token_indices, batch_mask) for e in layer_context ]
-        
-    else:
-        layer_context2 = (layer_context - empty_context) * compel_cfg_weight + empty_context
-        if skipped_token_indices is not None:
-            layer_context2[skipped_token_indices] = layer_context[skipped_token_indices]
-
-        if batch_mask is not None:
-            # layer_context: [4, 77, 768]
-            batch_mask = batch_mask.reshape(-1, 1, 1)
-            # if batch_mask[i] = 0, then layer_context3[i] = layer_context[i]  (compel cfg not applied).
-            # if batch_mask[i] = 1, then layer_context3[i] = layer_context2[i] (compel cfg applied).
-            layer_context3 = layer_context2 * batch_mask + layer_context * (1 - batch_mask)
-        else:
-            layer_context3 = layer_context2
-
-    return layer_context3
-
 def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
