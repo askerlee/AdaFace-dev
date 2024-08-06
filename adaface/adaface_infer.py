@@ -57,7 +57,7 @@ def parse_args():
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--scale", dest='guidance_scale', type=float, default=4, 
                         help="Guidance scale for the diffusion model")
-    parser.add_argument("--id_cfg_scale", type=float, default=1, 
+    parser.add_argument("--id_cfg_scale", type=float, default=6, 
                         help="CFG scale when generating the identity embeddings")
     
     parser.add_argument("--subject_string", 

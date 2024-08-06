@@ -29,6 +29,11 @@ def parse_args():
                         help="Path to the UNet checkpoint (default: RealisticVision 4.0)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
+    parser.add_argument('--extra_unet_paths', type=str, nargs="+", 
+                        default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
+                        help="Extra paths to the checkpoints of the UNet models")
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+                        help="Weights for the UNet models")    
     parser.add_argument("--in_folder",  type=str, required=True, help="Path to the folder containing input images")
     # If True, the input folder contains images of mixed subjects.
     # If False, the input folder contains multiple subfolders, each of which contains images of the same subject.
@@ -82,7 +87,8 @@ if __name__ == "__main__":
         process_index = 0
 
     adaface = AdaFaceWrapper("img2img", args.base_model_path, args.embman_ckpt, args.device, 
-                             args.subject_string, args.num_vectors, args.num_inference_steps)
+                             args.subject_string, args.num_vectors, args.num_inference_steps,
+                             extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights)
 
     in_folder = args.in_folder
     if os.path.isfile(in_folder):

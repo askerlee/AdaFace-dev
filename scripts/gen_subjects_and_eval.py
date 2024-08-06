@@ -70,9 +70,6 @@ def parse_args():
     parser.add_argument("--z_suffix_type", type=str, default=argparse.SUPPRESS, 
                         help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
-    # extra_z_suffix: usually reduces the similarity of generated images to the real images.
-    parser.add_argument("--extra_z_suffix", type=str, default="",
-                        help="Extra suffix to append to the z suffix")
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
     # prompt_suffix: usually reduces the similarity.
@@ -186,9 +183,6 @@ if __name__ == "__main__":
         print("Generating samples for subject: " + subject_name)
         z_prefix = reformat_z_affix(args, 'z_prefix_type', broad_class, class_name, cls_delta_string)
         z_suffix = reformat_z_affix(args, 'z_suffix_type', broad_class, class_name, cls_delta_string)
-
-        if len(args.extra_z_suffix) > 0:
-            z_suffix += " " + args.extra_z_suffix + ","
 
         if args.background_string and args.include_bg_string:
             background_string = "with background " + args.background_string + ", " * (args.num_vectors_per_bg_token - 1)
