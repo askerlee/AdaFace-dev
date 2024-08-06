@@ -2,9 +2,9 @@
 #                           1               2               3           4       5       6               7           8               9               10              11          12              
 set -g subjects             andrewng	    daphnekoller    feifeili	hinton	ilya	kaiminghe	    lebronjames	mengchen	    qinwenzheng	    simonebiles	    yannlecun	yusufdikec
 # cls_delta_strings are used during training.
-set -g cls_delta_strings    man             woman           woman       man     man     "young man"     man         "young woman"   woman           man             man         man
+set -g cls_delta_strings    man             woman           woman       man     man     "young man"     man         "young woman"   woman           woman           man         man
 # class_names are used when the prompt needs to be added with a suffix.
-set -g class_names          man             woman           woman       man     man     man             man         woman           woman           man             man         man
+set -g class_names          man             woman           woman       man     man     man             man         woman           woman           woman           man         man
 # all bg tokens are initialized with "unknown" now. No need to use customized bg init words.
 # broad_classes are all 1, i.e., humans/animals.
 set -g broad_classes         1             1                 1          1       1       1               1           1               1               1               1           1               
