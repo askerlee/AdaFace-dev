@@ -1201,7 +1201,6 @@ class EmbeddingManager(nn.Module):
 
         # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
         self.zs_image_feat_dict = {}
-        self.zs_out_id_embs_scale_range = (1.0, 1.0)
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s)".format(
                self.subject_strings, self.background_strings, self.token2num_vectors))
@@ -1418,10 +1417,7 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs, placeholder_adaface_prompt_embs = \
                             subj_basis_generator(arc2face_id_embs,
                                                  zs_clip_features, zs_id_embs, 
-                                                 # Only scale with the lower bound.
-                                                 # TODO: more granular, layerwise scaling.
-                                                 self.zs_out_id_embs_scale_range[0],
-                                                 is_face=self.curr_subj_is_face,
+                                                 out_id_embs_scale=1, is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
                                                  adaface_prompt_embs_inf_type='full_half_pad')
                     # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
@@ -1463,8 +1459,7 @@ class EmbeddingManager(nn.Module):
                             # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
                             adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
                                     subj_basis_generator0(arc2face_id_embs, zs_clip_features, zs_id_embs, 
-                                                          self.zs_out_id_embs_scale_range[0],
-                                                          is_face=self.curr_subj_is_face,
+                                                          out_id_embs_scale=1, is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
                                                           adaface_prompt_embs_inf_type='full_half_pad')
                             
@@ -1753,8 +1748,7 @@ class EmbeddingManager(nn.Module):
                                         )
             self.arc2face_text_encoder.to(device)
             
-    def set_zs_image_features(self, zs_clip_features, zs_id_embs, zs_out_id_embs_scale_range=(1.0, 1.0), 
-                              add_noise_to_zs_id_embs=False):
+    def set_zs_image_features(self, zs_clip_features, zs_id_embs, add_noise_to_zs_id_embs=False):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         # zs_id_embs: [1, 512]. 
@@ -1775,7 +1769,6 @@ class EmbeddingManager(nn.Module):
 
         self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
                                     'id':   zs_id_embs }
-        self.zs_out_id_embs_scale_range = zs_out_id_embs_scale_range
 
         # Clear the basis_vecs and bias saved in embedders.
         for placeholder_string in self.placeholder_strings:

@@ -10,16 +10,18 @@ from diffusers import (
 )
 from insightface.app import FaceAnalysis
 from adaface.arc2face_models import CLIPTextModelWrapper
-from adaface.util import get_arc2face_id_prompt_embs
+from adaface.util import get_arc2face_id_prompt_embs, UNetEnsemble
 import re, os
 import sys
 sys.modules['ldm'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, device, 
+    def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, device,
                  subject_string='z', num_vectors=16, 
                  num_inference_steps=50, negative_prompt=None,
-                 use_840k_vae=False, use_ds_text_encoder=False, is_training=False):
+                 use_840k_vae=False, use_ds_text_encoder=False, 
+                 extra_unet_paths=None, unet_weights=None,
+                 is_training=False):
         '''
         pipeline_name: "text2img" or "img2img" or None. If None, the unet and vae are
         removed from the pipeline to release RAM.
@@ -33,6 +35,8 @@ class AdaFaceWrapper(nn.Module):
         self.subject_string = subject_string
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
+        self.extra_unet_paths = extra_unet_paths
+        self.unet_weights = unet_weights
         self.device = device
         self.is_training = is_training
         self.initialize_pipeline()
@@ -67,8 +71,10 @@ class AdaFaceWrapper(nn.Module):
 
     def initialize_pipeline(self):
         self.load_subj_basis_generator(self.adaface_ckpt_path)
+
         # arc2face_text_encoder maps the face analysis embedding to 16 face embeddings 
         # in the UNet image space.
+        # arc2face_text_encoder always uses float16.
         arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
             'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
         )
@@ -77,14 +83,16 @@ class AdaFaceWrapper(nn.Module):
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.
             # https://huggingface.co/stabilityai/sd-vae-ft-mse-original
-            vae = AutoencoderKL.from_single_file("models/diffusers/sd-vae-ft-mse-original/vae-ft-mse-840000-ema-pruned.ckpt", torch_dtype=torch.float16)
+            vae = AutoencoderKL.from_single_file("models/diffusers/sd-vae-ft-mse-original/vae-ft-mse-840000-ema-pruned.ckpt", 
+                                                 torch_dtype=torch.float16)
         else:
             vae = None
 
         if self.use_ds_text_encoder:
             # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
             # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
-            text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", torch_dtype=torch.float16)
+            text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", 
+                                                         torch_dtype=torch.float16)
         else:
             text_encoder = None
 
@@ -122,6 +130,11 @@ class AdaFaceWrapper(nn.Module):
                     safety_checker=None
                 )
         
+        if self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0:
+            unet_ensemble = UNetEnsemble(pipeline.unet, self.extra_unet_paths, self.unet_weights,
+                                         device=self.device, torch_dtype=torch.float16)
+            pipeline.unet = unet_ensemble
+
         print(f"Loaded pipeline from {self.base_model_path}.")
 
         if self.use_840k_vae:
@@ -154,7 +167,7 @@ class AdaFaceWrapper(nn.Module):
         self.pipeline = pipeline.to(self.device)
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.
-        self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
         self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         # Patch the missing tokenizer in the subj_basis_generator.
         if not hasattr(self.subj_basis_generator, 'clip_tokenizer'):
@@ -221,7 +234,8 @@ class AdaFaceWrapper(nn.Module):
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, image_folder=None, 
                                     pre_face_embs=None, gen_rand_face=False, 
-                                    out_id_embs_scale=1., noise_level=0, update_text_encoder=True):
+                                    out_id_embs_scale=1., noise_level=0, noise_std_to_input=0, 
+                                    update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
         # If extract_faceid_embeds is True, faceid_embeds is *the same* embedding repeated by id_batch_size times.
         # Otherwise, faceid_embeds is a batch of random embeddings, each instance is different.
@@ -248,13 +262,15 @@ class AdaFaceWrapper(nn.Module):
                                           # The results are indistinguishable from input_max_length=77.
                                           input_max_length=22,
                                           noise_level=noise_level,
+                                          noise_std_to_input=noise_std_to_input,
                                           return_core_id_embs=True,
+                                          avg_at_stage=None,
                                           gen_neg_prompt=False, 
                                           verbose=True)
         
         if face_image_count == 0:
             return None
-                
+        
         # adaface_subj_embs: [1, 1, 16, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
         adaface_subj_embs, adaface_prompt_embs = \
@@ -262,8 +278,8 @@ class AdaFaceWrapper(nn.Module):
                                       out_id_embs_scale=out_id_embs_scale,
                                       is_face=True, is_training=False,
                                       adaface_prompt_embs_inf_type='full_half_pad')
-        # adaface_subj_embs: [16, 768]
-        adaface_subj_embs = adaface_subj_embs.squeeze()
+        # adaface_subj_embs: [N, 16, 768] -> [16, 768]
+        adaface_subj_embs = adaface_subj_embs.mean(dim=0).squeeze(0)
         if update_text_encoder:
             self.update_text_encoder_subj_embs(adaface_subj_embs)
         return adaface_subj_embs
@@ -320,7 +336,7 @@ class AdaFaceWrapper(nn.Module):
     # ref_img_strength is used only in the img2img pipeline.
     def forward(self, noise, prompt, negative_prompt=None, guidance_scale=4.0, 
                 out_image_count=4, ref_img_strength=0.8, generator=None, verbose=False):
-        noise = noise.to(self.device).to(torch.float16)
+        noise = noise.to(device=self.device, dtype=torch.float16)
 
         if negative_prompt is None:
             negative_prompt = self.negative_prompt

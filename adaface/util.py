@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 import cv2
+from diffusers import UNet2DConditionModel
+from diffusers.models.unets.unet_2d_condition import UNet2DConditionOutput
 
 # add_noise_to_tensor() adds a fixed amount of noise to the tensor.
 def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
@@ -11,6 +13,8 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
     if noise_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
         noise_std *= ts_std_mean
+        # ts_std_mean: 50~80 for unnormalized images, noise_std: 2.5-4 for 0.05 noise.
+        #print(ts_std_mean, noise_std)
 
     noise = torch.randn_like(ts) * noise_std
     if keep_norm:
@@ -23,6 +27,10 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
         
     return ts
 
+def add_noise_to_np_array(np_array, noise_std, noise_std_is_relative=True, std_dim=-1):
+    ts = torch.from_numpy(np_array).to(dtype=torch.float32)
+    ts = add_noise_to_tensor(ts, noise_std, noise_std_is_relative, std_dim=std_dim)
+    return ts.numpy().astype(np_array.dtype)
 
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
@@ -237,6 +245,37 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, inverse_text_encoder, face
 
     return return_prompts
 
+def pad_image_obj_to_square(image_obj, new_size=-1):
+    # Remove alpha channel if it exists.
+    if image_obj.mode == 'RGBA':
+        image_obj = image_obj.convert('RGB')    
+
+    # Pad input to be width == height
+    width, height = orig_size = image_obj.size
+    new_width, new_height = max(width, height), max(width, height)
+
+    if width != height:    
+        if width > height:
+            pads = (0, (width - height) // 2)
+        elif height > width:
+            pads = ((height - width) // 2, 0)
+        square_image_obj = Image.new("RGB", (new_width, new_height))
+        # pads indicates the upper left corner to paste the input.
+        square_image_obj.paste(image_obj, pads)
+        #square_image_obj = square_image_obj.resize((512, 512))
+        print(f"{width}x{height} -> {new_width}x{new_height} -> {square_image_obj.size}")
+        long_short_ratio = max(width, height) / min(width, height)
+    else:
+        square_image_obj = image_obj
+        pads = (0, 0)
+        long_short_ratio = 1
+
+    if new_size > 0:
+        # Resize the shorter edge to 512.
+        square_image_obj = square_image_obj.resize([int(new_size * long_short_ratio), int(new_size * long_short_ratio)])
+
+    return square_image_obj, pads, orig_size
+
 # if pre_face_embs is None, generate random face embeddings [BS, 512].
 # image_folder is passed only for logging purpose. image_paths contains the paths of the images.
 def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder, 
@@ -244,7 +283,9 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
                                 image_folder, image_paths, images_np,
                                 id_batch_size, device, 
                                 input_max_length=77, noise_level=0.0, 
-                                return_core_id_embs=False,
+                                noise_std_to_input=0.0, 
+                                return_core_id_embs=True,
+                                avg_at_stage=None,  # id_emb, prompt_emb, or None.
                                 gen_neg_prompt=False, verbose=False):
     face_image_count = 0
 
@@ -256,26 +297,36 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
                 image_np = np.array(Image.open(image_path))
                 images_np.append(image_np)
 
+        add_noise_to_input_repeats = int(noise_std_to_input / 0.025) + 1
+        print(f"add {noise_std_to_input} noise to input, repeated {add_noise_to_input_repeats} times")
+
         for i, image_np in enumerate(images_np):
-            image_obj = Image.fromarray(image_np).resize((512, 512), Image.NEAREST)
-            # Remove alpha channel if it exists.
-            if image_obj.mode == 'RGBA':
-                image_obj = image_obj.convert('RGB')
+            image_obj = Image.fromarray(image_np)
+            image_obj, _, _ = pad_image_obj_to_square(image_obj, new_size=512)
+
             # This seems NOT a bug. The input image should be in BGR format, as per 
             # https://github.com/deepinsight/insightface/issues/524
             image_np = cv2.cvtColor(np.array(image_obj), cv2.COLOR_RGB2BGR)
             image_np = np.array(image_obj)
 
-            face_infos = face_app.get(image_np)
-            if verbose and image_paths is not None:
-                print(image_paths[i], len(face_infos))
-            # Assume all images belong to the same subject. Therefore, we can skip the images with no face detected.
-            if len(face_infos) == 0:
-                continue
-            # only use the maximum face
-            face_info = sorted(face_infos, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1]
-            # Each faceid_embed: [1, 512]
-            faceid_embeds.append(torch.from_numpy(face_info.normed_embedding).unsqueeze(0))
+            #noisy_image_embeds = []
+            for j in range(add_noise_to_input_repeats):
+                noisy_image_np = add_noise_to_np_array(image_np, noise_std_to_input, 
+                                                       noise_std_is_relative=True,
+                                                       std_dim=(0,1))
+                face_infos = face_app.get(noisy_image_np)
+                if verbose and image_paths is not None and j == 0:
+                    print(image_paths[i], len(face_infos))
+                # Assume all images belong to the same subject. Therefore, we can skip the images with no face detected.
+                if len(face_infos) == 0:
+                    continue
+                # only use the maximum face
+                face_info = sorted(face_infos, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1]
+                noisy_image_embed = torch.from_numpy(face_info.normed_embedding).unsqueeze(0)
+                # Each faceid_embed: [1, 512]
+                faceid_embeds.append(noisy_image_embed)
+            
+            #faceid_embed = torch.cat(noisy_image_embeds, dim=0).mean(dim=0, keepdim=True)
             face_image_count += 1
 
         if verbose:
@@ -290,9 +341,11 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
         else:
             # faceid_embeds: [10, 512]
             faceid_embeds = torch.cat(faceid_embeds, dim=0)
-            # faceid_embeds: [10, 512] -> [1, 512].
-            # and the resulted prompt embeddings are the same.
-            faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True).to(device=device, dtype=torch.float16)
+            faceid_embeds = faceid_embeds.to(device=device, dtype=torch.float16)
+            if avg_at_stage == 'id_emb':
+                # faceid_embeds: [10, 512] -> [1, 512].
+                # and the sampleed prompt embeddings are the same.
+                faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True)
     else:
         # Random face embeddings. faceid_embeds: [BS, 512].
         if pre_face_embs is None:
@@ -318,9 +371,15 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
                                         return_full_and_core_embs=True)
         if return_core_id_embs:
             arc2face_pos_prompt_emb = arc2face_pos_core_prompt_emb
-    # If extract_faceid_embeds, we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
+    
+    if avg_at_stage == 'prompt_emb':
+        arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.mean(dim=0, keepdim=True)
+        arc2face_pos_core_prompt_emb = arc2face_pos_core_prompt_emb.mean(dim=0, keepdim=True)
+
+    # If extract_faceid_embeds, and the prompt embeddings are already averaged, then 
+    # we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
     # So we need to repeat faceid_embeds.
-    if extract_faceid_embeds:
+    if extract_faceid_embeds and avg_at_stage is not None:
         faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
         arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(id_batch_size, 1, 1)
 
@@ -340,3 +399,49 @@ def get_arc2face_id_prompt_embs(face_app, clip_tokenizer, arc2face_text_encoder,
     else:
         return face_image_count, faceid_embeds, arc2face_pos_prompt_emb
     
+class UNetEnsemble(nn.Module):
+    # The first unet is the unet already loaded in a pipeline.
+    def __init__(self, unet, extra_unet_paths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
+        super().__init__()
+
+        if unet_weights is None:
+            unet_weights = [1.] * (len(extra_unet_paths) + 1)
+        assert len(extra_unet_paths) + 1 == len(unet_weights)
+        unet_weights = torch.tensor(unet_weights, dtype=torch_dtype)
+        unet_weights = unet_weights / unet_weights.sum()
+        self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)
+
+        self.unets = nn.ModuleList()
+        self.unets.append(unet)
+
+        for unet_path in extra_unet_paths:
+            unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
+            self.unets.append(unet.to(device=device))
+
+        print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights.data.cpu().numpy()}")
+        self.dtype  = unet.dtype
+        self.device = unet.device
+        self.config = unet.config
+
+    def forward(self, *args, **kwargs):
+        return_dict = kwargs.get('return_dict', True)
+        samples = []
+
+        for unet in self.unets:
+            sample = unet(*args, **kwargs)
+            if not return_dict:
+                sample = sample[0]
+            else:
+                sample = sample.sample
+
+            samples.append(sample)
+
+        samples = torch.stack(samples, dim=0)
+        unet_weights = self.unet_weights.reshape(-1, *([1] * (samples.ndim - 1)))
+        sample = (samples * unet_weights).sum(dim=0)
+
+        if not return_dict:
+            return (sample,)
+        else:
+            return UNet2DConditionOutput(sample=sample)
+        

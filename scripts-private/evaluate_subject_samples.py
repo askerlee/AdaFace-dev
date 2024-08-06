@@ -1,3 +1,4 @@
+# This script assumes the samples have been generated for each subject and prompt.
 import argparse, os
 import numpy as np
 

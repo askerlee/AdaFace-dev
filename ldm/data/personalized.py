@@ -11,8 +11,7 @@ import random
 import torch
 import regex as re
 import webdataset as wds
-import glob
-from evaluation.eval_utils import parse_subject_file
+from ldm.util import parse_subject_file
 import torch.distributed as dist
 from queue import Queue
 import json

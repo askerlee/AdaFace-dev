@@ -22,10 +22,10 @@ def save_images(images, num_images_per_row, subject_name, prompt, noise_level, s
     grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level:.02f}.png")
     if os.path.exists(grid_filepath):
         grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.png')
         while os.path.exists(grid_filepath):
             grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
+            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.png')
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
@@ -47,6 +47,8 @@ def parse_args():
                         help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
+    parser.add_argument("--extra_unet_paths", type=str, nargs="+", default=[], 
+                        help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument("--subject", type=str)
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4,  help="Number of images to generate")
@@ -84,7 +86,8 @@ if __name__ == "__main__":
     print(f"Using device {args.device}")
 
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, args.embman_ckpt, args.device, 
-                             args.subject_string, args.num_vectors, args.num_inference_steps)
+                             args.subject_string, args.num_vectors, args.num_inference_steps,
+                             extra_unet_paths=args.extra_unet_paths)
 
     if not args.randface:
         image_folder = args.subject

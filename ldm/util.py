@@ -16,12 +16,11 @@ from queue import Queue
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
-import random, math
+import random, math, sys, re
 
 from torch.optim.lr_scheduler import SequentialLR
 from bisect import bisect_right
 from safetensors.torch import load_file as safetensors_load_file
-import sys
 
 class SequentialLR2(SequentialLR):
     def step(self):
@@ -270,6 +269,73 @@ def calc_stats(emb_name, embeddings, mean_dim=0):
     norms = torch.norm(embeddings, dim=1).detach().cpu().numpy()
     print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
+
+
+def split_string(input_string):
+    pattern = r'"[^"]*"|\S+'
+    substrings = re.findall(pattern, input_string)
+    substrings = [ s.strip('"') for s in substrings ]
+    return substrings
+
+# The most important variables: "subjects", "class_names", "broad_classes", "sel_set"
+def parse_subject_file(subject_file_path):
+    subj_info = {}
+    subj2attr = {}
+    
+    with open(subject_file_path, "r") as f:
+        lines = f.readlines()
+        lines = [line.strip() for line in lines]
+        for line in lines:
+            if re.search(r"^set -g [a-zA-Z_]+ ", line):
+                # set -g subjects  alexachung    alita...
+                # At least one character in the value (after the variable name).
+                mat = re.search(r"^set -g ([a-zA-Z_]+)\s+(\S.*)", line)
+                if mat is not None:
+                    var_name = mat.group(1)
+                    substrings = split_string(mat.group(2))
+                    if re.match("broad_classes|are_faces|maxiters", var_name):
+                        values = [ int(s) for s in substrings ]
+                    elif var_name == 'all_init_word_weights':
+                        values = [ [ float(s) for s in split_string(weight_str) ] for weight_str in substrings ]
+                    elif var_name == 'sel_set':
+                        values = [ int(s) - 1 for s in substrings ]
+                    else:
+                        values = substrings
+
+                    if len(values) == 1 and values[0].startswith("$"):
+                        # e.g., set -g cls_strings    $cls_delta_strings
+                        values = subj_info[values[0][1:]]
+
+                    subj_info[var_name] = values
+                else:
+                    breakpoint()
+
+    for var_name in [ "subjects", "class_names", "cls_delta_strings", "data_folder" ]:
+        if var_name not in subj_info:
+            print("Variable %s is not defined in %s" %(var_name, subject_file_path))
+            breakpoint()
+
+    if 'broad_classes' not in subj_info:
+        # By default, all subjects are humans/animals, unless specified in the subject file.
+        subj_info['broad_classes'] = [ 1 for _ in subj_info['subjects'] ]
+
+    for var_name in [ "class_names", "cls_delta_strings", "all_init_word_weights", 
+                      "bg_init_strings", "broad_classes", "are_faces" ]:
+        if var_name in subj_info:
+            subj2attr[var_name] = {}
+            if len(subj_info[var_name]) != len(subj_info['subjects']):
+                print("Variable %s has %d elements, while there are %d subjects." 
+                      %(var_name, len(subj_info[var_name]), len(subj_info['subjects'])))
+                breakpoint()
+            for i in range(len(subj_info['subjects'])):
+                subj_name = subj_info['subjects'][i]
+                subj2attr[var_name][subj_name] = subj_info[var_name][i]
+            
+    if 'sel_set' not in subj_info:
+        subj_info['sel_set'] = list(range(len(subj_info['subjects'])))
+
+    # The most important variables: "subjects", "cls_delta_strings", "data_folder", "class_names"
+    return subj_info, subj2attr
 
 # Orthogonal subtraction of b from a: the residual is orthogonal to b (on the last dimension).
 # NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b.

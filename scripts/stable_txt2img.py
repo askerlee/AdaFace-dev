@@ -1,6 +1,5 @@
 import argparse, os
 import torch
-import torch.nn.functional as F
 import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
@@ -10,7 +9,6 @@ from einops import rearrange
 import time
 import re
 import csv
-import sys
 from collections import namedtuple
 
 from pytorch_lightning import seed_everything
@@ -23,7 +21,7 @@ from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 from insightface.app import FaceAnalysis
-from ldm.data.personalized import PersonalizedBase
+from adaface.adaface_wrapper import AdaFaceWrapper
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -189,16 +187,13 @@ def parse_args():
         action='store_true',
         help="do not preview the image",
     )
-    parser.add_argument("--broad_class", type=int, default=1,
-                        help="Whether the subject is a human/animal, object or cartoon"
-                             " (0: object, 1: human/animal, 2: cartoon)")
     parser.add_argument("--calc_face_sim", action="store_true",
                         help="If specified, assume the generated samples are human faces, "
                              "and compute face similarities with the groundtruth")
     parser.add_argument("--face_engine", type=str, default="deepface", choices=["deepface", "insightface"],
                         help="Face engine to use for face similarity calculation")
     
-    parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use. Set to -1 to use CPU (slow).')
+    parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use.')
     #parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
     parser.add_argument("--compare_with", type=str, default=None,
@@ -229,8 +224,6 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--zs_out_id_embs_scale_range", type=float, nargs=2, default=[1.0, 1.0],
-                        help="Range of the scale of the output id embeddings")
     parser.add_argument("--apply_arc2face_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
     parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
@@ -244,19 +237,23 @@ def parse_args():
     # bb_type: backbone checkpoint type. Just to append to the output image name for differentiation.
     # The backbone checkpoint is specified by --ckpt.
     parser.add_argument("--bb_type", type=str, default="")
-
     parser.add_argument("--scores_csv", type=str, default=None,
                         help="CSV file to save the evaluation scores")
-    # --debug
     parser.add_argument("--debug", action="store_true",
                         help="debug mode")
-    # --eval_blip
     parser.add_argument("--eval_blip", action="store_true",
                         help="Evaluate BLIP-diffusion models")
-    # cls_string
     parser.add_argument("--cls_string", type=str, default=None,
                         help="Subject class name. Only requires for --eval_blip")
-    
+    parser.add_argument("--diffusers", action="store_true", 
+                        help="Zeroshot uses the diffusers implementation")
+    # extra_unet_paths and unet_weights are only relevant for --diffusers
+    parser.add_argument('--extra_unet_paths', type=str, nargs="+", 
+                        default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
+                        help="Extra paths to the checkpoints of the UNet models")
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+                        help="Weights for the UNet models")
+        
     args = parser.parse_args()
     return args
 
@@ -302,12 +299,28 @@ def main(opt):
                                  "mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, " \
                                  "nude, naked, nsfw, topless, bare breasts"
     device = f"cuda:{opt.gpu}" if torch.cuda.is_available() else "cpu"
-    
-    if not opt.eval_blip:
+
+    if opt.zeroshot:
+        assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
+        ref_image_paths = []
+        for ref_image in opt.ref_images:
+            if os.path.isdir(ref_image):
+                ref_image_paths.extend([ os.path.join(ref_image, f) for f in os.listdir(ref_image) ])
+            else:
+                ref_image_paths.append(ref_image)
+        ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
+        ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
+    else:
+        ref_images = None
+
+    if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.token2num_vectors = {} 
+        if opt.zeroshot:
+            config.model.params.personalization_config.params.zs_cls_delta_string = 'person'
+
         if hasattr(opt, 'num_vectors_per_subj_token'):
             # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
@@ -316,20 +329,6 @@ def main(opt):
             # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
-
-        if opt.zeroshot:
-            assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
-            ref_image_paths = []
-            for ref_image in opt.ref_images:
-                if os.path.isdir(ref_image):
-                    ref_image_paths.extend([ os.path.join(ref_image, f) for f in os.listdir(ref_image) ])
-                else:
-                    ref_image_paths.append(ref_image)
-            ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
-            ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
-            config.model.params.personalization_config.params.zs_cls_delta_string = 'person'
-        else:
-            ref_images = None
 
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
@@ -382,18 +381,7 @@ def main(opt):
             # negative prompt borrowed from BLIP-Diffusion.
             opt.neg_prompt = predefined_negative_prompt
 
-    # eval_blip
-    else:
-        from lavis.models import load_model_and_preprocess
-        blip_model, vis_preprocess, txt_preprocess = load_model_and_preprocess("blip_diffusion", "base", device=f"cuda:{opt.gpu}", is_eval=True)
-        blip_model.load_checkpoint(opt.ckpt)
-        cond_subject = opt.cls_string
-        tgt_subject  = opt.cls_string
-        cond_subjects = [txt_preprocess["eval"](cond_subject)]
-        tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
-        negative_prompt = predefined_negative_prompt
-        opt.subj_model_path = ""
-        
+    else:        
         class DummyScope(object):
             def __init__(self):
                 pass
@@ -403,8 +391,30 @@ def main(opt):
                 pass
 
         DummyModel = namedtuple('DummyModel', ['ema_scope'])
+
         # model.ema_scope() is a do-nothing object.
         model = DummyModel(DummyScope)
+
+        if opt.diffusers:
+            opt.subj_model_path = opt.embedding_paths[0]
+            pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, device, 
+                                     opt.subject_string, opt.num_vectors_per_subj_token, 50,
+                                     extra_unet_paths=opt.extra_unet_paths, unet_weights=opt.unet_weights)
+            # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
+            adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, None, False, 
+                                                                     out_id_embs_scale=1, noise_level=0, 
+                                                                     update_text_encoder=True)
+        # eval_blip
+        else:
+            from lavis.models import load_model_and_preprocess
+            blip_model, vis_preprocess, txt_preprocess = load_model_and_preprocess("blip_diffusion", "base", device=f"cuda:{opt.gpu}", is_eval=True)
+            blip_model.load_checkpoint(opt.ckpt)
+            cond_subject = opt.cls_string
+            tgt_subject  = opt.cls_string
+            cond_subjects = [txt_preprocess["eval"](cond_subject)]
+            tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
+            negative_prompt = predefined_negative_prompt
+            opt.subj_model_path = ""
 
     os.makedirs(opt.outdir, exist_ok=True)
 
@@ -502,11 +512,12 @@ def main(opt):
         clip_evator, dino_evator = None, None
 
     if opt.fixed_code:
+        # start_code is independent of the samples. Therefore it's shared by all samples.
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
     else:
         start_code = None
 
-    if not opt.eval_blip:
+    if not opt.eval_blip and not opt.diffusers:
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], embman_iter_type='empty')
@@ -539,14 +550,13 @@ def main(opt):
                         if isinstance(prompts, tuple):
                             prompts = list(prompts)
 
-                        if not opt.eval_blip:
+                        if not opt.eval_blip and not opt.diffusers:
                             apply_arc2face_inverse_embs = opt.zeroshot and opt.apply_arc2face_inverse_embs
                             apply_arc2face_embs         = opt.zeroshot and opt.apply_arc2face_embs
                             # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                             # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                             c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                                zs_id_embs=zs_id_embs, 
-                                                               zs_out_id_embs_scale_range=opt.zs_out_id_embs_scale_range,
                                                                apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
                                                                apply_arc2face_embs=apply_arc2face_embs)
 
@@ -567,20 +577,25 @@ def main(opt):
                             # The first half contains negative samples, and the second half positive.
                             # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
                             samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                            conditioning=c,
-                                                            batch_size=batch_size,
-                                                            shape=shape,
-                                                            verbose=False,
-                                                            guidance_scale=opt.scale,
-                                                            unconditional_conditioning=uc,
-                                                            eta=opt.ddim_eta,
-                                                            x0=None,
-                                                            mask=None,
-                                                            x_T=start_code)
+                                                             conditioning=c,
+                                                             batch_size=batch_size,
+                                                             shape=shape,
+                                                             verbose=False,
+                                                             guidance_scale=opt.scale,
+                                                             unconditional_conditioning=uc,
+                                                             eta=opt.ddim_eta,
+                                                             x0=None,
+                                                             mask=None,
+                                                             x_T=start_code)
 
                             x_samples_ddim = model.decode_first_stage(samples_ddim)
                             # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
                             x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+
+                        if opt.diffusers:
+                            noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale[0], 
+                                                      batch_size, verbose=True)
                         else:
                             x_samples_ddim = []
                             blip_seed = 8888
@@ -628,7 +643,7 @@ def main(opt):
                                     base_count += 1
                                     sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
-                                if not opt.eval_blip:
+                                if not opt.eval_blip and not opt.diffusers:
                                     x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                     Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
                                 else:
