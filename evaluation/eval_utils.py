@@ -474,28 +474,28 @@ def format_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     # Added 'in iron man armor', 'in superman costume', 'playing guitar on a boat, ocean waves', 
     # 'jedi wielding a lightsaber, star wars' which are compatible with humans.
     animal_prompt_list = [
-    '{0}{1}{2} in the jungle',                                       # 0
-    '{0}{1}{2} in the snow',
-    '{0}{1}{2} on the beach',
-    '{0}{1}{2} on a cobblestone street',
-    '{0}{1}{2} on top of pink fabric',
-    '{0}{1}{2} with a city in the background',                       # 5
-    '{0}{1}{2} with a mountain in the background',
-    '{0}{1}{2} with a blue house in the background',
-    '{0}{1}{2} wearing a red hat',                                   
-    '{0}{1}{2} wearing a santa hat',
-    '{0}{1}{2} wearing a rainbow scarf',                             # 10
-    '{0}{1}{2} wearing a black top hat and a monocle',
-    '{0}{1}{2} in a chef outfit',
-    '{0}{1}{2} in a firefighter outfit',                             
-    '{0}{1}{2} in a police outfit',
-    '{0}{1}{2} wearing pink glasses',                                # 15
-    '{0}{1}{2} wearing a yellow shirt',
-    '{0}{1}{2} in a purple wizard outfit',
-    '{0}{1}{2} in iron man armor',
-    '{0}{1}{2} in superman costume',
-    '{0}{1}{2} playing guitar on a boat, ocean waves',               # 20
-    '{0}{1}{2} jedi wielding a lightsaber, star wars',
+    'a {0}{1}{2} in the jungle',                                       # 0
+    'a {0}{1}{2} in the snow',
+    'a {0}{1}{2} on the beach',
+    'a {0}{1}{2} on a cobblestone street',
+    'a {0}{1}{2} on top of pink fabric',
+    'a {0}{1}{2} with a city in the background',                       # 5
+    'a {0}{1}{2} with a mountain in the background',
+    'a {0}{1}{2} with a blue house in the background',
+    'a {0}{1}{2} wearing a red hat',                                   
+    'a {0}{1}{2} wearing a santa hat',
+    'a {0}{1}{2} wearing a rainbow scarf',                             # 10
+    'a {0}{1}{2} wearing a black top hat and a monocle',
+    'a {0}{1}{2} in a chef outfit',
+    'a {0}{1}{2} in a firefighter outfit',                             
+    'a {0}{1}{2} in a police outfit',
+    'a {0}{1}{2} wearing pink glasses',                                # 15
+    'a {0}{1}{2} wearing a yellow shirt',
+    'a {0}{1}{2} in a purple wizard outfit',
+    'a {0}{1}{2} in iron man armor',
+    'a {0}{1}{2} in superman costume',
+    'a {0}{1}{2} playing guitar on a boat, ocean waves',               # 20
+    'a {0}{1}{2} jedi wielding a lightsaber, star wars',
     ]
 
     # humans/animals and cartoon characters.

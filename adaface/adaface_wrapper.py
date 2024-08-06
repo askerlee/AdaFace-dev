@@ -228,6 +228,8 @@ class AdaFaceWrapper(nn.Module):
             comp_prompt = self.placeholder_tokens_str + " " + prompt
         else:
             # Replace the subject string 'z' with the placeholder tokens.
+            # If there is a word 'a' before the subject string, then replace 'a z' with the placeholder tokens.
+            prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b', self.placeholder_tokens_str, prompt)
             comp_prompt = re.sub(r'\b' + self.subject_string + r'\b', self.placeholder_tokens_str, prompt)
         return comp_prompt
 
