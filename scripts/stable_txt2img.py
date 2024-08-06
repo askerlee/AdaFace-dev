@@ -653,7 +653,7 @@ def main(opt):
                                     # H, W, C => C, H, W
                                     x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1).float() / 255.
 
-                            if opt.eval_blip:
+                            if opt.eval_blip or opt.diffusers:
                                 x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
 
                             if opt.compare_with:

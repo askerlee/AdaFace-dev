@@ -332,6 +332,7 @@ def parse_subject_file(subject_file_path):
                 subj2attr[var_name][subj_name] = subj_info[var_name][i]
             
     if 'sel_set' not in subj_info:
+        # 'sel_set' is not defined in the subject file. So select all subjects.
         subj_info['sel_set'] = list(range(len(subj_info['subjects'])))
 
     # The most important variables: "subjects", "cls_delta_strings", "data_folder", "class_names"
