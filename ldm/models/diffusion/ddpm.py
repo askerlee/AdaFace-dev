@@ -1013,7 +1013,7 @@ class LatentDiffusion(DDPM):
                 # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
                 # and scaling them down may hurt subject fidelity.
                 '''
-                if zs_out_id_embs_scale_range != (1.0, 1.0) and not apply_arc2face_embs:
+                if zs_out_id_embs_cfg_scale_range != (1.0, 1.0) and not apply_arc2face_embs:
                     emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
                     # Fix the scales of the static subject embeddings.
                     for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
@@ -1022,7 +1022,7 @@ class LatentDiffusion(DDPM):
                                                                 placeholder_indices,
                                                                 empty_context=self.empty_context,
                                                                 num_layers=self.N_CA_LAYERS,
-                                                                scale_range=zs_out_id_embs_scale_range,
+                                                                scale_range=zs_out_id_embs_cfg_scale_range,
                                                                 extra_scale=emb_extra_global_scale)
                 '''
 

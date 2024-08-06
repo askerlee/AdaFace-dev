@@ -234,7 +234,7 @@ class AdaFaceWrapper(nn.Module):
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, image_folder=None, 
                                     pre_face_embs=None, gen_rand_face=False, 
-                                    out_id_embs_scale=1., noise_level=0, noise_std_to_input=0, 
+                                    out_id_embs_cfg_scale=6., noise_level=0, noise_std_to_input=0, 
                                     update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
         # If extract_faceid_embeds is True, faceid_embeds is *the same* embedding repeated by id_batch_size times.
@@ -275,7 +275,7 @@ class AdaFaceWrapper(nn.Module):
         # adaface_prompt_embs: [1, 77, 768] (not used).
         adaface_subj_embs, adaface_prompt_embs = \
             self.subj_basis_generator(id_prompt_emb, None, None, 
-                                      out_id_embs_scale=out_id_embs_scale,
+                                      out_id_embs_cfg_scale=out_id_embs_cfg_scale,
                                       is_face=True, is_training=False,
                                       adaface_prompt_embs_inf_type='full_half_pad')
         # adaface_subj_embs: [N, 16, 768] -> [16, 768]

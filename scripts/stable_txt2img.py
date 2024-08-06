@@ -158,7 +158,7 @@ def parse_args():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.ckpt",
+        default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
         help="path to checkpoint of model",
     )    
     parser.add_argument(
@@ -247,13 +247,15 @@ def parse_args():
                         help="Subject class name. Only requires for --eval_blip")
     parser.add_argument("--diffusers", action="store_true", 
                         help="Zeroshot uses the diffusers implementation")
-    # extra_unet_paths and unet_weights are only relevant for --diffusers
+    # Options below are only relevant for --diffusers
     parser.add_argument('--extra_unet_paths', type=str, nargs="+", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
                         help="Weights for the UNet models")
-        
+    parser.add_argument("--out_id_embs_cfg_scale", type=float, default=6.0,
+                        help="CFG Scale for the adaface output id embeddings")
+    
     args = parser.parse_args()
     return args
 
@@ -398,11 +400,12 @@ def main(opt):
         if opt.diffusers:
             opt.subj_model_path = opt.embedding_paths[0]
             pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, device, 
-                                     opt.subject_string, opt.num_vectors_per_subj_token, 50,
+                                     opt.subject_string, opt.num_vectors_per_subj_token, opt.ddim_steps,
                                      extra_unet_paths=opt.extra_unet_paths, unet_weights=opt.unet_weights)
             # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
             adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, None, False, 
-                                                                     out_id_embs_scale=1, noise_level=0, 
+                                                                     out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
+                                                                     noise_level=0, 
                                                                      update_text_encoder=True)
         # eval_blip
         else:

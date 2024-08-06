@@ -293,7 +293,7 @@ def parse_subject_file(subject_file_path):
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))
-                    if re.match("broad_classes|are_faces|maxiters", var_name):
+                    if re.match("broad_classes|are_faces", var_name):
                         values = [ int(s) for s in substrings ]
                     elif var_name == 'all_init_word_weights':
                         values = [ [ float(s) for s in split_string(weight_str) ] for weight_str in substrings ]

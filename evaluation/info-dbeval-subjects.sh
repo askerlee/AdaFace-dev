@@ -14,21 +14,6 @@ set -g are_faces            0                 0                   0             
 # sel_set contains a few selected challenging test subjects.
 #                     backpack_dog  berry_bowl  can  candle  rc_car robot_toy
 set -g sel_set        2             4           5    6       24     26
-
-#                       objects    animals           cartoon characters
-set -g lrs              7e-4       1e-3              7e-4
-set -g inf_z_prefixes   ""         "portrait of"     ""
-set -g maxiters         1500       2000              1500
-# Individual LR for each class in the broad classes, according to their difficulties / inherent complexity.
-# A prefix of "portrait of" for animals/humans suggests SD to focus on the face area of the subject.
-
-# No suffix for the DreamBooth eval set, as they are objects/animals, as opposed to faces.
-set -g db_suffix           ""
 set -g data_folder         subjects-dreambench
 set -g misc_train_opts     --use_fp_trick 0
 set -g misc_infer_opts
-set -g resume_from_ckpt     0
-# Objects in the same group share the same resumed_ckpt. Number of subjects in each group:
-#                           2         3                4                          3             1       8    2    7
-set -g resumed_ckpt_keys    backpack  bowl,can,candle  clock,glasses,teapot,vase  boot,sneaker  sprite  toy  cat  dog
-#set -g resumed_ckpt_values  resumed_ckpts/backpack_dog2024-01-12T17-34-49_backpack_dog-ada/checkpoints/embeddings_gs-1500.pt

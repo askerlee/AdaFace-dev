@@ -102,7 +102,7 @@ def parse_args():
                         help="number of DDIM steps to generate samples")
     parser.add_argument("--ckpt_dir", type=str, default="logs",
                         help="parent directory containing checkpoints of all subjects")
-    parser.add_argument("--ckpt_iter", type=str, default=None,
+    parser.add_argument("--ckpt_iter", type=str, 
                         help="checkpoint iteration to use")
     parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
@@ -154,10 +154,10 @@ def parse_args():
 
     parser.add_argument("--prompt_mix_weight", type=float, default=0,
                         help="Weight of the reference prompt to be mixed with the subject prompt")  
-    # --dryrun
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
-    # --debug
+    parser.add_argument("--diffusers", action="store_true",
+                        help="Use Diffusers instead of LDM")
     parser.add_argument("--debug", action="store_true",
                         help="Debug mode")
 
@@ -168,8 +168,8 @@ if __name__ == "__main__":
     
     args, argparser = parse_args()
     subj_info, subj2attr = parse_subject_file(args.subjfile)
-    subjects, class_names, broad_classes, sel_set, ckpt_iters = \
-            subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes'], subj_info['sel_set'], subj_info['maxiters']
+    subjects, class_names, broad_classes, sel_set = \
+            subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes'], subj_info['sel_set']
 
     args.orig_placeholder = args.subject_string
     # If num_vectors_per_subj_token == 3:
@@ -360,12 +360,8 @@ if __name__ == "__main__":
             else:
                 bb_type = args.bb_type
 
-            if args.ckpt_iter is None:
-                ckpt_iter = ckpt_iters[broad_class]
-            else:
-                ckpt_iter = args.ckpt_iter
-
-            emb_path    = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
+            ckpt_iter = args.ckpt_iter
+            emb_path  = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
             if not os.path.exists(emb_path):
                 emb_path2 = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
                 if not os.path.exists(emb_path2):
@@ -450,7 +446,9 @@ if __name__ == "__main__":
                             
         if args.n_rows > 0:
             command_line += f" --n_rows {args.n_rows}"
-            
+        
+        if args.diffusers:
+            command_line += f" --diffusers"            
         if args.debug:
             command_line += f" --debug"
             

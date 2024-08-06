@@ -63,7 +63,7 @@ def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale,
 
     adaface_subj_embs = \
         adaface.generate_adaface_embeddings(image_folder=None, image_paths=image_paths,
-                                            out_id_embs_scale=adaface_id_cfg_scale, update_text_encoder=True)
+                                            out_id_embs_cfg_scale=adaface_id_cfg_scale, update_text_encoder=True)
     
     if adaface_subj_embs is None:
         raise gr.Error(f"Failed to detect any faces! Please try with other images")

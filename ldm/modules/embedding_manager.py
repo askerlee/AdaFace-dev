@@ -1417,7 +1417,7 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs, placeholder_adaface_prompt_embs = \
                             subj_basis_generator(arc2face_id_embs,
                                                  zs_clip_features, zs_id_embs, 
-                                                 out_id_embs_scale=1, is_face=self.curr_subj_is_face,
+                                                 out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
                                                  adaface_prompt_embs_inf_type='full_half_pad')
                     # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
@@ -1459,7 +1459,7 @@ class EmbeddingManager(nn.Module):
                             # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
                             adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
                                     subj_basis_generator0(arc2face_id_embs, zs_clip_features, zs_id_embs, 
-                                                          out_id_embs_scale=1, is_face=self.curr_subj_is_face,
+                                                          out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
                                                           adaface_prompt_embs_inf_type='full_half_pad')
                             
