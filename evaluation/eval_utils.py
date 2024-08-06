@@ -519,15 +519,16 @@ def format_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     subject_string = z_prefix + subject_string
     z_prefix = ""
     if use_fp_trick:
-        # z_prefix only contains "face portrait, "
-        z_prefix = "face portrait, "
+        # Prepend ", face portrait," to z_suffix to make sure the subject is always expressed.
+        # There's a space after z_suffix in the prompt, so no need to add a space here.
+        z_suffix = ", face portrait," + z_suffix
     
-    if class_token in z_prefix:
+    if class_token in subject_string:
         class_token = ""
-    if class_long_token in z_prefix:
+    if class_long_token in subject_string:
         class_long_token = ""
 
-    prompt_list            = [ prompt.format(z_prefix, subject_string,   z_suffix)  for prompt in orig_prompt_list ]
+    prompt_list            = [ prompt.format(z_prefix, subject_string,   z_suffix)           for prompt in orig_prompt_list ]
     orig_short_prompt_list = [ prompt.format(z_prefix, class_token,      background_string)  for prompt in orig_prompt_list ]
     orig_long_prompt_list  = [ prompt.format(z_prefix, class_long_token, background_string)  for prompt in orig_prompt_list ]
     return prompt_list, orig_short_prompt_list, orig_long_prompt_list

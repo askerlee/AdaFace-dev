@@ -1,6 +1,6 @@
+import numpy as np
 import argparse, os
 import torch
-import numpy as np
 from omegaconf import OmegaConf
 from PIL import Image
 from tqdm import tqdm, trange

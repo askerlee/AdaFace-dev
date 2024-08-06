@@ -22,7 +22,7 @@ def parse_args():
     parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, 
                         help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
-    parser.add_argument("--method", default='ada', choices=["ada", "static-layerwise", "ti", "db"], type=str, 
+    parser.add_argument("--method", default='ada', choices=["ada"], type=str, 
                         help="method for generating samples")
     parser.add_argument("--subject_string", type=str, default="z", 
                         help="Subject placeholder string that represents the subject in prompts")
@@ -46,7 +46,7 @@ def parse_args():
                         help="Do not use face/DINO embeddings for zero-shot generation")
       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
-                        help="Reference image for zero-shot learning")
+                        help="Reference image for zero-shot learning. If not specified, use subject_gt_dir.")
 
     parser.add_argument("--prompt_set", dest='prompt_set_name', type=str, default='all', 
                         choices=['dreambench', 'community', 'all'],
@@ -78,21 +78,8 @@ def parse_args():
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
-    parser.add_argument("--scale", type=float, nargs='+', default=[4, 1],
-                        help="the guidance scale")
-    parser.add_argument(
-        "--use_first_gt_img_as_init",
-        action='store_true',
-        help="use the first image in the groundtruth folder as the initial image",
-    )
-    # Anything between 0 and 1 will cause blended images.
-    parser.add_argument(
-        "--init_img_weight",
-        type=float,
-        default=0.1,
-        help="Weight of the initial image (if w, then w*img + (1-w)*noise)",
-    )
-
+    parser.add_argument("--scale", type=float, nargs='+', default=[8, 8],
+                        help="Guidance scale. From high annealed to low. If high = low, no annealing.")
     parser.add_argument("--n_samples", type=int, default=-1, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=-1, 
@@ -100,17 +87,16 @@ def parse_args():
     
     parser.add_argument("--steps", type=int, default=50, 
                         help="number of DDIM steps to generate samples")
-    parser.add_argument("--ckpt_dir", type=str, default="logs",
+    parser.add_argument("--all_ckpts_dir", type=str, default="logs",
                         help="parent directory containing checkpoints of all subjects")
     parser.add_argument("--ckpt_iter", type=str, 
                         help="checkpoint iteration to use")
     parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
                              " Could be a regular expression.")
-    parser.add_argument("--ckpt_name", type=str, default=argparse.SUPPRESS,
-                        help="CKPT folder name.")
-    
-    parser.add_argument("--out_dir_tmpl", type=str, default="samples-dbeval",
+    parser.add_argument("--subj_ckpt_folder_name", type=str, default=argparse.SUPPRESS,
+                        help="Subject model folder name.")
+    parser.add_argument("--out_dir_tmpl", type=str, default="samples",
                         help="Template of parent directory to save generated samples")
     parser.add_argument("--scores_csv", type=str, default=None,
                         help="CSV file to save the evaluation scores")
@@ -120,44 +106,31 @@ def parse_args():
         default=0,
         help="rows in the grid (default: batch_size)",
     )
-        
     # File path containing composition case information
     parser.add_argument("--subjfile", type=str, default="evaluation/info-subjects.sh", 
                         help="subject info script file")
     # The range of indices of subjects to generate
     parser.add_argument("--range", type=str, default=None, 
                         help="Range of subjects to generate (Index starts from 1 and is inclusive, e.g., 1-30)")
-    parser.add_argument("--selset", action="store_true",
-                        help="Whether to generate only the selected subset of subjects")
-    parser.add_argument("--skipselset", action="store_true",
-                        help="Whether to generate all subjects except the selected subset")
-    
     parser.add_argument("--compare_with_pardir", type=str, default=argparse.SUPPRESS,
                         help="Parent folder of subject images used for computing similarity with generated samples")
-
     parser.add_argument("--bb_type", type=str, default="v15-dste8-vae", 
-                        choices=["v14", "v15", "v15-ema", "v15-dste", "v15-dste8", "v15-dste8-vae", "v15-arte", "v15-rvte",
-                                 "dreamshaper-v5", "dreamshaper-v6", "dreamshaper-v8", "ar-v16", "rv-v4"],
+                        choices=["v15-dste8-vae", "dreamshaper-v5", "dreamshaper-v6", "dreamshaper-v8", "ar-v16", "rv-v4"],
                         help="Type of checkpoints to use (default: v15-dste8-vae)")
     # [1, 1] will be normalized to [0.5, 0.5] internally.
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
-    
     parser.add_argument("--is_face", type=str2bool, const=True, default=argparse.SUPPRESS, nargs="?",
                         help="Whether the generated samples are human faces",
     )    
-
-    parser.add_argument("--prompt_mix_scheme", type=str, default=argparse.SUPPRESS, 
-                        choices=['mix_hijk', 'mix_concat_cls'],
-                        help="How to mix the subject prompt with the reference prompt")
-
-    parser.add_argument("--prompt_mix_weight", type=float, default=0,
-                        help="Weight of the reference prompt to be mixed with the subject prompt")  
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
     parser.add_argument("--diffusers", action="store_true",
                         help="Use Diffusers instead of LDM")
+    parser.add_argument("--zs_subj_model_ckpt", type=str, default=argparse.SUPPRESS,
+                        help="Zero-shot subject model checkpoint")
+
     parser.add_argument("--debug", action="store_true",
                         help="Debug mode")
 
@@ -175,7 +148,7 @@ if __name__ == "__main__":
     # If num_vectors_per_subj_token == 3:
     # "z"    => "z, , "
     # Need to leave a space between multiple ",,", otherwise they are treated as one token.
-    if hasattr(args, 'num_vectors_per_subj_token') and args.num_vectors_per_subj_token > 1:
+    if (not args.zeroshot) and hasattr(args, 'num_vectors_per_subj_token') and (args.num_vectors_per_subj_token > 1):
         args.subject_string += ", " * (args.num_vectors_per_subj_token - 1)
 
     if hasattr(args, 'is_face'):
@@ -188,8 +161,6 @@ if __name__ == "__main__":
     cls_delta_strings = subj_info['cls_delta_strings']
 
     subject_indices = list(range(len(subjects)))
-    if args.selset:
-        subject_indices = sel_set
 
     range_indices   = parse_range_str(args.range)
     if range_indices is not None:
@@ -197,14 +168,6 @@ if __name__ == "__main__":
 
     # Convert the list of weights to a string to be accepted by the command line.
     args.clip_last_layers_skip_weights = " ".join([ str(w) for w in args.clip_last_layers_skip_weights ])
-
-    if args.method == 'db':
-        # For DreamBooth, use_z_suffix is the default.
-        args.z_suffix_type = 'cls_delta_string'
-
-    all_ckpts = os.listdir(args.ckpt_dir)
-    # Sort all_ckpts by name (actually by timestamp in the name), so that most recent first.
-    all_ckpts.sort(reverse=True)
 
     if args.scores_csv is None:
         args.scores_csv = f"{args.method}-{args.range}.csv"
@@ -214,8 +177,6 @@ if __name__ == "__main__":
     SCORES_CSV_FILE.close()
 
     for subject_idx in subject_indices:
-        if args.skipselset and subject_idx in sel_set:
-            continue
         subject_name        = subjects[subject_idx]
         class_name          = class_names[subject_idx]
         broad_class         = broad_classes[subject_idx]
@@ -305,75 +266,66 @@ if __name__ == "__main__":
             print(f"{len(prompt_list)} prompts saved to {prompt_filepath}")
             continue
 
-        if hasattr(args, 'ckpt_name'):
-            ckpt_name = args.ckpt_name
+        config_file = "v1-inference-" + args.method + ".yaml"
+        if args.bb_type == 'v15-dste8-vae':
+            ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors"
+        elif args.bb_type == 'dreamshaper-v5':
+            ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
+        elif args.bb_type == 'dreamshaper-v6':
+            ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
+        elif args.bb_type == 'dreamshaper-v8':
+            ckpt_path   = "models/dreamshaper/DreamShaper_8_pruned.safetensors"
+        elif args.bb_type == 'ar-v16':
+            ckpt_path   = "models/absolutereality/ar-v1-6.safetensors"
+        elif args.bb_type == 'rv-v4':
+            ckpt_path   = "models/realisticvision/realisticVisionV40_v40VAE.safetensors"
         else:
-            ckpt_sig   = subject_name + "-" + args.method
-            # Find the newest checkpoint that matches the subject name.
-            ckpt_name  = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
+            print(f"ERROR: Unknown bb_type: {args.bb_type}")
+            exit(0)
 
-        if ckpt_name is None:
-            print("ERROR: No checkpoint found for subject: " + subject_name)
-            continue
-            # breakpoint()
-
-        if args.method == 'db':
-            config_file = "v1-inference-db.yaml"
-            ckpt_path   = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/last.ckpt"
+        # bb_type is used to tell stable_txt2img.py what suffix to put in the output image name.
+        # If bb_type is the default value, then no suffix is appended. So specify as "" here.
+        if args.bb_type == argparser.get_default('bb_type'):
             bb_type = ""
         else:
-            config_file = "v1-inference-" + args.method + ".yaml"
-            if args.bb_type == 'v15-ema':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned-emaonly.ckpt"
-            elif args.bb_type == 'v15-dste':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste.ckpt"
-            elif args.bb_type == 'v15-dste8':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8.ckpt"
-            elif args.bb_type == 'v15-dste8-vae':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-dste8-vae.ckpt"
-            elif args.bb_type == 'v15-arte':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-arte.ckpt"
-            elif args.bb_type == 'v15-rvte':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-rvte.ckpt"
-            elif args.bb_type == 'dreamshaper-v5':
-                ckpt_path   = "models/dreamshaper/dreamshaper_5BakedVae.safetensors"
-            elif args.bb_type == 'dreamshaper-v6':
-                ckpt_path   = "models/dreamshaper/dreamshaper_631BakedVae.safetensors"
-            elif args.bb_type == 'dreamshaper-v8':
-                ckpt_path   = "models/dreamshaper/DreamShaper_8_pruned.safetensors"
-            elif args.bb_type == 'ar-v16':
-                ckpt_path   = "models/absolutereality/ar-v1-6.safetensors"
-            elif args.bb_type == 'rv-v4':
-                ckpt_path   = "models/realisticvision/realisticVisionV40_v40VAE.safetensors"
-            elif args.bb_type == 'v14':
-                ckpt_path   = "models/stable-diffusion-v-1-4-original/sd-v1-4-full-ema.ckpt"
-            elif args.bb_type == 'v15':
-                ckpt_path   = "models/stable-diffusion-v-1-5/v1-5-pruned.ckpt"
-            else:
-                print(f"ERROR: Unknown bb_type: {args.bb_type}")
-                exit(0)
+            bb_type = args.bb_type
 
-            # bb_type is used to tell stable_txt2img.py what suffix to put in the output image name.
-            # If bb_type is the default value, then no suffix is appended. So specify as "" here.
-            if args.bb_type == argparser.get_default('bb_type'):
-                bb_type = ""
+        if not args.zeroshot:
+            if hasattr(args, 'subj_ckpt_folder_name'):
+                subj_ckpt_folder_name = args.subj_ckpt_folder_name
             else:
-                bb_type = args.bb_type
+                all_ckpts = os.listdir(args.all_ckpts_dir)
+                # Sort all_ckpts by name (actually by timestamp in the name), so that most recent first.
+                all_ckpts.sort(reverse=True)
+                ckpt_sig = subject_name + "-" + args.method
+                # Find the newest checkpoint that matches the subject name.
+                subj_ckpt_folder_name = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
+
+            if subj_ckpt_folder_name is None:
+                print("ERROR: No checkpoint found for subject: " + subject_name)
+                continue
+                # breakpoint()
 
             ckpt_iter = args.ckpt_iter
-            emb_path  = f"{args.ckpt_dir}/{ckpt_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
+            emb_path  = f"{args.all_ckpts_dir}/{subj_ckpt_folder_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
             if not os.path.exists(emb_path):
-                emb_path2 = f"{args.ckpt_dir}/{ckpt_name}/embeddings_gs-{ckpt_iter}.pt"
+                emb_path2 = f"{args.all_ckpts_dir}/{subj_ckpt_folder_name}/embeddings_gs-{ckpt_iter}.pt"
                 if not os.path.exists(emb_path2):
                     print(f"ERROR: Subject embedding not found: '{emb_path}' or '{emb_path2}'")
                     continue
 
                 emb_path = emb_path2
 
+        else:
+            emb_path = args.zs_subj_model_ckpt
+
         if isinstance(args.scale, (list, tuple)):
             args.scale = " ".join([ str(s) for s in args.scale ])
 
-        command_line = f"python3 scripts/stable_txt2img.py --config configs/stable-diffusion/{config_file} --ckpt {ckpt_path} --bb_type '{bb_type}' --ddim_eta 0.0 --ddim_steps {args.steps} --gpu {args.gpu} --scale {args.scale} --broad_class {broad_class} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+        command_line = f"python3 -m scripts.stable_txt2img --config configs/stable-diffusion/{config_file} "     \
+                       f"--ckpt {ckpt_path} --bb_type '{bb_type}' --ddim_eta 0.0 --ddim_steps {args.steps} "    \
+                       f"--gpu {args.gpu} --scale {args.scale} --n_repeat 1 --bs {args.bs} --outdir {outdir}"
+        
         if hasattr(args, 'tfgpu'):
             command_line += f" --tfgpu {args.tfgpu}"
             
@@ -388,20 +340,10 @@ if __name__ == "__main__":
             command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
             command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_long_prompt}\""
 
-            if hasattr(args, 'prompt_mix_scheme'):
-                # Use the class_short_prompt as the reference prompt, 
-                # as it's tokenwise aligned with the subject prompt.
-                command_line += f" --ref_prompt \"{class_short_prompt}\""
-
         if args.scores_csv is not None:
             command_line += f" --scores_csv {args.scores_csv}"
 
-        # prompt_mix_weight may < 0, in which case we enhance the expression of the subject.
-        if hasattr(args, 'prompt_mix_scheme'):
-            # Only specify the flags here. The actual reference prompt will be read from the prompt file.
-            command_line += f" --prompt_mix_scheme {args.prompt_mix_scheme} --prompt_mix_weight {args.prompt_mix_weight}"
-
-        if args.method != 'db':
+        if args.method == 'ada':
             command_line += f" --embedding_paths {emb_path}"
 
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
@@ -420,9 +362,6 @@ if __name__ == "__main__":
             command_line += f" --neg_prompt \"{args.neg_prompt}\""
         elif hasattr(args, 'use_pre_neg_prompt'):
             command_line += f" --use_pre_neg_prompt 1"
-
-        if args.use_first_gt_img_as_init:
-            command_line += f" --use_first_gt_img_as_init --init_img_weight {args.init_img_weight}"
 
         if not hasattr(args, 'compare_with_pardir') and 'data_folder' in subj_info:
             args.compare_with_pardir = subj_info['data_folder'][0]
@@ -448,7 +387,7 @@ if __name__ == "__main__":
             command_line += f" --n_rows {args.n_rows}"
         
         if args.diffusers:
-            command_line += f" --diffusers"            
+            command_line += f" --diffusers"     
         if args.debug:
             command_line += f" --debug"
             
