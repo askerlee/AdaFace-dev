@@ -1,5 +1,5 @@
 setuptools>=68.0.0
-torch
+torch>=2.3.1
 torchvision
 pytorch-lightning==1.9
 albumentations>=1.1.0

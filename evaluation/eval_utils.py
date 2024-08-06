@@ -468,8 +468,11 @@ def format_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     'a {0}cube shaped {1}{2}'
     ]
 
-    # Remove 'on top of a wooden floor' and 'on top of a purple rug in a forest'
-    # They will lead to weird layouts.
+    # Removed 'on top of a wooden floor', 'on top of a purple rug in a forest'
+    # which will lead to weird layouts.
+    # Removed 'red', 'purple', 'shiny', 'wet', 'cube shaped' which are not compatible with humans.
+    # Added 'in iron man armor', 'in superman costume', 'playing guitar on a boat, ocean waves', 
+    # 'jedi wielding a lightsaber, star wars' which are compatible with humans.
     animal_prompt_list = [
     'a {0}{1}{2} in the jungle',                                       # 0
     'a {0}{1}{2} in the snow',
@@ -489,10 +492,10 @@ def format_prompt_list(subject_string, z_prefix, z_suffix, background_string,
     'a {0}{1}{2} wearing pink glasses',                                # 15
     'a {0}{1}{2} wearing a yellow shirt',
     'a {0}{1}{2} in a purple wizard outfit',
-    'a {0}red {1}{2}',                                                 
-    'a {0}purple {1}{2}',
-    'a {0}shiny {1}{2}',                                               # 20
-    'a {0}wet {1}{2}',
+    'a {0}{1}{2} in iron man armor',
+    'a {0}{1}{2} in superman costume',
+    'a {0}{1}{2} playing guitar on a boat, ocean waves',               # 20
+    'a {0}{1}{2} jedi wielding a lightsaber, star wars',
     ]
 
     # humans/animals and cartoon characters.
