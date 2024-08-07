@@ -640,8 +640,7 @@ def main(opt):
                                                           batch_size, verbose=True)
                             elif opt.method == "pulid":
                                 x_samples_ddim = []
-                                prompt = prompts[0]
-                                prompt = prompt.replace("a z, ", "")
+                                prompt = re.sub(r"a\s+z, ", "", prompts[0])
                                 print("pulid:", prompt)
                                 for bi in range(batch_size):
                                     sample = pipeline.inference(prompt, (1, 768, 768), opt.neg_prompt,
