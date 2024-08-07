@@ -1,5 +1,5 @@
 import numpy as np
-import argparse, os
+import argparse, os, sys
 import torch
 from omegaconf import OmegaConf
 from PIL import Image
@@ -16,12 +16,10 @@ from torch import autocast
 from contextlib import nullcontext
 
 from ldm.util import save_grid, extend_nn_embedding, load_model_from_config
-from adaface.util import get_b_core_e_embeddings
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
 from insightface.app import FaceAnalysis
-from adaface.adaface_wrapper import AdaFaceWrapper
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -247,7 +245,9 @@ def parse_args():
                         help="Subject class name. Only requires for --eval_blip")
     parser.add_argument("--diffusers", action="store_true", 
                         help="Zeroshot uses the diffusers implementation")
-    # Options below are only relevant for --diffusers
+    parser.add_argument("--method", type=str, default="adaface",
+                        choices=["adaface", "pulid"])
+    # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument('--extra_unet_paths', type=str, nargs="+", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
@@ -290,7 +290,7 @@ def main(opt):
         opt.gpu = -1
     else:
         torch.cuda.set_device(opt.gpu)
-        torch.backends.cuda.matmul.allow_tf32 = True
+        #torch.backends.cuda.matmul.allow_tf32 = True
 
     seed_everything(opt.seed)
     # More complex negative prompts may hurt the performance.
@@ -302,6 +302,13 @@ def main(opt):
                                  "nude, naked, nsfw, topless, bare breasts"
     device = f"cuda:{opt.gpu}" if torch.cuda.is_available() else "cpu"
 
+    if opt.neg_prompt == "" and opt.use_pre_neg_prompt:
+        # negative prompt borrowed from BLIP-Diffusion.
+        opt.neg_prompt = predefined_negative_prompt
+
+    if opt.neg_prompt != "":
+        print("Negative prompt:", opt.neg_prompt)
+        
     if opt.zeroshot:
         assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
         ref_image_paths = []
@@ -379,10 +386,6 @@ def main(opt):
 
         sampler = DDIMSampler(model)
 
-        if opt.neg_prompt == "" and opt.use_pre_neg_prompt:
-            # negative prompt borrowed from BLIP-Diffusion.
-            opt.neg_prompt = predefined_negative_prompt
-
     else:        
         class DummyScope(object):
             def __init__(self):
@@ -398,15 +401,47 @@ def main(opt):
         model = DummyModel(DummyScope)
 
         if opt.diffusers:
-            opt.subj_model_path = opt.embedding_paths[0]
-            pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, device, 
-                                     opt.subject_string, opt.num_vectors_per_subj_token, opt.ddim_steps,
-                                     extra_unet_paths=opt.extra_unet_paths, unet_weights=opt.unet_weights)
-            # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-            adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, None, False, 
-                                                                     out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
-                                                                     noise_level=0, 
-                                                                     update_text_encoder=True)
+            if opt.method == "adaface":
+                from adaface.adaface_wrapper import AdaFaceWrapper
+
+                opt.subj_model_path = opt.embedding_paths[0]
+                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, device, 
+                                          opt.subject_string, opt.num_vectors_per_subj_token, opt.ddim_steps,
+                                          extra_unet_paths=opt.extra_unet_paths, unet_weights=opt.unet_weights,
+                                          negative_prompt=opt.neg_prompt)
+                # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
+                adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, None, False, 
+                                                                         out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
+                                                                         noise_level=0, 
+                                                                         update_text_encoder=True)
+            elif opt.method == "pulid":
+                sys.path.append("pulid")
+                from pulid.pipeline import PuLIDPipeline
+                from pulid.utils import resize_numpy_image_long
+                from pulid import attention_processor as attention
+                pipeline = PuLIDPipeline()
+                
+                attention.NUM_ZERO = 8
+                attention.ORTHO = False
+                attention.ORTHO_v2 = True
+
+                id_embeddings = None
+                for id_image_path in ref_image_paths:
+                    id_image = np.array(Image.open(id_image_path))
+                    id_image = resize_numpy_image_long(id_image, 1024)
+                    id_embedding = pipeline.get_id_embedding(id_image)
+                    # No face detected.
+                    if id_embedding is None:
+                        continue
+                    if id_embeddings is None:
+                        id_embeddings = id_embedding
+                    else:
+                        id_embeddings = torch.cat(
+                            (id_embeddings, id_embedding[:, :5]), dim=1
+                        )
+
+                print("id_embeddings:", id_embeddings.shape)
+
         # eval_blip
         else:
             from lavis.models import load_model_and_preprocess
@@ -521,6 +556,8 @@ def main(opt):
         start_code = None
 
     if not opt.eval_blip and not opt.diffusers:
+        from adaface.util import get_b_core_e_embeddings
+
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], embman_iter_type='empty')
@@ -529,12 +566,11 @@ def main(opt):
         else:
             uc = None
     else:
-        # eval_blip
+        # eval_blip or diffusers
         uc = None
+        # pulid requires full precision.
+        opt.precision = "full"
 
-    if opt.neg_prompt != "":
-        print("Negative prompt:", opt.neg_prompt)
-        
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
@@ -597,8 +633,19 @@ def main(opt):
 
                         if opt.diffusers:
                             noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale[0], 
-                                                      batch_size, verbose=True)
+                            if opt.method == "adaface":                                
+                                x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale[0], 
+                                                          batch_size, verbose=True)
+                            elif opt.method == "pulid":
+                                x_samples_ddim = []
+                                prompt = prompts[0]
+                                prompt = prompt.replace(" z ", " ")
+                                print("pulid:", prompt)
+                                for bi in range(batch_size):
+                                    sample = pipeline.inference(prompt, (1, 512, 512), opt.neg_prompt,
+                                                                id_embeddings, 0.8, 1.2, 4)
+                                    x_samples_ddim.append(sample[0])
+
                         else:
                             x_samples_ddim = []
                             blip_seed = 8888
