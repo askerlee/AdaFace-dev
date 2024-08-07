@@ -21,9 +21,6 @@ def parse_args():
     parser.add_argument("--gpu", type=int, default=0, help="gpu id")
     parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, 
                         help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
-
-    parser.add_argument("--method", default='ada', choices=["ada"], type=str, 
-                        help="method for generating samples")
     parser.add_argument("--subject_string", type=str, default="z", 
                         help="Subject placeholder string that represents the subject in prompts")
     parser.add_argument("--num_vectors_per_subj_token",
@@ -125,6 +122,8 @@ def parse_args():
                         help="Dry run: only print the commands without actual execution")
     parser.add_argument("--diffusers", action="store_true",
                         help="Use Diffusers instead of LDM")
+    parser.add_argument("--method", type=str, default="adaface",
+                        choices=["adaface", "pulid"])    
     parser.add_argument("--zs_subj_model_ckpt", type=str, default=argparse.SUPPRESS,
                         help="Zero-shot subject model checkpoint")
 
@@ -191,7 +190,7 @@ if __name__ == "__main__":
             background_string = ""
             bg_suffix = ""
 
-        outdir = args.out_dir_tmpl + "-" + args.method
+        outdir = args.out_dir_tmpl + "-" + args.method[:3]
         os.makedirs(outdir, exist_ok=True)
 
         if args.prompt is None:
@@ -337,7 +336,7 @@ if __name__ == "__main__":
         if args.scores_csv is not None:
             command_line += f" --scores_csv {args.scores_csv}"
 
-        if args.method == 'ada':
+        if args.method == 'adaface':
             command_line += f" --embedding_paths {emb_path}"
 
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
@@ -382,6 +381,8 @@ if __name__ == "__main__":
         
         if args.diffusers:
             command_line += f" --diffusers"     
+        command_line += f" --method {args.method}"
+        
         if args.debug:
             command_line += f" --debug"
             

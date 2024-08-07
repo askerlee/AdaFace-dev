@@ -419,7 +419,9 @@ def main(opt):
                 from pulid.pipeline import PuLIDPipeline
                 from pulid.utils import resize_numpy_image_long
                 from pulid import attention_processor as attention
-                pipeline = PuLIDPipeline()
+
+                opt.subj_model_path = ""
+                pipeline = PuLIDPipeline(device=device)
                 
                 attention.NUM_ZERO = 8
                 attention.ORTHO = False
@@ -742,17 +744,17 @@ def main(opt):
                 if not opt.skip_grid:
                     # additionally, save as grid
                     # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
-                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
-                    if subjfolder_mat:
-                        date_sig = subjfolder_mat.group(2)
-                        # subjname_method: gabrielleunion-ada
-                        subjname_method = subjfolder_mat.group(3)
-                        if opt.zeroshot and opt.compare_with:
-                            if opt.compare_with.endswith("/") or opt.compare_with.endswith("\\"):
-                                opt.compare_with = opt.compare_with[:-1]
-                            subj_gt_folder_name = os.path.basename(opt.compare_with)
-                            # all-ada => all-ada-gabrielleunion
-                            subjname_method += "-" + subj_gt_folder_name
+                    if opt.zeroshot and opt.compare_with:
+                        if opt.compare_with.endswith("/") or opt.compare_with.endswith("\\"):
+                            opt.compare_with = opt.compare_with[:-1]
+                        subj_gt_folder_name = os.path.basename(opt.compare_with)
+
+                    if opt.method == "adaface":
+                        subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+                        if subjfolder_mat:
+                            date_sig = subjfolder_mat.group(2)
+                            # subjname_method: gabrielleunion-ada
+                            subjname_method = subjfolder_mat.group(3)
 
                         iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
                         if iter_mat is not None:
@@ -760,9 +762,14 @@ def main(opt):
                         else:
                             iter_sig = "unknown"
                     else:
-                        subjname_method = "unknown"
+                        subjname_method = opt.method
+
                         date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
-                        iter_sig = "unknown"
+                        iter_sig = opt.method
+
+                    if opt.zeroshot:
+                        # all-ada => all-ada-gabrielleunion
+                        subjname_method += "-" + subj_gt_folder_name
 
                     if isinstance(opt.scale, (list, tuple)):
                         scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
@@ -820,7 +827,7 @@ def main(opt):
             if subjfolder_mat:
                 emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
             else:
-                emb_sig  = "unknown"
+                emb_sig  = opt.method
 
             if opt.zeroshot:
                 emb_sig = subjname_method + "-" + emb_sig
