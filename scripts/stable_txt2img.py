@@ -641,10 +641,10 @@ def main(opt):
                             elif opt.method == "pulid":
                                 x_samples_ddim = []
                                 prompt = prompts[0]
-                                prompt = prompt.replace(" z ", " ")
+                                prompt = prompt.replace("a z, ", "")
                                 print("pulid:", prompt)
                                 for bi in range(batch_size):
-                                    sample = pipeline.inference(prompt, (1, 512, 512), opt.neg_prompt,
+                                    sample = pipeline.inference(prompt, (1, 768, 768), opt.neg_prompt,
                                                                 id_embeddings, 0.8, 1.2, 4)
                                     x_samples_ddim.append(sample[0])
 
