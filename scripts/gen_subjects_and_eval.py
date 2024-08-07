@@ -200,10 +200,18 @@ if __name__ == "__main__":
                 args.bs = 4
             # Usually cls_delta_string == class_name. But we can specify more fine-grained cls_delta_string.
             # E.g., format_prompt_list(placeholder="z", z_suffix="cat", cls_delta_string="tabby cat", broad_class=1)
+            if args.use_fp_trick:
+                if args.method == 'adaface':
+                    fp_trick_string = "face portrait"
+                elif args.method == 'pulid':
+                    fp_trick_string = "portrait"
+            else:
+                fp_trick_string = None
+
             prompt_list, class_short_prompt_list, class_long_prompt_list = \
                 format_prompt_list(args.subject_string, z_prefix, z_suffix, background_string, 
-                                    class_name, cls_delta_string, 
-                                    broad_class, args.prompt_set_name, args.use_fp_trick)
+                                   class_name, cls_delta_string, 
+                                   broad_class, args.prompt_set_name, fp_trick_string)
             prompt_filepath = f"{outdir}/{subject_name}-prompts-{args.prompt_set_name}{bg_suffix}-{args.num_vectors_per_subj_token}.txt"
             PROMPTS = open(prompt_filepath, "w")
         else:
@@ -382,7 +390,7 @@ if __name__ == "__main__":
         if args.diffusers:
             command_line += f" --diffusers"     
         command_line += f" --method {args.method}"
-        
+
         if args.debug:
             command_line += f" --debug"
             
