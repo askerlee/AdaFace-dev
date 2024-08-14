@@ -211,39 +211,39 @@ def arc2face_inverse_face_prompt_embs(clip_tokenizer, inverse_text_encoder, face
         extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
         core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
 
-    return_prompts = []
+    returned_prompt_embs = []
     for emb_type in return_emb_types:
         if emb_type == 'full':
-            return_prompts.append(prompt_embeds)
+            returned_prompt_embs.append(prompt_embeds)
         elif emb_type == 'full_half_pad':
             prompt_embeds2 = prompt_embeds.clone()
             PADS  = prompt_embeds2.shape[1] - 23
             if PADS >= 2:
                 # Fill half of the remaining embeddings with pad embeddings.
                 prompt_embeds2[:, 22:22+PADS//2] = pad_embeddings[22:22+PADS//2]
-            return_prompts.append(prompt_embeds2)
+            returned_prompt_embs.append(prompt_embeds2)
         elif emb_type == 'full_pad':
             prompt_embeds2 = prompt_embeds.clone()
             # Fill the 22nd to the second last embeddings with pad embeddings.
             prompt_embeds2[:, 22:-1] = pad_embeddings[22:-1]
-            return_prompts.append(prompt_embeds2)
+            returned_prompt_embs.append(prompt_embeds2)
         elif emb_type == 'core':
-            return_prompts.append(core_prompt_embs)
+            returned_prompt_embs.append(core_prompt_embs)
         elif emb_type == 'full_zeroed_extra':
             prompt_embeds2 = prompt_embeds.clone()
             # Only add two pad embeddings. The remaining embeddings are set to 0.
             # Make the positional embeddings align with the actual positions.
             prompt_embeds2[:, 22:24] = pad_embeddings[22:24]
             prompt_embeds2[:, 24:-1] = 0
-            return_prompts.append(prompt_embeds2)
+            returned_prompt_embs.append(prompt_embeds2)
         elif emb_type == 'b_core_e':
             # The first 22 embeddings, plus the last EOS embedding.
             b_core_e_embs = get_b_core_e_embeddings(prompt_embeds, length=22)
-            return_prompts.append(b_core_e_embs)
+            returned_prompt_embs.append(b_core_e_embs)
         else:
             breakpoint()
 
-    return return_prompts
+    return returned_prompt_embs
 
 def pad_image_obj_to_square(image_obj, new_size=-1):
     # Remove alpha channel if it exists.
@@ -404,19 +404,20 @@ class UNetEnsemble(nn.Module):
     def __init__(self, unet, extra_unet_paths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
         super().__init__()
 
-        if unet_weights is None:
-            unet_weights = [1.] * (len(extra_unet_paths) + 1)
-        assert len(extra_unet_paths) + 1 == len(unet_weights)
-        unet_weights = torch.tensor(unet_weights, dtype=torch_dtype)
-        unet_weights = unet_weights / unet_weights.sum()
-        self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)
-
         self.unets = nn.ModuleList()
-        self.unets.append(unet)
+        if unet is not None:
+            self.unets.append(unet)
 
         for unet_path in extra_unet_paths:
             unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
             self.unets.append(unet.to(device=device))
+
+        if unet_weights is None:
+            unet_weights = [1.] * len(self.unets)
+        assert len(self.unets) == len(unet_weights)
+        unet_weights = torch.tensor(unet_weights, dtype=torch_dtype)
+        unet_weights = unet_weights / unet_weights.sum()
+        self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)
 
         print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights.data.cpu().numpy()}")
         self.dtype  = unet.dtype

@@ -233,17 +233,24 @@ def get_parser(**parser_kwargs):
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_arc2face_rand_face", type=float, default=0.4,
                         help="Probability of generating random faces during arc2face distillation")
-    parser.add_argument("--max_num_denoising_steps", type=int, default=7,
-                        help="Maximum number of denoising steps (default 7)")    
+    parser.add_argument("--max_num_denoising_steps", type=int, default=3,
+                        help="Maximum number of denoising steps (default 3)")    
     parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=-1,
                         help="Multiplier of the prompt2token projection attention")
-    parser.add_argument("--arc2face_distill_iter_prob", type=float, default=argparse.SUPPRESS,
-                        help="Probability of doing arc2face distillation in each iteration")
-    parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
-                        const=True, default=False,
-                        help="Use Arc2Face inverse CLIP embeddings")    
+    parser.add_argument("--unet_distill_iter_prob", type=float, default=argparse.SUPPRESS,
+                        help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")
+    parser.add_argument("--unet_teacher_type", type=str, default="arc2face",
+                        choices=["arc2face", "unet_ensemble"], help="Type of the UNet teacher")
+    # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
+    parser.add_argument("--extra_unet_paths", type=str, nargs="+", 
+                        default=['models/ensemble/sd15-unet', 
+                                 'models/ensemble/rv4-unet', 
+                                 'models/ensemble/ar18-unet'], 
+                        help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+                        help="Weights for the teacher UNet models")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
 
@@ -949,9 +956,12 @@ if __name__ == "__main__":
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
 
-        if hasattr(opt, 'arc2face_distill_iter_prob'):
-            config.model.params.arc2face_distill_iter_prob = opt.arc2face_distill_iter_prob
-        config.model.params.apply_arc2face_inverse_embs = opt.apply_arc2face_inverse_embs
+        if hasattr(opt, 'unet_distill_iter_prob'):
+            config.model.params.unet_distill_iter_prob = opt.unet_distill_iter_prob
+            config.model.params.unet_teacher_type = opt.unet_teacher_type
+            config.model.params.extra_unet_paths = opt.extra_unet_paths
+            config.model.params.unet_weights = opt.unet_weights
+
         config.model.params.load_old_embman_ckpt = opt.load_old_embman_ckpt
 
         if hasattr(opt, 'optimizer_type'):

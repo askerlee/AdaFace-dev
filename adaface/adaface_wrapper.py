@@ -5,6 +5,7 @@ from diffusers import (
     StableDiffusionPipeline,
     StableDiffusionImg2ImgPipeline,
     StableDiffusion3Pipeline,
+    FluxPipeline,
     DDIMScheduler,
     AutoencoderKL,
 )
@@ -104,6 +105,8 @@ class AdaFaceWrapper(nn.Module):
             PipelineClass = StableDiffusionPipeline
         elif self.pipeline_name == "text2img3":
             PipelineClass = StableDiffusion3Pipeline
+        elif self.pipeline_name == "flux":
+            PipelineClass = FluxPipeline
         # pipeline_name is None means only use this instance to generate adaface embeddings, not to generate images.
         elif self.pipeline_name is None:
             PipelineClass = StableDiffusionPipeline
@@ -114,7 +117,8 @@ class AdaFaceWrapper(nn.Module):
         if self.base_model_path is None:
             base_model_path_dict = { 
                 'text2img':  'runwayml/stable-diffusion-v1-5',
-                'text2img3': 'stabilityai/stable-diffusion-3-medium-diffusers' 
+                'text2img3': 'stabilityai/stable-diffusion-3-medium-diffusers',
+                'flux':      'black-forest-labs/FLUX.1-schnell',
             }
             self.base_model_path = base_model_path_dict[self.pipeline_name]
 
@@ -151,7 +155,7 @@ class AdaFaceWrapper(nn.Module):
             pipeline.vae  = None
             print("Removed UNet and VAE from the pipeline.")
 
-        if self.pipeline_name != "text2img3":
+        if self.pipeline_name not in ["text2img3", "flux"]:
             noise_scheduler = DDIMScheduler(
                 num_train_timesteps=1000,
                 beta_start=0.00085,
@@ -161,8 +165,8 @@ class AdaFaceWrapper(nn.Module):
                 set_alpha_to_one=False,
                 steps_offset=1,
             )
-
             pipeline.scheduler = noise_scheduler
+        # Otherwise, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
 
         self.pipeline = pipeline.to(self.device)
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
@@ -199,10 +203,10 @@ class AdaFaceWrapper(nn.Module):
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.placeholder_tokens)
         # print(self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
-        old_weight = self.pipeline.text_encoder.get_input_embeddings().weight
+        old_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.shape
         self.pipeline.text_encoder.resize_token_embeddings(len(tokenizer))
         new_weight = self.pipeline.text_encoder.get_input_embeddings().weight
-        print(f"Resized text encoder token embeddings from {old_weight.shape} to {new_weight.shape} on {new_weight.device}.")
+        print(f"Resized text encoder token embeddings from {old_weight_shape} to {new_weight.shape} on {new_weight.device}.")
 
     # Extend pipeline.text_encoder with the adaface subject emeddings.
     # subj_embs: [16, 768].
@@ -293,7 +297,6 @@ class AdaFaceWrapper(nn.Module):
         if device is None:
             device = self.device
         
-        prompt_ = prompt
         prompt = self.update_prompt(prompt)
         if verbose:
             print(f"Prompt: {prompt}")
@@ -312,19 +315,29 @@ class AdaFaceWrapper(nn.Module):
             prompt_embeds_ = prompt_embeds_.unsqueeze(0)
             negative_prompt_embeds_ = negative_prompt_embeds_.unsqueeze(0)
         else:
-            if self.pipeline_name == "text2img3":
+            if self.pipeline_name in ["text2img3", "flux"]:
                 # prompt_embeds_, negative_prompt_embeds_: [1, 333, 4096]
                 # pooled_prompt_embeds_, negative_pooled_prompt_embeds_: [1, 2048]
                 # CLIP Text Encoder prompt uses a maximum sequence length of 77.
                 # T5 Text Encoder prompt uses a maximum sequence length of 256.
                 # 333 = 256 + 77.
-                prompt_t5 = prompt_ + "".join([", "] * 256)
-                prompt_embeds_, negative_prompt_embeds_, \
-                pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
-                    self.pipeline.encode_prompt(prompt, prompt_, prompt_t5, device=device, 
-                                                num_images_per_prompt=1, 
-                                                do_classifier_free_guidance=True,
-                                                negative_prompt=negative_prompt)
+                prompt_t5 = prompt + "".join([", "] * 256)
+                if self.pipeline_name == "text2img3":
+                    prompt_embeds_, negative_prompt_embeds_, \
+                    pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
+                        self.pipeline.encode_prompt(prompt, prompt, prompt_t5, device=device, 
+                                                    num_images_per_prompt=1, 
+                                                    do_classifier_free_guidance=True,
+                                                    negative_prompt=negative_prompt)
+                elif self.pipeline_name == "flux":
+                    # prompt_embeds_: [1, 512, 4096]
+                    # pooled_prompt_embeds_: [1, 768]
+                    prompt_embeds_, pooled_prompt_embeds_, text_ids = \
+                        self.pipeline.encode_prompt(prompt, prompt_t5, device=device, 
+                                                    num_images_per_prompt=1)
+                    negative_prompt_embeds_ = negative_pooled_prompt_embeds_ = None
+                else:
+                    breakpoint()
             else:
                 # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
                 prompt_embeds_, negative_prompt_embeds_ = \
@@ -348,7 +361,8 @@ class AdaFaceWrapper(nn.Module):
                 self.encode_prompt(prompt, negative_prompt, device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_          = prompt_embeds_.repeat(out_image_count, 1, 1)
-        negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
+        if negative_prompt_embeds_ is not None:
+            negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
 
         if self.pipeline_name == "text2img3":
             pooled_prompt_embeds_           = pooled_prompt_embeds_.repeat(out_image_count, 1)
@@ -357,24 +371,31 @@ class AdaFaceWrapper(nn.Module):
             # noise: [BS, 4, 64, 64]
             # When the pipeline is text2img, strength is ignored.
             images = self.pipeline(prompt_embeds=prompt_embeds_, 
-                                    negative_prompt_embeds=negative_prompt_embeds_, 
-                                    pooled_prompt_embeds=pooled_prompt_embeds_,
-                                    negative_pooled_prompt_embeds=negative_pooled_prompt_embeds_,
-                                    num_inference_steps=self.num_inference_steps, 
-                                    guidance_scale=guidance_scale, 
-                                    num_images_per_prompt=1,
-                                    generator=generator).images
+                                   negative_prompt_embeds=negative_prompt_embeds_, 
+                                   pooled_prompt_embeds=pooled_prompt_embeds_,
+                                   negative_pooled_prompt_embeds=negative_pooled_prompt_embeds_,
+                                   num_inference_steps=self.num_inference_steps, 
+                                   guidance_scale=guidance_scale, 
+                                   num_images_per_prompt=1,
+                                   generator=generator).images
+        elif self.pipeline_name == "flux":
+            images = self.pipeline(prompt_embeds=prompt_embeds_, 
+                                   pooled_prompt_embeds=pooled_prompt_embeds_, 
+                                   num_inference_steps=4, 
+                                   guidance_scale=guidance_scale, 
+                                   num_images_per_prompt=1,
+                                   generator=generator).images
         else:
             # noise: [BS, 4, 64, 64]
             # When the pipeline is text2img, strength is ignored.
             images = self.pipeline(image=noise,
-                                    prompt_embeds=prompt_embeds_, 
-                                    negative_prompt_embeds=negative_prompt_embeds_, 
-                                    num_inference_steps=self.num_inference_steps, 
-                                    guidance_scale=guidance_scale, 
-                                    num_images_per_prompt=1,
-                                    strength=ref_img_strength,
-                                    generator=generator).images
+                                   prompt_embeds=prompt_embeds_, 
+                                   negative_prompt_embeds=negative_prompt_embeds_, 
+                                   num_inference_steps=self.num_inference_steps, 
+                                   guidance_scale=guidance_scale, 
+                                   num_images_per_prompt=1,
+                                   strength=ref_img_strength,
+                                   generator=generator).images
         # images: [BS, 3, 512, 512]
         return images
     

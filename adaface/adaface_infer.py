@@ -41,14 +41,17 @@ def seed_everything(seed):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pipeline", type=str, default="text2img", 
-                        choices=["text2img", "img2img", "text2img3"],
+                        choices=["text2img", "img2img", "text2img3", "flux"],
                         help="Type of pipeline to use (default: txt2img)")
     parser.add_argument("--base_model_path", type=str, default=None, 
                         help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
-    parser.add_argument("--extra_unet_paths", type=str, nargs="+", default=[], 
+    parser.add_argument("--extra_unet_paths", type=str, nargs="+", 
+                        default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+                        help="Weights for the UNet models")    
     parser.add_argument("--subject", type=str)
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4,  help="Number of images to generate")
@@ -85,9 +88,14 @@ if __name__ == "__main__":
         args.device = f"cuda:{args.device}"
     print(f"Using device {args.device}")
 
+    if args.pipeline not in ["text2img", "img2img"]:
+        args.extra_unet_paths = None
+        args.unet_weights = None
+        
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, args.embman_ckpt, args.device, 
                              args.subject_string, args.num_vectors, args.num_inference_steps,
-                             extra_unet_paths=args.extra_unet_paths)
+                             extra_unet_paths=args.extra_unet_paths,
+                             unet_weights=args.unet_weights)
 
     if not args.randface:
         image_folder = args.subject

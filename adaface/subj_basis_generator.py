@@ -397,7 +397,9 @@ class SubjBasisGenerator(nn.Module):
             # TODO: use CLIPTextModelWrapper as obj_proj_in.
             self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=self.num_id_vecs)
 
-            # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings).
+            # ** prompt2token_proj does the actual job: **
+            # it is the inverse projection that maps from arc2face_id_embs to adaface_prompt_embs.
+            # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings) or [1, 16, 768] (without paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
@@ -433,6 +435,8 @@ class SubjBasisGenerator(nn.Module):
             v_has_skip      = not identity_to_v                         # True
             identity_to_out = not bg_prompt_translator_has_to_out_proj  # True
             out_has_skip    = not identity_to_out                       # False
+            # prompt_translator maps the clip image features (of the background) to the prompt embedding space.
+            # It is only used during training when placeholder_is_bg is True.
             # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
             # dim=768, num_heads=6.
             self.prompt_translator = \
@@ -502,7 +506,7 @@ class SubjBasisGenerator(nn.Module):
                 if is_training:
                     return_emb_types = ['full_pad', 'core']
                 else:
-                    # adaface_prompt_embs_inf_type: default is full_half_pad, same as training.
+                    # adaface_prompt_embs_inf_type: default is 'full_half_pad', slightly different from training.
                     return_emb_types = [adaface_prompt_embs_inf_type, 'core']
 
                 if self.pad_embeddings is None:
@@ -512,8 +516,8 @@ class SubjBasisGenerator(nn.Module):
 
                 with torch.set_grad_enabled(self.training and self.prompt2token_proj_grad_scale != 0):
                     # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
-                    # and (at most) two extra words in full_prompt_embs, without BOS and EOS.
-                    # If list_extra_words is None, then core_id_embs: [BS, 16, 768], the 16 identity tokens in full_prompt_embs.
+                    # and (at most) two extra words in adaface_prompt_embs, without BOS and EOS.
+                    # If list_extra_words is None, then core_id_embs: [BS, 16, 768], the 16 identity tokens in adaface_prompt_embs.
                     # hidden_state_layer_weights: [[0.9163], [0.9483], [2.0762]]
                     # zs_extra_words_scale is only effective when list_extra_words is not None.
                     # adaface_prompt_embs: [BS, 77, 768], core_id_embs: [BS, 16, 768].

@@ -404,7 +404,7 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # transformer: CLIPTextModel
         # transformer.forward = transformer_forward.__get__(obj)
         # when calling self.transformer(args), it will call transformer_forward(obj, args) instead.
-        # Therefore, the method is intercepted without modifying the implicit object "transformer".
+        # Therefore, the method is intercepted without modifying the implicit object "self.transformer".
         self.transformer.forward = transformer_forward.__get__(self.transformer)
 
     # If randomize_clip_skip_weights, then use_as_dirichlet_weights=True.

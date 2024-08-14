@@ -26,7 +26,7 @@ captionizer
 safetensors
 wandb
 gradio
-diffusers
+diffusers>=0.30.0
 webdataset
 bitsandbytes
 prodigyopt

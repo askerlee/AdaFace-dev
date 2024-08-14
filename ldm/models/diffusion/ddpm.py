@@ -21,8 +21,9 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities import rank_zero_only
-from transformers import CLIPImageProcessor, CLIPTokenizer, ViTFeatureExtractor, ViTModel
+from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
+import bitsandbytes as bnb
 
 from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
                         count_params, calc_stats, instantiate_from_config, SequentialLR2, \
@@ -38,7 +39,6 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         anneal_add_noise_to_embedding
 
-from ldm.modules.ema import LitEma
 from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
@@ -47,7 +47,7 @@ from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
 from adaface.subj_basis_generator import CLIPVisionModelWithMask
-from adaface.util import get_arc2face_id_prompt_embs
+from ldm.models.teachers import Arc2FaceTeacher, UNetEnsembleTeacher
 
 import copy
 from functools import partial
@@ -102,8 +102,6 @@ class DDPM(pl.LightningModule):
                  manual_accumulate_grad_batches=1,
                  adam_config=None,
                  prodigy_config=None,
-                 use_positional_encodings=False,
-                 learn_logvar=False,
                  logvar_init=0.,
                  use_layerwise_embedding=False,
                  composition_regs_iter_gap=3,
@@ -123,11 +121,13 @@ class DDPM(pl.LightningModule):
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=True,
-                 arc2face_distill_iter_prob=0,
-                 apply_arc2face_inverse_embs=False,
+                 unet_distill_iter_prob=0,
+                 unet_teacher_type='arc2face',
+                 extra_unet_paths=None,
+                 unet_weights=None,
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
-                 max_num_denoising_steps=5,
+                 max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=-1,
                  load_old_embman_ckpt=False,
                  ):
@@ -141,12 +141,11 @@ class DDPM(pl.LightningModule):
         self.first_stage_key = first_stage_key
         self.image_size = image_size  # try conv?
         self.channels = channels
-        self.use_positional_encodings = use_positional_encodings
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
-
         self.do_zero_shot                = do_zero_shot
+
         self.static_embedding_reg_weight = static_embedding_reg_weight
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
@@ -165,9 +164,12 @@ class DDPM(pl.LightningModule):
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
-        self.arc2face_distill_iter_prob             = arc2face_distill_iter_prob if (do_zero_shot and self.training) \
+        self.unet_distill_iter_prob                 = unet_distill_iter_prob if (do_zero_shot and self.training) \
                                                         else 0
-        self.apply_arc2face_inverse_embs            = apply_arc2face_inverse_embs
+        self.unet_teacher_type                      = unet_teacher_type
+        self.extra_unet_paths                       = extra_unet_paths
+        self.unet_weights                           = unet_weights
+
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps
@@ -196,12 +198,6 @@ class DDPM(pl.LightningModule):
 
         count_params(self.model, verbose=True)
         self.use_ema = False
-        
-        '''
-        if self.use_ema:
-            self.model_ema = LitEma(self.model)
-            print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-        '''
 
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
@@ -228,11 +224,6 @@ class DDPM(pl.LightningModule):
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
         self.loss_type = loss_type
-
-        self.learn_logvar = learn_logvar
-        self.logvar = torch.full(fill_value=logvar_init, size=(self.num_timesteps,))
-        if self.learn_logvar:
-            self.logvar = nn.Parameter(self.logvar, requires_grad=True)
 
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
@@ -481,12 +472,12 @@ class DDPM(pl.LightningModule):
     def init_iteration_flags(self):
         self.iter_flags = { 'calc_clip_loss':               False,
                             'do_normal_recon':              True,
-                            'do_arc2face_distill':          False,
+                            'do_unet_distill':              False,
                             'gen_arc2face_rand_face':       False,
                             'arc2face_prompt_emb':          None,
                             'add_noise_to_real_id_embs':    False,
                             'faceless_img_count':           0,
-                            'use_arc2face_as_target':       False,
+                            'use_unet_teacher_as_target':   False,
                             'num_denoising_steps':          1,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
@@ -562,10 +553,10 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['calc_clip_loss']   = True
                 self.iter_flags['do_normal_recon']  = False
 
-        if self.iter_flags['do_normal_recon'] and self.arc2face_distill_iter_prob > 0:
-            if np.random.rand() < self.arc2face_distill_iter_prob:
-                self.iter_flags['do_arc2face_distill'] = True
-                # Disable do_static_prompt_delta_reg during arc2face distillation.
+        if self.iter_flags['do_normal_recon'] and self.unet_distill_iter_prob > 0:
+            if np.random.rand() < self.unet_distill_iter_prob:
+                self.iter_flags['do_unet_distill'] = True
+                # Disable do_static_prompt_delta_reg during unet distillation.
                 self.iter_flags['do_static_prompt_delta_reg'] = False
 
         if self.is_dreambooth:
@@ -691,8 +682,6 @@ class DDPM(pl.LightningModule):
     def configure_optimizers(self):
         lr = self.learning_rate
         params = list(self.model.parameters())
-        if self.learn_logvar:
-            params = params + [self.logvar]
         opt = torch.optim.AdamW(params, lr=lr)
         return opt
 
@@ -706,7 +695,8 @@ class LatentDiffusion(DDPM):
                  personalization_config,
                  num_timesteps_cond=None,
                  cond_stage_key="image",
-                 cond_stage_trainable=False,
+                 cond_stage_trainable=True,
+                 embedding_manager_trainable=False,
                  concat_mode=True,
                  cond_stage_forward=None,
                  conditioning_key=None,
@@ -736,6 +726,7 @@ class LatentDiffusion(DDPM):
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
         self.cond_stage_key = cond_stage_key
+        self.embedding_manager_trainable = embedding_manager_trainable
 
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
@@ -758,12 +749,27 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             
-        if self.arc2face_distill_iter_prob > 0:
+        if self.unet_distill_iter_prob > 0:
             # arc2face is initialized after the model is loaded from ckpt,
             # to avoid warning of many missing keys.
-            self.arc2face = Arc2FaceWrapper()
+            self.arc2face = Arc2FaceTeacher()
+            if self.unet_teacher_type == 'arc2face':
+                # Reuse the arc2face model.
+                self.unet_teacher = self.arc2face
+            elif self.unet_teacher_type == 'unet_ensemble':
+                # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
+                # arc2face embeddings.
+                # The first (optional) ctor param of UNetEnsembleTeacher is an instantiated unet, 
+                # in our case, the ddpm unet. Ideally we should reuse it to save GPU RAM.
+                # However, since the __call__ method of the ddpm unet takes different formats of params, 
+                # for simplicity, we still use the diffusers unet.
+                self.unet_teacher = UNetEnsembleTeacher(unet=None, 
+                                                        extra_unet_paths=self.extra_unet_paths, 
+                                                        unet_weights=self.unet_weights,
+                                                        device='cpu')
         else:
             self.arc2face = None
+            self.unet_teacher = None
 
         if not self.unfreeze_model:
             # cond_stage_model = FrozenCLIPEmbedder training = False.
@@ -894,12 +900,8 @@ class LatentDiffusion(DDPM):
 
         return model
 
-    def instantiate_zero_shot_image_encoders(self, clip_type='openai'):
-        if clip_type == 'laion':
-            clip_model_tag = 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'
-        else:
-            clip_model_tag = 'openai/clip-vit-large-patch14'
-
+    def instantiate_zero_shot_image_encoders(self):
+        clip_model_tag = 'openai/clip-vit-large-patch14'
         self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained(clip_model_tag)
         self.clip_preprocessor  = CLIPImageProcessor.from_pretrained(clip_model_tag)
         self.clip_image_encoder = self.clip_image_encoder.to(self.device)
@@ -917,7 +919,7 @@ class LatentDiffusion(DDPM):
          'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
          'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
-        # Use the same model as Arc2Face.
+        # Use the same model as Arc2Face does.
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
         self.insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
@@ -961,7 +963,7 @@ class LatentDiffusion(DDPM):
     # If do_normal_recon without delta loss, then 1 call.
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
-                                 randomize_clip_weights=False, apply_arc2face_inverse_embs=False, 
+                                 randomize_clip_weights=False, 
                                  apply_arc2face_embs=False, embman_iter_type=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
@@ -985,8 +987,6 @@ class LatentDiffusion(DDPM):
                 if embman_iter_type is None:
                     if self.iter_flags['is_compos_iter']:
                         embman_iter_type = 'compos_distill_iter'
-                    elif apply_arc2face_inverse_embs:
-                        embman_iter_type = 'arc2face_inverse_clip_iter'
                     elif apply_arc2face_embs:
                         embman_iter_type = 'arc2face_clip_iter'
                     else:
@@ -1003,32 +1003,8 @@ class LatentDiffusion(DDPM):
                     # when we wish to evaluate the original Arc2Face model.
                     # static_prompt_embedding: [1, 77, 768]. Need to repeat 16 times for 16 layers, and then BS times for BS instances.
                     static_prompt_embedding = self.embedding_manager.arc2face_embs
-                # If apply_arc2face_inverse_embs, the static_prompt_embedding is the CLIP-encoded Arc2Face inverse embeddings,
-                # which has been returned from self.cond_stage_model.encode(). So no need to replace it.
 
-                # If apply_arc2face_embs, the location of the subject embeddings is not 
-                # indexed by placeholder_indices, so no point to fix the scale of the embeddings.
-                # But if apply_arc2face_inverse_embs, in theory we can still fix the scale of the embeddings,
-                # as the location of the subject embeddings is still indexed by placeholder_indices.
-                # But we don't do this in practice, as the zero-shot subject embeddings don't have large magnitudes,
-                # and scaling them down may hurt subject fidelity.
-                '''
-                if zs_out_id_embs_cfg_scale_range != (1.0, 1.0) and not apply_arc2face_embs:
-                    emb_global_scales_dict = self.embedding_manager.get_emb_global_scales_dict(regen=True)
-                    # Fix the scales of the static subject embeddings.
-                    for placeholder, placeholder_indices in self.embedding_manager.placeholder2indices.items():
-                        emb_extra_global_scale = emb_global_scales_dict[placeholder]
-                        static_prompt_embedding = fix_emb_scale(static_prompt_embedding, 
-                                                                placeholder_indices,
-                                                                empty_context=self.empty_context,
-                                                                num_layers=self.N_CA_LAYERS,
-                                                                scale_range=zs_out_id_embs_cfg_scale_range,
-                                                                extra_scale=emb_extra_global_scale)
-                '''
-
-                # If apply_arc2face_inverse_embs, there's no cls_delta_string in the prompt embeddings,
-                # so no point to merge them.
-                if self.training and not apply_arc2face_inverse_embs:
+                if self.training:
                     # If cls_delta_string_indices is not empty, then it must be a compositional 
                     # distillation iteration, and placeholder_indices only contains the indices of the subject 
                     # instances. Whereas cls_delta_string_indices only contains the indices of the
@@ -1037,7 +1013,7 @@ class LatentDiffusion(DDPM):
                                                                          self.embedding_manager.cls_delta_string_indices,
                                                                          self.embedding_manager.subj_name_to_cls_delta_token_weights)
                     
-                elif (apply_arc2face_inverse_embs or apply_arc2face_embs):
+                elif apply_arc2face_embs:
                     if not self.training:
                         BS_repeat = 1
                     else:
@@ -1046,7 +1022,7 @@ class LatentDiffusion(DDPM):
                     # Repeat the static prompt embeddings 16 times to get the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(BS_repeat, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
-                # Otherwise, not apply_arc2face_inverse_embs, not apply_arc2face_embs,
+                # Otherwise, not apply_arc2face_embs,
                 # we do nothing to the static_prompt_embedding.
 
                 extra_info = { 
@@ -1205,31 +1181,17 @@ class LatentDiffusion(DDPM):
                     xc = super().get_input(batch, cond_key).to(self.device)
             else:
                 xc = x
-            # cond_stage_trainable: True. force_c_encode: False.
-            if not self.cond_stage_trainable or force_c_encode:
-                if isinstance(xc, dict) or isinstance(xc, list):
-                    # import pudb; pudb.set_trace()
-                    c = self.get_learned_conditioning(xc)
-                else:
-                    c = self.get_learned_conditioning(xc.to(self.device))
-            else:
-                c = xc
+
+            c = xc
             #if bs is not None:
             #    c = c[:bs]
             #if bs is not None and c.shape[0] != bs:
             #    breakpoint()
 
-            if self.use_positional_encodings:
-                pos_x, pos_y = self.compute_latent_shifts(batch)
-                ckey = __conditioning_keys__[self.model.conditioning_key]
-                c = {ckey: c, 'pos_x': pos_x, 'pos_y': pos_y}
-
         else:
             c = None
             xc = None
-            if self.use_positional_encodings:
-                pos_x, pos_y = self.compute_latent_shifts(batch)
-                c = {'pos_x': pos_x, 'pos_y': pos_y}
+
         out = [z, c]
         if return_first_stage_outputs:
             xrec = self.decode_first_stage(z)
@@ -1556,8 +1518,8 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['use_wds_comp']:
                     # At 95% of the time, use background tokens in recon iters if use_wds_comp.
                     p_use_background_token  = 0.95
-                elif self.iter_flags['do_arc2face_distill']:
-                    # If do_arc2face_distill, then disable the background token.
+                elif self.iter_flags['do_unet_distill']:
+                    # If do_unet_distill, then disable the background token.
                     p_use_background_token  = 0
                 elif self.do_zero_shot:
                     # Since we train the model on many subjects, and the background tokens are kind of stable across subjects,
@@ -1696,9 +1658,9 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = False
 
-        # do_arc2face_distill is only True in do_normal_recon iters.
+        # do_unet_distill is only True in do_normal_recon iters.
         # p_gen_arc2face_rand_face: 0.4
-        if self.iter_flags['do_arc2face_distill'] and random.random() < self.p_gen_arc2face_rand_face:
+        if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
             self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
         else:
@@ -1743,9 +1705,9 @@ class LatentDiffusion(DDPM):
                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
-                p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_arc2face_distill'] else 0                
+                p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
                 # p_add_noise_to_real_id_embs: default 0.6.
-                # If do_arc2face_distill, then prob of add_noise_to_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
+                # If do_unet_distill, then prob of add_noise_to_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
                 self.iter_flags['add_noise_to_real_id_embs'] = random.random() < p_add_noise_to_real_id_embs
                 if self.iter_flags['add_noise_to_real_id_embs']:
                     if not self.iter_flags['same_subject_in_batch']:
@@ -1780,8 +1742,8 @@ class LatentDiffusion(DDPM):
                         
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
-                # Sometimes do_arc2face_distill is True but gen_arc2face_rand_face is False.
-                if self.iter_flags['do_arc2face_distill']:
+                # Sometimes do_unet_distill is True but gen_arc2face_rand_face is False.
+                if self.iter_flags['do_unet_distill']:
                     # The returned zs_id_embs2 should be (almost) the same as the passed-in zs_id_embs.
                     face_image_count, zs_id_embs2, arc2face_prompt_emb \
                         = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
@@ -1808,11 +1770,11 @@ class LatentDiffusion(DDPM):
             # During training, zs_id_embs, arc2face_prompt_emb are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
 
-            if self.iter_flags['do_arc2face_distill']:
+            if self.iter_flags['do_unet_distill']:
                 arc2face_prompt_emb = arc2face_prompt_emb.to(x_start.dtype)
                 # arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
                 # arc2face_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
-                # self.arc2face to generate the predicted teacher noise.
+                # self.unet_teacher to generate the predicted teacher noise.
 
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
                 # or if there are faceless input images in the batch, we have to use the arc2face recon as target.
@@ -1821,23 +1783,30 @@ class LatentDiffusion(DDPM):
                 # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
                 if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['add_noise_to_real_id_embs'] \
                   or self.iter_flags['faceless_img_count'] > 0:
-                    self.iter_flags['use_arc2face_as_target'] = True
+                    self.iter_flags['use_unet_teacher_as_target'] = True
                 else:
                     # Prob of this branch is (1 - 0.4) * 0.4 = 0.24 (ignoring the cases when faceless_img_count > 0, which are rare).
                     # Still with a probability of 0.5, we use the original image as target.
                     # Therefore, overall, the probability of using the original image as target is 0.5 * 0.24 = 0.12.
                     # The probability of using the arc2face recon as target is 0.88.
-                    p_use_arc2face_as_target = 0.5
-                    self.iter_flags['use_arc2face_as_target'] = random.random() < p_use_arc2face_as_target
+                    if self.unet_teacher_type == 'arc2face':
+                        p_use_unet_teacher_as_target = 0.5
+                    # UNet ensemble always uses the unet teacher as target.
+                    elif self.unet_teacher_type == 'unet_ensemble':
+                        p_use_unet_teacher_as_target = 1
+                    else:
+                        breakpoint()
 
-                if self.iter_flags['use_arc2face_as_target']:
+                    self.iter_flags['use_unet_teacher_as_target'] = random.random() < p_use_unet_teacher_as_target
+
+                if self.iter_flags['use_unet_teacher_as_target']:
                     # Gradually increase the chance of taking 5 or 7 denoising steps.
                     p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
                                                          final_percent=0.5,
                                                          begin_array=[0.4, 0.3, 0.2, 0.1], 
                                                          end_array  =[0.4, 0.3, 0.2, 0.1],
                                                         )
-                    cand_num_denoising_steps = [1, 3, 5, 7]
+                    cand_num_denoising_steps = [1, 2, 3, 5, 7]
                     # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
                     cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
                                                  if si <= self.max_num_denoising_steps ]
@@ -1876,10 +1845,10 @@ class LatentDiffusion(DDPM):
                         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
 
-            # Do zero-shot training but not arc2face distillation.
+            # Do zero-shot training but not unet distillation.
             else:
                 arc2face_prompt_emb = None
-                self.iter_flags['use_arc2face_as_target'] = False
+                self.iter_flags['use_unet_teacher_as_target'] = False
 
         # Not do_zero_shot.
         else:
@@ -1917,8 +1886,6 @@ class LatentDiffusion(DDPM):
         # whose behavior depends on the correct embman_iter_type.
         if self.iter_flags['is_compos_iter']:
             embman_iter_type = 'compos_distill_iter'
-        elif self.iter_flags['do_arc2face_distill'] and self.apply_arc2face_inverse_embs:
-            embman_iter_type = 'arc2face_inverse_clip_iter'
         # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning().
         #elif apply_arc2face_embs:
         #    embman_iter_type = 'arc2face_clip_iter'
@@ -1992,14 +1959,11 @@ class LatentDiffusion(DDPM):
                     # delta_prompts: the concatenation of
                     # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
                     # extra_info: a dict that contains extra info.
-                    apply_arc2face_inverse_embs = self.iter_flags['do_arc2face_distill'] \
-                                                  and self.apply_arc2face_inverse_embs
                     c_static_emb, _, extra_info = \
                         self.get_learned_conditioning(delta_prompts, 
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],
-                                                      randomize_clip_weights=True,
-                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
+                                                      randomize_clip_weights=True)
                     
                     # Release zs_clip_features and zs_id_embs.
                     # del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
@@ -2094,23 +2058,22 @@ class LatentDiffusion(DDPM):
                             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                         else:
                             breakpoint()
+                            '''
                             # We are unable to reuse the static embeddings of subject single prompt within 
                             # the 4-type prompts, as captions are different. 
                             # So generate embeddings from the captions from scratch.
                             # placeholder2indices in captions should be the same as in subj_single_prompts.
                             # "captions" consist of subject single prompts only (no comp prompts).
                             # Embeddings don't need patching as there are no class prompts.
-                            apply_arc2face_inverse_embs = self.iter_flags['do_arc2face_distill'] \
-                                                          and self.apply_arc2face_inverse_embs
                             c_static_emb, _, extra_info0 = \
                                 self.get_learned_conditioning(captions, 
                                                               self.iter_flags['zs_clip_features'],
                                                               self.iter_flags['zs_id_embs'],
-                                                              randomize_clip_weights=True,
-                                                              apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
+                                                              randomize_clip_weights=True)
                             # print(captions)
                             extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
-
+                            '''
+                            
                         extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                              *c_static_emb.shape[1:])
                                                 
@@ -2143,15 +2106,12 @@ class LatentDiffusion(DDPM):
                     # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
                     # it's called by self.validation_step().
                     assert self.iter_flags['do_normal_recon']
-                    
-                    apply_arc2face_inverse_embs = self.iter_flags['do_arc2face_distill'] \
-                                                  and self.apply_arc2face_inverse_embs
+
                     c_static_emb, c_in, extra_info0 = \
                         self.get_learned_conditioning(captions, 
                                                       self.iter_flags['zs_clip_features'],
                                                       self.iter_flags['zs_id_embs'],                                                      
-                                                      randomize_clip_weights=True,
-                                                      apply_arc2face_inverse_embs=apply_arc2face_inverse_embs)
+                                                      randomize_clip_weights=True)
                     
                     extra_info = extra_info0
                     extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
@@ -2885,7 +2845,7 @@ class LatentDiffusion(DDPM):
         cfg_info = { 'cfg_scales':     cfg_scales_for_clip_loss,
                      'uncond_context': uncond_context }
         
-        if not self.iter_flags['use_arc2face_as_target']:
+        if not self.iter_flags['use_unet_teacher_as_target']:
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
@@ -2911,7 +2871,7 @@ class LatentDiffusion(DDPM):
         loss = 0
                                 
         if self.iter_flags['do_normal_recon']:
-            if not self.iter_flags['do_arc2face_distill']:
+            if not self.iter_flags['do_unet_distill']:
                 if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                     # bg loss is almost completely ignored. But giving it a little weight may help suppress 
                     # subj embeddings' contribution to the background (serving as a contrast to the fg).
@@ -2945,9 +2905,20 @@ class LatentDiffusion(DDPM):
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
-                if self.iter_flags['use_arc2face_as_target']:
-                    arc2face_noise_preds, arc2face_pred_x0s, arc2face_noises, ts = \
-                        self.arc2face(self, x_start, noise, t, self.iter_flags['arc2face_prompt_emb'], num_denoising_steps=num_denoising_steps)
+                if self.iter_flags['use_unet_teacher_as_target']:
+                    if self.unet_teacher_type == 'arc2face':
+                        context = self.iter_flags['arc2face_prompt_emb']
+                    elif self.unet_teacher_type == 'unet_ensemble':
+                        # context is the same prompt embedding of the student model.
+                        # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
+                        # So we only need to take the first one.
+                        # [16, 77, 768] -> [1, 77, 768]
+                        context = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                    else:
+                        breakpoint()
+
+                    unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
+                        self.unet_teacher(self, x_start, noise, t, context, num_denoising_steps=num_denoising_steps)
 
                     MAX_ACCUMU_BATCH_SIZE = 7
                     # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 
@@ -2959,23 +2930,23 @@ class LatentDiffusion(DDPM):
                     max_num_loss_steps = MAX_ACCUMU_BATCH_SIZE // x_start.shape[0]
                     loss_start_step  = max(0, num_denoising_steps - max_num_loss_steps)
 
-                    # targets: replaced as the reconstructed x0 by the arc2face UNet.
-                    # If NS = num_denoising_steps > 1, then arc2face_noise_preds contain NS*half_batch arc2face predicted noises (of different ts).
+                    # targets: replaced as the reconstructed x0 by the teacher UNet.
+                    # If NS = num_denoising_steps > 1, then unet_teacher_noise_preds contain NS*half_batch unet_teacher predicted noises (of different ts).
                     # targets: [HALF_BS, 4, 64, 64] * (num_denoising_steps - loss_start_step).
                     # If we skip the first loss_start_step steps, then we remove the teacher output in these steps from
                     # targets, so that they are not used in the loss computation.
-                    targets         = arc2face_noise_preds[loss_start_step:]
+                    targets         = unet_teacher_noise_preds[loss_start_step:]
 
                     # The outputs of the remaining denoising steps will be appended to model_outputs.
                     model_outputs = []
 
                     for s in range(loss_start_step, num_denoising_steps):
                         # Predict the noise of the half-batch with t2 (a set of earlier t).
-                        # arc2face_pred_x0 is the first half-batch of the arc2face predicted images, 
+                        # unet_teacher_pred_x0 is the first half-batch of the unet_teacher predicted images, 
                         # used to seed the second denoising step. But using it will cut off the gradient flow.
-                        pred_x0 = arc2face_pred_x0s[s-1].to(x_start.dtype)
-                        # noise2, t2 are the s-th half-batch of noise/t used to by arc2face.
-                        noise2  = arc2face_noises[s].to(x_start.dtype)
+                        pred_x0 = unet_teacher_pred_x0s[s-1].to(x_start.dtype)
+                        # noise2, t2 are the s-th half-batch of noise/t used to by unet_teacher.
+                        noise2  = unet_teacher_noises[s].to(x_start.dtype)
                         t2      = ts[s]
 
                         # Here pred_x0 is used as x_start.
@@ -2999,20 +2970,21 @@ class LatentDiffusion(DDPM):
                 for s in range(num_denoising_steps - loss_start_step):
                     model_output, target = model_outputs[s], targets[s]
 
-                    if self.iter_flags['gen_arc2face_rand_face']:
-                        # if gen_arc2face_rand_face, then always use_arc2face_as_target == True.                    
+                    if self.iter_flags['gen_arc2face_rand_face'] or self.unet_teacher_type == 'unet_ensemble':
+                        # If gen_arc2face_rand_face, then always use_unet_teacher_as_target == True.                    
                         # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
+                        # If unet_teacher_type == 'unet_ensemble', then also compute the recon loss on the whole image.
                         loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
                     else:
-                        # use_arc2face_as_target could be True or False.
-                        # If use_arc2face_as_target, we don't want to distill using the background pixels, 
+                        # use_unet_teacher_as_target could be True or False.
+                        # If use_unet_teacher_as_target, we don't want to distill using the background pixels, 
                         # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
                         # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
                         # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
                         # Therefore, bg_pixel_weight = 0.1.
                         # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
                         # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
-                        bg_pixel_weight = 0 if self.iter_flags['use_arc2face_as_target'] else 0.1
+                        bg_pixel_weight = 0 if self.iter_flags['use_unet_teacher_as_target'] else 0.1
 
                         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                         loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
@@ -3164,7 +3136,7 @@ class LatentDiffusion(DDPM):
                             'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
                             # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'arc2face_prompt_emb' 
                             # are all None.
-                            # We don't need to cache other flags, such as do_arc2face_distill,
+                            # We don't need to cache other flags, such as do_unet_distill,
                             # as they are only applicable to recon iters. 
                             # We reuse init conds only in compositional iters.
                             'zs_clip_features':       self.iter_flags['zs_clip_features'],
@@ -5130,9 +5102,9 @@ class LatentDiffusion(DDPM):
             # In torch 1.13, decoupled_weight_decay is not supported. 
             # But since we disabled weight decay, it doesn't matter.
             OptimizerClass = torch.optim.NAdam
+        elif self.optimizer_type == 'Adam8bit':
+            OptimizerClass = bnb.optim.Adam8bit
         elif self.optimizer_type == 'Prodigy':
-            OptimizerClass = Prodigy
-        elif self.optimizer_type == 'ProdigyAdamW':
             OptimizerClass = Prodigy
         else:
             raise NotImplementedError()
@@ -5141,176 +5113,121 @@ class LatentDiffusion(DDPM):
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
         lr      = self.learning_rate
         scheduler = None
-        prodigy_adam_opt = None
-        prodigy_adamw_scheduler = None
 
-        # If using textual inversion, then embedding_manager is not None.
-        if self.embedding_manager is not None: 
-            embedding_params_with_lr_ratios = self.embedding_manager.optimized_parameters()
+        opt_params_with_lrs = []
+        if self.embedding_manager_trainable:
+            embedding_params = self.embedding_manager.optimized_parameters()
             num_filtered_params = 0
 
             embedding_params_with_lrs = []
-            for param_group in embedding_params_with_lr_ratios:
-                params = param_group['params']
-                param_lr = lr * param_group['lr_ratio']
+            for params in embedding_params:
                 # Not sure if it's necessary to set requires_grad=True here.
                 #for param in params:
                 #    param.requires_grad = True
                 # Exclude the parameters whose requires_grad is False
                 params2 = [ param for param in params if param.requires_grad ]
                 if len(params) > 0:
-                    embedding_params_with_lrs.append( {'params': params2, 'lr': param_lr, 
-                                                       'excluded_from_prodigy': param_group['excluded_from_prodigy']} )
+                    embedding_params_with_lrs.append( {'params': params2, 'lr': lr} )
                 num_filtered_params += len(params) - len(params2)
             
             print(f"Filtered out {num_filtered_params} no-grad parameters.")
 
-            # unfreeze_model:
-            # Are we allowing the base model to train? If so, set two different parameter groups.
-            if self.unfreeze_model: 
-                model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-                opt_params_with_lrs = embedding_params_with_lrs + [ {"params": model_params, "lr": self.model_lr,
-                                                                    "excluded_from_prodigy": False} ]
-            else:
-                # Otherwise, train only embeddings
-                opt_params_with_lrs = embedding_params_with_lrs
-            
-            if 'Prodigy' not in self.optimizer_type:
-                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                     betas=self.adam_config.betas)
-                
-                assert 'target' in self.adam_config.scheduler_config
-                self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
-                lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
-                print("Setting up LambdaLR scheduler...")
-                scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
+            opt_params_with_lrs += embedding_params_with_lrs
 
-            else:
-                prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs \
-                                   if not param_group['excluded_from_prodigy'] ]
-                prodigy_params = sum(prodigy_params, [])
+        # unfreeze_model:
+        # Are we allowing the base model to train? If so, set two different parameter groups.
+        if self.unfreeze_model: 
+            model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
+            # model_lr: default 2e-6 set in finetune-unet.yaml.
+            opt_params_with_lrs += [ {"params": model_params, "lr": self.model_lr} ]
 
-                if self.do_zero_shot:
-                    # [0.9, 0.999]. Converge more slowly.
-                    betas = self.prodigy_config.zs_betas
-                else:
-                    # [0.985, 0.993]. Converge faster.
-                    betas = self.prodigy_config.betas
-
-                # Prodigy uses an LR = 1.
-                opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
-                                     betas=betas,   # default: [0.985, 0.993]
-                                     d_coef=self.prodigy_config.d_coef, # default: 5
-                                     safeguard_warmup= self.prodigy_config.scheduler_cycles > 1, 
-                                     use_bias_correction=True)
-
-                total_cycle_steps  = self.trainer.max_steps - self.prodigy_config.warm_up_steps
-                transition_milestones = [self.prodigy_config.warm_up_steps]
-                # Since factor=1, we don't need to make sure the last step of the scheduler is called,
-                # which restores the LR to the original value.
-                warmup_scheduler    = ConstantLR(opt, factor=1., total_iters=self.prodigy_config.warm_up_steps)
-                num_scheduler_cycles = self.prodigy_config.scheduler_cycles
-                if self.prodigy_config.scheduler_type == 'CyclicLR':
-                    # CyclicLR will do a downward half-cycle first. So we subtract 0.5
-                    # from num_scheduler_cycles. If self.prodigy_config.scheduler_cycles = 2,
-                    # then num_scheduler_cycles = 1.5, which means there'll be an extra up-down cycle.
-                    num_scheduler_cycles -= 0.5
-
-                # single_cycle_steps = 750, if max_steps = 2000, warm_up_steps = 500 and scheduler_cycles = 2.
-                single_cycle_steps  = total_cycle_steps / num_scheduler_cycles
-                last_cycle_steps    = total_cycle_steps - single_cycle_steps * (num_scheduler_cycles - 1)
-                schedulers = [warmup_scheduler]
-                print(f"Setting up {num_scheduler_cycles} * {single_cycle_steps} cycles, {self.prodigy_config.warm_up_steps} warm up steps.")
-
-                if self.prodigy_config.scheduler_type == 'Linear':
-                    num_scheduler_cycles = int(num_scheduler_cycles)
-                    for c in range(num_scheduler_cycles):
-                        if c == num_scheduler_cycles - 1:
-                            # The last cycle.
-                            cycle_steps = last_cycle_steps
-                        else:
-                            cycle_steps = single_cycle_steps
-                            transition_milestones.append(transition_milestones[-1] + cycle_steps)
-
-                        # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
-                        # of the full LR at the end.
-                        linear_cycle_scheduler = PolynomialLR(opt, power=1,
-                                                              total_iters=cycle_steps * 1.1)
-                        schedulers.append(linear_cycle_scheduler)
-                elif self.prodigy_config.scheduler_type == 'CosineAnnealingWarmRestarts':
-                    # eta_min should be 0.1 instead of 0.1 * LR, since the full LR is 1 for Prodigy.
-                    schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=int(single_cycle_steps), T_mult=1, 
-                                                                  eta_min=0.1,
-                                                                  last_epoch=-1))
-                elif self.prodigy_config.scheduler_type == 'CyclicLR':
-                    # step_size_up = step_size_down = single_cycle_steps / 2 (float).
-                    # last_epoch will be updated to single_cycle_steps / 2 in training_step(), 
-                    # so that the LR begins with max_lr.
-                    # We can't initialize it here, since SequentialLR will manually call 
-                    # scheduler.step(0) at the first iteration, which will set the last_epoch to 0.
-                    # Therefore, after the first scheduler.step(), we set the last_epoch of CyclicLR 
-                    # to single_cycle_steps / 2.
-                    schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
-                                               last_epoch=single_cycle_steps / 2 - 1, cycle_momentum=False))
-                    # Disable SequentialLR2 from calling scheduler.step(0) at the first iteration, which will 
-                    # set the last_epoch of CyclicLR to 0.
-                    schedulers[-1].start_from_epoch_0 = False
-
-                #print(scheduler._schedulers[-1].get_lr())
-                else:
-                    raise NotImplementedError()
-                
-                scheduler = SequentialLR2(opt, schedulers=schedulers,
-                                          milestones=transition_milestones)
-
-                if self.optimizer_type == 'ProdigyAdamW':
-                    # If using ProdigyAdamW, AdamW is initialized with param group opt_params_with_lrs.
-                    # It's different from Prodigy, which is initialized with param group opt_params.
-                    # So the two data structures won't interfere with each other.
-                    prodigy_adam_opt = torch.optim.AdamW(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                                         betas=self.adam_config.betas)
-                    # Use AdamW with LR = self.learning_rate / 10000, in the beginning half of the total steps.
-                    # This is to warm-up the AdamW optimizer, and delegate the optimization to Prodigy.
-                    # total_iters = adamw_kickin_iter - 2: 
-                    # at the last iteration, ConstantLR will revert the 
-                    # LR to the original values. If total_iters > milestones of SequentialLR, this step
-                    # will not be called, and the LR of AdamW will be kept at very small values, which 
-                    # is not intended. Therefore we set total_iters=adamw_kickin_iter - 2.
-                    # It will revert the LRs to initial LRs before the last cycle of Prodigy.
-                    adamw_kickin_iter   = self.trainer.max_steps - last_cycle_steps
-                    zero_scheduler      = ConstantLR(prodigy_adam_opt, factor=1e-4,  
-                                                     total_iters=adamw_kickin_iter - 2)
-                    # Enable adamw optimizer in the last cycle of Prodigy.
-                    # max_LR = lr / 4. Initial LR = max_lr / div_factor = lr / 40. 
-                    # No need to use a smaller initial LR, as AdamW has been warmed-up 
-                    # (operating with LR=0 for half of the total steps).
-                    # pct_start=0.3 (default). If max_steps = 2000, then total_steps = 1000, 
-                    # max_lr is achieved at relative step = 300 (absolute step = 1300).
-                    # final_div_factor = initial LR / 1 = lr / 40.
-                    onecycle_scheduler  = OneCycleLR(prodigy_adam_opt, max_lr=lr / 4, 
-                                                     total_steps=last_cycle_steps,
-                                                     div_factor=10, final_div_factor=1)
-                    prodigy_adamw_scheduler = SequentialLR(prodigy_adam_opt, schedulers=[zero_scheduler, onecycle_scheduler], 
-                                                           milestones=[adamw_kickin_iter])
-
-        else:
-            params = list(self.model.parameters())
-            if self.cond_stage_trainable:
-                print(f"{self.__class__.__name__}: Also optimizing conditioner params!")
-                params = params + list(self.cond_stage_model.parameters())
-            if self.learn_logvar:
-                print('Diffusion model optimizing logvar')
-                params.append(self.logvar)
-
-            opt = OptimizerClass(params, lr=lr, weight_decay=self.weight_decay,
+        if 'Prodigy' not in self.optimizer_type:
+            opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                  betas=self.adam_config.betas)
-
+            
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
-
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
             print("Setting up LambdaLR scheduler...")
             scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
+
+        else:
+            # Remove 'lr' from the parameter groups, since Prodigy doesn't use it.
+            prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
+            prodigy_params = sum(prodigy_params, [])
+
+            if self.do_zero_shot:
+                # [0.9, 0.999]. Converge more slowly.
+                betas = self.prodigy_config.zs_betas
+            else:
+                # [0.985, 0.993]. Converge faster.
+                betas = self.prodigy_config.betas
+
+            # Prodigy uses an LR = 1.
+            opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
+                                 betas=betas,   # default: [0.985, 0.993]
+                                 d_coef=self.prodigy_config.d_coef, # default: 5
+                                 safeguard_warmup= self.prodigy_config.scheduler_cycles > 1, 
+                                 use_bias_correction=True)
+
+            total_cycle_steps  = self.trainer.max_steps - self.prodigy_config.warm_up_steps
+            transition_milestones = [self.prodigy_config.warm_up_steps]
+            # Since factor=1, we don't need to make sure the last step of the scheduler is called,
+            # which restores the LR to the original value.
+            warmup_scheduler    = ConstantLR(opt, factor=1., total_iters=self.prodigy_config.warm_up_steps)
+            num_scheduler_cycles = self.prodigy_config.scheduler_cycles
+            if self.prodigy_config.scheduler_type == 'CyclicLR':
+                # CyclicLR will do a downward half-cycle first. So we subtract 0.5
+                # from num_scheduler_cycles. If self.prodigy_config.scheduler_cycles = 2,
+                # then num_scheduler_cycles = 1.5, which means there'll be an extra up-down cycle.
+                num_scheduler_cycles -= 0.5
+
+            # single_cycle_steps = 750, if max_steps = 2000, warm_up_steps = 500 and scheduler_cycles = 2.
+            single_cycle_steps  = total_cycle_steps / num_scheduler_cycles
+            last_cycle_steps    = total_cycle_steps - single_cycle_steps * (num_scheduler_cycles - 1)
+            schedulers = [warmup_scheduler]
+            print(f"Setting up {num_scheduler_cycles} * {single_cycle_steps} cycles, {self.prodigy_config.warm_up_steps} warm up steps.")
+
+            if self.prodigy_config.scheduler_type == 'Linear':
+                num_scheduler_cycles = int(num_scheduler_cycles)
+                for c in range(num_scheduler_cycles):
+                    if c == num_scheduler_cycles - 1:
+                        # The last cycle.
+                        cycle_steps = last_cycle_steps
+                    else:
+                        cycle_steps = single_cycle_steps
+                        transition_milestones.append(transition_milestones[-1] + cycle_steps)
+
+                    # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
+                    # of the full LR at the end.
+                    linear_cycle_scheduler = PolynomialLR(opt, power=1,
+                                                            total_iters=cycle_steps * 1.1)
+                    schedulers.append(linear_cycle_scheduler)
+            elif self.prodigy_config.scheduler_type == 'CosineAnnealingWarmRestarts':
+                # eta_min should be 0.1 instead of 0.1 * LR, since the full LR is 1 for Prodigy.
+                schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=int(single_cycle_steps), T_mult=1, 
+                                                                eta_min=0.1,
+                                                                last_epoch=-1))
+            elif self.prodigy_config.scheduler_type == 'CyclicLR':
+                # step_size_up = step_size_down = single_cycle_steps / 2 (float).
+                # last_epoch will be updated to single_cycle_steps / 2 in training_step(), 
+                # so that the LR begins with max_lr.
+                # We can't initialize it here, since SequentialLR will manually call 
+                # scheduler.step(0) at the first iteration, which will set the last_epoch to 0.
+                # Therefore, after the first scheduler.step(), we set the last_epoch of CyclicLR 
+                # to single_cycle_steps / 2.
+                schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
+                                            last_epoch=single_cycle_steps / 2 - 1, cycle_momentum=False))
+                # Disable SequentialLR2 from calling scheduler.step(0) at the first iteration, which will 
+                # set the last_epoch of CyclicLR to 0.
+                schedulers[-1].start_from_epoch_0 = False
+
+            #print(scheduler._schedulers[-1].get_lr())
+            else:
+                raise NotImplementedError()
+            
+            scheduler = SequentialLR2(opt, schedulers=schedulers,
+                                      milestones=transition_milestones)
 
         if scheduler is None:
             return opt
@@ -5322,18 +5239,6 @@ class LatentDiffusion(DDPM):
                             'frequency': 1
                         }} ]
 
-        if self.optimizer_type == 'ProdigyAdamW':
-            optimizers.append(
-                {
-                    'optimizer': prodigy_adam_opt, 'frequency': 1, 
-                    'lr_scheduler': {
-                        'scheduler': prodigy_adamw_scheduler,
-                        'interval': 'step',
-                        'frequency': 1
-                    }
-                })
-
-        # self.scheduler = schedulers[0]['scheduler']
         return optimizers
 
 
@@ -5387,112 +5292,17 @@ class LatentDiffusion(DDPM):
         if not self.unfreeze_model: # If we are not tuning the model itself, zero-out the checkpoint content to preserve memory.
             checkpoint.clear()
         
-        if os.path.isdir(self.trainer.checkpoint_callback.dirpath) and self.embedding_manager is not None:
-            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
-            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
+        if os.path.isdir(self.trainer.checkpoint_callback.dirpath): 
+            if self.embedding_manager_trainable:
+                self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
-class Arc2FaceWrapper(pl.LightningModule):
-    def __init__(self, **kwargs):
-        super().__init__()
-        from diffusers import UNet2DConditionModel
-        from adaface.arc2face_models import CLIPTextModelWrapper
-
-        self.unet = UNet2DConditionModel.from_pretrained(
-                        #"runwayml/stable-diffusion-v1-5", subfolder="unet"
-                        'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
-                    )
-        self.text_encoder = CLIPTextModelWrapper.from_pretrained(
-                            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
-                            )
-        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-        
-    def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None):
-        # if pre_face_embs is None, generate random face embeddings [BS, 512].
-        # Returns faceid_embeds, arc2face_prompt_emb.
-        return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
-                                           extract_faceid_embeds=False, 
-                                           pre_face_embs=pre_face_embs,
-                                           image_folder=None, image_paths=None,
-                                           images_np=None, 
-                                           id_batch_size=batch_size,
-                                           device=self.device,
-                                           input_max_length=21, # Remove all paddings.
-                                           noise_level=0, verbose=False)
-    
-    # Only used for inference/distillation, so no_grad() is used.
-    @torch.no_grad()
-    def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
-        assert num_denoising_steps <= 10
-
-        x_starts    = [ x_start ]
-        noises      = [ noise ]
-        ts          = [ t ]
-        noise_preds = []
-
-        with torch.autocast(device_type='cuda', dtype=torch.float16):
-            for i in range(num_denoising_steps):
-                x_start = x_starts[i]
-                t       = ts[i]
-                noise   = noises[i]
-                # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
-                x_noisy = ddpm_model.q_sample(x_start, t, noise)
-                                
-                # If do_arc2face_distill, then context is [BS=6, 21, 768].
-                noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=context,
-                                       return_dict=False)[0]
-                noise_preds.append(noise_pred)
-                
-                # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
-                pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
-                x_starts.append(pred_x0)
-
-                if i < num_denoising_steps - 1:
-                    # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                    relative_ts = torch.rand_like(t.float())
-                    # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
-                    # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
-                    # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
-                    # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
-                    # of the current timestep.
-                    t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
-                    t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
-                    earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
-                    earlier_timesteps = earlier_timesteps.long()
-
-                    # earlier_timesteps = ts[i+1] < ts[i].
-                    ts.append(earlier_timesteps)
-
-                    noise = torch.randn_like(pred_x0)
-                    noises.append(noise)
-
-        # Remove the original x_start from pred_x0s.
-        pred_x0s = x_starts[1:]
-        return noise_preds, pred_x0s, noises, ts
-
-'''
-# ConsistentID requires torch 2.0, which is not compatible with the current version of pytorch_lightning.
-# Will fix this issue in a future commit.
-
-class ConsistentIDWrapper(pl.LightningModule):
-    def __init__(self, **kwargs):
-        super().__init__()
-        ### Load base model
-        from pipline_StableDiffusion_ConsistentID import ConsistentIDStableDiffusionPipeline
-        pipe = ConsistentIDStableDiffusionPipeline.from_pretrained(
-            base_model_path, 
-            torch_dtype=torch.float16, 
-            use_safetensors=True, 
-            variant="fp16"
-        ).to(device)
-
-        ### Load consistentID_model checkpoint
-        pipe.load_ConsistentID_model(
-            os.path.dirname(consistentID_path),
-            subfolder="",
-            weight_name=os.path.basename(consistentID_path),
-            trigger_word="img",
-        )     
-'''
+            elif self.unfreeze_model:
+                # Save the UNetModel state_dict.
+                torch.save(self.model.diffusion_model.state_dict(), 
+                           os.path.join(self.trainer.checkpoint_callback.dirpath, f"unet-{self.global_step}.pt"))
+                           
+            else:
+                breakpoint()
 
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
@@ -5534,27 +5344,3 @@ class DiffusionWrapper(pl.LightningModule):
             raise NotImplementedError()
 
         return out
-
-
-class Layout2ImgDiffusion(LatentDiffusion):
-    # TODO: move all layout-specific hacks to this class
-    def __init__(self, cond_stage_key, *args, **kwargs):
-        assert cond_stage_key == 'coordinates_bbox', 'Layout2ImgDiffusion only for cond_stage_key="coordinates_bbox"'
-        super().__init__(cond_stage_key=cond_stage_key, *args, **kwargs)
-
-    def log_images(self, batch, N=8, *args, **kwargs):
-        logs = super().log_images(batch=batch, N=N, *args, **kwargs)
-
-        key = 'train' if self.training else 'validation'
-        dset = self.trainer.datamodule.datasets[key]
-        mapper = dset.conditional_builders[self.cond_stage_key]
-
-        bbox_imgs = []
-        map_fn = lambda catno: dset.get_textual_label(dset.get_category_id(catno))
-        for tknzd_bbox in batch[self.cond_stage_key][:N]:
-            bboximg = mapper.plot(tknzd_bbox.detach().cpu(), map_fn, (256, 256))
-            bbox_imgs.append(bboximg)
-
-        cond_img = torch.stack(bbox_imgs, dim=0)
-        logs['bbox_image'] = cond_img
-        return logs

@@ -50,30 +50,12 @@ class VQModel(pl.LightningModule):
         if self.batch_resize_range is not None:
             print(f"{self.__class__.__name__}: Using per-batch resizing in range {batch_resize_range}.")
 
-        self.use_ema = use_ema
-        if self.use_ema:
-            self.model_ema = LitEma(self)
-            print(f"Keeping EMAs of {len(list(self.model_ema.buffers()))}.")
-
+        self.use_ema = False # Ignore use_ema.
+        
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
         self.scheduler_config = scheduler_config
         self.lr_g_factor = lr_g_factor
-
-    @contextmanager
-    def ema_scope(self, context=None):
-        if self.use_ema:
-            self.model_ema.store(self.parameters())
-            self.model_ema.copy_to(self)
-            if context is not None:
-                print(f"{context}: Switched to EMA weights")
-        try:
-            yield None
-        finally:
-            if self.use_ema:
-                self.model_ema.restore(self.parameters())
-                if context is not None:
-                    print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]

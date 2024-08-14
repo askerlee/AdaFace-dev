@@ -11,12 +11,14 @@ model:
     cond_stage_key: "txt"
     image_size: 64
     channels: 4
-    cond_stage_trainable: false   # Note: different from the one we trained before
+    # cond_stage_trainable = False disables the training data loading in LatentDiffusion.forward().
+    cond_stage_trainable: false   
+    embedding_manager_trainable: false
     conditioning_key: crossattn
     monitor: val/loss_simple_ema
     scale_factor: 0.18215
     use_layerwise_embedding: True
-    arc2face_distill_iter_prob: 0
+    unet_distill_iter_prob: 0
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
@@ -32,7 +34,7 @@ model:
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel
-      #target: ldm.models.diffusion.ddpm.Arc2FaceWrapper
+      #target: ldm.models.diffusion.ddpm.Arc2FaceTeacher
       params:
         image_size: 32 # unused
         in_channels: 4

@@ -224,9 +224,6 @@ def parse_args():
                         help="Whether to use zero-shot learning")                    
     parser.add_argument("--apply_arc2face_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
-    parser.add_argument("--apply_arc2face_inverse_embs", type=str2bool, nargs="?", 
-                        const=True, default=False,
-                        help="Evaluate Arc2Face inverse CLIP embeddings")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
@@ -387,6 +384,7 @@ def main(opt):
         sampler = DDIMSampler(model)
 
     else:        
+        '''
         class DummyScope(object):
             def __init__(self):
                 pass
@@ -399,7 +397,8 @@ def main(opt):
 
         # model.ema_scope() is a do-nothing object.
         model = DummyModel(DummyScope)
-
+        '''
+        
         if opt.diffusers:
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
@@ -576,229 +575,217 @@ def main(opt):
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
-            with model.ema_scope():
-                tic = time.time()
-                all_samples = list()
-                sample_count = 0
-                prompt_block_count = len(batched_prompts)
-                for n in trange(opt.n_repeat, desc="Sampling"):
-                    indiv_subdir = None
+            tic = time.time()
+            all_samples = list()
+            sample_count = 0
+            prompt_block_count = len(batched_prompts)
+            for n in trange(opt.n_repeat, desc="Sampling"):
+                indiv_subdir = None
 
-                    # prompts in a batch are just repetitions of the same prompt.
-                    for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
-                        print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
+                # prompts in a batch are just repetitions of the same prompt.
+                for p_i, prompts in enumerate(tqdm(batched_prompts, desc="prompts")):
+                    print(f"\n{p_i+1}/{prompt_block_count}", prompts[0])
 
-                        if isinstance(prompts, tuple):
-                            prompts = list(prompts)
+                    if isinstance(prompts, tuple):
+                        prompts = list(prompts)
 
-                        if not opt.eval_blip and not opt.diffusers:
-                            apply_arc2face_inverse_embs = opt.zeroshot and opt.apply_arc2face_inverse_embs
-                            apply_arc2face_embs         = opt.zeroshot and opt.apply_arc2face_embs
-                            # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
-                            # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
-                            c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
-                                                               zs_id_embs=zs_id_embs, 
-                                                               apply_arc2face_inverse_embs=apply_arc2face_inverse_embs,
-                                                               apply_arc2face_embs=apply_arc2face_embs)
+                    if not opt.eval_blip and not opt.diffusers:
+                        apply_arc2face_embs         = opt.zeroshot and opt.apply_arc2face_embs
+                        # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
+                        # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
+                        c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
+                                                            zs_id_embs=zs_id_embs,
+                                                            apply_arc2face_embs=apply_arc2face_embs)
 
-                            if apply_arc2face_inverse_embs:
-                                static_prompt_embedding = c[0].repeat(len(prompts), 1, 1)
-                                c = (static_prompt_embedding, c[1], c[2])
-                                # If the arc2face prompt is shorter than the uncond static prompt (77 tokens),
-                                # Then we shorten the uncond static prompt to match the arc2face prompt.
-                                if static_prompt_embedding.shape[1] < uc[0].shape[1]:
-                                    uncond_prompt_embedding = get_b_core_e_embeddings(uc[0], length=static_prompt_embedding.shape[1] - 1)
-                                    uc = (uncond_prompt_embedding, uc[1], uc[2])
+                        if opt.debug:
+                            c[2]['debug_attn'] = True
 
-                            if opt.debug:
-                                c[2]['debug_attn'] = True
+                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                        # During inference, the batch size is *doubled*. 
+                        # The first half contains negative samples, and the second half positive.
+                        # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
+                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                                                            conditioning=c,
+                                                            batch_size=batch_size,
+                                                            shape=shape,
+                                                            verbose=False,
+                                                            guidance_scale=opt.scale,
+                                                            unconditional_conditioning=uc,
+                                                            eta=opt.ddim_eta,
+                                                            x0=None,
+                                                            mask=None,
+                                                            x_T=start_code)
 
-                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                            # During inference, the batch size is *doubled*. 
-                            # The first half contains negative samples, and the second half positive.
-                            # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
-                            samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                             conditioning=c,
-                                                             batch_size=batch_size,
-                                                             shape=shape,
-                                                             verbose=False,
-                                                             guidance_scale=opt.scale,
-                                                             unconditional_conditioning=uc,
-                                                             eta=opt.ddim_eta,
-                                                             x0=None,
-                                                             mask=None,
-                                                             x_T=start_code)
+                        x_samples_ddim = model.decode_first_stage(samples_ddim)
+                        # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
+                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
-                            x_samples_ddim = model.decode_first_stage(samples_ddim)
-                            # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
-                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-
-                        if opt.diffusers:
-                            noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-                            if opt.method == "adaface":                                
-                                x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale[0], 
-                                                          batch_size, verbose=True)
-                            elif opt.method == "pulid":
-                                x_samples_ddim = []
-                                prompt = re.sub(r"a\s+z,? ", "", prompts[0])
-                                print("pulid:", prompt)
-                                for bi in range(batch_size):
-                                    sample = pipeline.inference(prompt, (1, 768, 768), opt.neg_prompt,
-                                                                id_embeddings, 0.8, 1.2, 4)[0]
-                                    sample = sample.resize((512, 512))
-                                    x_samples_ddim.append(sample)
-
-                        else:
+                    if opt.diffusers:
+                        noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
+                        if opt.method == "adaface":                                
+                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale[0], 
+                                                        batch_size, verbose=True)
+                        elif opt.method == "pulid":
                             x_samples_ddim = []
-                            blip_seed = 8888
-                            for i_sample, prompt in enumerate(prompts):
-                                stripped_prompt_parts = re.split("of z[, ]*", prompt)
-                                if stripped_prompt_parts[1] == "":
-                                    stripped_prompt = re.sub("^a ", "", stripped_prompt_parts[0])
-                                    stripped_prompt = stripped_prompt.strip()
-                                else:
-                                    stripped_prompt = stripped_prompt_parts[1].strip()
+                            prompt = re.sub(r"a\s+z,? ", "", prompts[0])
+                            print("pulid:", prompt)
+                            for bi in range(batch_size):
+                                sample = pipeline.inference(prompt, (1, 768, 768), opt.neg_prompt,
+                                                            id_embeddings, 0.8, 1.2, 4)[0]
+                                sample = sample.resize((512, 512))
+                                x_samples_ddim.append(sample)
 
-                                if i_sample == 0:
-                                    print("blip:", stripped_prompt)
+                    else:
+                        x_samples_ddim = []
+                        blip_seed = 8888
+                        for i_sample, prompt in enumerate(prompts):
+                            stripped_prompt_parts = re.split("of z[, ]*", prompt)
+                            if stripped_prompt_parts[1] == "":
+                                stripped_prompt = re.sub("^a ", "", stripped_prompt_parts[0])
+                                stripped_prompt = stripped_prompt.strip()
+                            else:
+                                stripped_prompt = stripped_prompt_parts[1].strip()
 
-                                stripped_prompts = [txt_preprocess["eval"](stripped_prompt)]
-                                samples_info = {
-                                    "cond_images":  None,
-                                    "cond_subject": cond_subjects,
-                                    "tgt_subject":  tgt_subjects,
-                                    "prompt":       stripped_prompts,
-                                }
+                            if i_sample == 0:
+                                print("blip:", stripped_prompt)
 
-                                samples = blip_model.generate(
-                                    samples_info,
-                                    seed=blip_seed + i_sample,
-                                    guidance_scale=7.5,
-                                    num_inference_steps=50,
-                                    neg_prompt=negative_prompt,
-                                    height=512,
-                                    width=512,
-                                )
-                                x_samples_ddim.append(samples[0])
+                            stripped_prompts = [txt_preprocess["eval"](stripped_prompt)]
+                            samples_info = {
+                                "cond_images":  None,
+                                "cond_subject": cond_subjects,
+                                "tgt_subject":  tgt_subjects,
+                                "prompt":       stripped_prompts,
+                            }
 
-                        if not opt.skip_save:
-                            indiv_subdir = batched_subdirs[p_i]
-                            class_long_prompt = batched_class_long_prompts[p_i]
-                            sample_dir = os.path.join(opt.outdir, indiv_subdir)
-                            os.makedirs(sample_dir, exist_ok=True)                            
+                            samples = blip_model.generate(
+                                samples_info,
+                                seed=blip_seed + i_sample,
+                                guidance_scale=7.5,
+                                num_inference_steps=50,
+                                neg_prompt=negative_prompt,
+                                height=512,
+                                width=512,
+                            )
+                            x_samples_ddim.append(samples[0])
 
-                            for i, x_sample in enumerate(x_samples_ddim):
-                                base_count = len(os.listdir(sample_dir))
+                    if not opt.skip_save:
+                        indiv_subdir = batched_subdirs[p_i]
+                        class_long_prompt = batched_class_long_prompts[p_i]
+                        sample_dir = os.path.join(opt.outdir, indiv_subdir)
+                        os.makedirs(sample_dir, exist_ok=True)                            
+
+                        for i, x_sample in enumerate(x_samples_ddim):
+                            base_count = len(os.listdir(sample_dir))
+                            sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
+
+                            while os.path.exists(sample_file_path):
+                                base_count += 1
                                 sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
-                                while os.path.exists(sample_file_path):
-                                    base_count += 1
-                                    sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
+                            if not opt.eval_blip and not opt.diffusers:
+                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
+                                Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
+                            else:
+                                # eval_blip. x_sample is already a PIL image.
+                                x_sample.save(sample_file_path)
+                                # Convert x_sample to a torch tensor with a compatible shape.
+                                # H, W, C => C, H, W
+                                x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1).float() / 255.
 
-                                if not opt.eval_blip and not opt.diffusers:
-                                    x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                    Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
-                                else:
-                                    # eval_blip. x_sample is already a PIL image.
-                                    x_sample.save(sample_file_path)
-                                    # Convert x_sample to a torch tensor with a compatible shape.
-                                    # H, W, C => C, H, W
-                                    x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1).float() / 255.
+                        if opt.eval_blip or opt.diffusers:
+                            x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
 
-                            if opt.eval_blip or opt.diffusers:
-                                x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
+                        if opt.compare_with:
+                            # There's an extra "None" after the last indiv_subdir in batched_subdirs 
+                            # as boundary detection. So no need to worry (p_i + 1) may go out of bound.
+                            next_indiv_subdir = batched_subdirs[p_i + 1]
+                            # indiv_subdir will change in the next batch, or this is the end of the loop. 
+                            # This means the current chunk (generated with the same prompt) is finished.
+                            # So we evaluate the current chunk.
+                            if next_indiv_subdir != indiv_subdir:
+                                print()
+                                sim_img, sim_text, sim_dino = \
+                                    compare_folders(clip_evator, dino_evator, 
+                                                    opt.compare_with, sample_dir, 
+                                                    class_long_prompt, len(prompts))
 
-                            if opt.compare_with:
-                                # There's an extra "None" after the last indiv_subdir in batched_subdirs 
-                                # as boundary detection. So no need to worry (p_i + 1) may go out of bound.
-                                next_indiv_subdir = batched_subdirs[p_i + 1]
-                                # indiv_subdir will change in the next batch, or this is the end of the loop. 
-                                # This means the current chunk (generated with the same prompt) is finished.
-                                # So we evaluate the current chunk.
-                                if next_indiv_subdir != indiv_subdir:
-                                    print()
-                                    sim_img, sim_text, sim_dino = \
-                                        compare_folders(clip_evator, dino_evator, 
-                                                        opt.compare_with, sample_dir, 
-                                                        class_long_prompt, len(prompts))
+                                all_sims_img.append(sim_img.item())
+                                all_sims_text.append(sim_text.item())
+                                all_sims_dino.append(sim_dino.item())
 
-                                    all_sims_img.append(sim_img.item())
-                                    all_sims_text.append(sim_text.item())
-                                    all_sims_dino.append(sim_dino.item())
+                                if opt.calc_face_sim:
+                                    sim_face, normal_img_count, except_img_count = \
+                                        compare_face_folders_fast(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
+                                                                    face_engine=opt.face_engine, insightface_app=insightface_app)
+                                    # sim_face is a float, so no need to detach().cpu().numpy().
+                                    all_sims_face.append(sim_face)
+                                    all_normal_img_counts.append(normal_img_count)
+                                    all_except_img_counts.append(except_img_count)
 
-                                    if opt.calc_face_sim:
-                                        sim_face, normal_img_count, except_img_count = \
-                                            compare_face_folders_fast(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
-                                                                      face_engine=opt.face_engine, insightface_app=insightface_app)
-                                        # sim_face is a float, so no need to detach().cpu().numpy().
-                                        all_sims_face.append(sim_face)
-                                        all_normal_img_counts.append(normal_img_count)
-                                        all_except_img_counts.append(except_img_count)
+                    if not opt.skip_grid:
+                        all_samples.append(x_samples_ddim)
 
-                        if not opt.skip_grid:
-                            all_samples.append(x_samples_ddim)
+                    sample_count += batch_size
 
-                        sample_count += batch_size
+            # After opt.n_repeat passes of batched_prompts, save all sample images as an image grid
+            if not opt.skip_grid:
+                # additionally, save as grid
+                # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
+                if opt.zeroshot and opt.compare_with:
+                    if opt.compare_with.endswith("/") or opt.compare_with.endswith("\\"):
+                        opt.compare_with = opt.compare_with[:-1]
+                    subj_gt_folder_name = os.path.basename(opt.compare_with)
 
-                # After opt.n_repeat passes of batched_prompts, save all sample images as an image grid
-                if not opt.skip_grid:
-                    # additionally, save as grid
-                    # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
-                    if opt.zeroshot and opt.compare_with:
-                        if opt.compare_with.endswith("/") or opt.compare_with.endswith("\\"):
-                            opt.compare_with = opt.compare_with[:-1]
-                        subj_gt_folder_name = os.path.basename(opt.compare_with)
+                if opt.method == "adaface":
+                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+                    if subjfolder_mat:
+                        date_sig = subjfolder_mat.group(2)
+                        # subjname_method: gabrielleunion-ada
+                        subjname_method = subjfolder_mat.group(3)
 
-                    if opt.method == "adaface":
-                        subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
-                        if subjfolder_mat:
-                            date_sig = subjfolder_mat.group(2)
-                            # subjname_method: gabrielleunion-ada
-                            subjname_method = subjfolder_mat.group(3)
-
-                        iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
-                        if iter_mat is not None:
-                            iter_sig = iter_mat.group(1)
-                        else:
-                            iter_sig = "unknown"
+                    iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
+                    if iter_mat is not None:
+                        iter_sig = iter_mat.group(1)
                     else:
-                        subjname_method = opt.method
+                        iter_sig = "unknown"
+                else:
+                    subjname_method = opt.method
 
-                        date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
-                        iter_sig = opt.method
+                    date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
+                    iter_sig = opt.method
 
-                    if opt.zeroshot:
-                        # all-ada => all-ada-gabrielleunion
-                        subjname_method += "-" + subj_gt_folder_name
+                if opt.zeroshot:
+                    # all-ada => all-ada-gabrielleunion
+                    subjname_method += "-" + subj_gt_folder_name
 
-                    if isinstance(opt.scale, (list, tuple)):
-                        scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
-                    else:
-                        scale_sig = f"scale{opt.scale:.1f}"
-                    experiment_sig = "-".join([date_sig, iter_sig, scale_sig])
+                if isinstance(opt.scale, (list, tuple)):
+                    scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
+                else:
+                    scale_sig = f"scale{opt.scale:.1f}"
+                experiment_sig = "-".join([date_sig, iter_sig, scale_sig])
 
-                    if opt.bb_type:
-                        experiment_sig += "-" + opt.bb_type
-                    if opt.neg_prompt != "":
-                        experiment_sig += "-neg"
+                if opt.bb_type:
+                    experiment_sig += "-" + opt.bb_type
+                if opt.neg_prompt != "":
+                    experiment_sig += "-neg"
 
-                    # Use the first prompt of the current chunk from opt.from_file as the saved file name.
-                    if opt.from_file:
-                        prompt = prompts[0]
-                    # Otherwise, use the prompt passed by the command line.
-                    prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
-                    grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}.jpg')
-                    if os.path.exists(grid_filepath):
-                        grid_count = 2
+                # Use the first prompt of the current chunk from opt.from_file as the saved file name.
+                if opt.from_file:
+                    prompt = prompts[0]
+                # Otherwise, use the prompt passed by the command line.
+                prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
+                grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}.jpg')
+                if os.path.exists(grid_filepath):
+                    grid_count = 2
+                    grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
+                    while os.path.exists(grid_filepath):
+                        grid_count += 1
                         grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
-                        while os.path.exists(grid_filepath):
-                            grid_count += 1
-                            grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
-                    img = save_grid(all_samples, None, grid_filepath, nrow=n_rows)
-                    
-                toc = time.time()
-            
+                img = save_grid(all_samples, None, grid_filepath, nrow=n_rows)
+                
+            toc = time.time()
+        
 
 
     if not opt.skip_grid:
