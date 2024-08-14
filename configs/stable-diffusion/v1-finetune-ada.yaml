@@ -22,7 +22,7 @@ model:
     # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
     embedding_manager_trainable: True
     conditioning_key: crossattn
-    monitor: val/loss_ema
+    monitor: train/loss_ema
     scale_factor: 0.18215
     unfreeze_model: False
     model_lr: 0.0
@@ -121,7 +121,7 @@ model:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
-        monitor: val/rec_loss
+        monitor: train/rec_loss
         ddconfig:
           double_z: true
           z_channels: 4

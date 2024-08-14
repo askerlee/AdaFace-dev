@@ -81,7 +81,7 @@ class DDPM(pl.LightningModule):
                  ckpt_path=None,
                  ignore_keys=[],
                  load_only_unet=False,
-                 monitor="val/loss",
+                 monitor="train/loss",
                  first_stage_key="image",
                  image_size=256,
                  channels=3,
