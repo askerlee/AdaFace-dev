@@ -15,7 +15,7 @@ model:
     cond_stage_trainable: false   
     embedding_manager_trainable: false
     conditioning_key: crossattn
-    monitor: train/loss_simple_ema
+    # monitor: train/loss_ema
     scale_factor: 0.18215
     use_layerwise_embedding: True
     unet_distill_iter_prob: 0
@@ -54,7 +54,7 @@ model:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
-        monitor: train/rec_loss
+        # monitor: train/rec_loss
         ddconfig:
           double_z: true
           z_channels: 4

@@ -81,7 +81,7 @@ class DDPM(pl.LightningModule):
                  ckpt_path=None,
                  ignore_keys=[],
                  load_only_unet=False,
-                 monitor="train/loss",
+                 monitor=None,
                  first_stage_key="image",
                  image_size=256,
                  channels=3,
@@ -771,18 +771,20 @@ class LatentDiffusion(DDPM):
             self.arc2face = None
             self.unet_teacher = None
 
-        if not self.unfreeze_model:
-            # cond_stage_model = FrozenCLIPEmbedder training = False.
-            self.cond_stage_model.eval()
-            self.cond_stage_model.train = disabled_train
-            for param in self.cond_stage_model.parameters():
-                param.requires_grad = False
+        # cond_stage_model = FrozenCLIPEmbedder training = False.
+        self.cond_stage_model.eval()
+        self.cond_stage_model.train = disabled_train
+        for param in self.cond_stage_model.parameters():
+            param.requires_grad = False
 
-            # self.model = DiffusionWrapper() training = False.
-            self.model.eval()
-            self.model.train = disabled_train
-            for param in self.model.parameters():
-                param.requires_grad = False
+        # self.model = DiffusionWrapper() training = False.
+        self.model.eval()
+        self.model.train = disabled_train
+        for param in self.model.parameters():
+            param.requires_grad = False
+        if not self.unfreeze_model:
+            for param in self.model.diffusion_model.parameters():
+                param.requires_grad = True            
         
         self.is_dreambooth = is_dreambooth
         self.db_reg_weight  = 1.
@@ -821,7 +823,6 @@ class LatentDiffusion(DDPM):
         ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
         self.cond_ids[:self.num_timesteps_cond] = ids
 
-    #@rank_zero_only
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
         if self.global_step == 0:
@@ -5134,10 +5135,9 @@ class LatentDiffusion(DDPM):
 
             opt_params_with_lrs += embedding_params_with_lrs
 
-        # unfreeze_model:
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_model: 
-            model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
+            model_params = list(self.model.diffusion_model.parameters())
             # model_lr: default 2e-6 set in finetune-unet.yaml.
             opt_params_with_lrs += [ {"params": model_params, "lr": self.model_lr} ]
 
@@ -5286,11 +5286,9 @@ class LatentDiffusion(DDPM):
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
 
-    @rank_zero_only
     def on_save_checkpoint(self, checkpoint):
-
-        if not self.unfreeze_model: # If we are not tuning the model itself, zero-out the checkpoint content to preserve memory.
-            checkpoint.clear()
+        #if not self.unfreeze_model: # If we are not tuning the model itself, zero-out the checkpoint content to preserve memory.
+        checkpoint.clear()
         
         if os.path.isdir(self.trainer.checkpoint_callback.dirpath): 
             if self.embedding_manager_trainable:

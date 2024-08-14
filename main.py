@@ -10,15 +10,11 @@ from packaging import version
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Dataset
 from functools import partial
-from PIL import Image
 
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import Callback
-# Do not remove ModelCheckpoint and LearningRateMonitor from import. 
-# They are USED in default_modelckpt_cfg and default_callbacks_cfg.
-from pytorch_lightning.callbacks import ModelCheckpoint, Callback, LearningRateMonitor
-from pytorch_lightning.utilities import rank_zero_only
+from pytorch_lightning.callbacks import Callback, LearningRateMonitor
 from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
@@ -426,11 +422,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
             self.predict_dataloader = self._predict_dataloader
         self.wrap = wrap
 
-    def prepare_data(self):
-        return None
-        #for data_cfg in self.dataset_configs.values():
-        #    instantiate_from_config(data_cfg)
-
     def setup(self, stage=None):
         self.datasets = dict(
             (k, instantiate_from_config(self.dataset_configs[k]))
@@ -442,13 +433,12 @@ class DataModuleFromConfig(pl.LightningDataModule):
 
     # _train_dataloader() is called within prepare_data().
     def _train_dataloader(self):
-        is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
-        if is_iterable_dataset or self.use_worker_init_fn:
+        if self.use_worker_init_fn:
             init_fn = worker_init_fn
         else:
             init_fn = None
         
-        shuffle = False if is_iterable_dataset else True
+        shuffle = False # if is_iterable_dataset else True
         # If there are multiple subjects, we use SubjectSampler to ensure that 
         # each batch contains data from one subject only.
         if self.datasets['train'].num_subjects > 1:
@@ -514,9 +504,6 @@ class SetupCallback(Callback):
             os.makedirs(self.ckptdir, exist_ok=True)
             os.makedirs(self.cfgdir, exist_ok=True)
 
-            if "callbacks" in self.lightning_config:
-                if 'metrics_over_trainsteps_checkpoint' in self.lightning_config['callbacks']:
-                    os.makedirs(os.path.join(self.ckptdir, 'trainstep_checkpoints'), exist_ok=True)
             print("Project config")
             print(OmegaConf.to_yaml(self.config))
             OmegaConf.save(self.config,
@@ -888,8 +875,7 @@ if __name__ == "__main__":
         logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
         trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
 
-        # modelcheckpoint - use TrainResult/EvalResult(checkpoint_on=metric) to
-        # specify which metric is used to determine best models
+        # modelcheckpoint - use monitor to specify which metric is used to determine best models
         default_modelckpt_cfg = {
             "target": "pytorch_lightning.callbacks.ModelCheckpoint",
             "params": {
@@ -897,23 +883,24 @@ if __name__ == "__main__":
                 "filename": "{epoch:06}",
                 "verbose": True,
                 "save_last": True,
+                "save_top_k": 0,
             }
         }
-        if hasattr(model, "monitor"):
-            print(f"Monitoring {model.monitor} as checkpoint metric.")
-            default_modelckpt_cfg["params"]["monitor"] = model.monitor
-            default_modelckpt_cfg["params"]["save_top_k"] = 1
 
         if "modelcheckpoint" in lightning_config:
             modelckpt_cfg = lightning_config.modelcheckpoint
         else:
             modelckpt_cfg =  OmegaConf.create()
         modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
+
+        if hasattr(model, "monitor"):
+            print(f"Monitoring {model.monitor} as checkpoint metric.")
+            modelckpt_cfg["params"]["monitor"] = model.monitor
+            modelckpt_cfg["params"]["save_top_k"] = 1
+
         # Maintain the same frequency of saving checkpoints when manual_accumulate_grad_batches > 1.
         # modelckpt_cfg.params.every_n_train_steps //= config.model.params.manual_accumulate_grad_batches
         print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
-        if version.parse(pl.__version__) < version.parse('1.4.0'):
-            trainer_kwargs["checkpoint_callback"] = instantiate_from_config(modelckpt_cfg)
 
         # add callback which sets up log directory
         default_callbacks_cfg = {
@@ -940,36 +927,14 @@ if __name__ == "__main__":
                 "target": "main.CUDACallback"
             },
         }
-        if version.parse(pl.__version__) >= version.parse('1.4.0'):
-            default_callbacks_cfg.update({'checkpoint_callback': modelckpt_cfg})
+        default_callbacks_cfg.update({'checkpoint_callback': modelckpt_cfg})
 
         if "callbacks" in lightning_config:
             callbacks_cfg = lightning_config.callbacks
         else:
             callbacks_cfg = OmegaConf.create()
 
-        if 'metrics_over_trainsteps_checkpoint' in callbacks_cfg:
-            print('Caution: Saving checkpoints every n train steps without deleting. This might require some free space.')
-            default_metrics_over_trainsteps_ckpt_dict = {
-                'metrics_over_trainsteps_checkpoint':
-                    {"target": 'pytorch_lightning.callbacks.ModelCheckpoint',
-                     'params': {
-                         "dirpath": os.path.join(ckptdir, 'trainstep_checkpoints'),
-                         "filename": "{epoch:06}-{step:09}",
-                         "verbose": True,
-                         'save_top_k': -1,
-                         'every_n_train_steps': 10000,
-                         'save_weights_only': True
-                     }
-                    }
-            }
-            default_callbacks_cfg.update(default_metrics_over_trainsteps_ckpt_dict)
-
         callbacks_cfg = OmegaConf.merge(default_callbacks_cfg, callbacks_cfg)
-        if 'ignore_keys_callback' in callbacks_cfg and hasattr(trainer_opt, 'resume_from_checkpoint'):
-            callbacks_cfg.ignore_keys_callback.params['ckpt_path'] = trainer_opt.resume_from_checkpoint
-        elif 'ignore_keys_callback' in callbacks_cfg:
-            del callbacks_cfg['ignore_keys_callback']
 
         trainer_kwargs["callbacks"] = [instantiate_from_config(callbacks_cfg[k]) for k in callbacks_cfg]
         trainer_kwargs["max_steps"] = trainer_opt.max_steps
