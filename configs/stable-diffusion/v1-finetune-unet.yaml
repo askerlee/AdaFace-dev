@@ -168,18 +168,12 @@ data:
         repeats: 100
         verbose: false
 
-    validation:
-      target: ldm.data.personalized.PersonalizedBase
-      params:
-        size: 512       # Image resolution
-        set_name: val
-        repeats: 10
-        verbose: false
-        
 lightning:
   modelcheckpoint:
     params:
-      every_n_train_steps: 500
+      # As we use manual_accumulate_grad_batches = 4, we save the model every 250 steps.
+      # In effect, we save the model every 1000 steps.
+      every_n_train_steps: 250
 
   trainer:
     benchmark: True

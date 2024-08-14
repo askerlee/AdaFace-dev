@@ -404,13 +404,11 @@ def worker_init_fn(_):
 
 # LightningDataModule: https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/datamodules.html
 # train: ldm.data.personalized.PersonalizedBase
-# validation path is the same as train.
 class DataModuleFromConfig(pl.LightningDataModule):
-    # train, validation: the corresponding section in the config file,
+    # train: the corresponding section in the config file,
     # used by instantiate_from_config(self.dataset_configs[k]).
-    def __init__(self, batch_size, max_steps, train=None, validation=None, test=None, predict=None,
-                 wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False,
-                 shuffle_val_dataloader=False):
+    def __init__(self, batch_size, max_steps, train=None, test=None, predict=None,
+                 wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False):
         super().__init__()
         self.batch_size = batch_size
         self.num_batches = max_steps
@@ -420,9 +418,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
         if train is not None:
             self.dataset_configs["train"] = train
             self.train_dataloader = self._train_dataloader
-        if validation is not None:
-            self.dataset_configs["validation"] = validation
-            self.val_dataloader = partial(self._val_dataloader, shuffle=shuffle_val_dataloader)
         if test is not None:
             self.dataset_configs["test"] = test
             self.test_dataloader = partial(self._test_dataloader, shuffle=shuffle_test_loader)
@@ -472,17 +467,6 @@ class DataModuleFromConfig(pl.LightningDataModule):
                           shuffle=shuffle, sampler=sampler,
                           num_workers=self.num_workers, 
                           worker_init_fn=init_fn, drop_last=True)
-
-    def _val_dataloader(self, shuffle=False):
-        if isinstance(self.datasets['validation'], Txt2ImgIterableBaseDataset) or self.use_worker_init_fn:
-            init_fn = worker_init_fn
-        else:
-            init_fn = None
-        return DataLoader(self.datasets["validation"],
-                          batch_size=self.batch_size,
-                          num_workers=self.num_workers,
-                          worker_init_fn=init_fn,
-                          shuffle=shuffle)
 
     def _test_dataloader(self, shuffle=False):
         is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
@@ -614,10 +598,6 @@ if __name__ == "__main__":
     #          target: path to train dataset
     #          params:
     #              key: value
-    #      validation:
-    #          target: path to validation dataset
-    #          params:
-    #              key: value
     #      test:
     #          target: path to test dataset
     #          params:
@@ -740,38 +720,27 @@ if __name__ == "__main__":
             config.data.params.max_steps = opt.max_steps
                     
         config.data.params.train.params.subject_string       = opt.subject_string
-        config.data.params.validation.params.subject_string  = opt.subject_string
         if hasattr(opt, 'subj_info_filepaths'):
             config.data.params.train.params.subj_info_filepaths      = opt.subj_info_filepaths
-            config.data.params.validation.params.subj_info_filepaths = opt.subj_info_filepaths
 
         # common_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix
-        config.data.params.validation.params.common_placeholder_prefix  = opt.common_placeholder_prefix   
         # broad_class
         config.data.params.train.params.broad_class             = opt.broad_class
-        config.data.params.validation.params.broad_class        = opt.broad_class
         config.data.params.train.params.default_cls_delta_string        = opt.default_cls_delta_string
-        config.data.params.validation.params.default_cls_delta_string   = opt.default_cls_delta_string
         if opt.subj_init_word_weights is not None and len(opt.subj_init_word_weights) > 0:
             assert len(opt.subj_init_word_weights) == len(re.split("\s+", opt.default_cls_delta_string))
 
         config.data.params.train.params.default_subj_initializer_word_weights       = opt.subj_init_word_weights
-        config.data.params.validation.params.default_subj_initializer_word_weights  = opt.subj_init_word_weights
         config.data.params.train.params.num_vectors_per_subj_token           = opt.num_vectors_per_subj_token
-        config.data.params.validation.params.num_vectors_per_subj_token      = opt.num_vectors_per_subj_token
         config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
-        config.data.params.validation.params.num_vectors_per_bg_token   = opt.num_vectors_per_bg_token
 
         config.data.params.train.params.wds_db_path                     = opt.wds_db_path
 
         if opt.background_string is not None:
             config.data.params.train.params.background_string           = opt.background_string
             config.data.params.train.params.wds_background_string       = opt.wds_background_string
-            config.data.params.validation.params.background_string      = opt.background_string
-            config.data.params.validation.params.wds_background_string  = opt.wds_background_string
             config.data.params.train.params.bg_init_string              = opt.bg_init_string
-            config.data.params.validation.params.bg_init_string         = opt.bg_init_string
 
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
         
@@ -780,13 +749,8 @@ if __name__ == "__main__":
         #  'wrap': False, 'train': {'target': 'ldm.data.personalized.PersonalizedBase', 
         #  'params': {'size': 512, 'set_name': 'train', 'repeats': 100, 
         #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}, 
-        #  'validation': {'target': 'ldm.data.personalized.PersonalizedBase', 
-        #  'params': {'size': 512, 'set_name': 'val', 'repeats': 10, 
-        #  'subject_string': 'z', 'data_roots': 'data/spikelee/'}}}}
         config.data.params.train.params.data_roots               = opt.data_roots
-        config.data.params.validation.params.data_roots          = opt.data_roots
         config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
-        config.data.params.validation.params.mix_subj_data_roots = opt.mix_subj_data_roots
         config.data.params.train.params.load_meta_subj2person_type_cache_path = opt.load_meta_subj2person_type_cache_path
         config.data.params.train.params.save_meta_subj2person_type_cache_path = opt.save_meta_subj2person_type_cache_path
 
@@ -799,7 +763,6 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.data.params.train.params.do_zero_shot        = opt.zeroshot
-        config.data.params.validation.params.do_zero_shot   = opt.zeroshot
 
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"

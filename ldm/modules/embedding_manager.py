@@ -905,6 +905,7 @@ class EmbeddingManager(nn.Module):
     
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
+    # If 'validation' is present in the config file,
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
     # -> .get_learned_conditioning() -> .cond_stage_model.encode()
     # -> EmbeddingManager.forward() -> here.

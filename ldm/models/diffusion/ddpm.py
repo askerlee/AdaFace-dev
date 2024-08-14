@@ -5296,7 +5296,7 @@ class LatentDiffusion(DDPM):
             if self.embedding_manager_trainable:
                 self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
-            elif self.unfreeze_model:
+            if self.unfreeze_model:
                 # Save the UNetModel state_dict.
                 torch.save(self.model.diffusion_model.state_dict(), 
                            os.path.join(self.trainer.checkpoint_callback.dirpath, f"unet-{self.global_step}.pt"))

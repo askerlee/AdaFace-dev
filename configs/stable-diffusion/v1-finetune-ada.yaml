@@ -162,14 +162,6 @@ data:
         repeats: 100
         verbose: false
 
-    validation:
-      target: ldm.data.personalized.PersonalizedBase
-      params:
-        size: 512       # Image resolution
-        set_name: val
-        repeats: 10
-        verbose: false
-        
 lightning:
   modelcheckpoint:
     params:
