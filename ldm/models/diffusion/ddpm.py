@@ -1,11 +1,3 @@
-"""
-wild mixture of
-https://github.com/lucidrains/denoising-diffusion-pytorch/blob/7706bdfc6f527f58d33f84b7b522e61e6e3164b3/denoising_diffusion_pytorch/denoising_diffusion_pytorch.py
-https://github.com/openai/improved-diffusion/blob/e94489283bb876ac1477d5dd7709bbbd2d9902ce/improved_diffusion/gaussian_diffusion.py
-https://github.com/CompVis/taming-transformers
--- merci
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,17 +7,13 @@ import numpy as np
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR, ConstantLR, \
                                      PolynomialLR, CosineAnnealingWarmRestarts, CyclicLR
-from einops import rearrange, repeat
-from contextlib import contextmanager
-from tqdm import tqdm
-from torchvision.utils import make_grid
+from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
 from insightface.app import FaceAnalysis
 import bitsandbytes as bnb
 
-from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_flat, \
-                        count_params, calc_stats, instantiate_from_config, SequentialLR2, \
+from ldm.util import    exists, default, count_params, calc_stats, instantiate_from_config, SequentialLR2, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_dyn_loss_scale, \
                         save_grid, chunk_list, normalize_dict_values, normalized_sum, masked_mean, \
                         join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
@@ -38,10 +26,9 @@ from ldm.util import    log_txt_as_img, exists, default, ismap, isimage, mean_fl
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         anneal_add_noise_to_embedding
 
-from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianDistribution
-from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
-from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
-from ldm.models.diffusion.ddim import DDIMSampler
+from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+from ldm.models.autoencoder import VQModelInterface
+from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
 from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
@@ -96,8 +83,7 @@ class DDPM(pl.LightningModule):
                  accumulate_grad_batches=1,
                  adam_config=None,
                  prodigy_config=None,
-                 logvar_init=0.,
-                 use_layerwise_embedding=False,
+                 use_layerwise_embedding=True,
                  composition_regs_iter_gap=3,
                  static_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
@@ -115,7 +101,7 @@ class DDPM(pl.LightningModule):
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=True,
-                 unet_distill_iter_prob=0,
+                 p_unet_distill_iter=0,
                  unet_teacher_type='arc2face',
                  extra_unet_paths=None,
                  unet_weights=None,
@@ -158,7 +144,7 @@ class DDPM(pl.LightningModule):
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
-        self.unet_distill_iter_prob                 = unet_distill_iter_prob if (do_zero_shot and self.training) \
+        self.p_unet_distill_iter                 = p_unet_distill_iter if (do_zero_shot and self.training) \
                                                         else 0
         self.unet_teacher_type                      = unet_teacher_type
         self.extra_unet_paths                       = extra_unet_paths
@@ -356,41 +342,6 @@ class DDPM(pl.LightningModule):
 
         return loss
 
-    def p_losses(self, x_start, t, noise=None):
-        noise = default(noise, lambda: torch.randn_like(x_start))
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-        model_out = self.model(x_noisy, t)
-
-        loss_dict = {}
-        if self.parameterization == "eps":
-            target = noise
-        elif self.parameterization == "x0":
-            target = x_start
-        else:
-            raise NotImplementedError(f"Paramterization {self.parameterization} not yet supported")
-
-        loss = self.get_loss(model_out, target, mean=False).mean(dim=[1, 2, 3])
-
-        log_prefix = 'train' if self.training else 'val'
-
-        loss_dict.update({f'{log_prefix}/loss_recon': loss.mean().detach()})
-        loss_recon = loss.mean()
-
-        loss_vlb = (self.lvlb_weights[t] * loss).mean()
-        loss_dict.update({f'{log_prefix}/loss_vlb': loss_vlb.mean().detach()})
-
-        loss = loss_recon + self.original_elbo_weight * loss_vlb
-
-        loss_dict.update({f'{log_prefix}/loss': loss.mean().detach()})
-
-        return loss, loss_dict
-
-    def forward(self, x, *args, **kwargs):
-        # b, c, h, w, device, img_size, = *x.shape, x.device, self.image_size
-        # assert h == img_size and w == img_size, f'height and width of image must be {img_size}'
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
-        return self.p_losses(x, t, *args, **kwargs)
-
     def get_input(self, batch, k):
         x = batch[k]
 
@@ -484,8 +435,8 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['calc_clip_loss']   = True
                 self.iter_flags['do_normal_recon']  = False
 
-        if self.iter_flags['do_normal_recon'] and self.unet_distill_iter_prob > 0:
-            if np.random.rand() < self.unet_distill_iter_prob:
+        if self.iter_flags['do_normal_recon'] and self.p_unet_distill_iter > 0:
+            if np.random.rand() < self.p_unet_distill_iter:
                 self.iter_flags['do_unet_distill'] = True
                 # Disable do_static_prompt_delta_reg during unet distillation.
                 self.iter_flags['do_static_prompt_delta_reg'] = False
@@ -565,7 +516,7 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
             
-        if self.unet_distill_iter_prob > 0:
+        if self.p_unet_distill_iter > 0:
             # arc2face is initialized after the model is loaded from ckpt,
             # to avoid warning of many missing keys.
             self.arc2face = Arc2FaceTeacher()
@@ -611,8 +562,9 @@ class LatentDiffusion(DDPM):
         if self.do_zero_shot:
             # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
             # which is used to generate the subject embeddings for subject-single prompts.
-            self.embedding_manager.make_frozen_copy_of_subj_basis_generators()
-            
+            self.embedding_manager.make_frozen_copy_of_subj_basis_generators()        
+            self.instantiate_zero_shot_image_encoders()
+
         if self.arc2face is not None:
             # Let embedding_manager share the text_encoder with arc2face, to save some RAM.
             self.embedding_manager.arc2face_text_encoder = self.arc2face.text_encoder
@@ -716,9 +668,6 @@ class LatentDiffusion(DDPM):
         self.clip_image_encoder.half()
         print(f'{clip_model_tag} image encoder loaded on {self.device}.')
 
-        # BUG: If device='cpu', then it will throw an exception.
-        gpu_id = re.findall(r'\d+', str(self.device)).pop()
-        gpu_id = int(gpu_id)
         '''
         {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
          'landmark_2d_106': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc2b0>, 
@@ -729,9 +678,12 @@ class LatentDiffusion(DDPM):
         # Use the same model as Arc2Face does.
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
-        self.insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-        self.insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
-        print(f'Face encoder loaded on {self.device}.')
+        # Note DON'T use CUDAExecutionProvider, as it will hang DDP training. 
+        # Seems when loading insightface onto the GPU, it will only reside on the first GPU. 
+        # Then the process on the second GPU has issue to communicate with insightface on the first GPU, causing hanging.
+        self.insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
+        self.insightface_app.prepare(ctx_id=0, det_size=(512, 512))
+        print(f'Face encoder loaded on CPU.')
 
         if not only_faces:
             self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
@@ -786,7 +738,7 @@ class LatentDiffusion(DDPM):
                     if self.iter_flags['is_compos_iter']:
                         embman_iter_type = 'compos_distill_iter'
                     elif apply_arc2face_embs:
-                        embman_iter_type = 'arc2face_clip_iter'
+                        embman_iter_type = 'arc2face_clip_iter'     # Only for inference.
                     else:
                         embman_iter_type = 'recon_iter'
                 # Update the iteration type of the embedding manager, according to the arguments passed in.
@@ -999,7 +951,7 @@ class LatentDiffusion(DDPM):
         # between the two in the batch, if it's above the usable threshold.
         # do_comp_teacher_filter and reuse_init_conds are mutually exclusive.
         self.iter_flags['do_comp_teacher_filter'] = (self.do_comp_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
-                                                and not self.iter_flags['reuse_init_conds'])
+                                                     and not self.iter_flags['reuse_init_conds'])
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
@@ -1161,17 +1113,13 @@ class LatentDiffusion(DDPM):
                 cls_comp_prompts.append(prompt_comp.split("|"))
             # REPEATS: how many prompts correspond to each image.
             REPEATS = len(subj_comp_prompts[0])
-            if REPEATS == 1 or self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:
-                subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
-                cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
-                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-            else:
-                # Too complicated and not helpful. Disabled
-                breakpoint()
+            # Currently only support REPEATS == 1.
+            assert REPEATS == 1
+            subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
+            cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
+            delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
             if self.iter_flags['use_wds_comp']:
-                # TODO: Currently only support REPEATS == 1.
-                assert REPEATS == 1
                 # wds_comp_extras is a list of wds compositional extra substrings.
                 # Never include the class token in wds_comp_extras, i.e. don't use wds_cls_comp_extra.
                 # Because the 4-type prompts are for distillation, which don't use the class token.
@@ -1223,7 +1171,7 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = False
 
-        # do_unet_distill is only True in do_normal_recon iters.
+        # do_unet_distill == do_normal_recon and random() < p_unet_distill_iter.
         # p_gen_arc2face_rand_face: 0.4
         if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_arc2face_rand_face:
             self.iter_flags['gen_arc2face_rand_face'] = True
@@ -1267,7 +1215,7 @@ class LatentDiffusion(DDPM):
                                                          # iter_flags['is_face'] is a list of 0/1 elements.
                                                          is_face=self.iter_flags['is_face'][0],
                                                          calc_avg=use_subj_avg_embedding)
-                
+                                
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
                 p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
@@ -1304,7 +1252,7 @@ class LatentDiffusion(DDPM):
                                                                end_noise_std_range=None, 
                                                                add_noise_prob=1, noise_std_is_relative=True, 
                                                                keep_norm=True)
-                
+
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
@@ -1451,6 +1399,8 @@ class LatentDiffusion(DDPM):
         # whose behavior depends on the correct embman_iter_type.
         if self.iter_flags['is_compos_iter']:
             embman_iter_type = 'compos_distill_iter'
+        elif self.iter_flags['use_unet_teacher_as_target']:
+            embman_iter_type = 'unet_distill_iter'
         else:
             embman_iter_type = 'recon_iter'
         # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning(), instead of here.
@@ -2326,8 +2276,9 @@ class LatentDiffusion(DDPM):
                                                        bg_pixel_weight,
                                                        x_start.shape[0], loss_dict, prefix)
                 loss += loss_fg_bg_contrast + loss_recon
-                if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                    print(f"Rank {self.trainer.global_rank} Step 0: {t.tolist()}, {loss_recon.item():.5f}")
+                if True:
+                    print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {loss_recon.item():.5f}")
+            # do_unet_distill
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
@@ -2384,13 +2335,13 @@ class LatentDiffusion(DDPM):
                                                 unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
                         model_outputs.append(model_output2)
                 else:
+                    # Otherwise, use the original image as target. 
+                    # num_denoising_steps = 1, initialized in init_iteration_flags().
+                    # target == noise.
                     loss_start_step = 0
                     targets         = [target]
                     model_outputs   = [model_output]
                     ts              = [t]
-
-                # Otherwise, use the original image as target and num_denoising_steps = 1. 
-                # We don't need to change target or anything.
 
                 loss_recons = []
                 for s in range(num_denoising_steps - loss_start_step):
@@ -2419,13 +2370,13 @@ class LatentDiffusion(DDPM):
                                                              bg_pixel_weight=bg_pixel_weight)
 
                     loss_recons.append(loss_recon)
-                    if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+                    if True:
                         print(f"Rank {self.trainer.global_rank} Step {s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
                 # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
-                loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
+                loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
                 loss += loss_recon
 
         ###### begin of preparation for is_compos_iter ######
@@ -2875,14 +2826,14 @@ class LatentDiffusion(DDPM):
                                                             )
 
             if loss_fg_bg_complementary > 0:
-                loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach()})
+                loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach().item()})
             # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
             if loss_subj_mb_suppress > 0:
-                loss_dict.update({f'{prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach()})
+                loss_dict.update({f'{prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
             if loss_bg_mf_suppress > 0:
-                loss_dict.update({f'{prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach()})
+                loss_dict.update({f'{prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach().item()})
             if loss_fg_bg_mask_contrast > 0:
-                loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach()})
+                loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach().item()})
 
             # Reduce the scale of loss_fg_bg_complementary if do_zero_shot, as it hurts performance. 
             loss_fg_bg_complementary_scale = 0.2 if self.do_zero_shot else 1
@@ -2930,14 +2881,14 @@ class LatentDiffusion(DDPM):
                                                             )
 
             if loss_fg_wds_complementary > 0:
-                loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach()})
+                loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach().item()})
             # If fg_mask is None, then loss_subj_mb_suppress_wds = loss_wds_mask_align = 0.
             if loss_subj_mb_suppress_wds > 0:
-                loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach()})
+                loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach().item()})
             if loss_wds_mask_align > 0:
-                loss_dict.update({f'{prefix}/wds_mask_align': loss_wds_mask_align.mean().detach()})
+                loss_dict.update({f'{prefix}/wds_mask_align': loss_wds_mask_align.mean().detach().item()})
             if loss_fg_wds_mask_contrast > 0:
-                loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach()})
+                loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach().item()})
 
             fg_wds_comple_loss_scale    = 1
             wds_mask_align_loss_scale   = 1
@@ -2951,7 +2902,7 @@ class LatentDiffusion(DDPM):
                                              fg_pixel_weight=1,
                                              bg_pixel_weight=bg_pixel_weight)
 
-        loss_dict.update({f'{prefix}/loss_recon': loss_recon.detach()})
+        loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
 
         return loss_fg_bg_contrast, loss_recon
 

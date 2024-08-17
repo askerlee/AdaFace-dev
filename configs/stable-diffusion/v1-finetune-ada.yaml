@@ -32,8 +32,8 @@ model:
     num_candidate_teachers:           2
     composition_regs_iter_gap:        3
     do_zero_shot:                     True
-    # The percentage of arc2face_distill_iter among do_normal_recon iters.
-    unet_distill_iter_prob:       0.1
+    # The percentage of unet_distill_iter among do_normal_recon iters.
+    p_unet_distill_iter:       0.1
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5
@@ -87,13 +87,13 @@ model:
         background_strings:       ['y']
         initializer_strings:      ["person", "unknown"]
         subj_name_to_cls_delta_string: { 'z': "person" }
-        num_vectors_per_subj_token: 9
+        num_vectors_per_subj_token:         16
         use_layerwise_embedding: True
         training_begin_add_noise_std_range:  [ 0.02, 0.04 ]
         training_end_add_noise_std_range:    [ 0.02, 0.04 ]
         # probs for recon_iter and compos_distill_iter, respectively
         training_add_noise_prob:   { 'recon_iter':            0.6, 
-                                     'arc2face_distill_iter': 0,
+                                     'unet_distill_iter':     0,
                                      'compos_distill_iter':   0.4 }
         embedding_manager_ckpt:             null
         # Load the ada components from these placeholders in the checkpoint.

@@ -715,7 +715,7 @@ class EmbeddingManager(nn.Module):
                     # One potential issue is the delta loss may slowly degrade the identity information in the embeddings.
                     # So we will replace the subject-single embeddings when computing the delta loss in ddpm.py later.
                     if self.training and not placeholder_is_bg and self.iter_type in ['compos_distill_iter']: #, 'recon_iter']:
-                        # compos_distill_iter is with same_subject_in_batch=True. 
+                        # compos_distill_iter always has same_subject_in_batch == True. 
                         # So zs_id_embs: [1, 512].
                         if zs_id_embs.shape[0] != 1:
                             breakpoint()
@@ -1363,51 +1363,3 @@ class EmbeddingManager(nn.Module):
             return self.layerwise_embedding_norm_loss()
         else:
             return self.embedding_attractor_loss()
-
-    # NOTE: calc_fg_bg_token_embs_ortho_loss() is DISABLED if do_zero_shot but not same_subject_in_batch,
-    # i.e., do_zero_shot and different subjects are sampled in the same batch,
-    # because the fg/bg ortho loss with multiple subjects will be too complicated, esp. considering
-    # that in a compositional iteration, only the first prompt (corresponding to the first subject) is active.
-    def calc_fg_bg_token_embs_ortho_loss(self, fg_bg_string_lists=None, fg_grad_scale=0.5):
-        if fg_bg_string_lists is None:
-            fg_bg_string_lists = list(filter(lambda k: k in self.subject_string_dict,    self.static_subj_embs_dict)), \
-                                 list(filter(lambda k: k in self.background_string_dict, self.static_subj_embs_dict))
-            #print(fg_bg_string_lists)
-
-        loss_fg_bg_token_emb_ortho = 0.
-        num_fg_bg_pairs = 0
-
-        # Sum of pairwise fg/bg token embedding ortho losses.
-        for fg_string in fg_bg_string_lists[0]:
-            for bg_string in fg_bg_string_lists[1]:
-                fg_static_token_emb         = self.static_subj_embs_dict[fg_string]
-                bg_static_token_emb         = self.static_subj_embs_dict[bg_string]
-
-                # fg_hybrid_token_emb: [16, 9, 768]. 16: num layers. 9: num vectors.
-                # bg_hybrid_token_emb: [16, 4, 768]. 16: num layers. 4: num vectors.
-                fg_hybrid_token_emb = fg_static_token_emb
-                bg_hybrid_token_emb = bg_static_token_emb
-                
-                '''
-                fg_hybrid_token_emb = fg_static_token_emb
-                bg_hybrid_token_emb = bg_static_token_emb
-                '''
-
-                # fg_hybrid_token_emb, bg_hybrid_token_emb: [16, 768]. 16: num layers.
-                fg_hybrid_token_mean_emb = fg_hybrid_token_emb.mean(dim=1)
-                bg_hybrid_token_mean_emb = bg_hybrid_token_emb.mean(dim=1)
-
-                loss_fg_bg_pair_token_emb_ortho = \
-                    calc_ref_cosine_loss(bg_hybrid_token_mean_emb, fg_hybrid_token_mean_emb, 
-                                         exponent=2, do_demean_first=False,
-                                         first_n_dims_to_flatten=1, 
-                                         ref_grad_scale=fg_grad_scale,
-                                         aim_to_align=False)
-                
-                loss_fg_bg_token_emb_ortho += loss_fg_bg_pair_token_emb_ortho
-                num_fg_bg_pairs += 1
-        
-        if num_fg_bg_pairs == 0:
-            return 0.
-        else:
-            return loss_fg_bg_token_emb_ortho / num_fg_bg_pairs

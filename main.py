@@ -224,7 +224,7 @@ def get_parser(**parser_kwargs):
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=-1,
                         help="Multiplier of the prompt2token projection attention")
-    parser.add_argument("--unet_distill_iter_prob", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--p_unet_distill_iter", type=float, default=argparse.SUPPRESS,
                         help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")
     parser.add_argument("--unet_teacher_type", type=str, default="arc2face",
                         choices=["arc2face", "unet_ensemble"], help="Type of the UNet teacher")
@@ -769,11 +769,12 @@ if __name__ == "__main__":
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
 
-        if hasattr(opt, 'unet_distill_iter_prob'):
-            config.model.params.unet_distill_iter_prob = opt.unet_distill_iter_prob
-            config.model.params.unet_teacher_type = opt.unet_teacher_type
-            config.model.params.extra_unet_paths = opt.extra_unet_paths
-            config.model.params.unet_weights = opt.unet_weights
+        if hasattr(opt, 'p_unet_distill_iter'):
+            config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
+            config.model.params.unet_teacher_type   = opt.unet_teacher_type
+            config.model.params.extra_unet_paths    = opt.extra_unet_paths
+            # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
+            config.model.params.unet_weights        = opt.unet_weights
 
         config.model.params.load_old_embman_ckpt = opt.load_old_embman_ckpt
 
