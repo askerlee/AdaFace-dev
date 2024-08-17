@@ -54,7 +54,7 @@ Our face segmentation and filtering code is [gen_face_masks.py](/scripts-private
 ## Training
 The training are divided into two stages: training the AdaFace inverse encoder by distillation on Arc2Face, and training the AdaFace with compositionality distillation.
 
-In all training stages, `manual_accumulate_grad_batches` is set to 2 in the `configs/stable-diffusion/v1-finetune-ada.yaml` file. This is to double the effective batch size from 4 to 8 (Stage 1) or 3 to 6 (Stage 2) for faster convergence. As a result, say after 120000 iterations with bs=4, the final checkpoint is equivalent to training with a batch size of 8 for 60000 iterations, and saved into a file `embeddings_gs-60000.pt`.
+In all training stages, `accumulate_grad_batches` is set to 2 in the `configs/stable-diffusion/v1-finetune-ada.yaml` file. This is to double the effective batch size from 4 to 8 (Stage 1) or 3 to 6 (Stage 2) for faster convergence. As a result, say after 120000 iterations with bs=4, the final checkpoint is equivalent to training with a batch size of 8 for 60000 iterations, and saved into a file `embeddings_gs-60000.pt`.
 
 ### Stage 1: Training AdaFace Inverse Encoder
 In this stage, we only do image reconstruction by learning from an [Arc2Face](https://github.com/foivospar/Arc2Face) teacher model.

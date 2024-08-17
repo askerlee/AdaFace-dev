@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 from transformers import CLIPTokenizer
 from adaface.util import get_arc2face_id_prompt_embs
 from diffusers import UNet2DConditionModel
+from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.arc2face_models import CLIPTextModelWrapper
 from adaface.util import UNetEnsemble
 
@@ -95,6 +96,7 @@ class UNetEnsembleTeacher(UNetTeacher):
     def __init__(self, unet, extra_unet_paths, unet_weights, device, **kwargs):
         super().__init__()
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
+
 
 '''
 class ConsistentIDTeacher(UNetTeacher):

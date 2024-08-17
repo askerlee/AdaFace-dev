@@ -3,24 +3,20 @@ import numpy as np
 import time
 import torch
 
-import torchvision
 import pytorch_lightning as pl
 
-from packaging import version
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader, Dataset
 from functools import partial
 
 from pytorch_lightning import seed_everything
 from pytorch_lightning.trainer import Trainer
-from pytorch_lightning.callbacks import Callback
 from pytorch_lightning.callbacks import Callback, LearningRateMonitor
 from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
 from ldm.util import instantiate_from_config, extend_nn_embedding
-import re
 
 def get_parser(**parser_kwargs):
     def str2bool(v):
@@ -146,8 +142,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--optimizer", dest='optimizer_type',
                         type=str, default=argparse.SUPPRESS, choices=['AdamW', 'Prodigy'],
                         help="Type of optimizer")
-    parser.add_argument("--manual_accumulate_grad_batches", type=int, default=argparse.SUPPRESS,
-                        help="Number of manually accumulate grad batches")
     parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS,
                         help="Number of warm up steps")
     
@@ -198,10 +192,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--bg_init_string", 
         type=str, default="unknown",    # 'unknown' is a wild-card word to match various actual background patterns.
         help="Words used to initialize background embedding")
-
-    parser.add_argument("--subj_init_word_weights", nargs="*", 
-        type=float, 
-        help="Weights of each token in default_cls_delta_string/subj_init_string")
 
     # default_cls_delta_string is also used as subj_init_string.
     parser.add_argument("--default_cls_delta_string",
@@ -311,12 +301,10 @@ def nondefault_trainer_args(opt):
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
     if not opt.zeroshot:
-        personalization_config_params.subject_strings                     = dataset.subject_strings
-        personalization_config_params.initializer_strings                 = dataset.cls_delta_strings
-        personalization_config_params.list_initializer_word_weights       = dataset.list_subj_initializer_word_weights
+        personalization_config_params.subject_strings                    = dataset.subject_strings
+        personalization_config_params.initializer_strings                = dataset.cls_delta_strings
         personalization_config_params.subj_name_to_cls_delta_string      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-        personalization_config_params.subj_name_to_cls_delta_word_weights = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
-        personalization_config_params.token2num_vectors         = dict()
+        personalization_config_params.token2num_vectors                  = dict()
         for subject_string in dataset.subject_strings:
             personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
 
@@ -324,7 +312,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             config.model.params.use_background_token = True
             personalization_config_params.background_strings             = dataset.background_strings
             personalization_config_params.initializer_strings           += dataset.bg_initializer_strings
-            personalization_config_params.list_initializer_word_weights += dataset.list_bg_initializer_word_weights
 
             for background_string in dataset.background_strings:
                 personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
@@ -333,7 +320,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             # wds_background_strings share the same settings of the background string.
             personalization_config_params.background_strings        += dataset.wds_background_strings
             personalization_config_params.initializer_strings       += dataset.bg_initializer_strings
-            personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights
 
             for wds_background_string in dataset.wds_background_strings:
                 personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
@@ -341,9 +327,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         # Only keep the first subject and background placeholder.
         personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
         personalization_config_params.initializer_strings                   = ["person"]
-        personalization_config_params.list_initializer_word_weights         = [None]
-        personalization_config_params.subj_name_to_cls_delta_string        = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-        personalization_config_params.subj_name_to_cls_delta_word_weights   = dict(zip(dataset.subject_names, dataset.list_subj_initializer_word_weights))
+        personalization_config_params.subj_name_to_cls_delta_string         = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.token2num_vectors         = dict()
         for subject_string in dataset.subject_strings[:1]:
             personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
@@ -352,7 +336,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             config.model.params.use_background_token = True
             personalization_config_params.background_strings              = dataset.background_strings[:1]
             personalization_config_params.initializer_strings            += dataset.bg_initializer_strings[:1]
-            personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights[:1]
 
             for background_string in dataset.background_strings[:1]:
                 personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
@@ -361,7 +344,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             # wds_background_strings share the same settings of the background string.
             personalization_config_params.background_strings        += dataset.wds_background_strings[:1]
             personalization_config_params.initializer_strings       += dataset.bg_initializer_strings[:1]
-            personalization_config_params.list_initializer_word_weights  += dataset.list_bg_initializer_word_weights[:1]
 
             for wds_background_string in dataset.wds_background_strings[:1]:
                 personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
@@ -659,7 +641,7 @@ if __name__ == "__main__":
         logdir = os.path.join(opt.logdir, nowname)
 
     ckptdir = os.path.join(logdir, "checkpoints")
-    cfgdir = os.path.join(logdir, "configs")
+    cfgdir  = os.path.join(logdir, "configs")
     # If do zeroshot and setting seed, then the whole training sequence is deterministic, limiting the random space
     # it can explore. Therefore we don't set seed when doing zero-shot learning.
     if not opt.zeroshot:
@@ -696,38 +678,34 @@ if __name__ == "__main__":
             config.data.params.batch_size = opt.bs
         trainer_opt.num_nodes = opt.num_nodes
 
-        # manual_accumulate_grad_batches: Default is 2, specified in v1-finetune-ada.yaml.
+        # accumulate_grad_batches: Default is 2, specified in v1-finetune-ada.yaml.
         # If specified in command line, then override the default value.
-        if hasattr(opt, 'manual_accumulate_grad_batches'):
-            config.model.params.manual_accumulate_grad_batches = opt.manual_accumulate_grad_batches
+        if opt.accumulate_grad_batches is not None:
+            config.model.params.accumulate_grad_batches = opt.accumulate_grad_batches
 
         if opt.max_steps > 0:
-            trainer_opt.max_steps = opt.max_steps // config.model.params.manual_accumulate_grad_batches
+            trainer_opt.max_steps = opt.max_steps // config.model.params.accumulate_grad_batches
             # max_steps: Used to initialize DataModuleFromConfig.
             config.data.params.max_steps = opt.max_steps
                     
-        config.data.params.train.params.subject_string       = opt.subject_string
+        config.data.params.train.params.subject_string = opt.subject_string
         if hasattr(opt, 'subj_info_filepaths'):
-            config.data.params.train.params.subj_info_filepaths      = opt.subj_info_filepaths
+            config.data.params.train.params.subj_info_filepaths     = opt.subj_info_filepaths
 
         # common_placeholder_prefix
-        config.data.params.train.params.common_placeholder_prefix       = opt.common_placeholder_prefix
+        config.data.params.train.params.common_placeholder_prefix   = opt.common_placeholder_prefix
         # broad_class
-        config.data.params.train.params.broad_class             = opt.broad_class
-        config.data.params.train.params.default_cls_delta_string        = opt.default_cls_delta_string
-        if opt.subj_init_word_weights is not None and len(opt.subj_init_word_weights) > 0:
-            assert len(opt.subj_init_word_weights) == len(re.split("\s+", opt.default_cls_delta_string))
+        config.data.params.train.params.broad_class                 = opt.broad_class
+        config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
+        config.data.params.train.params.num_vectors_per_subj_token  = opt.num_vectors_per_subj_token
+        config.data.params.train.params.num_vectors_per_bg_token    = opt.num_vectors_per_bg_token
 
-        config.data.params.train.params.default_subj_initializer_word_weights       = opt.subj_init_word_weights
-        config.data.params.train.params.num_vectors_per_subj_token           = opt.num_vectors_per_subj_token
-        config.data.params.train.params.num_vectors_per_bg_token        = opt.num_vectors_per_bg_token
-
-        config.data.params.train.params.wds_db_path                     = opt.wds_db_path
+        config.data.params.train.params.wds_db_path                 = opt.wds_db_path
 
         if opt.background_string is not None:
-            config.data.params.train.params.background_string           = opt.background_string
-            config.data.params.train.params.wds_background_string       = opt.wds_background_string
-            config.data.params.train.params.bg_init_string              = opt.bg_init_string
+            config.data.params.train.params.background_string       = opt.background_string
+            config.data.params.train.params.wds_background_string   = opt.wds_background_string
+            config.data.params.train.params.bg_init_string          = opt.bg_init_string
 
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
         
@@ -743,13 +721,13 @@ if __name__ == "__main__":
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
-        config.model.params.p_gen_arc2face_rand_face  = opt.p_gen_arc2face_rand_face
-        config.model.params.max_num_denoising_steps   = opt.max_num_denoising_steps
+        config.model.params.p_gen_arc2face_rand_face    = opt.p_gen_arc2face_rand_face
+        config.model.params.max_num_denoising_steps     = opt.max_num_denoising_steps
         config.model.params.p_add_noise_to_real_id_embs = opt.p_add_noise_to_real_id_embs
         config.model.params.extend_prompt2token_proj_attention_multiplier = opt.extend_prompt2token_proj_attention_multiplier
 
-        config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
-        config.data.params.train.params.do_zero_shot        = opt.zeroshot
+        config.model.params.personalization_config.params.do_zero_shot  = opt.zeroshot
+        config.data.params.train.params.do_zero_shot                    = opt.zeroshot
 
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
@@ -898,8 +876,8 @@ if __name__ == "__main__":
             modelckpt_cfg["params"]["monitor"] = model.monitor
             modelckpt_cfg["params"]["save_top_k"] = 1
 
-        # Maintain the same frequency of saving checkpoints when manual_accumulate_grad_batches > 1.
-        # modelckpt_cfg.params.every_n_train_steps //= config.model.params.manual_accumulate_grad_batches
+        # Maintain the same frequency of saving checkpoints when accumulate_grad_batches > 1.
+        # modelckpt_cfg.params.every_n_train_steps //= config.model.params.accumulate_grad_batches
         print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
 
         # add callback which sets up log directory

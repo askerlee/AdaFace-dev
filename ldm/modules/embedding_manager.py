@@ -218,8 +218,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 # Initialize static embedders.
 def create_static_embedders(out_emb_dim, num_layers_per_embedder, num_vectors_per_subj_token, 
                             initializer_string, init_word_embeddings, 
-                            init_word_weights, placeholder_string, avg_init_word_embedding_3d, 
-                            do_zero_shot):
+                            init_word_weights, placeholder_string, do_zero_shot):
     # A static embedder can generate K embeddings.
     # num_layers_per_embedder = num_unet_ca_layers
     token_static_embedder   = StaticLayerwiseEmbedding(num_layers_per_embedder, 
@@ -244,9 +243,7 @@ class EmbeddingManager(nn.Module):
             # If background_strings are specified, they are part of the list placeholder_strings.
             background_strings=None,
             initializer_strings=None,
-            list_initializer_word_weights=None,
             subj_name_to_cls_delta_string=None,
-            subj_name_to_cls_delta_word_weights=None,
             # token2num_vectors: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
             # token2num_vectors is a dict.
@@ -350,9 +347,7 @@ class EmbeddingManager(nn.Module):
         self.placeholder_token_to_idx       = {}
 
         assert initializer_strings is not None, "initializer_strings must be specified"
-        if list_initializer_word_weights is None:
-            list_initializer_word_weights = [ None ] * len(self.placeholder_strings)
-        self.list_initializer_word_weights   = list_initializer_word_weights
+        list_initializer_word_weights  = [ None ] * len(self.placeholder_strings)
 
         if self.do_zero_shot:
             # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
@@ -405,8 +400,8 @@ class EmbeddingManager(nn.Module):
             placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
 
             num_vectors_per_subj_token = self.token2num_vectors.get(placeholder_string, 1)
-            initializer_string     = initializer_strings[placeholder_idx]
-            initializer_word_weights   = list_initializer_word_weights[placeholder_idx]
+            initializer_string       = initializer_strings[placeholder_idx]
+            initializer_word_weights = list_initializer_word_weights[placeholder_idx]
 
             # The background token may not have initializer words. So its corresponding
             # init_word_embeddings, avg_init_word_embedding, init_word_weights are None.
@@ -418,19 +413,10 @@ class EmbeddingManager(nn.Module):
                 breakpoint()
 
             self.string_to_token_dict[placeholder_string] = placeholder_token
-            # initial_embeddings are only used to compute the regularization loss.
-            # Wrap with Parameter so that they will be saved to checkpoints.
-            # avg_init_word_embedding_3d: [1, 768] => [16, 9, 768]
-            if avg_init_word_embedding is not None:
-                avg_init_word_embedding_3d = avg_init_word_embedding.unsqueeze(0).repeat(self.num_layers_per_embedder, num_vectors_per_subj_token, 1)
-            else:
-                # Use zero tensor as avg_init_word_embedding_3d.
-                avg_init_word_embedding_3d = torch.zeros(self.num_layers_per_embedder, num_vectors_per_subj_token, 768)
-
             token_static_embedder = \
                 create_static_embedders(out_emb_dim, self.num_unet_ca_layers, num_vectors_per_subj_token, 
                                         initializer_string, init_word_embeddings, init_word_weights, 
-                                        placeholder_string, avg_init_word_embedding_3d, do_zero_shot)
+                                        placeholder_string, do_zero_shot)
 
             # token_static_embedder: a StaticLayerwiseEmbedding object (when use_layerwise_embedding) or an embedding vector.
             # Pytorch >= 1.12.0 allows to put an nn.Module object into an nn.ParameterDict.
@@ -460,10 +446,9 @@ class EmbeddingManager(nn.Module):
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
-        # Initialize self.subj_name_to_cls_delta_tokens and self.subj_name_to_cls_delta_token_weights.
+        # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(get_tokens_for_string, get_embeddings_for_tokens, 
-                                   subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights,
-                                   zs_cls_delta_string)
+                                   subj_name_to_cls_delta_string, zs_cls_delta_string)
         self.init_subj_name_to_being_faces(subj_name_to_being_faces)
 
         self.layer_idx = -1
@@ -509,49 +494,34 @@ class EmbeddingManager(nn.Module):
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
-                              subj_name_to_cls_delta_string, subj_name_to_cls_delta_word_weights,
+                              subj_name_to_cls_delta_string, 
                               zs_cls_delta_string=None):
         if subj_name_to_cls_delta_string is None:
             subj_name_to_cls_delta_string = {}
-        if subj_name_to_cls_delta_word_weights is None:
-            subj_name_to_cls_delta_word_weights = {}
         if zs_cls_delta_string is not None:
             # During inference, subj_name_to_cls_delta_string contains 'zs_default' as the subject name, and maps
             # to zs_cls_delta_string, the default class delta string.
             subj_name_to_cls_delta_string['zs_default'] = zs_cls_delta_string
-            subj_name_to_cls_delta_word_weights['zs_default'] = [1] * len(get_tokens_for_string(zs_cls_delta_string))
 
         # We don't know the gender of a random arc2face subject.
         subj_name_to_cls_delta_string['arc2face'] = 'person'
-        subj_name_to_cls_delta_word_weights['arc2face'] = [1]
 
         self.subj_name_to_cls_delta_string  = subj_name_to_cls_delta_string
         self.subj_name_to_cls_delta_tokens  = {}
-        self.subj_name_to_cls_delta_token_weights = {}
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = 0
-
-        # subj_name_to_cls_delta_word_weights is of type omegaconf. If without convertion to dict,
-        # "subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights" will throw an error.
-        self.subj_name_to_cls_delta_token_weights = dict(subj_name_to_cls_delta_word_weights)
 
         for subj_name in self.subj_name_to_cls_delta_string:
             cls_delta_string = self.subj_name_to_cls_delta_string[subj_name]
-            cls_delta_token_weights = subj_name_to_cls_delta_word_weights[subj_name]
             cls_delta_tokens, cls_delta_token_weights, _, _ = \
                 calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                                          cls_delta_string, cls_delta_token_weights)
+                                          cls_delta_string, None)
 
             num_cls_delta_tokens = len(cls_delta_tokens)
-            if len(cls_delta_token_weights) != num_cls_delta_tokens:
-                # BUG: some rare words may be split into two tokens. But this should be extremely rare.
-                # Any common words will be mapped to one token only.
-                breakpoint()
-            
+
             # subj_idx_to_cls_delta_tokens is used to examine class prompts, 
             # to see if there are subsequences of cls_delta_tokens.
             # If there are, the embeddings of init_word_tokens should be combined through weighted sum.
             self.subj_name_to_cls_delta_tokens[subj_name]        = cls_delta_tokens
-            self.subj_name_to_cls_delta_token_weights[subj_name] = cls_delta_token_weights
 
             # CLS_DELTA_STRING_MAX_SEARCH_SPAN should be the max number of extra tokens
             # (all excluding the first of the init word tokens; the first corresponds to the subject token).
