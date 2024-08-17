@@ -934,7 +934,7 @@ class UNetModel(nn.Module):
             hs.append(h)
 
             if layer_idx in distill_layer_indices:
-                    ca_layers_activations[layer_idx]            = module[1].transformer_blocks[0].attn2.cached_activations
+                    ca_layers_activations[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_activations
                     ca_layers_activations[layer_idx]['outfeat'] = h
                     # Release RAM.
                     module[1].transformer_blocks[0].attn2.cached_activations = None

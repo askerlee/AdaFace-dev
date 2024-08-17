@@ -151,7 +151,6 @@ class PersonalizedBase(Dataset):
                  # cls string used to compute the delta loss.
                  # default_cls_delta_string is the same as subj init string.
                  default_cls_delta_string=None,  
-                 default_subj_initializer_word_weights=None,
                  bg_init_string=None,
                 # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
@@ -415,7 +414,6 @@ class PersonalizedBase(Dataset):
             self.common_placeholder_prefixes   = None
 
         self.cls_delta_strings = []
-        self.list_subj_initializer_word_weights = []
         self.subjects_are_faces = []
         
         for subject_name in self.subject_names:
@@ -431,23 +429,6 @@ class PersonalizedBase(Dataset):
 
             self.cls_delta_strings.append(cls_delta_string)
 
-            # Set all_init_word_weights for each subject.
-            # list_subj_initializer_word_weights are not used in the data loader, but are used to initialize
-            # the embedding manager.
-            if 'all_init_word_weights' in subj2attr and subject_name in subj2attr['all_init_word_weights']:
-                subj_initializer_word_weights = subj2attr['all_init_word_weights'][subject_name]
-            elif subject_name in meta_subj2person_type:
-                cls_delta_string_num_words = len(cls_delta_string.split())
-                if cls_delta_string_num_words > 1:
-                    # subj_initializer_word_weights: [1, ..., 1, 2]
-                    subj_initializer_word_weights = [1] * (cls_delta_string_num_words - 1) + [2]
-                else:
-                    # If cls_delta_string is a single word, then the weights are [1].
-                    subj_initializer_word_weights = [1]
-            else:
-                subj_initializer_word_weights = default_subj_initializer_word_weights
-            self.list_subj_initializer_word_weights.append(subj_initializer_word_weights)
-
             if 'are_faces' in subj2attr and subject_name in subj2attr['are_faces']:
                 is_face = subj2attr['are_faces'][subject_name]
             else:
@@ -456,10 +437,7 @@ class PersonalizedBase(Dataset):
 
             self.subjects_are_faces.append(is_face)
 
-        self.bg_initializer_strings             = [ bg_init_string ] * self.num_subjects
-        # bg_initializer_word_weights are always None (uniform over bg initializer words).
-        self.list_bg_initializer_word_weights   = [ None ]           * self.num_subjects
-
+        self.bg_initializer_strings     = [ bg_init_string ] * self.num_subjects
         self.num_vectors_per_subj_token = num_vectors_per_subj_token
         self.num_vectors_per_bg_token   = num_vectors_per_bg_token
         self.center_crop = center_crop
@@ -1038,4 +1016,5 @@ class SubjectSampler(Sampler):
     def __iter__(self):
         for i in range(self.num_batches * self.batch_size):
             self.curr_subj_idx   = self.next_subject()
+            print(self.curr_subj_idx)
             yield self.curr_subj_idx, True

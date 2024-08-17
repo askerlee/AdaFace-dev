@@ -295,8 +295,6 @@ def parse_subject_file(subject_file_path):
                     substrings = split_string(mat.group(2))
                     if re.match("broad_classes|are_faces", var_name):
                         values = [ int(s) for s in substrings ]
-                    elif var_name == 'all_init_word_weights':
-                        values = [ [ float(s) for s in split_string(weight_str) ] for weight_str in substrings ]
                     elif var_name == 'sel_set':
                         values = [ int(s) - 1 for s in substrings ]
                     else:
@@ -319,7 +317,7 @@ def parse_subject_file(subject_file_path):
         # By default, all subjects are humans/animals, unless specified in the subject file.
         subj_info['broad_classes'] = [ 1 for _ in subj_info['subjects'] ]
 
-    for var_name in [ "class_names", "cls_delta_strings", "all_init_word_weights", 
+    for var_name in [ "class_names", "cls_delta_strings", 
                       "bg_init_strings", "broad_classes", "are_faces" ]:
         if var_name in subj_info:
             subj2attr[var_name] = {}
@@ -879,7 +877,8 @@ def scan_cls_delta_strings(tokenized_text, placeholder_indices_1st,
 
     return cls_delta_string_indices
 
-def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_name_to_cls_delta_token_weights):
+def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, 
+                               subj_name_to_cls_delta_token_weights=None):
     if cls_delta_string_indices is None or len(cls_delta_string_indices) == 0:
         return prompt_embedding
 
@@ -899,8 +898,11 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, subj_
         i_off = batch_i2offset.get(batch_i, 0)
         # cls_delta_embeddings: [M, 768].
         cls_delta_embeddings = prompt_embedding[batch_i, start_index_N:start_index_N+M]
-        # cls_delta_token_weights: [M] -> [M, 1].
-        cls_delta_token_weights = subj_name_to_cls_delta_token_weights[subj_name].unsqueeze(1).to(device)
+        if subj_name_to_cls_delta_token_weights is not None:
+            # cls_delta_token_weights: [M] -> [M, 1].
+            cls_delta_token_weights = subj_name_to_cls_delta_token_weights[subj_name].unsqueeze(1).to(device)
+        else:
+            cls_delta_token_weights = torch.ones(M, 1, device=device)
         # avg_cls_delta_embedding: [768].
         avg_cls_delta_embedding = (cls_delta_embeddings * cls_delta_token_weights).sum(dim=0)
         prompt_embedding2[batch_i, start_index_N-i_off] = avg_cls_delta_embedding

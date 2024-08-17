@@ -13,11 +13,10 @@ import torch.nn.functional as F
 import os
 import numpy as np
 import pytorch_lightning as pl
-from torch.optim.lr_scheduler import LambdaLR, ConstantLR, OneCycleLR, SequentialLR, \
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR, \
                                      PolynomialLR, CosineAnnealingWarmRestarts, CyclicLR
 from einops import rearrange, repeat
 from contextlib import contextmanager
-from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities import rank_zero_only
@@ -92,14 +91,14 @@ class DDPM(pl.LightningModule):
                  cosine_s=8e-3,
                  given_betas=None,
                  original_elbo_weight=0.,
-                 unfreeze_model=False,
+                 unfreeze_unet=False,
                  model_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='Prodigy',
                  grad_clip=0.5,
-                 manual_accumulate_grad_batches=1,
+                 accumulate_grad_batches=1,
                  adam_config=None,
                  prodigy_config=None,
                  logvar_init=0.,
@@ -202,8 +201,7 @@ class DDPM(pl.LightningModule):
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
         self.grad_clip = grad_clip
-        self.manual_accumulate_grad_batches = manual_accumulate_grad_batches
-        self.automatic_optimization = False
+        self.accumulate_grad_batches = accumulate_grad_batches
     
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
@@ -212,7 +210,7 @@ class DDPM(pl.LightningModule):
         
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
-        self.unfreeze_model = unfreeze_model
+        self.unfreeze_unet = unfreeze_unet
         self.model_lr = model_lr
 
         if monitor is not None:
@@ -502,9 +500,9 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
-        # global_step is updated every self.manual_accumulate_grad_batches iterations.
-        # So training_percent is multiplied by self.manual_accumulate_grad_batches.
-        self.training_percent = self.global_step / self.trainer.max_steps
+        # global_step is updated every self.accumulate_grad_batches iterations.
+        # So training_percent is multiplied by self.accumulate_grad_batches.
+        self.training_percent = self.global_step * self.accumulate_grad_batches / self.trainer.max_steps
 
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
@@ -576,63 +574,11 @@ class DDPM(pl.LightningModule):
         self.log("global_step", self.global_step,
                  prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
-        # No need to divide loss by self.manual_accumulate_grad_batches, since the learning rate is not scaled according to
-        # manual_accumulate_grad_batches. So if we divide loss by manual_accumulate_grad_batches, and at the same time,
-        # scale the learning rate by manual_accumulate_grad_batches, then they will cancel out each other.
-        #loss = loss / self.manual_accumulate_grad_batches
-        self.manual_backward(loss)
-
-        optimizers = self.optimizers()
-        if isinstance(optimizers, list):
-            main_optimizer   = optimizers[0]
-            extra_optimizers = optimizers[1:]
-        else:
-            # Single optimizer.
-            main_optimizer   = optimizers
-            extra_optimizers = None
-
-        if (batch_idx + 1) % self.manual_accumulate_grad_batches == 0:
-            self.clip_gradients(main_optimizer, gradient_clip_val=self.grad_clip, 
-                                gradient_clip_algorithm="norm")
-            
-            main_optimizer.step()
-            # Execute all optimizers.
-            if extra_optimizers is not None:
-                for optimizer in extra_optimizers:
-                    # Fix double counted global step counter which causes premature end of training.
-                    # https://github.com/Lightning-AI/pytorch-lightning/issues/17958
-                    # The default two functions do self.optim_step_progress.increment_ready()
-                    # and self.optim_step_progress.increment_completed(), respectively.
-                    # Removing them will prevent optimizer from updating the global step counter.
-                    optimizer._on_before_step = lambda : self.trainer.profiler.start("optimizer_step")
-                    optimizer._on_after_step  = lambda : self.trainer.profiler.stop("optimizer_step")                
-                    optimizer.step()
-
-            main_optimizer.zero_grad()
-
-            # Update LRs of optimizers.
-            schedulers = self.lr_schedulers()
-            if isinstance(schedulers, list):
-                for scheduler in schedulers:
-                    scheduler.step()
-            else:
-                scheduler = schedulers
-                # Single scheduler.
-                scheduler.step()
-
-        lr = main_optimizer.param_groups[0]['lr']
+        optimizer = self.optimizers()
+        lr = optimizer.param_groups[0]['lr']
         self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
         return loss
-
-    @torch.no_grad()
-    def validation_step(self, batch, batch_idx):
-        _, loss_dict_no_ema = self.shared_step(batch)
-        with self.ema_scope():
-            _, loss_dict_ema = self.shared_step(batch)
-            loss_dict_ema = {key + '_ema': loss_dict_ema[key] for key in loss_dict_ema}
-        self.log_dict(loss_dict_no_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
-        self.log_dict(loss_dict_ema, prog_bar=False, logger=True, on_step=False, on_epoch=True)
 
     def _get_rows_from_list(self, samples):
         n_imgs_per_row = len(samples)
@@ -782,7 +728,7 @@ class LatentDiffusion(DDPM):
         self.model.train = disabled_train
         for param in self.model.parameters():
             param.requires_grad = False
-        if not self.unfreeze_model:
+        if self.unfreeze_unet:
             for param in self.model.diffusion_model.parameters():
                 param.requires_grad = True            
         
@@ -860,6 +806,7 @@ class LatentDiffusion(DDPM):
         if self.shorten_cond_schedule:
             self.make_cond_schedule()
 
+    # Disable the training of the VAE.
     def instantiate_first_stage(self, config):
         model = instantiate_from_config(config)
         self.first_stage_model = model.eval()
@@ -880,6 +827,7 @@ class LatentDiffusion(DDPM):
             else:
                 model = instantiate_from_config(config)
                 self.cond_stage_model = model.eval()
+                # Disable the training of the CLIP text encoder.
                 self.cond_stage_model.train = disabled_train
                 for param in self.cond_stage_model.parameters():
                     param.requires_grad = False
@@ -1011,8 +959,7 @@ class LatentDiffusion(DDPM):
                     # instances. Whereas cls_delta_string_indices only contains the indices of the
                     # class (mix) instances.
                     static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
-                                                                         self.embedding_manager.cls_delta_string_indices,
-                                                                         self.embedding_manager.subj_name_to_cls_delta_token_weights)
+                                                                         self.embedding_manager.cls_delta_string_indices)
                     
                 elif apply_arc2face_embs:
                     if not self.training:
@@ -1913,8 +1860,6 @@ class LatentDiffusion(DDPM):
             assert captions is not None
             # get_learned_conditioning(): convert captions to a [16*B, 77, 768] tensor.
             if self.cond_stage_trainable:
-                # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
-                # or traditional TI.
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
                 
@@ -5118,25 +5063,11 @@ class LatentDiffusion(DDPM):
         opt_params_with_lrs = []
         if self.embedding_manager_trainable:
             embedding_params = self.embedding_manager.optimized_parameters()
-            num_filtered_params = 0
-
-            embedding_params_with_lrs = []
-            for params in embedding_params:
-                # Not sure if it's necessary to set requires_grad=True here.
-                #for param in params:
-                #    param.requires_grad = True
-                # Exclude the parameters whose requires_grad is False
-                params2 = [ param for param in params if param.requires_grad ]
-                if len(params) > 0:
-                    embedding_params_with_lrs.append( {'params': params2, 'lr': lr} )
-                num_filtered_params += len(params) - len(params2)
-            
-            print(f"Filtered out {num_filtered_params} no-grad parameters.")
-
+            embedding_params_with_lrs = [ {'params': embedding_params, 'lr': lr} ]
             opt_params_with_lrs += embedding_params_with_lrs
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
-        if self.unfreeze_model: 
+        if self.unfreeze_unet: 
             model_params = list(self.model.diffusion_model.parameters())
             # model_lr: default 2e-6 set in finetune-unet.yaml.
             opt_params_with_lrs += [ {"params": model_params, "lr": self.model_lr} ]
@@ -5152,9 +5083,10 @@ class LatentDiffusion(DDPM):
             scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
 
         else:
-            # Remove 'lr' from the parameter groups, since Prodigy doesn't use it.
+            # Use Prodigy. Remove 'lr' from the parameter groups, since Prodigy doesn't use it.
             prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
             prodigy_params = sum(prodigy_params, [])
+            prodigy_params = opt_params_with_lrs
 
             if self.do_zero_shot:
                 # [0.9, 0.999]. Converge more slowly.
@@ -5286,21 +5218,23 @@ class LatentDiffusion(DDPM):
         x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
         return x
 
+    # Called by modelcheckpoint in config.yaml.
     def on_save_checkpoint(self, checkpoint):
-        #if not self.unfreeze_model: # If we are not tuning the model itself, zero-out the checkpoint content to preserve memory.
+        print(self.trainer.global_rank, "Saving checkpoint...")
+    
         checkpoint.clear()
         
         if os.path.isdir(self.trainer.checkpoint_callback.dirpath): 
             if self.embedding_manager_trainable:
                 self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
 
-            if self.unfreeze_model:
+            if self.unfreeze_unet:
                 # Save the UNetModel state_dict.
+                # This unet has different parameter names from diffusers.
+                # It can be converted with convert_ldm_unet_checkpoint().
                 torch.save(self.model.diffusion_model.state_dict(), 
                            os.path.join(self.trainer.checkpoint_callback.dirpath, f"unet-{self.global_step}.pt"))
-                           
-            else:
-                breakpoint()
+                print(f"Saved unet-{self.global_step}.pt.")
 
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
