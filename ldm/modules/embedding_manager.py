@@ -272,7 +272,7 @@ class EmbeddingManager(nn.Module):
     ):
         super().__init__()
 
-        self.rank = dist.get_rank()
+        self.rank = -1
         self.do_zero_shot = do_zero_shot
 
         self.string_to_token_dict = OrderedDict()
@@ -581,6 +581,12 @@ class EmbeddingManager(nn.Module):
     # N: length of sequence (including padding).
     def get_static_embedding(self, tokenized_text, embedded_text, zs_image_feat_dict, embedder_dict, 
                              BS, N, num_unet_ca_layers, device):
+        
+        # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
+        # at that time.
+        if self.rank == -1:
+            self.rank = dist.get_rank()
+
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
         self.cls_delta_string_indices = []
