@@ -6,7 +6,6 @@ import torch.nn.functional as F
 
 import numpy as np
 from collections import abc
-from einops import rearrange
 from functools import partial
 
 import multiprocessing as mp
@@ -2114,7 +2113,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     #print('matching_score_scale:', matching_score_scale)
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
-    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2), ss_q_gs) * matching_score_scale
+    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q_gs) * matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Normalize among subj comp tokens (sc dim).
@@ -2125,7 +2124,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # of the single instance, which can hardly handle scale changes.
     sc_map_ss_prob  = F.softmax(sc_map_ss_score, dim=1)
 
-    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2), ms_q_gs) * matching_score_scale
+    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q_gs) * matching_score_scale
     # Normalize among mix comp tokens (mc dim).
     mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
     # breakpoint()

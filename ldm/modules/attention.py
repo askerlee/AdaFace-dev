@@ -82,11 +82,11 @@ class LinearAttention(nn.Module):
     def forward(self, x):
         b, c, h, w = x.shape
         qkv = self.to_qkv(x)
-        q, k, v = rearrange(qkv, 'b (qkv heads c) h w -> qkv b heads c (h w)', heads = self.heads, qkv=3)
+        q, k, v = rearrange(qkv, 'b (qkv heads c) h w -> qkv b heads c (h w)', heads = self.heads, qkv=3).contiguous()
         k = k.softmax(dim=-1)  
         context = torch.einsum('bhdn,bhen->bhde', k, v)
         out = torch.einsum('bhde,bhdn->bhen', context, q)
-        out = rearrange(out, 'b heads c (h w) -> b (heads c) h w', heads=self.heads, h=h, w=w)
+        out = rearrange(out, 'b heads c (h w) -> b (heads c) h w', heads=self.heads, h=h, w=w).contiguous()
         return self.to_out(out)
 
 
@@ -126,18 +126,18 @@ class SpatialSelfAttention(nn.Module):
 
         # compute attention
         b,c,h,w = q.shape
-        q = rearrange(q, 'b c h w -> b (h w) c')
-        k = rearrange(k, 'b c h w -> b c (h w)')
-        w_ = torch.einsum('bij,bjk->bik', q, k)
+        q = rearrange(q, 'b c h w -> b (h w) c').contiguous()
+        k = rearrange(k, 'b c h w -> b c (h w)').contiguous()
+        w_ = torch.einsum('bij,bjk->bik', q, k).contiguous()
 
         w_ = w_ * (int(c)**(-0.5))
         w_ = torch.nn.functional.softmax(w_, dim=2)
 
         # attend to values
-        v = rearrange(v, 'b c h w -> b c (h w)')
-        w_ = rearrange(w_, 'b i j -> b j i')
-        h_ = torch.einsum('bij,bjk->bik', v, w_)
-        h_ = rearrange(h_, 'b c (h w) -> b c h w', h=h)
+        v = rearrange(v, 'b c h w -> b c (h w)').contiguous()
+        w_ = rearrange(w_, 'b i j -> b j i').contiguous()
+        h_ = torch.einsum('bij,bjk->bik', v, w_).contiguous()
+        h_ = rearrange(h_, 'b c (h w) -> b c h w', h=h).contiguous()
         h_ = self.proj_out(h_)
 
         return x+h_
@@ -189,14 +189,14 @@ class CrossAttention(nn.Module):
         k = self.to_k(k_context)            
         v = self.to_v(v_context)
 
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h), (q, k, v))
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h).contiguous(), (q, k, v))
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
 
         # Otherwise, the whole column of 77 sim values will all be max_neg_value, 
         # which lead to nan after softmax.
         if exists(mask):
             # mask: [2, 1, 64, 64] -> [2, 4096]
-            mask = rearrange(mask, 'b ... -> b (...)')
+            mask = rearrange(mask, 'b ... -> b (...)').contiguous()
             max_neg_value = -torch.finfo(sim.dtype).max
             # mask: [2, 4096] -> [16, 1, 4096]
             mask = repeat(mask.bool(), 'b j -> (b h) () j', h=h)
@@ -213,20 +213,20 @@ class CrossAttention(nn.Module):
         # v: [64, 77, 40]. 40: dim of each head. out: [64, 4096, 40].
         out = einsum('b i j, b j d -> b i d', attn, v)
         # [64, 4096, 40] -> [8, 4096, 320].
-        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        out = rearrange(out, '(b h) n d -> b n (h d)', h=h).contiguous()
         out = self.to_out(out)
 
         if self.save_attn_vars:
             self.cached_activations = {}
             # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
             # So sqrt(self.scale) will scale the product of two qs by self.scale.
-            self.cached_activations['q'] = rearrange(q,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
+            self.cached_activations['q'] = rearrange(q,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
             # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
             # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
-            #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
-            #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h) * math.sqrt(self.scale)
-            self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h)
-            self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h)
+            #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
+            #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
+            self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h).contiguous()
+            self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h).contiguous()
 
         return out
 
@@ -298,7 +298,7 @@ class SpatialTransformer(nn.Module):
         x_in = x
         x = self.norm(x)
         x = self.proj_in(x)
-        x = rearrange(x, 'b c h w -> b (h w) c')
+        x = rearrange(x, 'b c h w -> b (h w) c').contiguous()
         # Each block is BasicTransformerBlock.
         for block in self.transformer_blocks:
             block.attn2.infeat_size = (h, w)
@@ -306,7 +306,7 @@ class SpatialTransformer(nn.Module):
             mask2 = F.interpolate(mask, size=(h, w), mode='nearest') if exists(mask) else None
             x = block(x, context=context, mask=mask2)
 
-        x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
+        x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w).contiguous()
         
         if self.save_feat:
             self.feat = x

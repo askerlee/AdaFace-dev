@@ -112,7 +112,7 @@ class DDPM(pl.LightningModule):
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  wds_bg_recon_discount=1.,
-                 do_clip_teacher_filtering=True,
+                 do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
                  use_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
@@ -154,7 +154,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.do_clip_teacher_filtering              = do_clip_teacher_filtering
+        self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
         self.wds_bg_recon_discount                  = wds_bg_recon_discount
@@ -462,7 +462,7 @@ class DDPM(pl.LightningModule):
 
         if len(x.shape) == 3:
             x = x[..., None]
-        x = rearrange(x, 'b h w c -> b c h w')
+        x = rearrange(x, 'b h w c -> b c h w').contiguous()
         x = x.to(memory_format=torch.contiguous_format).float()
         return x
 
@@ -480,7 +480,7 @@ class DDPM(pl.LightningModule):
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
                             'do_ada_prompt_delta_reg':      False,
-                            # 'do_teacher_filter':        False,
+                            # 'do_comp_teacher_filter':        False,
                             # 'is_teachable':             False,
                             'use_background_token':         False,
                             'use_wds_comp':                 False,  
@@ -545,7 +545,7 @@ class DDPM(pl.LightningModule):
                     self.iter_flags['do_ada_prompt_delta_reg'] = True
 
                 self.iter_flags['is_compos_iter']   = True
-                # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_teacher_filter'] is False.
+                # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_comp_teacher_filter'] is False.
                 # This is to monitor how well the model performs on compositionality.
                 self.iter_flags['calc_clip_loss']   = True
                 self.iter_flags['do_normal_recon']  = False
@@ -581,8 +581,8 @@ class DDPM(pl.LightningModule):
 
     def _get_rows_from_list(self, samples):
         n_imgs_per_row = len(samples)
-        denoise_grid = rearrange(samples, 'n b c h w -> b n c h w')
-        denoise_grid = rearrange(denoise_grid, 'b n c h w -> (b n) c h w')
+        denoise_grid = rearrange(samples, 'n b c h w -> b n c h w').contiguous()
+        denoise_grid = rearrange(denoise_grid, 'b n c h w -> (b n) c h w').contiguous()
         denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
         return denoise_grid
 
@@ -845,18 +845,6 @@ class LatentDiffusion(DDPM):
             
         self.neg_image_features = None
         self.zs_image_encoders_instantiated = True
-
-    def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
-        denoise_row = []
-        for zd in tqdm(samples, desc=desc):
-            denoise_row.append(self.decode_first_stage(zd.to(self.device),
-                                                            force_not_quantize=force_no_decoder_quantization))
-        n_imgs_per_row = len(denoise_row)
-        denoise_row = torch.stack(denoise_row)  # n_log_step, n_row, C, H, W
-        denoise_grid = rearrange(denoise_row, 'n b c h w -> b n c h w')
-        denoise_grid = rearrange(denoise_grid, 'b n c h w -> (b n) c h w')
-        denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
-        return denoise_grid
 
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
@@ -1322,10 +1310,10 @@ class LatentDiffusion(DDPM):
                                                 and self.batch_1st_subject_name in self.cached_inits \
                                                 and random.random() < p_reuse_init_conds)
 
-        # do_teacher_filter: If not reuse_init_conds and do_teacher_filtering, then we choose the better instance 
+        # do_comp_teacher_filter: If not reuse_init_conds and do_comp_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
-        # do_teacher_filter and reuse_init_conds are mutually exclusive.
-        self.iter_flags['do_teacher_filter'] = (self.do_clip_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
+        # do_comp_teacher_filter and reuse_init_conds are mutually exclusive.
+        self.iter_flags['do_comp_teacher_filter'] = (self.do_comp_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                 and not self.iter_flags['reuse_init_conds'])
 
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
@@ -1440,10 +1428,6 @@ class LatentDiffusion(DDPM):
                     # force the foreground tokens to focus on the whole image.
                     p_use_background_token  = 0.9
 
-            # Only use_background_token on recon iters.
-            # No need to check do_mix_prompt_distillation, because if do_mix_prompt_distillation,
-            # in most iterations p_use_background_token = 0, except for 50% of the iterations when
-            # comp_init_fg_from_training_image = True.
             self.iter_flags['use_background_token'] = self.use_background_token \
                                                       and random.random() < p_use_background_token
                         
@@ -1499,20 +1483,6 @@ class LatentDiffusion(DDPM):
             else:
                 # Too complicated and not helpful. Disabled
                 breakpoint()
-                '''
-                subj_comp_prompts2 = []
-                cls_prompt_comp2   = []
-                for prompts in zip(*subj_comp_prompts):
-                    subj_comp_prompts2 += prompts
-                for prompts in zip(*cls_comp_prompts):
-                    cls_prompt_comp2 += prompts
-                subj_comp_prompts = subj_comp_prompts2
-                cls_comp_prompts  = cls_prompt_comp2
-                captions = captions * REPEATS
-                subj_single_prompts = subj_single_prompts * REPEATS
-                cls_single_prompts  = cls_single_prompts * REPEATS
-                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-                '''
 
             if self.iter_flags['use_wds_comp']:
                 # TODO: Currently only support REPEATS == 1.
@@ -1551,6 +1521,8 @@ class LatentDiffusion(DDPM):
         else:
             assert self.iter_flags['fg_mask_avail_ratio'] == 0
             fg_mask = None
+
+        print(f"Rank {self.trainer.global_rank}: {batch['subject_name']}")
 
         BS = len(batch['subject_name'])
         # If do_mix_prompt_distillation, we repeat the instances in the batch, so that all instances are the same.
@@ -1647,22 +1619,22 @@ class LatentDiffusion(DDPM):
                                                                end_noise_std_range=None, 
                                                                add_noise_prob=1, noise_std_is_relative=True, 
                                                                keep_norm=True)
-                        
+                
+                # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
                 # Sometimes do_unet_distill is True but gen_arc2face_rand_face is False.
                 if self.iter_flags['do_unet_distill']:
-                    # The returned zs_id_embs2 should be (almost) the same as the passed-in zs_id_embs.
-                    face_image_count, zs_id_embs2, arc2face_prompt_emb \
-                        = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], 
-                                                                 pre_face_embs=zs_id_embs)
+                    # gen_arc2face_prompt_embs() encodes zs_id_embs to arc2face_prompt_emb.
+                    _, _, arc2face_prompt_emb \
+                        = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=zs_id_embs)
 
             # gen_arc2face_rand_face == True. It implies it's not do_mix_prompt_distillation.
             else:
-                # Since it's a random face, the CLIP features are all zeros as a placeholder.
+                # Since it's a batch of random faces, the CLIP features are all zeros as a placeholder.
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. arc2face_prompt_emb: [4, 21, 768]
-                face_image_count, zs_id_embs, arc2face_prompt_emb \
+                _, zs_id_embs, arc2face_prompt_emb \
                     = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=None)
                 # On random faces, we don't need to consider img_mask and fg_mask.
                 img_mask = None
@@ -1673,6 +1645,7 @@ class LatentDiffusion(DDPM):
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['is_face'] = [True] * x_start.shape[0]
                 self.iter_flags['faceless_img_count'] = 0
+                # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
                 self.iter_flags['same_subject_in_batch'] = False
 
             # During training, zs_id_embs, arc2face_prompt_emb are float16, but x_start is float32.
@@ -1685,8 +1658,8 @@ class LatentDiffusion(DDPM):
                 # self.unet_teacher to generate the predicted teacher noise.
 
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
-                # or if there are faceless input images in the batch, we have to use the arc2face recon as target.
-                # Otherwise, use the arc2face recon as target with a probability of 0.5, and use the original image (noise) 
+                # or if there are faceless input images in the batch, we have to use the unet recon as target.
+                # Otherwise, use the unet recon as target with a probability of 0.5, and use the original image (noise) 
                 # as target with a probability of 0.5.
                 # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
                 if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['add_noise_to_real_id_embs'] \
@@ -1696,16 +1669,15 @@ class LatentDiffusion(DDPM):
                     # Prob of this branch is (1 - 0.4) * 0.4 = 0.24 (ignoring the cases when faceless_img_count > 0, which are rare).
                     # Still with a probability of 0.5, we use the original image as target.
                     # Therefore, overall, the probability of using the original image as target is 0.5 * 0.24 = 0.12.
-                    # The probability of using the arc2face recon as target is 0.88.
+                    # The probability of using the unet recon as target is 0.88.
                     if self.unet_teacher_type == 'arc2face':
                         p_use_unet_teacher_as_target = 0.5
+                        self.iter_flags['use_unet_teacher_as_target'] = random.random() < p_use_unet_teacher_as_target
                     # UNet ensemble always uses the unet teacher as target.
                     elif self.unet_teacher_type == 'unet_ensemble':
-                        p_use_unet_teacher_as_target = 1
+                        self.iter_flags['use_unet_teacher_as_target'] = True
                     else:
                         breakpoint()
-
-                    self.iter_flags['use_unet_teacher_as_target'] = random.random() < p_use_unet_teacher_as_target
 
                 if self.iter_flags['use_unet_teacher_as_target']:
                     # Gradually increase the chance of taking 5 or 7 denoising steps.
@@ -1726,7 +1698,8 @@ class LatentDiffusion(DDPM):
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
                     if num_denoising_steps > 1:
-                        # Only use the first half of the batch to avoid OOM.
+                        # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
+                        # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
                         # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
                         # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
                         HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
@@ -1751,7 +1724,6 @@ class LatentDiffusion(DDPM):
                             cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
                         
                         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-
 
             # Do zero-shot training but not unet distillation.
             else:
@@ -1794,11 +1766,9 @@ class LatentDiffusion(DDPM):
         # whose behavior depends on the correct embman_iter_type.
         if self.iter_flags['is_compos_iter']:
             embman_iter_type = 'compos_distill_iter'
-        # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning().
-        #elif apply_arc2face_embs:
-        #    embman_iter_type = 'arc2face_clip_iter'
         else:
             embman_iter_type = 'recon_iter'
+        # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning(), instead of here.
 
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
 
@@ -1931,7 +1901,7 @@ class LatentDiffusion(DDPM):
                         c_in2 = delta_prompts
                         extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
-                        # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
+                        # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
                         extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b'] 
 
@@ -1946,7 +1916,7 @@ class LatentDiffusion(DDPM):
                         # Do ada prompt delta loss in this iteration. 
                         extra_info['iter_type']     = 'do_ada_prompt_delta_reg'
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
-                        # (subj comp, subj comp, cls comp, cls comp) if do_teacher_filter. 
+                        # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
                         extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
                     else:
@@ -2123,11 +2093,11 @@ class LatentDiffusion(DDPM):
                 print(cut_cond.shape)
 
                 adapted_cond = torch.stack([torch.cat([cut_cond, p], dim=1) for p in patch_limits_tknzd])
-                adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n')
+                adapted_cond = rearrange(adapted_cond, 'l b n -> (l b) n').contiguous()
                 print(adapted_cond.shape)
                 adapted_cond = self.get_learned_conditioning(adapted_cond)
                 print(adapted_cond.shape)
-                adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1])
+                adapted_cond = rearrange(adapted_cond, '(l b) n d -> l b n d', l=z.shape[-1]).contiguous()
                 print(adapted_cond.shape)
 
                 cond_list = [{'c_crossattn': [e]} for e in adapted_cond]
@@ -2459,8 +2429,8 @@ class LatentDiffusion(DDPM):
                 v_cls_scale_layerwise_range = [1.0, 0.7]
 
         if self.iter_flags['is_compos_iter']:
-            # For simplicity, always BLOCK_SIZE = 1, no matter the batch size.
-            # We can't afford BLOCK_SIZE=2.
+            # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
+            # We can't afford BLOCK_SIZE=2 as it will double the memory usage.
             BLOCK_SIZE = 1
 
             # Only reuse_init_conds if do_mix_prompt_distillation.
@@ -2561,7 +2531,7 @@ class LatentDiffusion(DDPM):
                 # If BS=3, then N = self.num_candidate_teachers = 3 or 6.
                 # If batch size = 3 and N = 6, then we quadruple the batch size to 12
                 # (6 subj comp, 6 mix comp).
-                if self.iter_flags['do_teacher_filter']:
+                if self.iter_flags['do_comp_teacher_filter']:
                     NEW_HALF_BS  = self.num_candidate_teachers * BLOCK_SIZE
                     assert NEW_HALF_BS <= x_start.shape[0], \
                         f"NEW_HALF_BS {NEW_HALF_BS} should be no larger than the batch size {x_start.shape[0]}."
@@ -2634,13 +2604,13 @@ class LatentDiffusion(DDPM):
                     # Teachers are slightly more aggressive, to increase the teachable fraction.   
                     cfg_scales_for_clip_loss = gen_cfg_scales_for_stu_tea(6, 5, NEW_HALF_BS, x_start.device)
 
-                # Not self.iter_flags['do_teacher_filter']. This branch is do_mix_prompt_distillation.
-                # So it's either reuse_init_conds, or not do_clip_teacher_filtering (globally).
+                # Not self.iter_flags['do_comp_teacher_filter']. This branch is do_mix_prompt_distillation.
+                # So it's either reuse_init_conds, or not do_comp_teacher_filtering (globally).
                 # In any case, we do not need to change the prompts and static embeddings 
                 # and simply do mix reg.
                 else:
-                    if (not self.do_clip_teacher_filtering) and (not self.iter_flags['reuse_init_conds']):
-                        # Usually we shouldn't go here, as do_clip_teacher_filtering is always True.
+                    if (not self.do_comp_teacher_filtering) and (not self.iter_flags['reuse_init_conds']):
+                        # Usually we shouldn't go here, as do_comp_teacher_filtering is always True.
                         x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
 
                     # If reuse_init_conds, prev_t is already 1-repeat-4, and 
@@ -2666,9 +2636,9 @@ class LatentDiffusion(DDPM):
                     # the previous iteration, cond is also almost the same.
             
             # This code block is within if self.iter_flags['is_compos_iter'].
-            # The prompts are either 2-repeat-2 (do_teacher_filter) or 1-repeat-4 (distillation) structure.
+            # The prompts are either 2-repeat-2 (do_comp_teacher_filter) or 1-repeat-4 (distillation) structure.
             # Use cond[1] instead of c_static_emb as input, since cond[1] is updated as 2-repeat-2 
-            # in the 'do_teacher_filter' branch. We need to do mixing on the c_static_emb 
+            # in the 'do_comp_teacher_filter' branch. We need to do mixing on the c_static_emb 
             # to be used for denoising.
             # In either case, c_static_emb is of (subject embeddings, class embeddings) structure.
             # Therefore, we don't need to deal with the two cases separately.
@@ -2694,7 +2664,7 @@ class LatentDiffusion(DDPM):
           
             # Update cond[0] to c_static_emb_vk.
             # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
-            # 'do_teacher_filter' branch.
+            # 'do_comp_teacher_filter' branch.
             cond = (c_static_emb_vk, cond[1], extra_info)
 
         # It's a RECON iter.
@@ -2725,7 +2695,7 @@ class LatentDiffusion(DDPM):
 
             # No need to update masks.
 
-        extra_info['capture_distill_attn'] = not self.iter_flags['do_teacher_filter']
+        extra_info['capture_distill_attn'] = not self.iter_flags['do_comp_teacher_filter']
 
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -2742,7 +2712,7 @@ class LatentDiffusion(DDPM):
         # can freely compose any contents.
         emb_man_prompt_adhoc_info = { 'placeholder2indices':    placeholder2indices2,
                                       # In compositional iterations, img_mask is always None.
-                                      # No need to consider whether do_teacher_filter or not.
+                                      # No need to consider whether do_comp_teacher_filter or not.
                                       'img_mask':         extra_info['img_mask'],
                                       'prompt_emb_mask':  prompt_emb_mask2 }
         
@@ -2756,7 +2726,7 @@ class LatentDiffusion(DDPM):
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
-                                    unet_has_grad=not self.iter_flags['do_teacher_filter'], 
+                                    unet_has_grad=not self.iter_flags['do_comp_teacher_filter'], 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
                                     do_pixel_recon=self.iter_flags['calc_clip_loss'],
@@ -2808,7 +2778,7 @@ class LatentDiffusion(DDPM):
                                                        x_start.shape[0], loss_dict, prefix)
                 loss += loss_fg_bg_contrast + loss_recon
                 if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                    print(f"0: {t.tolist()}, {loss_recon.item():.5f}")
+                    print(f"Rank {self.trainer.global_rank} Step 0: {t.tolist()}, {loss_recon.item():.5f}")
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
@@ -2901,7 +2871,7 @@ class LatentDiffusion(DDPM):
 
                     loss_recons.append(loss_recon)
                     if True: #'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-                        print(f"{s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
+                        print(f"Rank {self.trainer.global_rank} Step {s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
                 # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.
@@ -2919,10 +2889,10 @@ class LatentDiffusion(DDPM):
             is_teachable = are_insts_teachable.any()
             self.iter_flags['is_teachable'] = is_teachable
 
-            if self.do_clip_teacher_filtering:
+            if self.do_comp_teacher_filtering:
                 # Only do distillation if at least one of teacher instances is teachable.
-                # do_teacher_filter implies not reuse_init_conds.
-                if self.iter_flags['do_teacher_filter'] and self.iter_flags['is_teachable']:
+                # do_comp_teacher_filter implies not reuse_init_conds.
+                if self.iter_flags['do_comp_teacher_filter'] and self.iter_flags['is_teachable']:
                     # No need the intermediates of the twin-comp instances. Release them to save RAM.
                     # Cannot release the intermediates outside the "if" branch, as the intermediates
                     # will be used in a reuse_init_conds iter.
@@ -3028,7 +2998,7 @@ class LatentDiffusion(DDPM):
                     # NOTE: no need to update masks to correspond to x_recon_sel_rep, as x_recon_sel_rep
                     # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
                     # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
-                    # NOTE: do_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
+                    # NOTE: do_comp_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
                     self.cached_inits[self.batch_1st_subject_name] = \
                         {   'x_start':                x_recon_sel_rep, 
                             'delta_prompts':          cond_orig[2]['delta_prompts'],
@@ -3060,11 +3030,11 @@ class LatentDiffusion(DDPM):
                     pass
 
             else:
-                # Not do_teacher_filter, nor reuse_init_conds. 
-                # So only one possibility: not do_clip_teacher_filtering.
+                # Not do_comp_teacher_filter, nor reuse_init_conds. 
+                # So only one possibility: not do_comp_teacher_filtering.
                 # The teacher instance is always teachable as teacher filtering is disabled.
                 self.iter_flags['is_teachable'] = True
-                # Since not self.iter_flags['do_teacher_filter']/reuse_init_conds, log_image_colors are all 0,
+                # Since not self.iter_flags['do_comp_teacher_filter']/reuse_init_conds, log_image_colors are all 0,
                 # i.e., no box to be drawn on the images in cache_and_log_generations().
                 log_image_colors = torch.zeros(clip_images.shape[0], dtype=int, device=x_start.device)
 
@@ -3469,11 +3439,11 @@ class LatentDiffusion(DDPM):
     def calc_clip_losses(self, x_recon, extra_info, loss_dict, prefix):
         # Images generated both under subj_comp_prompts and cls_comp_prompts 
         # are subject to the CLIP text-image matching evaluation.
-        # If self.iter_flags['do_teacher_filter'] (implying do_mix_prompt_distillation), 
+        # If self.iter_flags['do_comp_teacher_filter'] (implying do_mix_prompt_distillation), 
         # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
         # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
         # images guided by the subject or mixed embeddings.
-        if self.iter_flags['do_teacher_filter']:
+        if self.iter_flags['do_comp_teacher_filter']:
             #del extra_info['ca_layers_activations']
             clip_images_code  = x_recon
             # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
@@ -3515,7 +3485,7 @@ class LatentDiffusion(DDPM):
         # If reuse_init_conds, we still check whether the instances are teachable.
         # But it's not called teacher filtering, as there's only one teacher. If it's not teachable,
         # then we skip the distillation loss.
-        if self.iter_flags['do_teacher_filter'] or self.iter_flags['reuse_init_conds']:
+        if self.iter_flags['do_comp_teacher_filter'] or self.iter_flags['reuse_init_conds']:
             # Discard instances that seem to be too far from the text 
             # (it may be a bit premature to make this decision now, as the images are only denoised once).
             # 0.35/0.006: 30%-40% instances will meet these thresholds.
@@ -3572,7 +3542,7 @@ class LatentDiffusion(DDPM):
         # (because it's not in the second iter yet).
         # 2 red:    teachable in the first iter but not in the second iter; 
         # 3 purple: teachable in both iters.
-        # If self.iter_flags['do_teacher_filter'] and an instance is teachable, then in the log image file, 
+        # If self.iter_flags['do_comp_teacher_filter'] and an instance is teachable, then in the log image file, 
         # log_image_flag = 1, so the instance has a green bounary box in the logged image.
         # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
         log_image_colors = are_insts_teachable.repeat(2).int()

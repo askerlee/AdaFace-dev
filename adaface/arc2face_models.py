@@ -109,7 +109,7 @@ class CLIPAttentionMKV(nn.Module):
         src_len = key_states.size(1)
         # src_len0 is the original src_len without the multiplier.
         src_len0 = src_len // self.multiplier
-        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
+        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2).contiguous())
 
         if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
             raise ValueError(
@@ -165,7 +165,7 @@ class CLIPAttentionMKV(nn.Module):
             )
 
         attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = attn_output.transpose(1, 2)
+        attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, tgt_len, embed_dim)
 
         attn_output = self.out_proj(attn_output)

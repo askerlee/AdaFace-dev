@@ -1016,5 +1016,4 @@ class SubjectSampler(Sampler):
     def __iter__(self):
         for i in range(self.num_batches * self.batch_size):
             self.curr_subj_idx   = self.next_subject()
-            print(self.rank, self.curr_subj_idx)
             yield self.curr_subj_idx, True

@@ -268,7 +268,7 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-    parser.add_argument("--do_clip_teacher_filtering", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--do_comp_teacher_filtering", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to filter the teacher's output using CLIP")
     
     parser.add_argument("--wds_db_path", type=str, default=None,

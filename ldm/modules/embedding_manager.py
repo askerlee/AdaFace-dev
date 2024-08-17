@@ -185,7 +185,7 @@ class StaticLayerwiseEmbedding(nn.Module):
 
             if self.do_zero_shot:
                 # (i0, e0), (i0, e1), ..., (i0, e15), (i1, e0), (i1, e1), ..., (i1, e15), ..., (iB, e15).
-                adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d')
+                adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d').contiguous()
                 # Copy to bias, so that adaface_subj_embs is regularized by layerwise_embedding_norm_loss().
                 self.bias = adaface_subj_embs
                 # Make sure adaface_subj_embs is regularized by layerwise_embedding_norm_loss().
@@ -732,7 +732,7 @@ class EmbeddingManager(nn.Module):
                         # adaface_subj_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
                         adaface_subj_embs0 = adaface_subj_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
                         # adaface_subj_embs0: [2, 16, 16, 768] -> [32, 16, 768].
-                        self.adaface_subj_embs0 = rearrange(adaface_subj_embs0, 'b l k d -> (b l) k d')
+                        self.adaface_subj_embs0 = rearrange(adaface_subj_embs0, 'b l k d -> (b l) k d').contiguous()
                         # Only replace the subject-single embeddings in the compos_distill_iter.
                         # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
                         # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
@@ -749,7 +749,7 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs = None
 
                 # static_embedder essentially only does:
-                # >> adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d')
+                # >> adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d').contiguous()
                 # So subj_static_embedding is reshaped adaface_subj_embs.
                 subj_static_embedding = static_embedder(adaface_subj_embs)
                 subj_static_embedding = subj_static_embedding.to(embedded_text.dtype)
@@ -928,7 +928,7 @@ class EmbeddingManager(nn.Module):
 
         self.set_curr_iter_type(embman_iter_type)
         if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-            print(f"{self.rank} subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
+            print(f"{self.rank} subjects: {self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
 
     def set_curr_iter_type(self, embman_iter_type):
         self.iter_type = embman_iter_type

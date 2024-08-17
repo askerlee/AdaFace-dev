@@ -27,7 +27,7 @@ def reshape_tensor(x, num_heads):
     # (bs, length, width) --> (bs, length, n_heads, dim_per_head)
     x = x.view(bs, length, num_heads, -1)
     # (bs, length, n_heads, dim_per_head) --> (bs, n_heads, length, dim_per_head)
-    x = x.transpose(1, 2)
+    x = x.transpose(1, 2).contiguous()
     # (bs, n_heads, length, dim_per_head) --> (bs*n_heads, length, dim_per_head)
     x = x.reshape(bs, num_heads, length, -1)
     return x
@@ -314,13 +314,13 @@ class CrossAttention(nn.Module):
         if self.q_aware_to_v:
             # v: [6, 64, 17, 128].
             # v is query-specific, so there's an extra dim for the query.
-            v = rearrange(v, 'b q n (h d) -> (b h) q n d', h=h)
+            v = rearrange(v, 'b q n (h d) -> (b h) q n d', h=h).contiguous()
             # Each v is for a query group with 512/64 = 8 queries.
             # So each v is repeated 8 times to match the number of queries.
             # v: [6, 64, 17, 128] -> [6, 512, 17, 128].
             v = v.repeat(1, self.v_repeat, 1, 1)
         else:
-            v = rearrange(v, 'b n (h d) -> (b h) n d', h=h)
+            v = rearrange(v, 'b n (h d) -> (b h) n d', h=h).contiguous()
 
         if attn_mat is None:
             scale = q.size(-1) ** -0.25
@@ -344,7 +344,7 @@ class CrossAttention(nn.Module):
             out = einsum('b i j, b j d -> b i d',   attn, v)
 
         # [6, 32, 128] -> [1, 32, 768].
-        out = rearrange(out, '(b h) n d -> b n (h d)', h=h)
+        out = rearrange(out, '(b h) n d -> b n (h d)', h=h).contiguous()
 
         if self.out_has_skip:
             out = self.to_out(out) + out

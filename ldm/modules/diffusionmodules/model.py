@@ -208,16 +208,16 @@ class AttnBlock(nn.Module):
                     bg_mask = bg_mask * aug_mask
 
                 # mask: [2, 1,   64,  64]  => [2, 1, 4096]
-                fg_mask2, bg_mask2 = [ rearrange(mask, 'b ... -> b () (...)') for mask in (fg_mask, bg_mask) ]
+                fg_mask2, bg_mask2 = [ rearrange(mask, 'b ... -> b () (...)').contiguous() for mask in (fg_mask, bg_mask) ]
 
                 # mask_pair_homo(subj_i1, subj_i2) = True.      mask_pair_homo(subj_i1, bg_i2) = False. 
                 # mask_pair_homo(bg_i1, bg_i2)     = False.
                 # fg_mask2.sum(dim=(1,2)) = [2712., 1268.]. fg_mask_pair_homo.sum() = 2712 ** 2 + 1268 ** 2 = 8962768.
-                fg_mask_pair_homo = torch.matmul(fg_mask2.transpose(-1, -2), fg_mask2).bool()
+                fg_mask_pair_homo = torch.matmul(fg_mask2.transpose(-1, -2).contiguous(), fg_mask2).bool()
                 # neg_mask_pair_homo(bg_i1, bg_i2)     = True.  neg_mask_pair_homo(subj_i1, subj_i2) = False.
                 # neg_mask_pair_homo(bg_i1, subj_i2)   = False.
                 # bg_mask2.sum(dim=(1,2)) = [1257., 1282.]. bg_mask_pair_homo.sum() = 1257 ** 2 + 1282 ** 2 = 3223573.
-                bg_mask_pair_homo = torch.matmul(bg_mask2.transpose(-1, -2), bg_mask2).bool()
+                bg_mask_pair_homo = torch.matmul(bg_mask2.transpose(-1, -2).contiguous(), bg_mask2).bool()
                 # mask_pair_hetero: whether each pixel pairs (i,j) are heterogeneous, i.e., 
                 # one is in subject areas and the other in background areas.
                 # mask_pair_hetero(subj_i1, subj_i2) = False, mask_pair_hetero(bg_i1, bg_i2) = False.
@@ -870,6 +870,6 @@ class FirstStagePostProcessor(nn.Module):
             z = downmodel(z)
 
         if self.do_reshape:
-            z = rearrange(z,'b c h w -> b (h w) c')
+            z = rearrange(z,'b c h w -> b (h w) c').contiguous()
         return z
 
