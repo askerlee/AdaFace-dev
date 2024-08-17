@@ -22,7 +22,7 @@ model:
     # Since we don't want to train the embedding manager, we set embedding_manager_trainable = False.
     embedding_manager_trainable: false
     conditioning_key: crossattn
-    # monitor: train/loss_ema
+    monitor: train/loss
     scale_factor: 0.18215
     unfreeze_unet: true
     # Recommended in https://github.com/TheLastBen/fast-stable-diffusion/issues/1609
@@ -124,7 +124,7 @@ model:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
-        # monitor: train/rec_loss
+        monitor: train/loss_recon
         ddconfig:
           double_z: true
           z_channels: 4

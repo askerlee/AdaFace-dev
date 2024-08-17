@@ -865,7 +865,7 @@ if __name__ == "__main__":
         if hasattr(model, "monitor"):
             print(f"Monitoring {model.monitor} as checkpoint metric.")
             modelckpt_cfg["params"]["monitor"] = model.monitor
-            modelckpt_cfg["params"]["save_top_k"] = 1
+            modelckpt_cfg["params"]["save_top_k"] = 0
 
         # Maintain the same frequency of saving checkpoints when accumulate_grad_batches > 1.
         # modelckpt_cfg.params.every_n_train_steps //= config.model.params.accumulate_grad_batches

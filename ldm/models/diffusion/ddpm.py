@@ -3068,7 +3068,8 @@ class LatentDiffusion(DDPM):
                 # i.e., no box to be drawn on the images in cache_and_log_generations().
                 log_image_colors = torch.zeros(clip_images.shape[0], dtype=int, device=x_start.device)
 
-            self.cache_and_log_generations(clip_images, log_image_colors)
+            if self.trainer.is_global_zero == 0:
+                self.cache_and_log_generations(clip_images, log_image_colors)
 
         else:
             # Not a compositional iter. Distillation won't be done in this iter, so is_teachable = False.
@@ -4856,7 +4857,6 @@ class LatentDiffusion(DDPM):
 
         return samples, intermediates
 
-    @rank_zero_only
     def cache_and_log_generations(self, samples, img_colors, max_cache_size=48):
         self.generation_cache.append(samples)
         self.generation_cache_img_colors.append(img_colors)
@@ -5015,6 +5015,7 @@ class LatentDiffusion(DDPM):
         return optimizers
 
     # Called by modelcheckpoint in config.yaml.
+    @rank_zero_only
     def on_save_checkpoint(self, checkpoint):
         print(self.trainer.global_rank, "Saving checkpoint...")
     
