@@ -60,15 +60,10 @@ __conditioning_keys__ = {'concat': 'c_concat',
                          'crossattn': 'c_crossattn',
                          'adm': 'y'}
 
-
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
     does not change anymore."""
     return self
-
-def uniform_on_device(r1, r2, shape, device):
-    return (r1 - r2) * torch.rand(*shape, device=device) + r2
-
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -130,6 +125,7 @@ class DDPM(pl.LightningModule):
                  extend_prompt2token_proj_attention_multiplier=-1,
                  load_old_embman_ckpt=False,
                  ):
+        
         super().__init__()
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
         self.parameterization = parameterization
@@ -188,14 +184,10 @@ class DDPM(pl.LightningModule):
         self.do_static_prompt_delta_reg = (self.prompt_emb_delta_reg_weight >= 0)
         
         self.init_iteration_flags()
-        
-        # Is this for DreamBooth training? Will be overwritten in LatentDiffusion ctor.
-        self.is_dreambooth                  = False
 
         self.model = DiffusionWrapper(unet_config, conditioning_key)
 
         count_params(self.model, verbose=True)
-        self.use_ema = False
 
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
@@ -287,21 +279,6 @@ class DDPM(pl.LightningModule):
         # A tiny number to avoid division by zero.
         self.num_total_reuse_filter_iters = 0.001
         self.num_reuse_teachable_iters = 0
-
-    @contextmanager
-    def ema_scope(self, context=None):
-        if self.use_ema:
-            self.model_ema.store(self.model.parameters())
-            self.model_ema.copy_to(self.model)
-            if context is not None:
-                print(f"{context}: Switched to EMA weights")
-        try:
-            yield None
-        finally:
-            if self.use_ema:
-                self.model_ema.restore(self.model.parameters())
-                if context is not None:
-                    print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
         if path.endswith(".ckpt"):
@@ -555,18 +532,8 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_unet_distill'] = True
                 # Disable do_static_prompt_delta_reg during unet distillation.
                 self.iter_flags['do_static_prompt_delta_reg'] = False
-
-        if self.is_dreambooth:
-            # DreamBooth uses ConcatDataset to make batch a tuple of train_batch and reg_batch.
-            # train_batch: normal subject image recon. reg_batch: general class regularization.
-            train_batch = batch[0]
-            reg_batch   = batch[1]
-            loss_train, loss_dict = self.shared_step(train_batch)
-            loss_reg, _ = self.shared_step(reg_batch)
-            loss = loss_train + self.db_reg_weight * loss_reg
-        else:            
-            loss, loss_dict = self.shared_step(batch)
-
+       
+        loss, loss_dict = self.shared_step(batch)
         self.log_dict(loss_dict, prog_bar=True,
                       logger=True, on_step=True, on_epoch=True)
 
@@ -609,8 +576,6 @@ class LatentDiffusion(DDPM):
                  conditioning_key=None,
                  scale_factor=1.0,
                  scale_by_std=False,
-                 # To do DreamBooth training, set is_dreambooth=True.
-                 is_dreambooth=False,
                  *args, **kwargs):
 
         self.num_timesteps_cond = default(num_timesteps_cond, 1)
@@ -679,42 +644,34 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
+        # We never train the CLIP text encoder. So disable the training of the CLIP text encoder.
         self.cond_stage_model.eval()
         self.cond_stage_model.train = disabled_train
         for param in self.cond_stage_model.parameters():
             param.requires_grad = False
 
-        # self.model = DiffusionWrapper() training = False.
-        self.model.eval()
-        self.model.train = disabled_train
-        for param in self.model.parameters():
-            param.requires_grad = False
         if self.unfreeze_unet:
-            for param in self.model.diffusion_model.parameters():
+            self.model.train()
+            for param in self.model.parameters():
                 param.requires_grad = True            
-        
-        self.is_dreambooth = is_dreambooth
-        self.db_reg_weight  = 1.
-        if not is_dreambooth:
-            # self.embedding_manager.training = True after creation. 
-            # *** Where this status is set? ***
-            self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
-            if self.do_zero_shot:
-                # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
-                # which is used to generate the subject embeddings for subject-single prompts.
-                self.embedding_manager.make_frozen_copy_of_subj_basis_generators()
-                
-            if self.arc2face is not None:
-                # Let embedding_manager share the text_encoder with arc2face, to save some RAM.
-                self.embedding_manager.arc2face_text_encoder = self.arc2face.text_encoder
-
-            # embedding_manager.optimized_parameters(): string_to_static_embedder_dict, 
-            # which maps custom tokens to embeddings
-            #for param in self.embedding_manager.optimized_parameters():
-            #    param.requires_grad = True
         else:
-            # For DreamBooth.
-            self.embedding_manager = None
+            # self.model = DiffusionWrapper() training = False.
+            # If not unfreeze_unet, then disable the training of the UNetk, 
+            # and only train the embedding_manager.
+            self.model.eval()
+            self.model.train = disabled_train
+            for param in self.model.parameters():
+                param.requires_grad = False
+
+        self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        if self.do_zero_shot:
+            # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
+            # which is used to generate the subject embeddings for subject-single prompts.
+            self.embedding_manager.make_frozen_copy_of_subj_basis_generators()
+            
+        if self.arc2face is not None:
+            # Let embedding_manager share the text_encoder with arc2face, to save some RAM.
+            self.embedding_manager.arc2face_text_encoder = self.arc2face.text_encoder
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -763,7 +720,7 @@ class LatentDiffusion(DDPM):
         if self.shorten_cond_schedule:
             self.make_cond_schedule()
 
-    # Disable the training of the VAE.
+    # We never train the VAE. So disable the training of the VAE.
     def instantiate_first_stage(self, config):
         model = instantiate_from_config(config)
         self.first_stage_model = model.eval()
@@ -784,7 +741,7 @@ class LatentDiffusion(DDPM):
             else:
                 model = instantiate_from_config(config)
                 self.cond_stage_model = model.eval()
-                # Disable the training of the CLIP text encoder.
+                # We never train the CLIP text encoder. So disable the training of the CLIP text encoder.
                 self.cond_stage_model.train = disabled_train
                 for param in self.cond_stage_model.parameters():
                     param.requires_grad = False
@@ -1910,46 +1867,26 @@ class LatentDiffusion(DDPM):
                     # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
                     # Kept for clarity. 
                     elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
+                        # Do ada prompt delta loss in this iteration. 
+                        extra_info['iter_type'] = 'do_ada_prompt_delta_reg'
                         # c_in2 consists of four types of prompts: 
                         # subj_single, subj_comp, cls_single, cls_comp.
-                        c_in2         = delta_prompts
-                        # Do ada prompt delta loss in this iteration. 
-                        extra_info['iter_type']     = 'do_ada_prompt_delta_reg'
+                        c_in2                   = delta_prompts
                         # The prompts are either (subj single, subj comp, cls single, cls comp) or
                         # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
                         # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
                         extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
                     else:
                         # do_normal_recon. The original scheme. 
-                        extra_info['iter_type']      = 'normal_recon'
+                        extra_info['iter_type'] = 'normal_recon'
+                        c_in2                   = captions
                         # Use the original "captions" prompts and embeddings.
-                        c_in2         = captions
                         # captions == subj_single_prompts should always hold.
-                        # They are not the same, if bg/fg overlay is used (???). In that case, we need to generate 
-                        # c_static_emb from captions. This case is already disabled but just leave the code here.
-                        if captions == subj_single_prompts:
-                            c_static_emb = subj_single_emb
-                            # The blocks as input to get_learned_conditioning() are not halved. 
-                            # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                            extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
-                        else:
-                            breakpoint()
-                            '''
-                            # We are unable to reuse the static embeddings of subject single prompt within 
-                            # the 4-type prompts, as captions are different. 
-                            # So generate embeddings from the captions from scratch.
-                            # placeholder2indices in captions should be the same as in subj_single_prompts.
-                            # "captions" consist of subject single prompts only (no comp prompts).
-                            # Embeddings don't need patching as there are no class prompts.
-                            c_static_emb, _, extra_info0 = \
-                                self.get_learned_conditioning(captions, 
-                                                              self.iter_flags['zs_clip_features'],
-                                                              self.iter_flags['zs_id_embs'],
-                                                              randomize_clip_weights=True)
-                            # print(captions)
-                            extra_info['placeholder2indices'] = extra_info0['placeholder2indices']
-                            '''
-                            
+                        assert captions == subj_single_prompts
+                        c_static_emb = subj_single_emb
+                        # The blocks as input to get_learned_conditioning() are not halved. 
+                        # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
+                        extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                         extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                              *c_static_emb.shape[1:])
                                                 
@@ -1994,7 +1931,7 @@ class LatentDiffusion(DDPM):
                     extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                            *c_static_emb.shape[1:])
                                         
-                    extra_info['iter_type']         = 'normal_recon'
+                    extra_info['iter_type'] = 'normal_recon'
 
                     cond = (c_static_emb, c_in, extra_info)
                     ##### End of normal_recon without static delta loss iters. #####
@@ -4879,7 +4816,7 @@ class LatentDiffusion(DDPM):
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_unet: 
-            model_params = list(self.model.diffusion_model.parameters())
+            model_params = list(self.model.parameters())
             # model_lr: default 2e-6 set in finetune-unet.yaml.
             opt_params_with_lrs += [ {"params": model_params, "lr": self.model_lr} ]
 
@@ -4997,9 +4934,11 @@ class LatentDiffusion(DDPM):
 
             if self.unfreeze_unet:
                 # Save the UNetModel state_dict.
-                # This unet has different parameter names from diffusers.
+                # self.model is a DiffusionWrapper, whose parameters are the same as the UNetModel member,
+                # but with an extra diffusion_model prefix. This would be handled during checkpoint conversion.
+                # The unet has different parameter names from diffusers.
                 # It can be converted with convert_ldm_unet_checkpoint().
-                torch.save(self.model.diffusion_model.state_dict(), 
+                torch.save(self.model.state_dict(), 
                            os.path.join(self.trainer.checkpoint_callback.dirpath, f"unet-{self.global_step}.pt"))
                 print(f"Saved unet-{self.global_step}.pt.")
 

@@ -27,7 +27,6 @@ class VQModel(pl.LightningModule):
                  lr_g_factor=1.0,
                  remap=None,
                  sane_index_shape=False, # tell vector quantizer to return indices as bhw
-                 use_ema=False
                  ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -49,8 +48,6 @@ class VQModel(pl.LightningModule):
         self.batch_resize_range = batch_resize_range
         if self.batch_resize_range is not None:
             print(f"{self.__class__.__name__}: Using per-batch resizing in range {batch_resize_range}.")
-
-        self.use_ema = False # Ignore use_ema.
         
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
@@ -72,8 +69,7 @@ class VQModel(pl.LightningModule):
             print(f"Unexpected Keys: {unexpected}")
 
     def on_train_batch_end(self, *args, **kwargs):
-        if self.use_ema:
-            self.model_ema(self)
+        pass
 
     def encode(self, x):
         h = self.encoder(x)
@@ -145,8 +141,7 @@ class VQModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         log_dict = self._validation_step(batch, batch_idx)
-        with self.ema_scope():
-            log_dict_ema = self._validation_step(batch, batch_idx, suffix="_ema")
+        log_dict_ema = self._validation_step(batch, batch_idx, suffix="_ema")
         return log_dict
 
     def _validation_step(self, batch, batch_idx, suffix=""):
@@ -212,7 +207,7 @@ class VQModel(pl.LightningModule):
     def get_last_layer(self):
         return self.decoder.conv_out.weight
 
-    def log_images(self, batch, only_inputs=False, plot_ema=False, **kwargs):
+    def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
         x = self.get_input(batch, self.image_key)
         x = x.to(self.device)
@@ -227,11 +222,6 @@ class VQModel(pl.LightningModule):
             xrec = self.to_rgb(xrec)
         log["inputs"] = x
         log["reconstructions"] = xrec
-        if plot_ema:
-            with self.ema_scope():
-                xrec_ema, _ = self(x)
-                if x.shape[1] > 3: xrec_ema = self.to_rgb(xrec_ema)
-                log["reconstructions_ema"] = xrec_ema
         return log
 
     def to_rgb(self, x):

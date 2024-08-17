@@ -384,21 +384,6 @@ def main(opt):
         sampler = DDIMSampler(model)
 
     else:        
-        '''
-        class DummyScope(object):
-            def __init__(self):
-                pass
-            def __enter__(self):
-                pass
-            def __exit__(self, *args):
-                pass
-
-        DummyModel = namedtuple('DummyModel', ['ema_scope'])
-
-        # model.ema_scope() is a do-nothing object.
-        model = DummyModel(DummyScope)
-        '''
-        
         if opt.diffusers:
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper

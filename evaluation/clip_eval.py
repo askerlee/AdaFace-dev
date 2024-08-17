@@ -153,26 +153,25 @@ class LDMCLIPEvaluator(CLIPEvaluator):
         # generate samples
         all_samples=list()
         with torch.no_grad():
-            with ldm_model.ema_scope():                
-                uc = ldm_model.get_learned_conditioning(samples_per_batch * [""])
+            uc = ldm_model.get_learned_conditioning(samples_per_batch * [""])
 
-                for batch in range(n_batches):
-                    c = ldm_model.get_learned_conditioning(samples_per_batch * [target_text])
-                    shape = [4, 256//8, 256//8]
-                    samples_ddim, _ = sampler.sample(S=n_steps,
-                                                    conditioning=c,
-                                                    batch_size=samples_per_batch,
-                                                    shape=shape,
-                                                    verbose=False,
-                                                    unconditional_guidance_scale=5.0,
-                                                    unconditional_conditioning=uc,
-                                                    eta=0.0)
+            for batch in range(n_batches):
+                c = ldm_model.get_learned_conditioning(samples_per_batch * [target_text])
+                shape = [4, 256//8, 256//8]
+                samples_ddim, _ = sampler.sample(S=n_steps,
+                                                conditioning=c,
+                                                batch_size=samples_per_batch,
+                                                shape=shape,
+                                                verbose=False,
+                                                unconditional_guidance_scale=5.0,
+                                                unconditional_conditioning=uc,
+                                                eta=0.0)
 
-                    x_samples_ddim = ldm_model.decode_first_stage(samples_ddim)
-                    x_samples_ddim = torch.clamp(x_samples_ddim, min=-1.0, max=1.0)
+                x_samples_ddim = ldm_model.decode_first_stage(samples_ddim)
+                x_samples_ddim = torch.clamp(x_samples_ddim, min=-1.0, max=1.0)
 
-                    all_samples.append(x_samples_ddim)
-        
+                all_samples.append(x_samples_ddim)
+    
         all_samples = torch.cat(all_samples, axis=0)
 
         sim_samples_to_img  = self.image_pairwise_similarity(ref_images, all_samples)
