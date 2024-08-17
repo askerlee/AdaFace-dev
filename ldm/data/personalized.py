@@ -995,8 +995,8 @@ class SubjectSampler(Sampler):
         self.subj_weights = image_count_by_subj / image_count_by_subj.sum()
 
         assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
-        rank = dist.get_rank()
-        print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(rank, self.num_subjects, 
+        self.rank = dist.get_rank()
+        print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(self.rank, self.num_subjects, 
                                                                                  self.batch_size, self.num_batches))
         self.prefetch_buffer = Queue()
         self.curr_subj_idx = 0
@@ -1016,5 +1016,5 @@ class SubjectSampler(Sampler):
     def __iter__(self):
         for i in range(self.num_batches * self.batch_size):
             self.curr_subj_idx   = self.next_subject()
-            print(self.curr_subj_idx)
+            print(self.rank, self.curr_subj_idx)
             yield self.curr_subj_idx, True

@@ -587,44 +587,6 @@ class DDPM(pl.LightningModule):
         denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
         return denoise_grid
 
-    @torch.no_grad()
-    def log_images(self, batch, N=8, n_row=2, sample=True, return_keys=None, **kwargs):
-        log = dict()
-        x = self.get_input(batch, self.first_stage_key)
-        N = min(x.shape[0], N)
-        n_row = min(x.shape[0], n_row)
-        x = x.to(self.device)[:N]
-        log["inputs"] = x
-
-        # get diffusion row
-        diffusion_row = list()
-        x_start = x[:n_row]
-
-        for t in range(self.num_timesteps):
-            if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
-                t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
-                t = t.to(self.device).long()
-                noise = torch.randn_like(x_start)
-                x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-                diffusion_row.append(x_noisy)
-
-        log["diffusion_row"] = self._get_rows_from_list(diffusion_row)
-
-        if sample:
-            # get denoise row
-            with self.ema_scope("Plotting"):
-                samples, denoise_row = self.sample(batch_size=N, return_intermediates=True)
-
-            log["samples"] = samples
-            log["denoise_row"] = self._get_rows_from_list(denoise_row)
-
-        if return_keys:
-            if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
-                return log
-            else:
-                return {key: log[key] for key in return_keys}
-        return log
-
     def configure_optimizers(self):
         lr = self.learning_rate
         params = list(self.model.parameters())
@@ -849,7 +811,7 @@ class LatentDiffusion(DDPM):
 
         return model
 
-    def instantiate_zero_shot_image_encoders(self):
+    def instantiate_zero_shot_image_encoders(self, only_faces=True):
         clip_model_tag = 'openai/clip-vit-large-patch14'
         self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained(clip_model_tag)
         self.clip_preprocessor  = CLIPImageProcessor.from_pretrained(clip_model_tag)
@@ -873,14 +835,19 @@ class LatentDiffusion(DDPM):
         # Note there's a second "model" in the path.        
         self.insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         self.insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
+        print(f'Face encoder loaded on {self.device}.')
 
-        self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
-        self.dino_encoder = self.dino_encoder.to(self.device)
-        self.dino_encoder.eval()
-        self.dino_encoder.half()
-        self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
-        print(f'Face and DINO encoders loaded on {self.device}.')
-
+        if not only_faces:
+            self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
+            self.dino_encoder = self.dino_encoder.to(self.device)
+            self.dino_encoder.eval()
+            self.dino_encoder.half()
+            self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
+            print(f'DINO encoder loaded on {self.device}.')
+        else:
+            self.dino_encoder = None
+            self.dino_preprocess = None
+            
         self.neg_image_features = None
         self.zs_image_encoders_instantiated = True
 
@@ -2310,7 +2277,8 @@ class LatentDiffusion(DDPM):
                 # The actual size doesn't matter, 
                 # as fg_mask2 will be resized to the same size as image features 
                 # (much smaller than image_pixel_values).            
-                fg_masks2 = torch.tensor(fg_masks, device=self.device).float().unsqueeze(1)
+                fg_masks2 = fg_masks.to(device=self.device).float().unsqueeze(1)
+                # F.interpolate() always return a copy, even if scale_factor=1. So we don't need to clone fg_masks2.
                 fg_masks2 = F.interpolate(fg_masks2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
                 fg_masks2 = fg_masks2.squeeze(1)
         else:
@@ -4916,126 +4884,6 @@ class LatentDiffusion(DDPM):
             self.num_cached_generations = 0
             self.cache_start_iter = self.global_step + 1
 
-    @torch.no_grad()
-    def log_images(self, batch, N=8, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
-                   quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
-                   plot_diffusion_rows=False, **kwargs):
-
-        use_ddim = ddim_steps is not None
-
-        log = dict()
-        z, c, x, xrec, xc = self.get_input(batch, self.first_stage_key,
-                                           return_first_stage_outputs=True,
-                                           force_c_encode=True,
-                                           return_original_cond=True,
-                                           bs=N)
-        N = min(x.shape[0], N)
-        n_row = min(x.shape[0], n_row)
-        log["inputs"] = x
-        log["reconstruction"] = xrec
-        if self.model.conditioning_key is not None:
-            if hasattr(self.cond_stage_model, "decode"):
-                xc = self.cond_stage_model.decode(c)
-                log["conditioning"] = xc
-            elif self.cond_stage_key in ["caption"]:
-                xc = log_txt_as_img((x.shape[2], x.shape[3]), batch['caption'])
-                log["conditioning"] = xc
-            elif self.cond_stage_key == 'class_label':
-                xc = log_txt_as_img((x.shape[2], x.shape[3]), batch["human_label"])
-                log['conditioning'] = xc
-            elif isimage(xc):
-                log["conditioning"] = xc
-            if ismap(xc):
-                log["original_conditioning"] = self.to_rgb(xc)
-
-        if plot_diffusion_rows:
-            # get diffusion row
-            diffusion_row = list()
-            z_start = z[:n_row]
-            for t in range(self.num_timesteps):
-                if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
-                    t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
-                    t = t.to(self.device).long()
-                    noise = torch.randn_like(z_start)
-                    z_noisy = self.q_sample(x_start=z_start, t=t, noise=noise)
-                    diffusion_row.append(self.decode_first_stage(z_noisy))
-
-            diffusion_row = torch.stack(diffusion_row)  # n_log_step, n_row, C, H, W
-            diffusion_grid = rearrange(diffusion_row, 'n b c h w -> b n c h w')
-            diffusion_grid = rearrange(diffusion_grid, 'b n c h w -> (b n) c h w')
-            diffusion_grid = make_grid(diffusion_grid, nrow=diffusion_row.shape[0])
-            log["diffusion_row"] = diffusion_grid
-
-        if sample:
-            # get denoise row
-            with self.ema_scope("Plotting"):
-                samples, z_denoise_row = self.sample_log(cond=c, batch_size=N, ddim=use_ddim,
-                                                         ddim_steps=ddim_steps, eta=ddim_eta)
-                # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True)
-            x_samples = self.decode_first_stage(samples)
-            log["samples"] = x_samples
-            if plot_denoise_rows:
-                denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
-                log["denoise_row"] = denoise_grid
-            
-            uc = self.get_learned_conditioning(N * [""])
-            sample_scaled, _ = self.sample_log(cond=c, 
-                                               batch_size=N, 
-                                               ddim=use_ddim, 
-                                               ddim_steps=ddim_steps,
-                                               eta=ddim_eta,                                                 
-                                               unconditional_guidance_scale=5.0,
-                                               unconditional_conditioning=uc)
-            log["samples_scaled"] = self.decode_first_stage(sample_scaled)
-
-            if quantize_denoised and not isinstance(self.first_stage_model, AutoencoderKL) and not isinstance(
-                    self.first_stage_model, IdentityFirstStage):
-                # also display when quantizing x0 while sampling
-                with self.ema_scope("Plotting Quantized Denoised"):
-                    samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                             ddim_steps=ddim_steps,eta=ddim_eta,
-                                                             quantize_denoised=True)
-                    # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True,
-                    #                                      quantize_denoised=True)
-                x_samples = self.decode_first_stage(samples.to(self.device))
-                log["samples_x0_quantized"] = x_samples
-
-            if inpaint:
-                # make a simple center square
-                b, h, w = z.shape[0], z.shape[2], z.shape[3]
-                mask = torch.ones(N, h, w).to(self.device)
-                # zeros will be filled in
-                mask[:, h // 4:3 * h // 4, w // 4:3 * w // 4] = 0.
-                mask = mask[:, None, ...]
-                with self.ema_scope("Plotting Inpaint"):
-                    samples, _ = self.sample_log(cond=c,batch_size=N,ddim=use_ddim, eta=ddim_eta,
-                                                ddim_steps=ddim_steps, x0=z[:N], mask=mask)
-                x_samples = self.decode_first_stage(samples.to(self.device))
-                log["samples_inpainting"] = x_samples
-                log["mask"] = mask
-
-                # outpaint
-                with self.ema_scope("Plotting Outpaint"):
-                    samples, _ = self.sample_log(cond=c, batch_size=N, ddim=use_ddim,eta=ddim_eta,
-                                                ddim_steps=ddim_steps, x0=z[:N], mask=mask)
-                x_samples = self.decode_first_stage(samples.to(self.device))
-                log["samples_outpainting"] = x_samples
-
-        if plot_progressive_rows:
-            with self.ema_scope("Plotting Progressives"):
-                img, progressives = self.progressive_denoising(c,
-                                                               shape=(self.channels, self.image_size, self.image_size),
-                                                               batch_size=N)
-            prog_row = self._get_denoise_row_from_list(progressives, desc="Progressive Generation")
-            log["progressive_row"] = prog_row
-
-        if return_keys:
-            if np.intersect1d(list(log.keys()), return_keys).shape[0] == 0:
-                return log
-            else:
-                return {key: log[key] for key in return_keys}
-        return log
-
     # configure_optimizers() is called later as a hook function by pytorch_lightning.
     # call stack: main.py: trainer.fit()
     # ...
@@ -5057,8 +4905,8 @@ class LatentDiffusion(DDPM):
             
         # self.learning_rate and self.weight_decay are set in main.py.
         # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
-        lr      = self.learning_rate
-        scheduler = None
+        lr          = self.learning_rate
+        scheduler   = None
 
         opt_params_with_lrs = []
         if self.embedding_manager_trainable:
@@ -5172,51 +5020,6 @@ class LatentDiffusion(DDPM):
                         }} ]
 
         return optimizers
-
-
-    # configure_opt_embedding() is never called.
-    def configure_opt_embedding(self):
-        self.cond_stage_model.eval()
-        self.cond_stage_model.train = disabled_train
-        for param in self.cond_stage_model.parameters():
-            param.requires_grad = False
-
-        self.model.eval()
-        self.model.train = disabled_train
-        for param in self.model.parameters():
-            param.requires_grad = False
-
-        for param in self.embedding_manager.optimized_parameters():
-            param.requires_grad = True
-
-        lr = self.learning_rate
-        params = list(self.embedding_manager.optimized_parameters())
-        opt = torch.optim.AdamW(params, lr=lr)
-        return opt
-
-    # configure_opt_model() is never called.
-    def configure_opt_model(self):
-        for param in self.cond_stage_model.parameters():
-            param.requires_grad = True
-
-        for param in self.model.parameters():
-            param.requires_grad = True
-
-        for param in self.embedding_manager.optimized_parameters():
-            param.requires_grad = True
-
-        model_params = list(self.cond_stage_model.parameters()) + list(self.model.parameters())
-        embedding_params = list(self.embedding_manager.optimized_parameters())
-        return torch.optim.AdamW([{"params": embedding_params, "lr": self.learning_rate}, {"params": model_params}], lr=self.model_lr)
-
-    @torch.no_grad()
-    def to_rgb(self, x):
-        x = x.float()
-        if not hasattr(self, "colorize"):
-            self.colorize = torch.randn(3, x.shape[1], 1, 1).to(x)
-        x = nn.functional.conv2d(x, weight=self.colorize)
-        x = 2. * (x - x.min()) / (x.max() - x.min()) - 1.
-        return x
 
     # Called by modelcheckpoint in config.yaml.
     def on_save_checkpoint(self, checkpoint):

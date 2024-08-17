@@ -14,7 +14,6 @@ from pytorch_lightning.trainer import Trainer
 from pytorch_lightning.callbacks import Callback, LearningRateMonitor
 from pytorch_lightning.utilities import rank_zero_info
 
-from ldm.data.base import Txt2ImgIterableBaseDataset
 from ldm.data.personalized import SubjectSampler
 from ldm.util import instantiate_from_config, extend_nn_embedding
 
@@ -371,14 +370,7 @@ def worker_init_fn(_):
     dataset = worker_info.dataset
     worker_id = worker_info.id
 
-    if isinstance(dataset, Txt2ImgIterableBaseDataset):
-        split_size = dataset.num_records // worker_info.num_workers
-        # reset num_records to the true number to retain reliable length information
-        dataset.sample_ids = dataset.valid_ids[worker_id * split_size:(worker_id + 1) * split_size]
-        current_id = np.random.choice(len(np.random.get_state()[1]), 1)
-        return np.random.seed(np.random.get_state()[1][current_id] + worker_id)
-    else:
-        return np.random.seed(np.random.get_state()[1][0] + worker_id)
+    return np.random.seed(np.random.get_state()[1][0] + worker_id)
 
 # LightningDataModule: https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/datamodules.html
 # train: ldm.data.personalized.PersonalizedBase
@@ -420,7 +412,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
         else:
             init_fn = None
         
-        shuffle = False # if is_iterable_dataset else True
+        shuffle = False
         # If there are multiple subjects, we use SubjectSampler to ensure that 
         # each batch contains data from one subject only.
         if self.datasets['train'].num_subjects > 1:
@@ -441,23 +433,22 @@ class DataModuleFromConfig(pl.LightningDataModule):
                           worker_init_fn=init_fn, drop_last=True)
 
     def _test_dataloader(self, shuffle=False):
-        is_iterable_dataset = isinstance(self.datasets['train'], Txt2ImgIterableBaseDataset)
-        if is_iterable_dataset or self.use_worker_init_fn:
+        if self.use_worker_init_fn:
             init_fn = worker_init_fn
         else:
             init_fn = None
 
-        # do not shuffle dataloader for iterable dataset
-        shuffle = shuffle and (not is_iterable_dataset)
+        shuffle = False
 
         return DataLoader(self.datasets["test"], batch_size=self.batch_size,
                           num_workers=self.num_workers, worker_init_fn=init_fn, shuffle=shuffle)
 
     def _predict_dataloader(self, shuffle=False):
-        if isinstance(self.datasets['predict'], Txt2ImgIterableBaseDataset) or self.use_worker_init_fn:
+        if self.use_worker_init_fn:
             init_fn = worker_init_fn
         else:
             init_fn = None
+
         return DataLoader(self.datasets["predict"], batch_size=self.batch_size,
                           num_workers=self.num_workers, worker_init_fn=init_fn)
 
