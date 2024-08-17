@@ -706,7 +706,6 @@ class EmbeddingManager(nn.Module):
                             self.arc2face_embs = placeholder_arc2face_embs
                         if self.iter_type in ['compos_distill_iter']:
                             assert placeholder_adaface_prompt_embs is not None
-                            adaface_prompt_embs = placeholder_adaface_prompt_embs
 
                     # NOTE: the condition iter_type == 'compos_distill_iter' is vital, as a recon_iter with delta loss 
                     # also has the 4-type prompt structure.

@@ -154,7 +154,6 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.empty_context                          = None
         self.do_clip_teacher_filtering              = do_clip_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
@@ -717,10 +716,6 @@ class LatentDiffusion(DDPM):
             # For DreamBooth.
             self.embedding_manager = None
 
-        empty_context_info = self.get_learned_conditioning([""], embman_iter_type='empty')
-        # empty_context: [16, 77, 768] -> [1, 77, 768]
-        self.empty_context = empty_context_info[0][[0]]
-
         self.generation_cache = []
         self.generation_cache_img_colors = []
         self.cache_start_iter = 0
@@ -887,8 +882,6 @@ class LatentDiffusion(DDPM):
                 # each prompt in c is encoded as [1, 77, 768].
                 # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
                 self.cond_stage_model.device = self.device
-                if self.empty_context is not None:
-                    self.empty_context = self.empty_context.to(self.device)
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
