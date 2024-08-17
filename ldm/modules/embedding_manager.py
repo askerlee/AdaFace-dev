@@ -272,6 +272,7 @@ class EmbeddingManager(nn.Module):
     ):
         super().__init__()
 
+        self.rank = dist.get_rank()
         self.do_zero_shot = do_zero_shot
 
         self.string_to_token_dict = OrderedDict()
@@ -584,12 +585,6 @@ class EmbeddingManager(nn.Module):
         static_subj_embs_dict = {}
         self.cls_delta_string_indices = []
 
-        adaface_prompt_embs = None
-        if dist.is_initialized():
-            rank = dist.get_rank()
-        else:
-            rank = 0
-
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
@@ -696,10 +691,7 @@ class EmbeddingManager(nn.Module):
                     # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
                     # matching the batch structure of (subject-single, subject-single, ...).
                     if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
-                        adaface_subj_embs_orig_bs = adaface_subj_embs.shape[0]
                         adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
-                        #if rank == 0:
-                        #    print(f"Repeat adaface_subj_embs from {adaface_subj_embs_orig_bs} to {REAL_OCCURS_IN_BATCH}.")
 
                     if self.do_zero_shot and not placeholder_is_bg:
                         # NOTE: arc2face_embs is the Arc2Face forward embeddings, while 
@@ -746,7 +738,7 @@ class EmbeddingManager(nn.Module):
                             adaface_subj_embs[:NUM_HALF_SUBJS] = adaface_subj_embs0.to(adaface_subj_embs.dtype) * 0.9 \
                                                               + adaface_subj_embs[:NUM_HALF_SUBJS] * 0.1
                             
-                            if rank == 0:
+                            if self.rank == 0:
                                 print(f"compos_distill_iter. Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
                 else:
                     adaface_subj_embs = None
@@ -931,7 +923,7 @@ class EmbeddingManager(nn.Module):
 
         self.set_curr_iter_type(embman_iter_type)
         if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-            print(f"subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
+            print(f"{self.rank} subjects:{self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
 
     def set_curr_iter_type(self, embman_iter_type):
         self.iter_type = embman_iter_type
