@@ -36,6 +36,11 @@ model:
     do_zero_shot:                     True
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              1
+    unet_teacher_type:                'unet_ensemble'
+    # Actual values are set in main.py.
+    extra_unet_paths:                 []
+    unet_weights:                     [1.0]
+
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5

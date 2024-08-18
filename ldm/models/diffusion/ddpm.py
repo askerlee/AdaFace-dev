@@ -144,7 +144,7 @@ class DDPM(pl.LightningModule):
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
-        self.p_unet_distill_iter                 = p_unet_distill_iter if (do_zero_shot and self.training) \
+        self.p_unet_distill_iter                    = p_unet_distill_iter if (do_zero_shot and self.training) \
                                                         else 0
         self.unet_teacher_type                      = unet_teacher_type
         self.extra_unet_paths                       = extra_unet_paths
@@ -468,7 +468,7 @@ class LatentDiffusion(DDPM):
                  embedding_manager_trainable=False,
                  concat_mode=True,
                  cond_stage_forward=None,
-                 conditioning_key=None,
+                 conditioning_key='crossattn',
                  scale_factor=1.0,
                  scale_by_std=False,
                  *args, **kwargs):
@@ -477,18 +477,15 @@ class LatentDiffusion(DDPM):
         self.scale_by_std = scale_by_std
         assert self.num_timesteps_cond <= kwargs['timesteps']
         # for backwards compatibility after implementation of DiffusionWrapper
-        # conditioning_key: crossattn
-        if conditioning_key is None:
-            conditioning_key = 'concat' if concat_mode else 'crossattn'
+
         # cond_stage_config is a dict:
         # {'target': 'ldm.modules.encoders.modules.FrozenCLIPEmbedder'}
         # Not sure why it's compared with a string
-        if cond_stage_config == '__is_unconditional__':
-            conditioning_key = None
 
         # ckpt_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
         ckpt_path = kwargs.pop("ckpt_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
+        # conditioning_key: crossattn
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
         self.concat_mode = concat_mode
         self.cond_stage_trainable = cond_stage_trainable
@@ -515,7 +512,7 @@ class LatentDiffusion(DDPM):
         # As a result, the model weight is only loaded here, not in DDPM.
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
-            
+        
         if self.p_unet_distill_iter > 0:
             # arc2face is initialized after the model is loaded from ckpt,
             # to avoid warning of many missing keys.

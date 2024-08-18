@@ -971,7 +971,7 @@ class EmbeddingManager(nn.Module):
             print(f"Disable training_add_noise")
         else:
             print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
-                  ", with prob = {training_add_noise_prob}")
+                  f", with prob = {training_add_noise_prob}")
 
     def check_arc2face_text_encoder(self, device):
         if self.arc2face_text_encoder is None:

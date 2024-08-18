@@ -729,6 +729,13 @@ if __name__ == "__main__":
             config.model.params.personalization_config.params.zs_extra_words_scale = 0.5
             config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
 
+            if hasattr(opt, 'p_unet_distill_iter'):
+                config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
+            config.model.params.unet_teacher_type   = opt.unet_teacher_type
+            config.model.params.extra_unet_paths    = opt.extra_unet_paths
+            # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
+            config.model.params.unet_weights        = opt.unet_weights
+
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://lightning.ai/docs/pytorch/stable/data/datamodule.html
@@ -768,13 +775,6 @@ if __name__ == "__main__":
             # If do_zero_shot, composition_regs_iter_gap changes from 3 to 6, i.e., 
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
-
-        if hasattr(opt, 'p_unet_distill_iter'):
-            config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
-            config.model.params.unet_teacher_type   = opt.unet_teacher_type
-            config.model.params.extra_unet_paths    = opt.extra_unet_paths
-            # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
-            config.model.params.unet_weights        = opt.unet_weights
 
         config.model.params.load_old_embman_ckpt = opt.load_old_embman_ckpt
 
