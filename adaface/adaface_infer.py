@@ -47,6 +47,8 @@ def parse_args():
                         help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
+    parser.add_argument("--main_unet_path", type=str, default=None,
+                        help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
     parser.add_argument("--extra_unet_paths", type=str, nargs="+", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
@@ -94,6 +96,7 @@ if __name__ == "__main__":
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, args.embman_ckpt, args.device, 
                              args.subject_string, args.num_vectors, args.num_inference_steps,
+                             main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,
                              unet_weights=args.unet_weights)
 

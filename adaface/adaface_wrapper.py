@@ -9,9 +9,11 @@ from diffusers import (
     DDIMScheduler,
     AutoencoderKL,
 )
+from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from insightface.app import FaceAnalysis
 from adaface.arc2face_models import CLIPTextModelWrapper
 from adaface.util import get_arc2face_id_prompt_embs, UNetEnsemble
+from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import sys
 sys.modules['ldm'] = sys.modules['adaface']
@@ -21,7 +23,7 @@ class AdaFaceWrapper(nn.Module):
                  subject_string='z', num_vectors=16, 
                  num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
-                 extra_unet_paths=None, unet_weights=None,
+                 main_unet_path=None, extra_unet_paths=None, unet_weights=None,
                  is_training=False):
         '''
         pipeline_name: "text2img" or "img2img" or None. If None, the unet and vae are
@@ -36,6 +38,7 @@ class AdaFaceWrapper(nn.Module):
         self.subject_string = subject_string
         self.num_vectors = num_vectors
         self.num_inference_steps = num_inference_steps
+        self.main_unet_path = main_unet_path
         self.extra_unet_paths = extra_unet_paths
         self.unet_weights = unet_weights
         self.device = device
@@ -134,6 +137,10 @@ class AdaFaceWrapper(nn.Module):
                     safety_checker=None
                 )
         
+        if self.main_unet_path is not None:
+            print(f"Replacing the UNet with the UNet from {self.main_unet_path}.")
+            pipeline.unet.load_state_dict(self.load_unet_from_file(self.main_unet_path, device=self.device))
+
         if self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0:
             unet_ensemble = UNetEnsemble(pipeline.unet, self.extra_unet_paths, self.unet_weights,
                                          device=self.device, torch_dtype=torch.float16)
@@ -178,6 +185,34 @@ class AdaFaceWrapper(nn.Module):
             self.subj_basis_generator.clip_tokenizer = self.pipeline.tokenizer
             print("Patched the missing tokenizer in the subj_basis_generator.")
 
+    def load_unet_from_file(self, unet_path, device=None):
+        if os.path.isfile(unet_path):
+            if unet_path.endswith(".safetensors"):
+                unet_state_dict = safetensors_load_file(unet_path, device=device)
+            else:
+                unet_state_dict = torch.load(unet_path, map_location=device)
+
+            key0 = list(unet_state_dict.keys())[0]
+            if key0.startswith("model.diffusion_model"):
+                key_prefix = ""
+                is_ldm_unet = True
+            elif key0.startswith("diffusion_model"):
+                key_prefix = "model."
+                is_ldm_unet = True
+            else:
+                is_ldm_unet = False
+
+            if is_ldm_unet:
+                unet_state_dict2 = {}
+                for key, value in unet_state_dict.items():
+                    key2 = key_prefix + key
+                    unet_state_dict2[key2] = value
+                print(f"LDM UNet detected. Convert to diffusers")
+                unet_state_dict = convert_ldm_unet_checkpoint(unet_state_dict2)
+        else:
+            raise ValueError(f"UNet path {unet_path} is not a file.")
+        return unet_state_dict
+        
     def extend_tokenizer_and_text_encoder(self):
         if self.num_vectors < 1:
             raise ValueError(f"num_vectors has to be larger or equal to 1, but is {self.num_vectors}")
