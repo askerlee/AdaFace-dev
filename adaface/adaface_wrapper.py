@@ -139,7 +139,11 @@ class AdaFaceWrapper(nn.Module):
         
         if self.main_unet_path is not None:
             print(f"Replacing the UNet with the UNet from {self.main_unet_path}.")
-            pipeline.unet.load_state_dict(self.load_unet_from_file(self.main_unet_path, device=self.device))
+            ret = pipeline.unet.load_state_dict(self.load_unet_from_file(self.main_unet_path, device='cpu'))
+            if len(ret.missing_keys) > 0:
+                print(f"Missing keys: {ret.missing_keys}")
+            if len(ret.unexpected_keys) > 0:
+                print(f"Unexpected keys: {ret.unexpected_keys}")
 
         if self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0:
             unet_ensemble = UNetEnsemble(pipeline.unet, self.extra_unet_paths, self.unet_weights,
