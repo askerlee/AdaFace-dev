@@ -208,7 +208,8 @@ class AdaFaceWrapper(nn.Module):
                     key2 = key_prefix + key
                     unet_state_dict2[key2] = value
                 print(f"LDM UNet detected. Convert to diffusers")
-                unet_state_dict = convert_ldm_unet_checkpoint(unet_state_dict2)
+                ldm_unet_config = { 'layers_per_block': 2 }
+                unet_state_dict = convert_ldm_unet_checkpoint(unet_state_dict2, ldm_unet_config)
         else:
             raise ValueError(f"UNet path {unet_path} is not a file.")
         return unet_state_dict
