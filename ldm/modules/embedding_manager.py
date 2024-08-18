@@ -4,6 +4,7 @@ import torch.distributed as dist
 from einops import rearrange
 from adaface.subj_basis_generator import SubjBasisGenerator
 import sys
+sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
 from adaface.util import arc2face_forward_face_embs
@@ -12,7 +13,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import extract_first_index_in_each_instance, \
-                     anneal_add_noise_to_embedding, calc_ref_cosine_loss, \
+                     anneal_add_noise_to_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
                      scan_cls_delta_strings, torch_uniform, \
                      extend_clip_text_embedder, calc_init_word_embeddings

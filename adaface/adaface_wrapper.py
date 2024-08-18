@@ -16,7 +16,7 @@ from adaface.util import get_arc2face_id_prompt_embs, UNetEnsemble
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import sys
-sys.modules['ldm'] = sys.modules['adaface']
+sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, device,
