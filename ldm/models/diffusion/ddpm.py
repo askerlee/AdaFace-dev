@@ -39,6 +39,7 @@ import copy
 from functools import partial
 import random
 from safetensors.torch import load_file as safetensors_load_file
+from safetensors.torch import save_file as safetensors_save_file
 import sys
 import re, cv2
 from PIL import Image
@@ -4069,9 +4070,22 @@ class LatentDiffusion(DDPM):
                 # but with an extra diffusion_model prefix. This would be handled during checkpoint conversion.
                 # The unet has different parameter names from diffusers.
                 # It can be converted with convert_ldm_unet_checkpoint().
-                torch.save(self.model.state_dict(), 
-                           os.path.join(self.trainer.checkpoint_callback.dirpath, f"unet-{self.global_step}.pt"))
-                print(f"Saved unet-{self.global_step}.pt.")
+
+                state_dict = self.model.state_dict()
+                state_dict2 = {}
+                for k in state_dict:
+                    # Skip ema weights
+                    if k.startswith("model_ema."):
+                        continue    
+                    if state_dict[k].dtype == torch.float32:
+                        state_dict2[k] = state_dict[k].half()
+                    else:
+                        state_dict2[k] = state_dict[k]
+
+                unet_save_path = os.path.join(self.trainer.checkpoint_callback.dirpath, 
+                                              f"unet-{self.global_step}.safetensors")
+                safetensors_save_file(state_dict2, unet_save_path)
+                print(f"Saved {unet_save_path}")
 
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config, conditioning_key):
