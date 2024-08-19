@@ -29,7 +29,7 @@ def parse_args():
                         help="Path to the UNet checkpoint (default: RealisticVision 4.0)")
     parser.add_argument("--embman_ckpt", type=str, required=True,
                         help="Path to the checkpoint of the embedding manager")
-    parser.add_argument('--extra_unet_paths', type=str, nargs="+", 
+    parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 

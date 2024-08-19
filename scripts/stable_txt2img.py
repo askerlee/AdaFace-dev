@@ -247,7 +247,7 @@ def parse_args():
     # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
-    parser.add_argument('--extra_unet_paths', type=str, nargs="+", 
+    parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 

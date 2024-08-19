@@ -229,7 +229,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--unet_teacher_type", type=str, default="arc2face",
                         choices=["arc2face", "unet_ensemble"], help="Type of the UNet teacher")
     # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
-    parser.add_argument("--extra_unet_paths", type=str, nargs="+", 
+    parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
                         default=['models/ensemble/sd15-unet', 
                                  'models/ensemble/rv4-unet', 
                                  'models/ensemble/ar18-unet'], 
