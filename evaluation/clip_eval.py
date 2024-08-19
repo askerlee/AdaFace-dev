@@ -138,3 +138,14 @@ class CLIPEvaluator(object):
             return sim_scores
         else:
             raise NotImplementedError
+
+class ImageDirEvaluator(CLIPEvaluator):
+    def __init__(self, device, clip_model='ViT-B/32') -> None:
+        super().__init__(device, clip_model)
+
+    def evaluate(self, gen_samples, ref_images, target_text):
+
+        sim_samples_to_img  = self.image_pairwise_similarity(ref_images, gen_samples)
+        sim_samples_to_text = self.txt_to_img_similarity(target_text, gen_samples)
+
+        return sim_samples_to_img, sim_samples_to_text
