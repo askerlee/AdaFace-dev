@@ -545,7 +545,7 @@ if __name__ == "__main__":
     # configs are merged from left-to-right followed by command line parameters.
 
     # model:
-    #   base_learning_rate: float
+    #   base_lr: float
     #   target: path to lightning module
     #   params:
     #       key: value
@@ -791,7 +791,7 @@ if __name__ == "__main__":
             config.model.params.prodigy_config.d_coef = opt.d_coef
 
         if hasattr(opt, 'lr'):
-            config.model.base_learning_rate = opt.lr
+            config.model.base_lr = opt.lr
 
         # Personalization config
         config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
@@ -918,7 +918,7 @@ if __name__ == "__main__":
         trainer.logdir = logdir  ###
 
         # configure learning rate
-        bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_learning_rate, \
+        bs, base_lr, weight_decay = config.data.params.batch_size, config.model.base_lr, \
                                     config.model.weight_decay
 
         if not cpu:

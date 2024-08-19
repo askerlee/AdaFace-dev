@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 8e-04
+  base_lr: 1e-6
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -26,8 +26,8 @@ model:
     scale_factor: 0.18215
     unfreeze_unet: true
     # Recommended in https://github.com/TheLastBen/fast-stable-diffusion/issues/1609
-    # But Prodigy will ignore any model_lr setting.
-    model_lr: 2e-6
+    # But Prodigy will ignore any unet_lr setting.
+    unet_lr: 1e-6
     use_layerwise_embedding:          True
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True

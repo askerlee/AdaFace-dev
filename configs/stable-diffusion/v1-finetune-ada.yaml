@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 8e-04
+  base_lr: 8e-04
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -25,7 +25,7 @@ model:
     monitor: train/loss
     scale_factor: 0.18215
     unfreeze_unet: False
-    model_lr: 0.0
+    unet_lr: 0.0
     use_layerwise_embedding:          True
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True

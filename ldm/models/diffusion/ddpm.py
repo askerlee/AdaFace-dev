@@ -74,7 +74,7 @@ class DDPM(pl.LightningModule):
                  given_betas=None,
                  original_elbo_weight=0.,
                  unfreeze_unet=False,
-                 model_lr=0.,
+                 unet_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
                  conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
@@ -188,7 +188,7 @@ class DDPM(pl.LightningModule):
         self.v_posterior = v_posterior
         self.original_elbo_weight = original_elbo_weight
         self.unfreeze_unet = unfreeze_unet
-        self.model_lr = model_lr
+        self.unet_lr = unet_lr
 
         if monitor is not None:
             self.monitor = monitor
@@ -3929,7 +3929,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError()
             
         # self.learning_rate and self.weight_decay are set in main.py.
-        # self.learning_rate = base_learning_rate * 2, 2 is the batch size.
+        # self.learning_rate = base_lr * 2, 2 is the batch size.
         lr          = self.learning_rate
         scheduler   = None
 
@@ -3942,8 +3942,8 @@ class LatentDiffusion(DDPM):
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_unet: 
             model_params = list(self.model.parameters())
-            # model_lr: default 2e-6 set in finetune-unet.yaml.
-            opt_params_with_lrs += [ {"params": model_params, "lr": self.model_lr} ]
+            # unet_lr: default 2e-6 set in finetune-unet.yaml.
+            opt_params_with_lrs += [ {"params": model_params, "lr": self.unet_lr} ]
 
         if 'Prodigy' not in self.optimizer_type:
             opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
