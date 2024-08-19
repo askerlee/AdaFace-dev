@@ -5,7 +5,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import torch
 import re
 import glob
-import time
 import numpy as np
 from PIL import Image
 import cv2
@@ -112,10 +111,8 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
 
     """
     from deepface import DeepFace
-    from deepface.commons import functions as deepface_functions
 
     # --------------------------------
-    target_size = deepface_functions.find_target_size(model_name=model_name)
     all_embeddings = []
 
     for img_path in image_paths:
@@ -123,9 +120,8 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
 
         try:
             # img_path might have many faces
-            img_objs = deepface_functions.extract_faces(
-                img=img_path,
-                target_size=target_size,
+            img_objs = DeepFace.extract_faces(
+                img_path=img_path,
                 detector_backend=detector_backend,
                 grayscale=False,
                 enforce_detection=enforce_detection,
