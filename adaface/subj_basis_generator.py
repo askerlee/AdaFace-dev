@@ -20,7 +20,6 @@ from transformers.utils import ModelOutput
 from adaface.util import arc2face_inverse_face_prompt_embs, gen_gradient_scaler
 from adaface.arc2face_models import CLIPTextModelWrapper
 import sys
-sys.modules['ldm.modules'] = sys.modules['adaface']
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape

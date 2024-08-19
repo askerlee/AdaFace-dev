@@ -1327,6 +1327,12 @@ class LatentDiffusion(DDPM):
                     num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
+                    if self.unet_teacher_type == 'unet_ensemble':
+                        p_unet_ensemble_use_comp_prompt = 0.5
+                        # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+                        if random.random() < p_unet_ensemble_use_comp_prompt:
+                            captions = batch[SUBJ_PROMPT_COMP]
+
                     if num_denoising_steps > 1:
                         # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
                         # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
@@ -2581,10 +2587,11 @@ class LatentDiffusion(DDPM):
             # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.
             loss += loss_static_prompt_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
+        breakpoint()
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
-          and (self.iter_flags['do_normal_recon'] \
-                or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable'])):
+          and ( (self.iter_flags['do_normal_recon'] and not self.iter_flags['use_unet_teacher_as_target']) \
+               or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']) ):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 
             # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).

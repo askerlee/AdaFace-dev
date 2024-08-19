@@ -4,7 +4,7 @@ import torch.distributed as dist
 from einops import rearrange
 from adaface.subj_basis_generator import SubjBasisGenerator
 import sys
-sys.modules['ldm.modules']                      = sys.modules['adaface']
+#sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
 from adaface.util import arc2face_forward_face_embs
