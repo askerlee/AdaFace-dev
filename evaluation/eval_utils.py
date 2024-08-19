@@ -1,6 +1,7 @@
 import os
 # Suppress tensorflow info and warning messages. This should be before importing deepface.
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ["TF_USE_LEGACY_KERAS"] = '1'
 
 import torch
 import re
@@ -127,11 +128,15 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
                 enforce_detection=enforce_detection,
                 align=align,
             )
-        except:
+
+        except Exception as e: 
+            print(img_path)
+            print(e)
             continue
         
         # now we will find the face pair with minimum distance
-        for img_content, img_region, _ in img_objs:
+        for img_obj in img_objs:
+            img_content = img_obj["face"]
             img_embedding_obj = DeepFace.represent(
                 img_path=img_content,
                 model_name=model_name,
@@ -279,6 +284,10 @@ def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_sa
         dst_paths = []
         for ext in img_extensions:
             dst_paths += glob.glob(dst_path + "/*" + ext)
+
+    # Remove mask images.
+    src_paths = filter(lambda x: not x.endswith("_mask.png"), src_paths)
+    dst_paths = filter(lambda x: not x.endswith("_mask.png"), dst_paths)
 
     src_paths = sorted(src_paths)
     dst_paths = sorted(dst_paths)
