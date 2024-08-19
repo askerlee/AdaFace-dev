@@ -386,7 +386,7 @@ class DDPM(pl.LightningModule):
         self.init_iteration_flags()
         # global_step is updated every self.accumulate_grad_batches iterations.
         # So training_percent is multiplied by self.accumulate_grad_batches.
-        self.training_percent = self.global_step * self.accumulate_grad_batches / self.trainer.max_steps
+        self.training_percent = self.global_step / self.trainer.max_steps
 
         # How many regularizations are done intermittently during the training iterations?
         cand_reg_types = []
@@ -2587,7 +2587,6 @@ class LatentDiffusion(DDPM):
             # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.
             loss += loss_static_prompt_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
-        breakpoint()
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
           and ( (self.iter_flags['do_normal_recon'] and not self.iter_flags['use_unet_teacher_as_target']) \

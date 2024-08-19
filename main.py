@@ -675,7 +675,7 @@ if __name__ == "__main__":
             config.model.params.accumulate_grad_batches = opt.accumulate_grad_batches
 
         if opt.max_steps > 0:
-            trainer_opt.max_steps = opt.max_steps // config.model.params.accumulate_grad_batches
+            trainer_opt.max_steps = opt.max_steps
             # max_steps: Used to initialize DataModuleFromConfig.
             config.data.params.max_steps = opt.max_steps
                     

@@ -9,7 +9,6 @@ from einops import rearrange
 import time
 import re
 import csv
-from collections import namedtuple
 
 from pytorch_lightning import seed_everything
 from torch import autocast
