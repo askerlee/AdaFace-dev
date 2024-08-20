@@ -498,7 +498,6 @@ def main(opt):
                 # to batched_subdirs and batched_class_long_prompts respectively below.
                 indiv_subdir = indiv_subdirs[i]
                 class_long_prompt = class_long_prompts[i]
-                class_short_prompt = class_short_prompts[i]
                 # The number of prompts in batched_prompts has to match the number of samples.
                 # So we need to repeat the prompt by n_repeat times.
                 prompts_repeated = [prompt] * n_repeat
@@ -545,8 +544,6 @@ def main(opt):
         start_code = None
 
     if not opt.eval_blip and not opt.diffusers:
-        from adaface.util import get_b_core_e_embeddings
-
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], embman_iter_type='empty')
