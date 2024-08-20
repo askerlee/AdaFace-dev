@@ -53,4 +53,6 @@ animatediff
 pulid
 lightning_logs/*
 lightning_logs
+latent_diffusion.egg-info/*
+latent_diffusion.egg-info
 

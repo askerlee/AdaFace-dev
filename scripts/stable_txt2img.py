@@ -386,6 +386,8 @@ def main(opt):
 
     else:        
         if opt.diffusers:
+            opt.scale = opt.scale[0]
+
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
 
@@ -609,8 +611,8 @@ def main(opt):
                     if opt.diffusers:
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
                         if opt.method == "adaface":                                
-                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale[0], 
-                                                        batch_size, verbose=True)
+                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale, 
+                                                      batch_size, verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []
                             prompt = re.sub(r"a\s+z,? ", "", prompts[0])
@@ -710,8 +712,9 @@ def main(opt):
 
                     if not opt.skip_grid:
                         all_samples.append(x_samples_ddim)
-
+                
                     sample_count += batch_size
+            # End of the loop over prompts.
 
             # After opt.n_repeat passes of batched_prompts, save all sample images as an image grid
             if not opt.skip_grid:
@@ -723,13 +726,15 @@ def main(opt):
                     subj_gt_folder_name = os.path.basename(opt.compare_with)
 
                 if opt.method == "adaface":
-                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)-(\d+)\.pt", opt.subj_model_path)
                     if subjfolder_mat:
                         date_sig = subjfolder_mat.group(2)
-                        # subjname_method: gabrielleunion-ada
+                        # subjname_method: gabrielleunion-ada or zero3-ada
                         subjname_method = subjfolder_mat.group(3)
+                    else:
+                        subjname_method = 'unknown'
 
-                    iter_mat = re.search(r"(\d+).pt", opt.subj_model_path)
+                    iter_mat = re.search(r"(\d+).(pt|safetensors)", opt.subj_model_path)
                     if iter_mat is not None:
                         iter_sig = iter_mat.group(1)
                     else:
@@ -739,6 +744,11 @@ def main(opt):
 
                     date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
                     iter_sig = opt.method
+
+                if opt.main_unet_path:
+                    unet_mat = re.search(r"(\d+).(pt|safetensors)", opt.main_unet_path)
+                    unet_sig = "unet-" + unet_mat.group(1)
+                    subjname_method += "-" + unet_sig
 
                 if opt.zeroshot:
                     # all-ada => all-ada-gabrielleunion
