@@ -545,17 +545,17 @@ class LatentDiffusion(DDPM):
 
         if self.unfreeze_unet:
             self.model.train()
-            time_embed_param_count = 0
+            embed_param_count = 0
             trainable_param_count = 0
             for name, param in self.model.named_parameters():
                 # Freeze time_embed. Finetune other parameters.
-                if 'time_embed' in name:
+                if 'time_embed' in name or 'emb_layers' in name:
                     param.requires_grad = False
-                    time_embed_param_count += 1
+                    embed_param_count += 1
                 else:
                     param.requires_grad = True
                     trainable_param_count += 1
-            print(f"Freeze {time_embed_param_count} time_embed parameters, train {trainable_param_count} parameters.")
+            print(f"Freeze {embed_param_count} embedding parameters, train {trainable_param_count} parameters.")
 
         else:
             # self.model = DiffusionWrapper() training = False.
