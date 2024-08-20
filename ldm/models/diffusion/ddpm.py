@@ -547,9 +547,10 @@ class LatentDiffusion(DDPM):
             self.model.train()
             embed_param_count = 0
             trainable_param_count = 0
-            for name, param in self.model.named_parameters():
-                # Freeze time_embed. Finetune other parameters.
-                if 'time_embed' in name or 'emb_layers' in name:
+            excluded_key_pats = [ 'time_embed', 'emb_layers', 'input_blocks' ]
+            for key, param in self.model.named_parameters():
+                # Freeze embedding layers. Finetune other parameters.
+                if any([pat in key for pat in excluded_key_pats]):
                     param.requires_grad = False
                     embed_param_count += 1
                 else:
