@@ -98,7 +98,6 @@ class UNetEnsembleTeacher(UNetTeacher):
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
 
 
-'''
 class ConsistentIDTeacher(UNetTeacher):
     def __init__(self, **kwargs):
         super().__init__()
@@ -118,4 +117,3 @@ class ConsistentIDTeacher(UNetTeacher):
             weight_name=os.path.basename(consistentID_path),
             trigger_word="img",
         )     
-'''
