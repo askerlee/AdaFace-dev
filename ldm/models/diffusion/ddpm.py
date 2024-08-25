@@ -33,7 +33,7 @@ from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
 from adaface.subj_basis_generator import CLIPVisionModelWithMask
-from ldm.models.teachers import Arc2FaceTeacher, UNetEnsembleTeacher
+from ldm.models.teachers import Arc2FaceTeacher, UNetEnsembleTeacher, ConsistentIDTeacher
 
 import copy
 from functools import partial
@@ -41,7 +41,7 @@ import random
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 import sys
-import re, cv2
+import cv2
 from PIL import Image
 
 __conditioning_keys__ = {'concat': 'c_concat',
@@ -106,6 +106,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_type='arc2face',
                  extra_unet_paths=None,
                  unet_weights=None,
+                 unet_teacher_base_model_path=None,
                  p_gen_arc2face_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
                  max_num_denoising_steps=3,
@@ -150,6 +151,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_type                      = unet_teacher_type
         self.extra_unet_paths                       = extra_unet_paths
         self.unet_weights                           = unet_weights
+        self.unet_teacher_base_model_path           = unet_teacher_base_model_path
 
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
@@ -532,6 +534,10 @@ class LatentDiffusion(DDPM):
                                                         extra_unet_paths=self.extra_unet_paths, 
                                                         unet_weights=self.unet_weights,
                                                         device='cpu')
+            elif self.unet_teacher_type == 'consistentID':
+                # Delay the instantiation of ConsistentIDTeacher to the first iteration,
+                # at which time self.trainer is available.
+                self.unet_teacher = None
         else:
             self.arc2face = None
             self.unet_teacher = None
@@ -594,11 +600,14 @@ class LatentDiffusion(DDPM):
             # Make the behavior deterministic for debugging purposes.
             # In normal runs, disable this statement.
             #random.seed(10000)
-            self.create_clip_evaluator(next(self.parameters()).device)
-
+            device = f"cuda:{self.trainer.strategy.root_device.index}"
+            self.create_clip_evaluator(device)
             # empty_context_tea_filter is only used for clip teacher filtering.
             self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers, embman_iter_type='empty')
             self.empty_context_2b = self.get_learned_conditioning([""] * 2, embman_iter_type='empty')
+
+            if self.unet_teacher_type == 'consistentID':
+                self.unet_teacher = ConsistentIDTeacher(self.unet_teacher_base_model_path, device=device)
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -1191,6 +1200,7 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
                                         for subject_name in self.batch_subject_names ]
+        batch_images_unnorm = batch["image_unnorm"]
 
         if self.do_zero_shot:
             # images: 0~255 uint8 tensor [3, 512, 512, 3] -> [3, 3, 512, 512].
@@ -1245,12 +1255,12 @@ class LatentDiffusion(DDPM):
                         # NOTE: Use the same noise for different ID embeddings in the batch,
                         # so that we can compute the variance at each pixel.
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                        x_start, img_mask, fg_mask, batch_have_fg_mask, \
-                        self.batch_subject_names, \
+                        x_start, batch_images_unnorm, img_mask, fg_mask, \
+                        batch_have_fg_mask, self.batch_subject_names, \
                         self.iter_flags['is_face'], zs_clip_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
-                                                      x_start, img_mask, fg_mask, batch_have_fg_mask, 
-                                                      self.batch_subject_names, 
+                                                      x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                      batch_have_fg_mask, self.batch_subject_names, 
                                                       self.iter_flags['is_face'], zs_clip_features, zs_id_embs)
                         
                     # Add noise to the zero-shot ID embeddings.
@@ -1318,6 +1328,9 @@ class LatentDiffusion(DDPM):
                     # UNet ensemble always uses the unet teacher as target.
                     elif self.unet_teacher_type == 'unet_ensemble':
                         self.iter_flags['use_unet_teacher_as_target'] = True
+                    # consistentID: always uses the unet teacher as target.
+                    elif self.unet_teacher_type == 'consistentID':
+                        self.iter_flags['use_unet_teacher_as_target'] = True
                     else:
                         breakpoint()
 
@@ -1339,8 +1352,12 @@ class LatentDiffusion(DDPM):
                     num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
-                    if self.unet_teacher_type == 'unet_ensemble':
-                        p_unet_ensemble_use_comp_prompt = 0.5
+                    if self.unet_teacher_type == 'unet_ensemble' or self.unet_teacher_type == 'consistentID':
+                        if self.unet_teacher_type == 'unet_ensemble':
+                            p_unet_ensemble_use_comp_prompt = 0.5
+                        else:
+                            p_unet_ensemble_use_comp_prompt = 0.1
+
                         # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
                         if random.random() < p_unet_ensemble_use_comp_prompt:
                             captions = batch[SUBJ_PROMPT_COMP]
@@ -1359,11 +1376,13 @@ class LatentDiffusion(DDPM):
                         ## HALF_BS = max(2, HALF_BS)
 
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
-                        x_start, img_mask, fg_mask, batch_have_fg_mask, self.batch_subject_names, \
+                        x_start, batch_images_unnorm, img_mask, fg_mask, \
+                        batch_have_fg_mask, self.batch_subject_names, \
                         captions, self.iter_flags['is_face'], \
                         zs_clip_features, zs_id_embs, arc2face_prompt_emb = \
                             repeat_selected_instances(slice(0, HALF_BS), 1, 
-                                                      x_start, img_mask, fg_mask, batch_have_fg_mask, self.batch_subject_names, 
+                                                      x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                      batch_have_fg_mask, self.batch_subject_names, 
                                                       captions, self.iter_flags['is_face'],
                                                       zs_clip_features, zs_id_embs, arc2face_prompt_emb)
 
@@ -1392,6 +1411,7 @@ class LatentDiffusion(DDPM):
         self.iter_flags['zs_clip_features']     = zs_clip_features
         self.iter_flags['zs_id_embs']           = zs_id_embs
         self.iter_flags['arc2face_prompt_emb']  = arc2face_prompt_emb
+        self.iter_flags['image_unnorm']         = batch_images_unnorm
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -1408,6 +1428,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['zs_clip_features']         = cached_inits['zs_clip_features']
             self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
             self.iter_flags['arc2face_prompt_emb']      = cached_inits['arc2face_prompt_emb']
+            self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
 
         # In get_learned_conditioning(), embman_iter_type will be set again.
         # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
@@ -1903,6 +1924,7 @@ class LatentDiffusion(DDPM):
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
+        batch_images_unnorm = self.iter_flags['image_unnorm']
 
         c_static_emb, c_in, extra_info = cond
 
@@ -2177,8 +2199,8 @@ class LatentDiffusion(DDPM):
                                          V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
           
             # Update cond[0] to c_static_emb_vk.
-            # Use cond[1] instead of c_in as part of the tuple, since c_in is changed in the
-            # 'do_comp_teacher_filter' branch.
+            # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
+            # with compositional prompts in the 'do_comp_teacher_filter' branch.
             cond = (c_static_emb_vk, cond[1], extra_info)
 
         # It's a RECON iter.
@@ -2306,12 +2328,14 @@ class LatentDiffusion(DDPM):
                         # So we only need to take the first one.
                         # [16, 77, 768] -> [1, 77, 768]
                         context = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                    elif self.unet_teacher_type == 'consistentID':
+                        context = (cond[1], batch_images_unnorm)
                     else:
                         breakpoint()
 
                     unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
                         self.unet_teacher(self, x_start, noise, t, context, num_denoising_steps=num_denoising_steps)
-
+                        
                     MAX_ACCUMU_BATCH_SIZE = 7
                     # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 
                     # When ND >= 2, HALF_BS = 2, max_num_loss_steps = 3.
@@ -2534,6 +2558,7 @@ class LatentDiffusion(DDPM):
                             'zs_clip_features':       self.iter_flags['zs_clip_features'],
                             'zs_id_embs':             self.iter_flags['zs_id_embs'],
                             'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb'],
+                            'image_unnorm':           self.iter_flags['image_unnorm'],
                         }
                     if len(self.cached_inits) > 100:
                         # Delete a random element in the dict to save RAM.

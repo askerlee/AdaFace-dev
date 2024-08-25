@@ -226,8 +226,8 @@ def get_parser(**parser_kwargs):
                         help="Multiplier of the prompt2token projection attention")
     parser.add_argument("--p_unet_distill_iter", type=float, default=argparse.SUPPRESS,
                         help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")
-    parser.add_argument("--unet_teacher_type", type=str, default="arc2face",
-                        choices=["arc2face", "unet_ensemble"], help="Type of the UNet teacher")
+    parser.add_argument("--unet_teacher_type", type=str, default=argparse.SUPPRESS,
+                        choices=["arc2face", "unet_ensemble", "consistentID"], help="Type of the UNet teacher")
     # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
                         default=['models/ensemble/sd15-unet', 
@@ -731,7 +731,8 @@ if __name__ == "__main__":
 
             if hasattr(opt, 'p_unet_distill_iter'):
                 config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
-            config.model.params.unet_teacher_type   = opt.unet_teacher_type
+            if hasattr(opt, 'unet_teacher_type'):
+                config.model.params.unet_teacher_type   = opt.unet_teacher_type
             config.model.params.extra_unet_paths    = opt.extra_unet_paths
             # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights        = opt.unet_weights

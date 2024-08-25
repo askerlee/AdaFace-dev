@@ -8,6 +8,7 @@ from diffusers import UNet2DConditionModel
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.arc2face_models import CLIPTextModelWrapper
 from adaface.util import UNetEnsemble
+from PIL import Image
 
 class UNetTeacher(pl.LightningModule):
     def __init__(self, **kwargs):
@@ -97,25 +98,44 @@ class UNetEnsembleTeacher(UNetTeacher):
         super().__init__()
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
 
-
-'''
 class ConsistentIDTeacher(UNetTeacher):
-    def __init__(self, **kwargs):
+    def __init__(self, base_model_path, device, **kwargs):
         super().__init__()
+        from ConsistentID.pipline_ConsistentID import ConsistentIDPipeline
         ### Load base model
-        from ConsistentID.pipline_StableDiffusion_ConsistentID import ConsistentIDStableDiffusionPipeline
-        pipe = ConsistentIDStableDiffusionPipeline.from_pretrained(
+        pipe = ConsistentIDPipeline.from_pretrained(
             base_model_path, 
             torch_dtype=torch.float16, 
-            use_safetensors=True, 
-            variant="fp16"
-        )
+        ).to(device)
 
         ### Load consistentID_model checkpoint
         pipe.load_ConsistentID_model(
-            os.path.dirname(consistentID_path),
-            subfolder="",
-            weight_name=os.path.basename(consistentID_path),
-            trigger_word="img",
-        )     
-'''
+            consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
+            bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
+        )
+        # Release VAE to save memory.
+        pipe.release_components(release_unet=False, release_vae=True)
+        self.pipe = pipe
+        self.unet = pipe.unet
+
+    # Only used for inference/distillation, so no_grad() is used.
+    @torch.no_grad()
+    def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
+        batch_prompts, batch_images_unnorm = context
+        batch_coarse_prompt_embeds = []
+
+        # batch_images_unnorm: tensor of [BS, 512, 512, 3]
+        for prompt, subj_image_ts in zip(batch_prompts, batch_images_unnorm):
+            # subj_image_ts: [512, 512, 3]
+            subj_image_obj = Image.fromarray(subj_image_ts.cpu().numpy().astype(np.uint8))
+            # coarse_prompt_embeds, fine_prompt_embeds: [1, 81, 768]
+            coarse_prompt_embeds, fine_prompt_embeds = \
+                self.pipe.generate_id_prompt_embeds(prompt, None, subj_image_obj, 
+                                                    self.pipe.device, calc_uncond=False)
+            batch_coarse_prompt_embeds.append(coarse_prompt_embeds)
+        
+        # batch_coarse_prompt_embeds: [BS, 81, 768]
+        batch_coarse_prompt_embeds = torch.cat(batch_coarse_prompt_embeds, dim=0)
+        results = super().forward(ddpm_model, x_start, noise, t, batch_coarse_prompt_embeds, num_denoising_steps)
+        return results
+    

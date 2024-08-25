@@ -1,5 +1,5 @@
 model:
-  base_lr: 1e-6
+  base_lr: 8e-04
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -19,28 +19,23 @@ model:
     # It's checked within ddpm.instantiate_cond_stage(). The model sets requires_grad=False 
     # for all params of cond_stage (CLIP encoder) after seeing unfreeze_unet = False.
     cond_stage_trainable: true
-    # Since we don't want to train the embedding manager, we set embedding_manager_trainable = False.
-    embedding_manager_trainable: false
+    # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
+    embedding_manager_trainable: True
     conditioning_key: crossattn
     monitor: train/loss
     scale_factor: 0.18215
-    unfreeze_unet: true
-    # Recommended in https://github.com/TheLastBen/fast-stable-diffusion/issues/1609
-    # But Prodigy will ignore any unet_lr setting.
-    unet_lr: 1e-6
+    unfreeze_unet: False
+    unet_lr: 0.0
     use_layerwise_embedding:          True
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_teachers:           2
     composition_regs_iter_gap:        3
     do_zero_shot:                     True
-    unet_teacher_type:                'unet_ensemble'
+    unet_teacher_type:                'consistentID'
+    unet_teacher_base_model_path:     'models/sd1.5-diffusers'
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              1
-    # Actual values are set in main.py.
-    extra_unet_paths:                 []
-    unet_weights:                     [1.0]
-
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5
@@ -60,13 +55,10 @@ model:
     fg_wds_complementary_loss_weight: 0 #1e-4
     wds_bg_recon_discount:            0.05
     
-    # Finetuning the u-net consumes a huge amount of RAM. Even if we have BS=1,
-    # using optimizers other than Adam8bit and "--max_num_denoising_steps 2" will cause OOM.
-    # It's possible to use Prodigy with "--max_num_denoising_steps 1", but I'm not sure 
-    # how well it works.
-    optimizer_type: Adam8bit           # AdamW, Adam8bit, NAdam, Prodigy
+    optimizer_type: Prodigy           # AdamW, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
-    accumulate_grad_batches: 8
+    # Add "manual_" prefix to distinguish from the default accumulate_grad_batches.
+    accumulate_grad_batches: 2
     adam_config:
       betas:    [0.9,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
       scheduler_config:
@@ -158,7 +150,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size:  1
+    batch_size:  3
     num_workers: 1
     wrap: false
     max_steps: 60000
@@ -173,7 +165,7 @@ data:
 lightning:
   modelcheckpoint:
     params:
-      every_n_train_steps: 250
+      every_n_train_steps: 500
 
   trainer:
     benchmark: True
@@ -182,5 +174,3 @@ lightning:
     limit_val_batches: 0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
-    accumulate_grad_batches: 8
-    
