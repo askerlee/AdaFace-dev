@@ -33,7 +33,7 @@ from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
 from adaface.subj_basis_generator import CLIPVisionModelWithMask
-from ldm.models.teachers import Arc2FaceTeacher, UNetEnsembleTeacher, ConsistentIDTeacher
+from ldm.modules.teachers import Arc2FaceTeacher, UNetEnsembleTeacher
 
 import copy
 from functools import partial

@@ -723,12 +723,13 @@ def main(opt):
                     subj_gt_folder_name = os.path.basename(opt.compare_with)
 
                 if opt.method == "adaface":
-                    subjfolder_mat = re.search(r"([a-zA-Z0-9]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)-(\d+)\.pt", opt.subj_model_path)
+                    subjfolder_mat = re.search(r"([^\/]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+).*-(\d+)\.pt", opt.subj_model_path)
                     if subjfolder_mat:
                         date_sig = subjfolder_mat.group(2)
                         # subjname_method: gabrielleunion-ada or zero3-ada
                         subjname_method = subjfolder_mat.group(3)
                     else:
+                        date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
                         subjname_method = 'unknown'
 
                     iter_mat = re.search(r"(\d+).(pt|safetensors)", opt.subj_model_path)
