@@ -33,7 +33,6 @@ model:
     composition_regs_iter_gap:        3
     do_zero_shot:                     True
     unet_teacher_type:                'consistentID'
-    unet_teacher_base_model_path:     'models/sd1.5-diffusers'
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              1
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.

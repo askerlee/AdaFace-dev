@@ -100,9 +100,9 @@ class UNetEnsembleTeacher(UNetTeacher):
 class ConsistentIDTeacher(UNetTeacher):
     def __init__(self, base_model_path, device, **kwargs):
         super().__init__()
-        from ConsistentID.pipline_ConsistentID import ConsistentIDPipeline
+        from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline
         ### Load base model
-        pipe = ConsistentIDPipeline.from_pretrained(
+        pipe = ConsistentIDPipeline.from_single_file(
             base_model_path, 
             torch_dtype=torch.float16, 
         ).to(device)
@@ -121,20 +121,24 @@ class ConsistentIDTeacher(UNetTeacher):
     @torch.no_grad()
     def forward(self, ddpm_model, x_start, noise, t, context, num_denoising_steps=1):
         batch_prompts, batch_images_unnorm = context
-        batch_coarse_prompt_embeds = []
+        batch_text_global_id_embeds = []
 
         # batch_images_unnorm: tensor of [BS, 512, 512, 3]
         for prompt, subj_image_ts in zip(batch_prompts, batch_images_unnorm):
             # subj_image_ts: [512, 512, 3]
             subj_image_obj = Image.fromarray(subj_image_ts.cpu().numpy().astype(np.uint8))
-            # coarse_prompt_embeds, fine_prompt_embeds: [1, 81, 768]
-            coarse_prompt_embeds, fine_prompt_embeds = \
-                self.pipe.generate_id_prompt_embeds(prompt, None, subj_image_obj, 
-                                                    self.pipe.device, calc_uncond=False)
-            batch_coarse_prompt_embeds.append(coarse_prompt_embeds)
+            # global_id_embeds: [1, 4, 768]
+            global_id_embeds, _ = self.pipe.extract_global_id_embeds(subj_image_obj)
+
+            text_embeds, _ = \
+                self.pipe.encode_prompt(prompt, device=self.pipe.device, num_images_per_prompt=1,
+                                   do_classifier_free_guidance=False, negative_prompt=None)
+            # text_global_id_embeds: [1, 81, 768]      
+            text_global_id_embeds = torch.cat([text_embeds, global_id_embeds], dim=1)      
+            batch_text_global_id_embeds.append(text_global_id_embeds)
         
-        # batch_coarse_prompt_embeds: [BS, 81, 768]
-        batch_coarse_prompt_embeds = torch.cat(batch_coarse_prompt_embeds, dim=0)
-        results = super().forward(ddpm_model, x_start, noise, t, batch_coarse_prompt_embeds, num_denoising_steps)
+        # batch_text_global_id_embeds: [BS, 81, 768]
+        batch_text_global_id_embeds = torch.cat(batch_text_global_id_embeds, dim=0)
+        results = super().forward(ddpm_model, x_start, noise, t, batch_text_global_id_embeds, num_denoising_steps)
         return results
     

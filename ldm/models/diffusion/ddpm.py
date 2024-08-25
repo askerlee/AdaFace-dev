@@ -33,7 +33,7 @@ from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
 from adaface.subj_basis_generator import CLIPVisionModelWithMask
-from ldm.modules.teachers import Arc2FaceTeacher, UNetEnsembleTeacher
+from ldm.modules.teachers import Arc2FaceTeacher, UNetEnsembleTeacher, ConsistentIDTeacher
 
 import copy
 from functools import partial
@@ -152,7 +152,7 @@ class DDPM(pl.LightningModule):
         self.extra_unet_paths                       = extra_unet_paths
         self.unet_weights                           = unet_weights
         self.unet_teacher_base_model_path           = unet_teacher_base_model_path
-
+        
         self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps

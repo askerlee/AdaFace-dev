@@ -152,6 +152,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--actual_resume", 
         type=str,
         required=True,
+        default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
         help="Path to model to actually resume from")
 
     parser.add_argument("--data_roots", 
@@ -732,10 +733,12 @@ if __name__ == "__main__":
             if hasattr(opt, 'p_unet_distill_iter'):
                 config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
             if hasattr(opt, 'unet_teacher_type'):
-                config.model.params.unet_teacher_type   = opt.unet_teacher_type
-            config.model.params.extra_unet_paths    = opt.extra_unet_paths
+                config.model.params.unet_teacher_type            = opt.unet_teacher_type
+            
+            config.model.params.unet_teacher_base_model_path = opt.actual_resume
+            config.model.params.extra_unet_paths             = opt.extra_unet_paths
             # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
-            config.model.params.unet_weights        = opt.unet_weights
+            config.model.params.unet_weights                 = opt.unet_weights
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
