@@ -97,6 +97,8 @@ model:
                                      'unet_distill_iter':     0,
                                      'compos_distill_iter':   0.4 }
         embedding_manager_ckpt:             null
+        do_zero_shot:                       True
+        face2img_prompt_encoder_type:       'consistentID'
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:

@@ -1,13 +1,10 @@
 import torch
-import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
-from transformers import CLIPTokenizer
-from adaface.util import get_arc2face_id_prompt_embs
 from diffusers import UNet2DConditionModel
-from adaface.arc2face_models import CLIPTextModelWrapper
 from adaface.util import UNetEnsemble
 from PIL import Image
+from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline
 
 class UNetTeacher(pl.LightningModule):
     def __init__(self, **kwargs):
@@ -74,23 +71,6 @@ class Arc2FaceTeacher(UNetTeacher):
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
                     )
-        self.text_encoder = CLIPTextModelWrapper.from_pretrained(
-                            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
-                            )
-        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-        
-    def gen_arc2face_prompt_embs(self, batch_size, pre_face_embs=None):
-        # if pre_face_embs is None, generate random face embeddings [BS, 512].
-        # Returns faceid_embeds, arc2face_prompt_emb.
-        return get_arc2face_id_prompt_embs(None, self.tokenizer, self.text_encoder,
-                                           extract_faceid_embeds=False, 
-                                           pre_face_embs=pre_face_embs,
-                                           image_folder=None, image_paths=None,
-                                           images_np=None, 
-                                           id_batch_size=batch_size,
-                                           device=self.device,
-                                           input_max_length=21, # Remove all paddings.
-                                           noise_level=0, verbose=False)
 
 class UNetEnsembleTeacher(UNetTeacher):
     def __init__(self, unet, extra_unet_paths, unet_weights, device, **kwargs):
@@ -98,22 +78,24 @@ class UNetEnsembleTeacher(UNetTeacher):
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
 
 class ConsistentIDTeacher(UNetTeacher):
-    def __init__(self, base_model_path, device, **kwargs):
+    def __init__(self, base_model_path, **kwargs):
         super().__init__()
-        from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline
         ### Load base model
+        # In contrast to Arc2FaceTeacher or UNetEnsembleTeacher, ConsistentIDPipeline is not a torch.nn.Module.
+        # We couldn't initialize the ConsistentIDPipeline to CPU first and wait it to be automatically moved to GPU.
+        # Instead, we have to initialize it to GPU directly.
         pipe = ConsistentIDPipeline.from_single_file(
             base_model_path, 
             torch_dtype=torch.float16, 
-        ).to(device)
-
-        ### Load consistentID_model checkpoint
+        )
+        ### Load consistentID_model checkpoints (these paths are fixed, so they are hardcoded).
         pipe.load_ConsistentID_model(
             consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
             bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
         )
-        # Release VAE to save memory.
-        pipe.release_components(release_unet=False, release_vae=True)
+        # Release VAE to save memory. UNet is still needed for denoising 
+        # (it's implemented in diffusers and is fp16, so probably faster than the LDM unet).
+        pipe.release_components(["vae"])
         self.pipe = pipe
         self.unet = pipe.unet
 

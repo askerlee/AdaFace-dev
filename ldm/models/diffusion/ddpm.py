@@ -9,11 +9,9 @@ from torch.optim.lr_scheduler import LambdaLR, ConstantLR, \
                                      PolynomialLR, CosineAnnealingWarmRestarts, CyclicLR
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
-from transformers import CLIPImageProcessor, ViTFeatureExtractor, ViTModel
-from insightface.app import FaceAnalysis
 import bitsandbytes as bnb
 
-from ldm.util import    exists, default, count_params, calc_stats, instantiate_from_config, SequentialLR2, \
+from ldm.util import    exists, default, count_params, instantiate_from_config, SequentialLR2, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_dyn_loss_scale, \
                         save_grid, chunk_list, normalize_dict_values, normalized_sum, masked_mean, \
                         join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
@@ -32,7 +30,6 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
-from adaface.subj_basis_generator import CLIPVisionModelWithMask
 from ldm.modules.teachers import Arc2FaceTeacher, UNetEnsembleTeacher, ConsistentIDTeacher
 
 import copy
@@ -103,11 +100,11 @@ class DDPM(pl.LightningModule):
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=True,
                  p_unet_distill_iter=0,
-                 unet_teacher_type='arc2face',
+                 unet_teacher_type=None,
                  extra_unet_paths=None,
                  unet_weights=None,
                  unet_teacher_base_model_path=None,
-                 p_gen_arc2face_rand_face=0.4,
+                 p_gen_face2img_rand_face=0.4,
                  p_add_noise_to_real_id_embs=0.6,
                  max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=-1,
@@ -153,16 +150,13 @@ class DDPM(pl.LightningModule):
         self.unet_weights                           = unet_weights
         self.unet_teacher_base_model_path           = unet_teacher_base_model_path
         
-        self.p_gen_arc2face_rand_face               = p_gen_arc2face_rand_face
+        self.p_gen_face2img_rand_face               = p_gen_face2img_rand_face
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.load_old_embman_ckpt                   = load_old_embman_ckpt
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
-        self.insightface_app                        = None  # FaceAnalysis app.
-        self.dino_encoder                           = None  # ViTModel 'facebook/dino-vits16'
-        self.zs_image_encoders_instantiated         = False
 
         self.cached_inits = {}
 
@@ -358,8 +352,8 @@ class DDPM(pl.LightningModule):
         self.iter_flags = { 'calc_clip_loss':               False,
                             'do_normal_recon':              True,
                             'do_unet_distill':              False,
-                            'gen_arc2face_rand_face':       False,
-                            'arc2face_prompt_emb':          None,
+                            'gen_face2img_rand_face':       False,
+                            'face2img_prompt_emb':          None,
                             'add_noise_to_real_id_embs':    False,
                             'faceless_img_count':           0,
                             'use_unet_teacher_as_target':   False,
@@ -516,13 +510,9 @@ class LatentDiffusion(DDPM):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys)
         
-        if self.p_unet_distill_iter > 0:
-            # arc2face is initialized after the model is loaded from ckpt,
-            # to avoid warning of many missing keys.
-            self.arc2face = Arc2FaceTeacher()
+        if self.p_unet_distill_iter > 0 and self.unet_teacher_type is not None:
             if self.unet_teacher_type == 'arc2face':
-                # Reuse the arc2face model.
-                self.unet_teacher = self.arc2face
+                self.unet_teacher = Arc2FaceTeacher()
             elif self.unet_teacher_type == 'unet_ensemble':
                 # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
                 # arc2face embeddings.
@@ -530,16 +520,16 @@ class LatentDiffusion(DDPM):
                 # in our case, the ddpm unet. Ideally we should reuse it to save GPU RAM.
                 # However, since the __call__ method of the ddpm unet takes different formats of params, 
                 # for simplicity, we still use the diffusers unet.
+                # unet_teacher is put on CPU first, then moved to GPU when DDPM is moved to GPU.
                 self.unet_teacher = UNetEnsembleTeacher(unet=None, 
                                                         extra_unet_paths=self.extra_unet_paths, 
                                                         unet_weights=self.unet_weights,
                                                         device='cpu')
             elif self.unet_teacher_type == 'consistentID':
-                # Delay the instantiation of ConsistentIDTeacher to the first iteration,
-                # at which time self.trainer is available.
-                self.unet_teacher = None
+                self.unet_teacher = ConsistentIDTeacher(self.unet_teacher_base_model_path)
+            else:
+                breakpoint()
         else:
-            self.arc2face = None
             self.unet_teacher = None
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
@@ -577,12 +567,7 @@ class LatentDiffusion(DDPM):
         if self.do_zero_shot:
             # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
             # which is used to generate the subject embeddings for subject-single prompts.
-            self.embedding_manager.make_frozen_copy_of_subj_basis_generators()        
-            self.instantiate_zero_shot_image_encoders()
-
-        if self.arc2face is not None:
-            # Let embedding_manager share the text_encoder with arc2face, to save some RAM.
-            self.embedding_manager.arc2face_text_encoder = self.arc2face.text_encoder
+            self.embedding_manager.make_frozen_copy_of_subj_basis_generators()
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -604,10 +589,7 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(device)
             # empty_context_tea_filter is only used for clip teacher filtering.
             self.empty_context_tea_filter = self.get_learned_conditioning([""] * self.num_candidate_teachers, embman_iter_type='empty')
-            self.empty_context_2b = self.get_learned_conditioning([""] * 2, embman_iter_type='empty')
-
-            if self.unet_teacher_type == 'consistentID':
-                self.unet_teacher = ConsistentIDTeacher(self.unet_teacher_base_model_path, device=device)
+            self.empty_context_2b         = self.get_learned_conditioning([""] * 2, embman_iter_type='empty')
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -666,7 +648,6 @@ class LatentDiffusion(DDPM):
             # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
             self.cond_stage_model = model
             
-    
     def instantiate_embedding_manager(self, config, text_embedder):
         model = instantiate_from_config(config, text_embedder=text_embedder)
 
@@ -676,46 +657,6 @@ class LatentDiffusion(DDPM):
                        self.load_old_embman_ckpt)
 
         return model
-
-    def instantiate_zero_shot_image_encoders(self, only_faces=True):
-        clip_model_tag = 'openai/clip-vit-large-patch14'
-        self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained(clip_model_tag)
-        self.clip_preprocessor  = CLIPImageProcessor.from_pretrained(clip_model_tag)
-        self.clip_image_encoder = self.clip_image_encoder.to(self.device)
-        self.clip_image_encoder.eval()
-        self.clip_image_encoder.half()
-        print(f'{clip_model_tag} image encoder loaded on {self.device}.')
-
-        '''
-        {'landmark_3d_68': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc190>, 
-         'landmark_2d_106': <insightface.model_zoo.landmark.Landmark object at 0x7f8e3f0cc2b0>, 
-         'detection': <insightface.model_zoo.retinaface.RetinaFace object at 0x7f8e3f0cc100>, 
-         'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
-         'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
-        '''
-        # Use the same model as Arc2Face does.
-        # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
-        # Note there's a second "model" in the path.        
-        # Note DON'T use CUDAExecutionProvider, as it will hang DDP training. 
-        # Seems when loading insightface onto the GPU, it will only reside on the first GPU. 
-        # Then the process on the second GPU has issue to communicate with insightface on the first GPU, causing hanging.
-        self.insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
-        self.insightface_app.prepare(ctx_id=0, det_size=(512, 512))
-        print(f'Face encoder loaded on CPU.')
-
-        if not only_faces:
-            self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
-            self.dino_encoder = self.dino_encoder.to(self.device)
-            self.dino_encoder.eval()
-            self.dino_encoder.half()
-            self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
-            print(f'DINO encoder loaded on {self.device}.')
-        else:
-            self.dino_encoder = None
-            self.dino_preprocess = None
-            
-        self.neg_image_features = None
-        self.zs_image_encoders_instantiated = True
 
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
@@ -732,9 +673,11 @@ class LatentDiffusion(DDPM):
     # NOTE: the delta prompts consumes extram RAM.
     # If do_normal_recon without delta loss, then 1 call.
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
+    # apply_face2img_embs: apply_face2img_embs is enabled only 
+    # when we wish to evaluate the original Face2ImgPrompt model.
     def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
                                  randomize_clip_weights=False, 
-                                 apply_arc2face_embs=False, embman_iter_type=None):
+                                 apply_face2img_embs=False, embman_iter_type=None):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
                 # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
@@ -755,8 +698,8 @@ class LatentDiffusion(DDPM):
                 if embman_iter_type is None:
                     if self.iter_flags['is_compos_iter']:
                         embman_iter_type = 'compos_distill_iter'
-                    elif apply_arc2face_embs:
-                        embman_iter_type = 'arc2face_clip_iter'     # Only for inference.
+                    elif apply_face2img_embs:
+                        embman_iter_type = 'face2img_only_iter'     # Only for inference.
                     else:
                         embman_iter_type = 'recon_iter'
                 # Update the iteration type of the embedding manager, according to the arguments passed in.
@@ -765,10 +708,10 @@ class LatentDiffusion(DDPM):
                 # static_prompt_embedding: [128, 77, 768]
                 static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
 
-                if apply_arc2face_embs:
-                    # arc2face_embs is the embedding generated by the Arc2Face model. 
-                    # NOTE: It's not the inverse embeddings. apply_arc2face_embs is enabled only 
-                    # when we wish to evaluate the original Arc2Face model.
+                if apply_face2img_embs:
+                    # arc2face_embs is the embedding generated by the Face2ImgPrompt model. 
+                    # NOTE: It's not the inverse embeddings. apply_face2img_embs is enabled only 
+                    # when we wish to evaluate the original Face2ImgPrompt model.
                     # static_prompt_embedding: [1, 77, 768]. Need to repeat 16 times for 16 layers, and then BS times for BS instances.
                     static_prompt_embedding = self.embedding_manager.arc2face_embs
 
@@ -780,7 +723,7 @@ class LatentDiffusion(DDPM):
                     static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
                                                                          self.embedding_manager.cls_delta_string_indices)
                     
-                elif apply_arc2face_embs:
+                elif apply_face2img_embs:
                     if not self.training:
                         BS_repeat = 1
                     else:
@@ -789,7 +732,7 @@ class LatentDiffusion(DDPM):
                     # Repeat the static prompt embeddings 16 times to get the layerwise prompts.
                     static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(BS_repeat, 16, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
-                # Otherwise, not apply_arc2face_embs,
+                # Otherwise, not apply_face2img_embs,
                 # we do nothing to the static_prompt_embedding.
 
                 extra_info = { 
@@ -1190,16 +1133,14 @@ class LatentDiffusion(DDPM):
             self.iter_flags['same_subject_in_batch'] = False
 
         # do_unet_distill == do_normal_recon and random() < p_unet_distill_iter.
-        # p_gen_arc2face_rand_face: 0.4
-        if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_arc2face_rand_face:
-            self.iter_flags['gen_arc2face_rand_face'] = True
-            self.batch_subject_names = [ "arc2face" ] * len(batch['subject_name'])
+        # p_gen_face2img_rand_face: 0.4
+        if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_face2img_rand_face:
+            self.iter_flags['gen_face2img_rand_face'] = True
+            self.batch_subject_names = [ "rand_face_to_img_prompt" ] * len(batch['subject_name'])
         else:
-            self.iter_flags['gen_arc2face_rand_face'] = False
+            self.iter_flags['gen_face2img_rand_face'] = False
             self.batch_subject_names = batch['subject_name']            
 
-        self.iter_flags['is_face'] = [ self.embedding_manager.subj_name_to_being_faces[subject_name] \
-                                        for subject_name in self.batch_subject_names ]
         batch_images_unnorm = batch["image_unnorm"]
 
         if self.do_zero_shot:
@@ -1207,8 +1148,10 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             image_paths = batch["image_path"]
 
-            # 'gen_arc2face_rand_face' is only True in do_normal_recon iters.
-            if not self.iter_flags['gen_arc2face_rand_face']:
+            # 'gen_face2img_rand_face' is only True in do_normal_recon iters.
+            # So if not do_normal_recon, then this branch is always executed.
+            #    If     do_normal_recon, then this branch is sometimes executed.
+            if not self.iter_flags['gen_face2img_rand_face']:
                 # When possible, don't always use the average embedding of the same subject in the batch.
                 # Otherwise, the model may memorize the subject embedding and tend to generate subjects
                 # who look like the subjects in the training data.
@@ -1229,11 +1172,8 @@ class LatentDiffusion(DDPM):
                 # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
                 zs_clip_features, zs_id_embs, faceless_img_count = \
-                    self.encode_zero_shot_image_features(images, fg_mask.squeeze(1),
-                                                         image_paths=image_paths,
-                                                         # iter_flags['is_face'] is a list of 0/1 elements.
-                                                         is_face=self.iter_flags['is_face'][0],
-                                                         calc_avg=use_subj_avg_embedding)
+                    self.embedding_manager.face2img_prompt_encoder.encode_zero_shot_image_features(\
+                        images, fg_mask.squeeze(1), image_paths=image_paths, calc_avg=use_subj_avg_embedding)
                                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
@@ -1257,11 +1197,11 @@ class LatentDiffusion(DDPM):
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        self.iter_flags['is_face'], zs_clip_features, zs_id_embs = \
+                        zs_clip_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      self.iter_flags['is_face'], zs_clip_features, zs_id_embs)
+                                                      zs_clip_features, zs_id_embs)
                         
                     # Add noise to the zero-shot ID embeddings.
                     # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
@@ -1275,38 +1215,37 @@ class LatentDiffusion(DDPM):
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
-                # Sometimes do_unet_distill is True but gen_arc2face_rand_face is False.
+                # Sometimes gen_face2img_rand_face is False and do_unet_distill is True.
                 if self.iter_flags['do_unet_distill']:
-                    # gen_arc2face_prompt_embs() encodes zs_id_embs to arc2face_prompt_emb.
-                    _, _, arc2face_prompt_emb \
-                        = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=zs_id_embs)
+                    # gen_face2img_prompt_embs() encodes zs_id_embs to face2img_prompt_emb.
+                    _, _, face2img_prompt_emb \
+                        = self.embedding_manager.face2img_prompt_encoder.gen_face2img_prompt_embs(images.shape[0], pre_face_embs=zs_id_embs)
 
-            # gen_arc2face_rand_face == True. It implies it's not do_mix_prompt_distillation.
+            # gen_face2img_rand_face == True. It implies it's not do_mix_prompt_distillation.
             else:
                 # Since it's a batch of random faces, the CLIP features are all zeros as a placeholder.
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
-                # zs_id_embs: [4, 512]. arc2face_prompt_emb: [4, 21, 768]
-                _, zs_id_embs, arc2face_prompt_emb \
-                    = self.arc2face.gen_arc2face_prompt_embs(images.shape[0], pre_face_embs=None)
+                # zs_id_embs: [4, 512]. face2img_prompt_emb: [4, 21, 768]
+                _, zs_id_embs, face2img_prompt_emb \
+                    = self.embedding_manager.face2img_prompt_encoder.gen_face2img_prompt_embs(images.shape[0], pre_face_embs=None)
                 # On random faces, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None
                 batch_have_fg_mask[:] = False
-                # In a gen_arc2face_rand_face iteration, simply denoise a totally random x_start 
-                # with arc2face_prompt_emb.
+                # In a gen_face2img_rand_face iteration, simply denoise a totally random x_start 
+                # with face2img_prompt_emb.
                 x_start = torch.randn_like(x_start)
-                self.iter_flags['is_face'] = [True] * x_start.shape[0]
                 self.iter_flags['faceless_img_count'] = 0
                 # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
                 self.iter_flags['same_subject_in_batch'] = False
 
-            # During training, zs_id_embs, arc2face_prompt_emb are float16, but x_start is float32.
+            # During training, zs_id_embs, face2img_prompt_emb are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
 
             if self.iter_flags['do_unet_distill']:
-                arc2face_prompt_emb = arc2face_prompt_emb.to(x_start.dtype)
+                face2img_prompt_emb = face2img_prompt_emb.to(x_start.dtype)
                 # arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.to(x_start.dtype)
-                # arc2face_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
+                # face2img_prompt_emb and arc2face_neg_prompt_emb are used to do CFG-style conditioning on
                 # self.unet_teacher to generate the predicted teacher noise.
 
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
@@ -1314,7 +1253,7 @@ class LatentDiffusion(DDPM):
                 # Otherwise, use the unet recon as target with a probability of 0.5, and use the original image (noise) 
                 # as target with a probability of 0.5.
                 # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
-                if self.iter_flags['gen_arc2face_rand_face'] or self.iter_flags['add_noise_to_real_id_embs'] \
+                if self.iter_flags['gen_face2img_rand_face'] or self.iter_flags['add_noise_to_real_id_embs'] \
                   or self.iter_flags['faceless_img_count'] > 0:
                     self.iter_flags['use_unet_teacher_as_target'] = True
                 else:
@@ -1378,13 +1317,11 @@ class LatentDiffusion(DDPM):
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        captions, self.iter_flags['is_face'], \
-                        zs_clip_features, zs_id_embs, arc2face_prompt_emb = \
+                        captions, zs_clip_features, zs_id_embs, face2img_prompt_emb = \
                             repeat_selected_instances(slice(0, HALF_BS), 1, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      captions, self.iter_flags['is_face'],
-                                                      zs_clip_features, zs_id_embs, arc2face_prompt_emb)
+                                                      captions, zs_clip_features, zs_id_embs, face2img_prompt_emb)
 
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
@@ -1394,14 +1331,14 @@ class LatentDiffusion(DDPM):
 
             # Do zero-shot training but not unet distillation.
             else:
-                arc2face_prompt_emb = None
+                face2img_prompt_emb = None
                 self.iter_flags['use_unet_teacher_as_target'] = False
 
         # Not do_zero_shot.
         else:
             zs_clip_features = None
             zs_id_embs       = None
-            arc2face_prompt_emb = None
+            face2img_prompt_emb = None
 
         # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']             = img_mask
@@ -1410,7 +1347,7 @@ class LatentDiffusion(DDPM):
         self.iter_flags['delta_prompts']        = delta_prompts
         self.iter_flags['zs_clip_features']     = zs_clip_features
         self.iter_flags['zs_id_embs']           = zs_id_embs
-        self.iter_flags['arc2face_prompt_emb']  = arc2face_prompt_emb
+        self.iter_flags['face2img_prompt_emb']  = face2img_prompt_emb
         self.iter_flags['image_unnorm']         = batch_images_unnorm
 
         # reuse_init_conds, discard the prompts offered in shared_step().
@@ -1427,7 +1364,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
             self.iter_flags['zs_clip_features']         = cached_inits['zs_clip_features']
             self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
-            self.iter_flags['arc2face_prompt_emb']      = cached_inits['arc2face_prompt_emb']
+            self.iter_flags['face2img_prompt_emb']      = cached_inits['face2img_prompt_emb']
             self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
 
         # In get_learned_conditioning(), embman_iter_type will be set again.
@@ -1439,7 +1376,7 @@ class LatentDiffusion(DDPM):
             embman_iter_type = 'unet_distill_iter'
         else:
             embman_iter_type = 'recon_iter'
-        # As a special case, 'arc2face_clip_iter' is only set in get_learned_conditioning(), instead of here.
+        # As a special case, 'face2img_only_iter' is only set in get_learned_conditioning(), instead of here.
 
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
 
@@ -1680,163 +1617,6 @@ class LatentDiffusion(DDPM):
             return x_recon[0]
         else:
             return x_recon
-
-    # images: numpy.ndarray or torch.Tensor.
-    # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
-    # is_face: whether all the images are faces. If True, then face embeddings will be extracted. 
-    # Otherwise, DINO embedding will be extracted.
-    # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, image_paths=None, is_face=True, 
-                                        size=(512, 512), calc_avg=False, skip_non_faces=False, verbose=False):
-        if not self.zs_image_encoders_instantiated:
-            self.instantiate_zero_shot_image_encoders()
-
-        # Must call self.instantiate_zero_shot_image_encoders() before calling this function.
-        image_pixel_values = []
-        all_id_embs = []
-        faceless_img_count = 0
-
-        # images could be a batch of images that have been collated into a tensor or np array.
-        # images can also be a list of images.
-        # The code below that processes them one by one can be applied in both cases.
-        # If images are a collated batch, processing them one by one will not add much overhead.
-        for idx, image in enumerate(images):
-            # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
-            # torch.Tensor, tf.Tensor or jax.ndarray.
-            # Different sizes of images are standardized to the same size 224*224.
-            clip_image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt").pixel_values
-            image_pixel_values.append(clip_image_pixel_values)
-
-            if is_face and self.insightface_app is not None:
-                if isinstance(image, torch.Tensor):
-                    image = image.cpu().numpy().transpose(1, 2, 0)
-                # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
-                # PersonalizedBase dataset class.
-                image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))   
-                face_info = self.insightface_app.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-                if len(face_info) == 0 and not skip_non_faces:
-                    print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
-                    # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
-                    id_emb = torch.randn(512, device=self.device)
-                    faceless_img_count += 1
-                elif len(face_info) > 0:
-                    face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
-                    # id_emb: [512,]
-                    id_emb = torch.from_numpy(face_info.normed_embedding).to(self.device)
-                else:
-                    # len(face_info) == 0 and skip_non_faces.
-                    # Skip images without faces.
-                    print(f'Skip image without face: {image_paths[idx]}')
-                    continue
-
-                all_id_embs.append(id_emb)
-
-            elif not is_face:
-                # DINO embedding.
-                dino_input = self.dino_preprocess(images=image, return_tensors="pt")
-                dino_input = dino_input.to(self.device)
-                # last_hidden_states: [1, 197, 384]
-                last_hidden_states = self.dino_encoder(**dino_input).last_hidden_state
-                # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
-                # [1, 197, 384] -> [384,]
-                id_emb = last_hidden_states[0, 0]
-                all_id_embs.append(id_emb)
-
-        if verbose:
-            print(f'{len(all_id_embs)} face images identified, {faceless_img_count} faceless images.')
-
-        # image_pixel_values: [BS, 3, 224, 224]
-        image_pixel_values = torch.cat(image_pixel_values, dim=0)
-        image_pixel_values = image_pixel_values.to(self.device)
-        if self.insightface_app is not None:
-            # all_id_embs: [BS, 512] if is_face, or [BS, 384] if not is_face.
-            all_id_embs = torch.stack(all_id_embs, dim=0)
-        else:
-            all_id_embs = None
-
-        if fg_masks is not None:
-            assert len(fg_masks) == len(images)
-            # fg_masks is a list of masks.
-            if isinstance(fg_masks, (list, tuple)):
-                fg_masks2 = []
-                for fg_mask in fg_masks:
-                    # fg_mask: [Hi, Wi]
-                    # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
-                    # If the ref image is not square, then the fg_mask will not match the image.
-                    # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
-                    # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
-                    fg_mask2 = torch.tensor(fg_mask, device=self.device).float().unsqueeze(0).unsqueeze(0)
-                    fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
-                    fg_masks2.append(fg_mask2)
-                # fg_masks2: [BS, 224, 224]
-                fg_masks2 = torch.cat(fg_masks2, dim=0).squeeze(1)
-            else:
-                # fg_masks is a collated batch of masks.
-                # The actual size doesn't matter, 
-                # as fg_mask2 will be resized to the same size as image features 
-                # (much smaller than image_pixel_values).            
-                fg_masks2 = fg_masks.to(device=self.device).float().unsqueeze(1)
-                # F.interpolate() always return a copy, even if scale_factor=1. So we don't need to clone fg_masks2.
-                fg_masks2 = F.interpolate(fg_masks2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
-                fg_masks2 = fg_masks2.squeeze(1)
-        else:
-            # fg_mask2: [BS, 224, 224]. 
-            fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=self.device)
-
-        with torch.no_grad():
-            if self.neg_image_features is None:
-                # neg_pixel_values: [1, 3, 224, 224]
-                neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=self.device)
-                self.neg_image_features = self.clip_image_encoder(neg_pixel_values.half(), attn_mask=None, output_hidden_states=True).hidden_states[-2]
-
-            # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-            image_fg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=fg_masks2.half(), output_hidden_states=True)
-            # attn_mask: [BS, 1, 257]
-            image_fg_features = image_fg_dict.hidden_states[-2] - self.neg_image_features
-            if image_fg_dict.attn_mask is not None:
-                image_fg_features = image_fg_features * image_fg_dict.attn_mask
-
-            # A negative mask is used to extract the background features.
-            image_bg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=1-fg_masks2.half(), output_hidden_states=True)
-            image_bg_features = image_bg_dict.hidden_states[-2] - self.neg_image_features
-            if image_bg_dict.attn_mask is not None:
-                image_bg_features = image_bg_features * image_bg_dict.attn_mask        
-
-        # clip_features: [BS, 514, 1280].
-        # all_id_embs:   [BS, 512].
-        clip_features = torch.cat([image_fg_features, image_bg_features], dim=1)
-        clip_features = clip_features.to(image_pixel_values.dtype)
-
-        if calc_avg:
-            # clip_features: [BS, 514, 1280] -> [1, 514, 1280].
-            # all_id_embs:       [BS, 512]       -> [1, 512].
-            clip_features = clip_features.mean(dim=0, keepdim=True)
-
-            debug = False
-            if debug and all_id_embs is not None:
-                print(image_paths)                    
-                calc_stats('all_id_embs', all_id_embs)
-                # Compute pairwise similarities of the embeddings.
-                all_id_embs = F.normalize(all_id_embs, p=2, dim=1)
-                pairwise_sim = torch.matmul(all_id_embs, all_id_embs.t())
-                print('pairwise_sim:', pairwise_sim)
-                top_dir = os.path.dirname(image_paths[0]) 
-                mean_emb_path = os.path.join(top_dir, "mean_emb.pt")
-                if os.path.exists(mean_emb_path):
-                    mean_emb = torch.load(mean_emb_path)
-                    sim_to_mean = torch.matmul(all_id_embs, mean_emb.t())
-                    print('sim_to_mean:', sim_to_mean)
-
-            if all_id_embs is not None:
-                id_embs = all_id_embs.mean(dim=0, keepdim=True)
-                # Without normalization, id_embs.norm(dim=1) is ~0.9. So normalization doesn't have much effect.
-                id_embs = F.normalize(id_embs, p=2, dim=-1)
-            # id_embs is None only if insightface_app is None, i.e., disabled by the user.
-        else:
-            # Don't do average of all_id_embs.
-            id_embs = all_id_embs
-                    
-        return clip_features, id_embs, faceless_img_count
 
     # emb_man_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
     # Sometimes the prompts changed after generating the static embeddings, 
@@ -2321,20 +2101,20 @@ class LatentDiffusion(DDPM):
 
                 if self.iter_flags['use_unet_teacher_as_target']:
                     if self.unet_teacher_type == 'arc2face':
-                        context = self.iter_flags['arc2face_prompt_emb']
+                        teacher_context = self.iter_flags['face2img_prompt_emb']
                     elif self.unet_teacher_type == 'unet_ensemble':
-                        # context is the same prompt embedding of the student model.
+                        # teacher_context is the same prompt embedding of the student model.
                         # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
                         # So we only need to take the first one.
                         # [16, 77, 768] -> [1, 77, 768]
-                        context = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                        teacher_context = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
                     elif self.unet_teacher_type == 'consistentID':
-                        context = (cond[1], batch_images_unnorm)
+                        teacher_context = (cond[1], batch_images_unnorm)
                     else:
                         breakpoint()
 
                     unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
-                        self.unet_teacher(self, x_start, noise, t, context, num_denoising_steps=num_denoising_steps)
+                        self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
                         
                     MAX_ACCUMU_BATCH_SIZE = 7
                     # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 
@@ -2386,20 +2166,20 @@ class LatentDiffusion(DDPM):
                 for s in range(num_denoising_steps - loss_start_step):
                     model_output, target = model_outputs[s], targets[s]
 
-                    if self.iter_flags['gen_arc2face_rand_face'] or self.unet_teacher_type == 'unet_ensemble':
-                        # If gen_arc2face_rand_face, then always use_unet_teacher_as_target == True.                    
+                    if self.iter_flags['gen_face2img_rand_face'] or self.unet_teacher_type == 'unet_ensemble':
+                        # If gen_face2img_rand_face, then always use_unet_teacher_as_target == True.                    
                         # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                         # If unet_teacher_type == 'unet_ensemble', then also compute the recon loss on the whole image.
                         loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
                     else:
                         # use_unet_teacher_as_target could be True or False.
                         # If use_unet_teacher_as_target, we don't want to distill using the background pixels, 
-                        # as those pixels are suppressed by the arc2face UNet. So bg_pixel_weight = 0.
+                        # as those pixels are suppressed by the Face2ImgPrompt UNet. So bg_pixel_weight = 0.
                         # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
-                        # after being reconstructed with arc2face_prompt_emb, so as not to suppress the background pixels. 
+                        # after being reconstructed with face2img_prompt_emb, so as not to suppress the background pixels. 
                         # Therefore, bg_pixel_weight = 0.1.
                         # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
-                        # arc2face UNet might be slightly off. Anyway, hopefully the error is small.
+                        # Face2ImgPrompt UNet might be slightly off. Anyway, hopefully the error is small.
                         bg_pixel_weight = 0 if self.iter_flags['use_unet_teacher_as_target'] else 0.1
 
                         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -2550,14 +2330,14 @@ class LatentDiffusion(DDPM):
                             'use_background_token':   self.iter_flags['use_background_token'],
                             'use_wds_comp':           self.iter_flags['use_wds_comp'],
                             'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                            # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'arc2face_prompt_emb' 
+                            # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'face2img_prompt_emb' 
                             # are all None.
                             # We don't need to cache other flags, such as do_unet_distill,
                             # as they are only applicable to recon iters. 
                             # We reuse init conds only in compositional iters.
                             'zs_clip_features':       self.iter_flags['zs_clip_features'],
                             'zs_id_embs':             self.iter_flags['zs_id_embs'],
-                            'arc2face_prompt_emb':    self.iter_flags['arc2face_prompt_emb'],
+                            'face2img_prompt_emb':    self.iter_flags['face2img_prompt_emb'],
                             'image_unnorm':           self.iter_flags['image_unnorm'],
                         }
                     if len(self.cached_inits) > 100:

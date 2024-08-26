@@ -7,19 +7,13 @@ import math
 
 import torch
 from torch import nn
-import torch.nn.functional as F
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPVisionModel, CLIPTokenizer
+from transformers import CLIPTokenizer, CLIPTextModel
 
-import numpy as np
 from torch import einsum
-from dataclasses import dataclass
-from typing import Optional, Tuple
-from transformers.utils import ModelOutput
-from adaface.util import arc2face_inverse_face_prompt_embs, gen_gradient_scaler
+from adaface.util import gen_gradient_scaler
 from adaface.arc2face_models import CLIPTextModelWrapper
-import sys
 
 def reshape_tensor(x, num_heads):
     bs, length, width = x.shape
@@ -355,25 +349,148 @@ class CrossAttention(nn.Module):
         else:
             return out
 
-class SubjBasisGenerator(nn.Module):
+class ImgPrompt2TextPrompt(nn.Module):
+    def __init__(self, max_prompt_length=77):
+        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+        # clip_text_embeddings: CLIPTextEmbeddings instance.
+        clip_text_embeddings = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").text_model.embeddings
+        # clip_text_embeddings() and clip_text_embeddings.token_embedding() differ in that 
+        # clip_text_embeddings() adds positional embeddings, while clip_text_embeddings.token_embedding() doesn't.
+        # Adding positional embeddings seems to help somewhat.
+        # pad_tokens: pad_token_id 49407 repeated 77 times.
+        # pad_token_id is the EOS token. But BOS is 49406.
+        pad_tokens = torch.tensor([self.tokenizer.pad_token_id]).repeat(max_prompt_length)
+        # pad_embeddings: [77, 768]. 
+        # pad_embeddings is still on CPU. But should be moved to GPU automatically.
+        self.pad_embeddings = clip_text_embeddings(pad_tokens)[0]
+
+    # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra'].
+    def inverse_face_prompt_embs(self, inverse_text_encoder, face_prompt_embs, list_extra_words,
+                                 return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
+                                 input_max_length=77, zs_extra_words_scale=0.5):
+
+        '''
+        inverse_text_encoder: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
+        inverse_text_encoder is with the same architecture as the original arc2face text encoder, 
+        but retrained to do inverse mapping.
+        face_prompt_embs: (BS, 16, 768). Only the core embeddings, no paddings.
+        list_extra_words: [s_1, ..., s_BS], each s_i is a list of extra words to be added to the prompt.
+        return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
+                                If False, return only the core embeddings.
+        '''
+
+        if list_extra_words is not None:
+            if len(list_extra_words) != len(face_prompt_embs):
+                if len(face_prompt_embs) > 1:
+                    print("Warn: list_extra_words has different length as face_prompt_embs.")
+                    if len(list_extra_words) == 1:
+                        list_extra_words = list_extra_words * len(face_prompt_embs)
+                    else:
+                        breakpoint()
+                else:
+                    # len(face_prompt_embs) == 1, this occurs when same_subject_in_batch == True, e.g. in do_mix_prompt_distillation.
+                    # But list_extra_words always corresponds to the actual batch size. So we only take the first element.
+                    list_extra_words = list_extra_words[:1]
+                    
+            for extra_words in list_extra_words:
+                assert len(extra_words.split()) <= 2, "Each extra_words string should consist of at most 2 words."
+            # 16 ", " are placeholders for face_prompt_embs.
+            prompt_templates = [ "photo of a " + ", " * 16 + list_extra_words[i] for i in range(len(list_extra_words)) ]
+        else:
+            # 16 ", " are placeholders for face_prompt_embs.
+            # No extra words are added to the prompt.
+            prompt_templates = [ "photo of a " + ", " * 16 for _ in range(len(face_prompt_embs)) ]
+
+        # This step should be quite fast, and there's no need to cache the input_ids.
+        # input_ids: [BS, 77].
+        input_ids = self.tokenizer(
+                prompt_templates,
+                truncation=True,
+                padding="max_length",
+                max_length=input_max_length,
+                return_tensors="pt",
+            ).input_ids.to(face_prompt_embs.device)
+
+        face_prompt_embs_dtype  = face_prompt_embs.dtype
+        face_prompt_embs        = face_prompt_embs.to(inverse_text_encoder.dtype)
+
+        # token_embs: [1, 77, 768]. This call is only to get the template token embeddings (the shallowest mapping).
+        token_embs = inverse_text_encoder(input_ids=input_ids, return_token_embs=True)
+        # token 4: first ", " in the template prompt.
+        # Replace embeddings of 16 placeholder ", " with face_prompt_embs.
+        token_embs[:, 4:20] = face_prompt_embs
+
+        # This call does the ordinary CLIP text encoding pass.
+        prompt_embeds = inverse_text_encoder(
+            input_ids=input_ids,
+            input_token_embs=token_embs,
+            hidden_state_layer_weights=hidden_state_layer_weights,
+            return_token_embs=False
+        )[0]
+
+        # Restore the original dtype of prompt_embeds: float16 -> float32.
+        prompt_embeds = prompt_embeds.to(face_prompt_embs_dtype)
+        # token 4: first ", " in the template prompt.
+        # 4:20 are the most important 16 embeddings that contain the subject's identity.
+        # 20:22 are embeddings of the (at most) two extra words.
+        # [N, 77, 768] -> [N, 16, 768]
+        core_prompt_embs = prompt_embeds[:, 4:20]
+        if list_extra_words is not None:
+            # [N, 16, 768] -> [N, 18, 768]
+            extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
+            core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
+
+        returned_prompt_embs = []
+        for emb_type in return_emb_types:
+            if emb_type == 'full':
+                returned_prompt_embs.append(prompt_embeds)
+            elif emb_type == 'full_half_pad':
+                prompt_embeds2 = prompt_embeds.clone()
+                PADS  = prompt_embeds2.shape[1] - 23
+                if PADS >= 2:
+                    # Fill half of the remaining embeddings with pad embeddings.
+                    prompt_embeds2[:, 22:22+PADS//2] = pad_embeddings[22:22+PADS//2]
+                returned_prompt_embs.append(prompt_embeds2)
+            elif emb_type == 'full_pad':
+                prompt_embeds2 = prompt_embeds.clone()
+                # Fill the 22nd to the second last embeddings with pad embeddings.
+                prompt_embeds2[:, 22:-1] = pad_embeddings[22:-1]
+                returned_prompt_embs.append(prompt_embeds2)
+            elif emb_type == 'core':
+                returned_prompt_embs.append(core_prompt_embs)
+            elif emb_type == 'full_zeroed_extra':
+                prompt_embeds2 = prompt_embeds.clone()
+                # Only add two pad embeddings. The remaining embeddings are set to 0.
+                # Make the positional embeddings align with the actual positions.
+                prompt_embeds2[:, 22:24] = pad_embeddings[22:24]
+                prompt_embeds2[:, 24:-1] = 0
+                returned_prompt_embs.append(prompt_embeds2)
+            else:
+                breakpoint()
+
+        return returned_prompt_embs
+
+class SubjBasisGenerator(ImgPrompt2TextPrompt):
     def __init__(
         self,
-        # number of cross-attention heads. Half of the number of heads 12 of OpenAI clip-vit-large-patch14:
+        # number of cross-attention heads of the bg prompt translator. 
+        # Taken as a half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
-        num_heads=6,                       
-        num_id_vecs={ 'subj': 77, 'bg': 257 }, # number of identity vectors. 18: 16 face tokens + 2 extra tokens. 257: 257 CLIP tokens.
-        num_out_embs_per_layer=4,             # num_out_embs. subj: 16. bg: 4.
-        num_out_layers=16,                    # number of layers of output embeddings.
-        image_embedding_dim=768,              # CLIP image feature dimension, as per config.json above.
-        # DINO vits16 has 6 attention heads:
-        # https://huggingface.co/facebook/dino-vits16/blob/main/config.json
-        dino_embedding_dim=384,             # DINO object feature dimension for objects.
-        output_dim=768,                     # CLIP text embedding input dimension.
-        placeholder_is_bg: bool = False,    # Whether the placeholder is for the image background.
+        num_bg_translator_heads=6,                      
+        # number of subject input identity vectors (only when the subject is not face), 
+        # or number of background input identity vectors (no matter the subject is face or not).
+        # 257: 257 CLIP tokens. 
+        num_nonface_in_id_vecs={ 'subj': 77, 'bg': 257 },  
+        num_out_embs_per_layer=16,                  # num_out_embs_per_layer: subj: 16. bg: 4.
+        num_out_layers=16,                          # number of layers of output embeddings.
+        bg_image_embedding_dim=1024,                # CLIP image hidden layer feature dimension, as per config.json above.
+        obj_embedding_dim=384,                      # DINO object feature dimension for objects.
+        output_dim=768,                             # CLIP text embedding input dimension.
+        placeholder_is_bg: bool = False,            # Whether the placeholder is for the image background tokens.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
-        zs_extra_words_scale: float = 0.5,     # Scale for extra words in the prompt2token_proj.
-        learnable_hidden_state_weights_scheme: str = 'per-layer',  # none, per-layer.
-        bg_prompt_translator_has_to_out_proj: bool = False,  # Whether the prompt_trans_layers have a to_out projection.
+        zs_extra_words_scale: float = 0.5,          # Scale for extra words in the prompt2token_proj.
+        learnable_hidden_state_weights_scheme: str = 'per-layer',   # none, per-layer.
+        bg_prompt_translator_has_to_out_proj: bool = False,         # Whether the prompt_trans_layers have a to_out projection.
     ):
         super().__init__()
 
@@ -383,21 +500,19 @@ class SubjBasisGenerator(nn.Module):
         # subj: 64, bg: 32.
         self.num_out_embs           = num_out_layers * num_out_embs_per_layer
         self.output_dim             = output_dim
-        # num_id_vecs should be the number of core ID embs, 16.
+        # num_nonface_in_id_vecs should be the number of core ID embs, 16.
         # However, in such case, pos_embs is not used. So it doesn't matter if it's wrongly set.
-        self.num_id_vecs = num_id_vecs['bg'] if placeholder_is_bg else num_id_vecs['subj']
+        self.num_nonface_in_id_vecs = num_nonface_in_id_vecs['bg'] if placeholder_is_bg else num_nonface_in_id_vecs['subj']
         self.zs_extra_words_scale = zs_extra_words_scale
-        self.output_scale           = output_dim ** -0.5
-        self.clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         self.bg_prompt_translator_has_to_out_proj = bg_prompt_translator_has_to_out_proj
 
         if not self.placeholder_is_bg:
             # [1, 384] -> [1, 16, 768].
             # TODO: use CLIPTextModelWrapper as obj_proj_in.
-            self.obj_proj_in = ExpandEmbs(dino_embedding_dim, output_dim, expansion_ratio=self.num_id_vecs)
+            self.obj_proj_in = ExpandEmbs(obj_embedding_dim, output_dim, expansion_ratio=self.num_nonface_in_id_vecs)
 
             # ** prompt2token_proj does the actual job: **
-            # it is the inverse projection that maps from arc2face_id_embs to adaface_prompt_embs.
+            # it is the inverse projection that maps from face2img_id_embs to adaface_prompt_embs.
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings) or [1, 16, 768] (without paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
@@ -411,7 +526,6 @@ class SubjBasisGenerator(nn.Module):
 
             self.prompt2token_proj_attention_multiplier = -1
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
-            self.pad_embeddings = None
             self.bg_proj_in = None
             self.pos_embs = self.pos_embs_ln = self.latent_queries = self.latent_queries_ln = None
         else:
@@ -421,11 +535,11 @@ class SubjBasisGenerator(nn.Module):
             print("Bg prompt2token_proj is set to None.")
 
             self.bg_proj_in = nn.Sequential(
-                nn.Linear(image_embedding_dim, output_dim, bias=False),
+                nn.Linear(bg_image_embedding_dim, output_dim, bias=False),
                 nn.LayerNorm(output_dim),
             )
 
-            self.pos_embs           = nn.Parameter(torch.zeros(1, self.num_id_vecs, output_dim))
+            self.pos_embs           = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, output_dim))
             self.pos_embs_ln        = nn.LayerNorm(output_dim)
             self.latent_queries     = nn.Parameter(torch.randn(1, self.num_out_embs, output_dim))
             self.latent_queries_ln  = nn.LayerNorm(output_dim)
@@ -437,14 +551,17 @@ class SubjBasisGenerator(nn.Module):
             # prompt_translator maps the clip image features (of the background) to the prompt embedding space.
             # It is only used during training when placeholder_is_bg is True.
             # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
-            # dim=768, num_heads=6.
+            # dim=768, num_bg_translator_heads=6.
             self.prompt_translator = \
-                CrossAttention(input_dim=output_dim, num_heads=num_heads, p_dropout=0.05,
+                CrossAttention(input_dim=output_dim, num_heads=num_bg_translator_heads, p_dropout=0.05,
                                 identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                 q_aware_to_v=False,  v_has_skip=v_has_skip,
                                 num_q=0, # When not q_aware_to_v, num_q is not referenced.
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
+            
+            self.output_scale           = output_dim ** -0.5
+            
             ''' 
             prompt_translator: CLIPEncoder
             # https://github.com/huggingface/transformers/blob/1872bde7fc6a5d6796bd742bc2dc38eaf8069c5d/src/transformers/models/clip/modeling_clip.py#L566
@@ -468,50 +585,44 @@ class SubjBasisGenerator(nn.Module):
 
         print(repr(self))
 
-    # raw_id_embs: ArcFace embeddings for faces (not used since we have arc2face_id_embs), 
-    # or DINO embeddings for objects.
-    # arc2face_id_embs: [BS, 16, 768], the core identity embeddings generated by Arc2Face.
-    def forward(self, arc2face_id_embs, clip_features=None, raw_id_embs=None, out_id_embs_cfg_scale=1.0,
+    # raw_id_embs: only used when the subject is non-faces. In that case it's DINO embeddings.
+    # Otherwise, raw_id_embs is ArcFace embeddings, but it's not used since we can directly use face2img_id_embs. 
+    # face2img_id_embs: [BS, 16, 768], the core identity embeddings generated by Face2ImgPrompt.
+    def forward(self, face2img_id_embs, clip_features=None, raw_id_embs=None, out_id_embs_cfg_scale=1.0,
                 is_face=True, is_training=False, adaface_prompt_embs_inf_type='full_half_pad'):    
         
         if not self.placeholder_is_bg:
-            BS = arc2face_id_embs.shape[0]
+            BS = face2img_id_embs.shape[0]
         else:
-            # If bg, then arc2face_id_embs is set to None, but clip_features is not None.
+            # If bg, then face2img_id_embs is set to None, but clip_features is not None.
             BS = clip_features.shape[0]
 
         adaface_prompt_embs = None
-        if not hasattr(self, 'clip_tokenizer'):
-            self.clip_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
         # No need to use raw_id_embs if placeholder_is_bg.
         if not self.placeholder_is_bg:
             if is_face:
-                assert arc2face_id_embs is not None
-                # arc2face_embs has been projected to the (modified) prompt embedding space 
-                # by arc2face_forward_face_embs. This prompt embedding space is modified because Arc2Face finetuned
-                # the text encoder and the U-Net.
+                assert face2img_id_embs is not None
+                # face2img_embs has been projected to the (modified) prompt embedding space 
+                # by Face2ImgPrompt::face_id_to_img_prompt_embs(). This prompt embedding space is modified because 
+                # the Face2ImgPrompt model (at least when it's arc2face) may have finetuned the 
+                # text encoder and the U-Net.
                 # in embedding_manager: [BS, 16, 768] -> [BS, 77, 768].
-                # arc2face_id_embs is part of arc2face_embs: [BS, 77, 768] -> [BS, 16, 768].
+                # face2img_id_embs is part of face2img_embs: [BS, 77, 768] -> [BS, 16, 768].
                 # adaface_prompt_embs is projected to the prompt embedding spaces. This is the 
                 # original U-Net prompt embedding space.
 
                 # hidden_state_layer_weights: [[0.9163], [0.9483], [2.0762]]
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
                 # return_emb_types: a list of strings, each string is among 
-                # ['full', 'core', 'full_pad', 'full_half_pad', 'full_zeroed_extra', 'b_core_e'].
-                # Using b_core_e is more computationally efficient than using full_zeroed_extra. 
-                # But there is an unknow BUG that causes crash when using b_core_e. 
+                # ['full', 'core', 'full_pad', 'full_half_pad', 'full_zeroed_extra'].
                 if is_training:
                     return_emb_types = ['full_pad', 'core']
                 else:
                     # adaface_prompt_embs_inf_type: default is 'full_half_pad', slightly different from training.
                     return_emb_types = [adaface_prompt_embs_inf_type, 'core']
 
-                if self.pad_embeddings is None:
-                    self.generate_pad_embeddings()
-                else:
-                    self.pad_embeddings = self.pad_embeddings.to(arc2face_id_embs.device)
+                self.pad_embeddings = self.pad_embeddings.to(face2img_id_embs.device)
 
                 with torch.set_grad_enabled(self.training and self.prompt2token_proj_grad_scale != 0):
                     # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
@@ -521,14 +632,13 @@ class SubjBasisGenerator(nn.Module):
                     # zs_extra_words_scale is only effective when list_extra_words is not None.
                     # adaface_prompt_embs: [BS, 77, 768], core_id_embs: [BS, 16, 768].
                     adaface_prompt_embs, core_id_embs = \
-                        arc2face_inverse_face_prompt_embs(self.clip_tokenizer, 
-                                                          self.prompt2token_proj, 
-                                                          arc2face_id_embs, 
-                                                          list_extra_words=None,
-                                                          return_emb_types=return_emb_types, 
-                                                          pad_embeddings=self.pad_embeddings,
-                                                          hidden_state_layer_weights=hidden_state_layer_weights,
-                                                          input_max_length=77, zs_extra_words_scale=self.zs_extra_words_scale)
+                        self.inverse_face_prompt_embs(self.prompt2token_proj, 
+                                                      face2img_id_embs, 
+                                                      list_extra_words=None,
+                                                      return_emb_types=return_emb_types, 
+                                                      pad_embeddings=self.pad_embeddings,
+                                                      hidden_state_layer_weights=hidden_state_layer_weights,
+                                                      input_max_length=77, zs_extra_words_scale=self.zs_extra_words_scale)
                 # Reduce the update rate to prompt2token_proj.
                 adaface_prompt_embs = self.prompt2token_proj_grad_scaler(adaface_prompt_embs)
                 core_id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
@@ -588,23 +698,6 @@ class SubjBasisGenerator(nn.Module):
         else:
             breakpoint()
 
-    def generate_pad_embeddings(self):
-        # clip_embeddings: CLIPTextEmbeddings instance. pad_embeddings is generated after 
-        # prompt2token_proj is loaded from the finetuned weight. It seems such pad embeddings perform 
-        # slightly better than the original pad embeddings.
-        clip_embeddings = self.prompt2token_proj.text_model.embeddings
-        # clip_embeddings() and clip_embeddings.token_embedding() differ in that 
-        # clip_embeddings() adds positional embeddings, while clip_embeddings.token_embedding() doesn't.
-        # Adding positional embeddings seems to help somewhat.
-        # pad_tokens: pad_token_id 49407 repeated 77 times.
-        # pad_token_id is the EOS token. But BOS is 49406.
-        pad_tokens = torch.tensor([self.clip_tokenizer.pad_token_id]).to(clip_embeddings.token_embedding.weight.device).repeat(77)
-        # pad_embeddings: [77, 768]. 
-        pad_embeddings = clip_embeddings(pad_tokens)[0]
-        # We don't allow face recon to influence the pad embeddings. 
-        # Otherwise, face identity will leak into the pad embeddings.
-        self.pad_embeddings = pad_embeddings.detach()
-
     def extend_prompt2token_proj_attention(self, begin_layer_idx=-1, end_layer_idx=-1, multiplier=2, noise_std=0.1):
         if multiplier > 1:
             num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(begin_layer_idx, end_layer_idx, multiplier, noise_std)
@@ -633,7 +726,7 @@ class SubjBasisGenerator(nn.Module):
         
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:
-                self.pos_embs = nn.Parameter(torch.zeros(1, self.num_id_vecs, self.output_dim))
+                self.pos_embs = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, self.output_dim))
             if not hasattr(self, 'latent_queries') or self.latent_queries is None:        
                 self.latent_queries = nn.Parameter(torch.randn(1, self.num_out_embs, self.output_dim))
 
@@ -642,130 +735,4 @@ class SubjBasisGenerator(nn.Module):
 
         return f"{type_sig} SubjBasisGenerator: num_out_embs={self.num_out_embs}, " \
                f"bg_prompt_translator_has_to_out_proj={self.bg_prompt_translator_has_to_out_proj}"
-    
-@dataclass
-class BaseModelOutputWithPooling2(ModelOutput):
-    """
-    Base class for model's outputs that also contains a pooling of the last hidden states.
-
-    Args:
-        last_hidden_state (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`):
-            Sequence of hidden-states at the output of the last layer of the model.
-        pooler_output (`torch.FloatTensor` of shape `(batch_size, hidden_size)`):
-            Last layer hidden-state of the first token of the sequence (classification token) after further processing
-            through the layers used for the auxiliary pretraining task. E.g. for BERT-family of models, this returns
-            the classification token after processing through a linear layer and a tanh activation function. The linear
-            layer weights are trained from the next sentence prediction (classification) objective during pretraining.
-        hidden_states (`tuple(torch.FloatTensor)`, *optional*, returned when `output_hidden_states=True` is passed or when `config.output_hidden_states=True`):
-            Tuple of `torch.FloatTensor` (one for the output of the embeddings, if the model has an embedding layer, +
-            one for the output of each layer) of shape `(batch_size, sequence_length, hidden_size)`.
-
-            Hidden-states of the model at the output of each layer plus the optional initial embedding outputs.
-        attentions (`tuple(torch.FloatTensor)`, *optional*, returned when `output_attentions=True` is passed or when `config.output_attentions=True`):
-            Tuple of `torch.FloatTensor` (one for each layer) of shape `(batch_size, num_heads, sequence_length,
-            sequence_length)`.
-
-            Attentions weights after the attention softmax, used to compute the weighted average in the self-attention
-            heads.
-    """
-
-    last_hidden_state: torch.FloatTensor = None
-    pooler_output: torch.FloatTensor = None
-    hidden_states: Optional[Tuple[torch.FloatTensor]] = None
-    attentions: Optional[Tuple[torch.FloatTensor]] = None
-    attn_mask: Optional[torch.FloatTensor] = None
-
-# Revised from CLIPVisionTransformer to support attention mask. 
-# self: a CLIPVisionTransformer instance.
-# https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L821
-# pixel_values: preprocessed B*C*H*W images. [BS, 3, 224, 224]
-# attn_mask: B*H*W attention mask.
-def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None, 
-                                  output_attentions = None,
-                                  output_hidden_states = None, return_dict = None):
-
-        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-        output_hidden_states = (
-            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-        )
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if pixel_values is None:
-            raise ValueError("You have to specify pixel_values")
-
-        # Visual tokens are flattended in embeddings().
-        # self.embeddings: CLIPVisionEmbeddings.
-        # hidden_states: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
-        # 16*16 is output from Conv2d(3, 1280, kernel_size=(14, 14), stride=(14, 14), bias=False).
-        hidden_states = self.embeddings(pixel_values)
-        hidden_states = self.pre_layrnorm(hidden_states)
-        
-        if attn_mask is not None:
-            # feat_edge_size: 16.
-            feat_edge_size = np.sqrt(hidden_states.shape[1] - 1).astype(int)
-            # attn_mask: [BS, 512, 512] -> [BS, 1, 16, 16].
-            attn_mask = F.interpolate(attn_mask.unsqueeze(1), size=(feat_edge_size, feat_edge_size), mode='nearest')
-            # Flatten the mask: [BS, 1, 16, 16] => [BS, 1, 256].
-            attn_mask = attn_mask.flatten(2)
-            # Prepend 1 to the mask: [BS, 1, 256] => [BS, 1, 257]. 
-            # This 1 corresponds to class_embeds, which is always attended to.
-            attn_mask = torch.cat([torch.ones_like(attn_mask[:, :, :1]), attn_mask], dim=-1)
-            attn_mask_pairs = torch.matmul(attn_mask.transpose(-1, -2), attn_mask).unsqueeze(1)
-        else:
-            attn_mask_pairs = None
-
-        # encoder: CLIPEncoder.
-        encoder_outputs = self.encoder(
-            inputs_embeds=hidden_states,
-            # New feature: (***The official documentation is wrong***)
-            # attention_mask (`torch.Tensor` of shape `(batch_size, 1, sequence_length, sequence_length)`, *optional*):
-            #                 Mask to avoid performing attention on pairs of token. Mask values selected in `[0, 1]`:
-            #                 - 1 for pairs that are **not masked**,
-            #                 - 0 for pairs that are **masked**.    
-            # attention_mask is eventually used by CLIPEncoderLayer:
-            # https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L370
-            attention_mask=attn_mask_pairs,
-            output_attentions=output_attentions,        # False
-            output_hidden_states=output_hidden_states,  # True
-            return_dict=return_dict,                    # True
-        )
-
-        # last_hidden_state: [BS, 257, 1280]
-        last_hidden_state = encoder_outputs[0]
-        pooled_output = last_hidden_state[:, 0, :]
-        pooled_output = self.post_layernorm(pooled_output)
-
-        # return_dict is True.
-        if not return_dict:
-            return (last_hidden_state, pooled_output) + encoder_outputs[1:]
-
-        return BaseModelOutputWithPooling2(
-            last_hidden_state=last_hidden_state,
-            pooler_output=pooled_output,
-            hidden_states=encoder_outputs.hidden_states,
-            attentions=encoder_outputs.attentions,
-            # Newly added: return resized flattened attention mask.
-            # [BS, 1, 257] -> [BS, 257, 1]
-            attn_mask=attn_mask.permute(0, 2, 1) if attn_mask is not None else None
-        )
-
-
-class CLIPVisionModelWithMask(CLIPVisionModel):
-    def __init__(self, config):
-        super().__init__(config)
-        # Replace vision_model.forward() with the new one that supports mask.
-        self.vision_model.forward = CLIPVisionTransformer_forward.__get__(self.vision_model)
-    
-    def forward(self, pixel_values = None, attn_mask = None, output_attentions = None,
-                output_hidden_states = None, return_dict = None):
-        
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        return self.vision_model(
-            pixel_values=pixel_values,
-            attn_mask=attn_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        ) 
     

@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks import Callback, LearningRateMonitor
 from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.personalized import SubjectSampler
-from ldm.util import instantiate_from_config, extend_nn_embedding
+from ldm.util import instantiate_from_config
 
 def get_parser(**parser_kwargs):
     def str2bool(v):
@@ -807,16 +807,9 @@ if __name__ == "__main__":
             config.model.params.ckpt_path = opt.actual_resume
         # model will be loaded by ddpm.init_from_ckpt(). No need to load manually.
         model = instantiate_from_config(config.model)
-
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.
         # model.cond_stage_model: FrozenCLIPEmbedder = text_embedder
-        # Extend the token embeddings in CLIP text encoder for the new cls strings.
-        # model is still on CPU. So no need to consider where extended_token_embeddings is located.
-        if model.embedding_manager.extended_token_embeddings is not None:
-            model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
-                extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
-                                    model.embedding_manager.extended_token_embeddings)
-            model.embedding_manager.extended_token_embeddings = None
+
 
         # trainer and callbacks
         trainer_kwargs = dict()

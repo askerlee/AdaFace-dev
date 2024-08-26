@@ -14,7 +14,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import save_grid, extend_nn_embedding, load_model_from_config
+from ldm.util import save_grid, load_model_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
                                   init_evaluators, set_tf_gpu
@@ -221,7 +221,7 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--apply_arc2face_embs", action="store_true",
+    parser.add_argument("--apply_face2img_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
@@ -347,8 +347,6 @@ def main(opt):
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
         model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
-
-        # extend_placeholders() has to be called before extend_nn_embedding().
         model.embedding_manager.extend_placeholders([opt.subject_string], [opt.background_string],
                                                     opt.num_vectors_per_subj_token, opt.num_vectors_per_bg_token)
 
@@ -356,12 +354,6 @@ def main(opt):
             ckpt_num_vectors_per_subj_token = model.embedding_manager.token2num_vectors[opt.subject_string]
             if ckpt_num_vectors_per_subj_token != opt.num_vectors_per_subj_token:
                 print(f"WARN: Number of vectors per token mismatch: command line {opt.num_vectors_per_subj_token} != ckpt {ckpt_num_vectors_per_subj_token}.")
-
-        if model.embedding_manager.extended_token_embeddings is not None:
-            model.cond_stage_model.transformer.text_model.embeddings.token_embedding = \
-                extend_nn_embedding(model.cond_stage_model.transformer.text_model.embeddings.token_embedding, 
-                                    model.embedding_manager.extended_token_embeddings)
-            model.embedding_manager.extended_token_embeddings = None
 
         model.embedding_manager.curr_subj_is_face = opt.calc_face_sim
         
@@ -575,12 +567,12 @@ def main(opt):
                         prompts = list(prompts)
 
                     if not opt.eval_blip and not opt.diffusers:
-                        apply_arc2face_embs         = opt.zeroshot and opt.apply_arc2face_embs
+                        apply_face2img_embs         = opt.zeroshot and opt.apply_face2img_embs
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                             zs_id_embs=zs_id_embs,
-                                                            apply_arc2face_embs=apply_arc2face_embs)
+                                                            apply_face2img_embs=apply_face2img_embs)
 
                         if opt.debug:
                             c[2]['debug_attn'] = True

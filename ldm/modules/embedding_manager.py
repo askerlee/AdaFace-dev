@@ -7,7 +7,7 @@ import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
-from adaface.util import arc2face_forward_face_embs
+from adaface.face_to_img_prompt import Arc2Face_Face2ImgPrompt, ConsistentID_Face2ImgPrompt
 
 import torch.nn.functional as F
 import numpy as np
@@ -15,8 +15,7 @@ import numpy as np
 from ldm.util import extract_first_index_in_each_instance, \
                      anneal_add_noise_to_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings, torch_uniform, \
-                     extend_clip_text_embedder, calc_init_word_embeddings
+                     scan_cls_delta_strings, torch_uniform, calc_init_word_embeddings
                      
 from functools import partial
 from collections import OrderedDict
@@ -239,7 +238,7 @@ def create_static_embedders(out_emb_dim, num_layers_per_embedder, num_vectors_pe
 class EmbeddingManager(nn.Module):
     def __init__(
             self,
-            text_embedder,              
+            text_embedder,   
             subject_strings,
             # If background_strings are specified, they are part of the list placeholder_strings.
             background_strings=None,
@@ -259,6 +258,7 @@ class EmbeddingManager(nn.Module):
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             do_zero_shot=True,
+            face2img_prompt_encoder_type='arc2face',
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
@@ -301,13 +301,6 @@ class EmbeddingManager(nn.Module):
         self.placeholder_strings    = list(subject_strings) + self.background_strings
         self.subject_string_dict    = { s: True for s in self.subject_strings }
 
-        # Model should be still on CPU. So no need to consider the device when extending the text embedder.
-        # Extend CLIP text embedder with the subject strings / background strings / wds background strings.
-        # In order to load the text embedder ckpt, the text_model.embeddings.token_embedding hasn't been
-        # extended yet. So we  save extended_token_embeddings to be extended to text_model.embeddings.token_embedding
-        # later in main.py.
-        self.extended_token_embeddings = extend_clip_text_embedder(text_embedder, {}, self.placeholder_strings)
-
         self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
                                           training_end_add_noise_std_range,
                                           training_add_noise_prob)
@@ -333,16 +326,10 @@ class EmbeddingManager(nn.Module):
         self.set_num_vectors_per_subj_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim
 
-        # hasattr(text_embedder, 'tokenizer') -> True
-        if hasattr(text_embedder, 'tokenizer'): # using Stable Diffusion's CLIP encoder
-            get_tokens_for_string       = partial(get_clip_tokens_for_string,       text_embedder.tokenizer)
-            get_embeddings_for_tokens   = partial(get_embeddings_for_clip_tokens,   text_embedder.transformer.text_model.embeddings)
-        else:
-            breakpoint()
-
         # Save this function to be used in load() when doing placeholder substitution.
-        self.get_tokens_for_string = get_tokens_for_string
-        self.get_embeddings_for_tokens = get_embeddings_for_tokens
+        self.get_tokens_for_string       = partial(get_clip_tokens_for_string,       text_embedder.tokenizer)
+        self.get_embeddings_for_tokens   = partial(get_embeddings_for_clip_tokens,   text_embedder.transformer.text_model.embeddings)
+
         # "," -> 267, "z": 345, "y": 344.
         self.subj_idx_to_cls_delta_tokens   = {}
         self.subj_idx_to_cls_delta_token_weights  = {}
@@ -370,18 +357,16 @@ class EmbeddingManager(nn.Module):
             self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             self.zs_extra_words_scale = zs_extra_words_scale
 
-            self.arc2face_embs = None
+            self.face2img_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            # arc2face_text_encoder will be passed from ddpm.py after the Arc2FaceTeacher instance 
-            # is initialized, so as to save some RAM.
-            self.arc2face_text_encoder = None
+            self.init_face2img_prompt_encoder(face2img_prompt_encoder_type)
 
             if self.zs_cls_delta_string is not None:
-                self.zs_cls_delta_tokens   = get_tokens_for_string(zs_cls_delta_string)
+                self.zs_cls_delta_tokens   = self.get_tokens_for_string(zs_cls_delta_string)
                 if zs_cls_delta_token_weights is None:
                     self.zs_cls_delta_token_weights = torch.ones(len(self.zs_cls_delta_tokens))
                     self.zs_cls_delta_token_weights[-1] = 2
@@ -399,7 +384,7 @@ class EmbeddingManager(nn.Module):
             placeholder_is_bg =  (placeholder_string in self.background_string_dict)
             # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
-            placeholder_token = get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
+            placeholder_token = self.get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
 
             num_vectors_per_subj_token = self.token2num_vectors.get(placeholder_string, 1)
             initializer_string       = initializer_strings[placeholder_idx]
@@ -409,7 +394,7 @@ class EmbeddingManager(nn.Module):
             # init_word_embeddings, avg_init_word_embedding, init_word_weights are None.
             try:
                 init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
-                calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
+                calc_init_word_embeddings(self.get_tokens_for_string, self.get_embeddings_for_tokens,
                                           initializer_string, initializer_word_weights)
             except:
                 breakpoint()
@@ -439,7 +424,7 @@ class EmbeddingManager(nn.Module):
                                                           num_out_layers = self.num_unet_ca_layers,
                                                           # zs_image_emb_dim: laion: 1280, openai: 1024.
                                                           # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-                                                          image_embedding_dim = 1024, 
+                                                          bg_image_embedding_dim = 1024, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
@@ -449,14 +434,14 @@ class EmbeddingManager(nn.Module):
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
         # Initialize self.subj_name_to_cls_delta_tokens.
-        self.init_cls_delta_tokens(get_tokens_for_string, get_embeddings_for_tokens, 
+        self.init_cls_delta_tokens(self.get_tokens_for_string, self.get_embeddings_for_tokens, 
                                    subj_name_to_cls_delta_string, zs_cls_delta_string)
         self.init_subj_name_to_being_faces(subj_name_to_being_faces)
 
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
         self.clear_prompt_adhoc_info()
-        # 'recon_iter', 'compos_distill_iter', 'arc2face_clip_iter', 'empty'.
+        # 'recon_iter', 'compos_distill_iter', 'face2img_only_iter', 'empty'.
         self.iter_type = None       
         if self.do_zero_shot:
             self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
@@ -468,9 +453,6 @@ class EmbeddingManager(nn.Module):
         self.img_mask = None
         self.loss_call_count = 0
         self.training_percent = 0
-        # Store the text_embedder to compute the delta loss.
-        self.text_embedder  = text_embedder
-        self.tokenizer      = text_embedder.tokenizer
         self.emb_global_scales_dict = None
         # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
         # in loss computation in ddpm.py, and not used in this script.
@@ -505,8 +487,8 @@ class EmbeddingManager(nn.Module):
             # to zs_cls_delta_string, the default class delta string.
             subj_name_to_cls_delta_string['zs_default'] = zs_cls_delta_string
 
-        # We don't know the gender of a random arc2face subject.
-        subj_name_to_cls_delta_string['arc2face'] = 'person'
+        # We don't know the gender of a rand_face_to_img_prompt subject.
+        subj_name_to_cls_delta_string['rand_face_to_img_prompt'] = 'person'
 
         self.subj_name_to_cls_delta_string  = subj_name_to_cls_delta_string
         self.subj_name_to_cls_delta_tokens  = {}
@@ -537,8 +519,8 @@ class EmbeddingManager(nn.Module):
         # subj_name_to_being_faces is used in ddpm.py and not here.
         self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
                                             else {subj_name: True for subj_name in self.subject_strings}
-        self.subj_name_to_being_faces['arc2face']   = True
-        self.subj_name_to_being_faces['zs_default'] = True
+        self.subj_name_to_being_faces['rand_face_to_img_prompt'] = True
+        self.subj_name_to_being_faces['zs_default']              = True
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -668,25 +650,23 @@ class EmbeddingManager(nn.Module):
                     zs_id_embs = zs_image_feat_dict['id']
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                         
-                    # Load arc2face_text_encoder weight. No need to update arc2face_text_encoder.
+                    # Load face2img_prompt_encoder weight. No need to update face2img_prompt_encoder.
                     # So it's is frozen.
                     if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
-                        self.check_arc2face_text_encoder(zs_id_embs.device)
-
                         with torch.no_grad():
-                            # arc2face_embs: [BS, 77, 768]. arc2face_id_embs: [BS, 16, 768].
-                            placeholder_arc2face_embs, arc2face_id_embs = \
-                                    arc2face_forward_face_embs(self.tokenizer, self.arc2face_text_encoder, 
-                                                               zs_id_embs, return_full_and_core_embs=True)
+                            # face2img_embs: [BS, 77, 768]. face2img_id_embs: [BS, 16, 768].
+                            placeholder_face2img_embs, face2img_id_embs = \
+                                self.face2img_prompt_encoder.face_id_to_img_prompt_embs( \
+                                    zs_id_embs, return_full_and_core_embs=True)
                     else:
-                        placeholder_arc2face_embs = None
-                        arc2face_id_embs = None
+                        placeholder_face2img_embs = None
+                        face2img_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
                     # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
                     # zs_id_embs: the low-level ID embeddings from FaceAnalysis. Not actually used.
                     adaface_subj_embs, placeholder_adaface_prompt_embs = \
-                            subj_basis_generator(arc2face_id_embs,
+                            subj_basis_generator(face2img_id_embs,
                                                  zs_clip_features, zs_id_embs, 
                                                  out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                                  is_training=self.training,
@@ -701,10 +681,10 @@ class EmbeddingManager(nn.Module):
                         adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
 
                     if self.do_zero_shot and not placeholder_is_bg:
-                        # NOTE: arc2face_embs is the Arc2Face forward embeddings, while 
-                        if self.iter_type in ['arc2face_clip_iter']:
-                            # arc2face_embs: [BS, 77, 768].
-                            self.arc2face_embs = placeholder_arc2face_embs
+                        # NOTE: face2img_embs is the Face2ImgPrompt forward embeddings, while 
+                        if self.iter_type in ['face2img_only_iter']:
+                            # face2img_embs: [BS, 77, 768].
+                            self.face2img_embs = placeholder_face2img_embs
                         if self.iter_type in ['compos_distill_iter']:
                             assert placeholder_adaface_prompt_embs is not None
 
@@ -725,7 +705,7 @@ class EmbeddingManager(nn.Module):
                             # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
                             # This is to reduce overfitting of subj_basis_generator after it's been finetuned.
                             adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
-                                    subj_basis_generator0(arc2face_id_embs, zs_clip_features, zs_id_embs, 
+                                    subj_basis_generator0(face2img_id_embs, zs_clip_features, zs_id_embs, 
                                                           out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                                           is_training=self.training,
                                                           adaface_prompt_embs_inf_type='full_half_pad')
@@ -821,9 +801,9 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
 
-        # NOTE: if self.iter_type == 'arc2face_clip_iter', we CANNOT return self.arc2face_embs
+        # NOTE: if self.iter_type == 'face2img_only_iter', we CANNOT return self.face2img_embs
         # as the updated embedded_text, since the returned embedded_text will be encoded again by the text encoder.
-        # Instead, we replace the prompt embeddings with the arc2face_embs in ddpm.py:get_learned_conditioning().
+        # Instead, we replace the prompt embeddings with the face2img_embs in ddpm.py:get_learned_conditioning().
 
         return embedded_text, tokenized_text, static_subj_embs_dict
 
@@ -854,22 +834,6 @@ class EmbeddingManager(nn.Module):
                 self.token2num_vectors[k] = num_vectors_per_bg_token
                 added_placeholders.append(k)
                 print(f"Added new background string: {k}->num_vectors_per_subj_token={num_vectors_per_bg_token}.")
-
-        if len(added_placeholders) > 0:
-            extended_token_embeddings = extend_clip_text_embedder(self.text_embedder, {}, added_placeholders)
-            if extended_token_embeddings is not None:
-                # text_embedder: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-                # = LatentDiffusion.cond_stage_model
-                # Make sure text_embedder has been initialized. Otherwise when loading pretrained weights,
-                # it will throw an exception, as now the vocab size of the text_embedder is different from
-                # the pretrained weights.
-                # Update self.extended_token_embeddings. These new token embeddings will be extended
-                # to CLIP text embedder in either main.py or stable_txt2img.py later.
-                if self.extended_token_embeddings is not None:
-                    self.extended_token_embeddings = torch.cat([self.extended_token_embeddings, extended_token_embeddings], dim=0)
-                else:
-                    self.extended_token_embeddings = extended_token_embeddings
-        return
     
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
@@ -974,15 +938,16 @@ class EmbeddingManager(nn.Module):
             print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
                   f", with prob = {training_add_noise_prob}")
 
-    def check_arc2face_text_encoder(self, device):
-        if self.arc2face_text_encoder is None:
-            from adaface.arc2face_models import CLIPTextModelWrapper
-            print("arc2face_text_encoder is None. Initialize it as a private copy.")
-            self.arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
-                                            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
-                                        )
-            self.arc2face_text_encoder.to(device)
-            
+    def init_face2img_prompt_encoder(self, face2img_prompt_encoder_type):
+        if face2img_prompt_encoder_type == 'arc2face':
+            self.face2img_prompt_encoder = Arc2Face_Face2ImgPrompt()
+        elif face2img_prompt_encoder_type == 'consistentID':
+            # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
+            # Only the consistentID modules and bise_net are used.
+            self.face2img_prompt_encoder = ConsistentID_Face2ImgPrompt(base_model_path="models/sd1.5-diffusers")
+        else:
+            breakpoint()
+
     def set_zs_image_features(self, zs_clip_features, zs_id_embs, add_noise_to_zs_id_embs=False):
         # zs_clip_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
@@ -1039,7 +1004,6 @@ class EmbeddingManager(nn.Module):
 
         self.subject_strings                = []
         self.background_strings             = []
-        extended_token_embeddings                = []
 
         if isinstance(ckpt_paths, str):
             ckpt_paths = [ckpt_paths]
@@ -1179,10 +1143,7 @@ class EmbeddingManager(nn.Module):
                 try:
                     k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
                 except:
-                    k2_embedding = extend_clip_text_embedder(self.text_embedder, {}, [km2])
-                    extended_token_embeddings.append(k2_embedding)
-                    k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
-                    print
+                    breakpoint()
                 if km2 in self.string_to_token_dict:
                     if km2 in self.background_strings:
                         print(f"Duplicate key {km}->{km2} in {ckpt_path}. Ignored.")
@@ -1212,18 +1173,10 @@ class EmbeddingManager(nn.Module):
 
                 print(f"Loaded {km}->{km2} from {ckpt_path}")
                 
-                static_embedder = self.string_to_static_embedder_dict[km2]
-                # Make compatible with older ckpts which don't have do_zero_shot.
-                if 'do_zero_shot' not in static_embedder.__dict__:
-                    static_embedder.do_zero_shot = self.do_zero_shot
-
             if "token2num_vectors" in ckpt and not self.skip_loading_token2num_vectors:
                 self.set_num_vectors_per_subj_token(token2num_vectors)
 
         self.placeholder_strings = self.subject_strings + self.background_strings
-        if len(extended_token_embeddings) > 0:
-            self.extended_token_embeddings = torch.cat(extended_token_embeddings, dim=0)
-            print(f"Extended {len(extended_token_embeddings)} token embeddings")
 
         # Regenerate subject_string_dict, background_string_dict 
         # in case subject_strings or background_strings have been changed.

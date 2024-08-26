@@ -2,14 +2,14 @@ import torch
 import torch.nn as nn
 from transformers import CLIPTextModel
 from transformers.models.clip.modeling_clip import CLIPAttention
-from typing import Any, Callable, Dict, Optional, Tuple, Union, List
+from typing import Optional, Tuple, Union
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 # from transformers.models.clip.modeling_clip import _make_causal_mask, _expand_mask
 _make_causal_mask = AttentionMaskConverter._make_causal_mask
 _expand_mask = AttentionMaskConverter._expand_mask
 
-from adaface.util import add_noise_to_tensor
+from .util import add_noise_to_tensor
 
 # Extend CLIPAttention by using multiple k_proj and v_proj in each head.
 # To avoid too much increase of computation, we don't extend q_proj.
@@ -300,4 +300,3 @@ class CLIPTextModelWrapper(CLIPTextModel):
             num_extended_layers += 1
     
         return num_extended_layers
-    
