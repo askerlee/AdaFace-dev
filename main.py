@@ -210,7 +210,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=1,
-                        help="Gradient scale of the prompt2token projection layer")   
+                        help="Gradient scale of the prompt2token projection layer (Set to < 1 to reduce the update speed of SubjBasisGenerator)")
     parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
                         help="Scale of the extra words embeddings")
     parser.add_argument("--zs_prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,

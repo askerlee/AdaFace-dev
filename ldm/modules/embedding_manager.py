@@ -7,7 +7,7 @@ import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
-from adaface.face_to_img_prompt import Arc2Face_Face2ImgPrompt, ConsistentID_Face2ImgPrompt
+from adaface.init_id_to_img_prompt import Arc2Face_Face2ImgPrompt, ConsistentID_Face2ImgPrompt
 
 import torch.nn.functional as F
 import numpy as np
@@ -654,7 +654,7 @@ class EmbeddingManager(nn.Module):
                         with torch.no_grad():
                             # face2img_embs: [BS, 77, 768]. face2img_id_embs: [BS, 16, 768].
                             placeholder_face2img_embs, face2img_id_embs = \
-                                self.face2img_prompt_encoder.face_id_to_img_prompt_embs( \
+                                self.face2img_prompt_encoder.init_id_to_img_prompt_embs( \
                                     zs_id_embs, return_full_and_core_embs=True)
                     else:
                         placeholder_face2img_embs = None

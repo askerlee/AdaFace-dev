@@ -367,10 +367,9 @@ def main(opt):
             # zs_clip_features: [1, 514, 1280]. 
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
             zs_clip_features, zs_id_embs, _ = \
-                model.encode_zero_shot_image_features(ref_images, fg_masks=None,
-                                                      is_face=opt.calc_face_sim,
-                                                      calc_avg=True, skip_non_faces=True,
-                                                      image_paths=opt.ref_images, verbose=True)
+                model.embedding_manager.face2img_prompt_encoder.extract_init_id_embeds_from_images(\
+                    ref_images, fg_masks=None, image_paths=opt.ref_images, 
+                    calc_avg=True, skip_non_faces=True, verbose=True)
         else:
             zs_clip_features, zs_id_embs = None, None
 
@@ -571,8 +570,8 @@ def main(opt):
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
-                                                            zs_id_embs=zs_id_embs,
-                                                            apply_face2img_embs=apply_face2img_embs)
+                                                           zs_id_embs=zs_id_embs,
+                                                           apply_face2img_embs=apply_face2img_embs)
 
                         if opt.debug:
                             c[2]['debug_attn'] = True

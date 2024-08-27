@@ -10,7 +10,7 @@ from adaface.arc2face_models import CLIPTextModelWrapper
 import torch
 from PIL import Image
 import os, argparse, glob
-from adaface.util import get_arc2face_id_prompt_embs
+from adaface.init_id_to_img_prompt import Arc2Face_Face2ImgPrompt
 
 def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
     
@@ -79,6 +79,9 @@ if __name__ == "__main__":
     pipeline.scheduler = noise_scheduler
     pipeline = pipeline.to('cuda')
 
+    arc2face_prompt_encoder = Arc2Face_Face2ImgPrompt()
+    arc2face_prompt_encoder.to('cuda')
+
     if not args.randface:
         image_folder = args.subject
         if image_folder.endswith("/"):
@@ -105,45 +108,41 @@ if __name__ == "__main__":
         image_paths = None
         image_folder = None
 
-    # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
-    # Note there's a second "model" in the path.
-    face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
-    face_app.prepare(ctx_id=0, det_size=(512, 512))
-    
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
-    rand_face_embs=torch.randn(1, 512)
+    rand_face_id_embs=torch.randn(1, 512)
     id_batch_size = args.out_image_count
 
     input_max_length = 22
 
     # Noise level is the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
-    for noise_level in (0, 0.03, 0.06):
-        pre_face_embs = rand_face_embs if args.randface else None
+    for noise_level in (0, 0.03):
+        init_id_embs = rand_face_id_embs if args.randface else None
 
-        # id_prompt_emb, neg_id_prompt_emb are in the image prompt space.
-        faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
-            = get_arc2face_id_prompt_embs(face_app, tokenizer, text_encoder,
-                                            extract_faceid_embeds=not args.randface,
-                                            pre_face_embs=pre_face_embs,
-                                            image_folder=image_folder, image_paths=image_paths,
-                                            images_np=None,
-                                            id_batch_size=id_batch_size,
-                                            device='cuda',
-                                            input_max_length=input_max_length,
-                                            noise_level=noise_level,
-                                            gen_neg_prompt=True, 
-                                            verbose=True)
+        # id_prompt_emb is in the image prompt space.
+        face_image_count, faceid_embeds, id_prompt_emb \
+            = arc2face_prompt_encoder.get_arc2face_id_prompt_embs( \
+                extract_faceid_embeds=not args.randface,
+                init_id_embs=init_id_embs,
+                image_paths=image_paths,
+                images_np=None,
+                id_batch_size=id_batch_size,
+                device='cuda',
+                input_max_length=input_max_length,
+                noise_level=noise_level,
+                return_core_id_embs_only=False,
+                gen_neg_prompt=False, 
+                avg_at_stage='id_emb',
+                verbose=True)
 
         if args.randface:
             id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
-            neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
 
         pipeline.text_encoder = orig_text_encoder
 
         filler_prompt = "photo of a id person"
         comp_prompt = args.prompt 
-        test_core_embs = False
+        test_core_embs = True
         if test_core_embs:
             comp_prompt = filler_prompt
 
@@ -153,38 +152,19 @@ if __name__ == "__main__":
                                                                          do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         pipeline.text_encoder = text_encoder
 
-        if test_core_embs:
-            # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
-            # the resulting images are quite similar to those generated with id_prompt_emb. 
-            # This shows id_prompt_emb 4:20 contains the ID of the person.
-            prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
-            id_prompt_emb = prompt_embeds_
-            negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]] = neg_id_prompt_emb
-            
-        if len(comp_prompt) > 0:
-            pos_prompt_emb  = torch.cat([id_prompt_emb,     prompt_embeds_], dim=1)
-            neg_prompt_emb  = torch.cat([neg_id_prompt_emb, negative_prompt_embeds_], dim=1)
-        else:
-            pos_prompt_emb = id_prompt_emb
-            neg_prompt_emb = neg_id_prompt_emb
+        # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
+        # the resulting images are quite similar to those generated with id_prompt_emb. 
+        # This shows id_prompt_emb 4:20 contains the ID of the person.
+        prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
 
         noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
-        negative_prompt_embeds_ = negative_prompt_embeds_[:, :neg_id_prompt_emb.shape[1]]
 
         for guidance_scale in [2, 4]:
             images = pipeline(image=noise,
-                            prompt_embeds=pos_prompt_emb, 
-                            negative_prompt_embeds=negative_prompt_embeds_, 
-                            num_inference_steps=40, 
-                            guidance_scale=guidance_scale, 
-                            num_images_per_prompt=1).images
+                              prompt_embeds=prompt_embeds_, 
+                              negative_prompt_embeds=negative_prompt_embeds_, 
+                              num_inference_steps=40, 
+                              guidance_scale=guidance_scale, 
+                              num_images_per_prompt=1).images
 
-            save_images(images, subject_name, f"guide{guidance_scale}-origneg", noise_level)
-
-            images2 = pipeline(image=noise,
-                                prompt_embeds=pos_prompt_emb, 
-                                negative_prompt_embeds=neg_prompt_emb,
-                                num_inference_steps=40, 
-                                guidance_scale=guidance_scale, 
-                                num_images_per_prompt=1).images
-            save_images(images2, subject_name, f"guide{guidance_scale}-arcneg", noise_level)
+            save_images(images, subject_name, f"guide{guidance_scale}", noise_level)

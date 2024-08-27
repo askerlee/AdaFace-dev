@@ -1168,7 +1168,7 @@ class LatentDiffusion(DDPM):
                 # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
                 zs_clip_features, zs_id_embs, faceless_img_count = \
-                    self.embedding_manager.face2img_prompt_encoder.encode_zero_shot_image_features(\
+                    self.embedding_manager.face2img_prompt_encoder.extract_init_id_embeds_from_images(\
                         images, fg_mask.squeeze(1), image_paths=image_paths, calc_avg=use_subj_avg_embedding)
                                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
@@ -1213,9 +1213,9 @@ class LatentDiffusion(DDPM):
 
                 # Sometimes gen_face2img_rand_face is False and do_unet_distill is True.
                 if self.iter_flags['do_unet_distill']:
-                    # gen_face2img_prompt_embs() encodes zs_id_embs to face2img_prompt_emb.
+                    # gen_id2img_prompt_embs() encodes zs_id_embs to face2img_prompt_emb.
                     _, _, face2img_prompt_emb \
-                        = self.embedding_manager.face2img_prompt_encoder.gen_face2img_prompt_embs(images.shape[0], pre_face_embs=zs_id_embs)
+                        = self.embedding_manager.face2img_prompt_encoder.gen_id2img_prompt_embs(images.shape[0], init_id_embs=zs_id_embs)
 
             # gen_face2img_rand_face == True. It implies it's not do_mix_prompt_distillation.
             else:
@@ -1223,7 +1223,7 @@ class LatentDiffusion(DDPM):
                 zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. face2img_prompt_emb: [4, 21, 768]
                 _, zs_id_embs, face2img_prompt_emb \
-                    = self.embedding_manager.face2img_prompt_encoder.gen_face2img_prompt_embs(images.shape[0], pre_face_embs=None)
+                    = self.embedding_manager.face2img_prompt_encoder.gen_id2img_prompt_embs(images.shape[0], init_id_embs=None)
                 # On random faces, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None

@@ -279,7 +279,7 @@ class AdaFaceWrapper(nn.Module):
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, image_folder=None, 
-                                    pre_face_embs=None, gen_rand_face=False, 
+                                    face_id_embs=None, gen_rand_face=False, 
                                     out_id_embs_cfg_scale=6., noise_level=0, noise_std_to_input=0, 
                                     update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
@@ -290,16 +290,16 @@ class AdaFaceWrapper(nn.Module):
         # Here id_batch_size = 1, so
         # faceid_embeds: [1, 512]. NOT used later.
         # id_prompt_emb: [1, 16, 768]. 
-        # NOTE: Since return_core_id_embs is True, id_prompt_emb is only the 16 core ID embeddings.
+        # NOTE: Since return_core_id_embs_only is True, id_prompt_emb is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
         face_image_count, faceid_embeds, id_prompt_emb \
             = get_arc2face_id_prompt_embs(self.face_app, self.pipeline.tokenizer, self.arc2face_text_encoder,
                                           extract_faceid_embeds=not gen_rand_face,
-                                          pre_face_embs=pre_face_embs,
+                                          face_id_embs=face_id_embs,
                                           # image_folder is passed only for logging purpose. 
                                           # image_paths contains the paths of the images.
-                                          image_folder=image_folder, image_paths=image_paths,
+                                          image_paths=image_paths,
                                           images_np=None,
                                           id_batch_size=1,
                                           device=self.device,
@@ -309,7 +309,7 @@ class AdaFaceWrapper(nn.Module):
                                           input_max_length=22,
                                           noise_level=noise_level,
                                           noise_std_to_input=noise_std_to_input,
-                                          return_core_id_embs=True,
+                                          return_core_id_embs_only=True,
                                           avg_at_stage=None,
                                           gen_neg_prompt=False, 
                                           verbose=True)

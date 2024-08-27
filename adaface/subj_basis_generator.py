@@ -354,6 +354,9 @@ class ImgPrompt2TextPrompt(nn.Module):
         super().__init__()
         self.initialize_text_components(max_prompt_length)
 
+    # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
+    # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
+    # ckpts which were not subclassed from ImgPrompt2TextPrompt.
     def initialize_text_components(self, max_prompt_length=77):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
@@ -610,7 +613,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             if is_face:
                 assert face2img_id_embs is not None
                 # face2img_embs has been projected to the (modified) prompt embedding space 
-                # by Face2ImgPrompt::face_id_to_img_prompt_embs(). This prompt embedding space is modified because 
+                # by Face2ImgPrompt::init_id_to_img_prompt_embs(). This prompt embedding space is modified because 
                 # the Face2ImgPrompt model (at least when it's arc2face) may have finetuned the 
                 # text encoder and the U-Net.
                 # in embedding_manager: [BS, 16, 768] -> [BS, 77, 768].

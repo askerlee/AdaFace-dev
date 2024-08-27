@@ -48,8 +48,8 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
     # images: numpy.ndarray or torch.Tensor.
     # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
     # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, image_paths=None, size=(512, 512), 
-                                        calc_avg=False, skip_non_faces=True, verbose=False):
+    def extract_init_id_embeds_from_images(self, images, fg_masks, image_paths=None, size=(512, 512), 
+                                           calc_avg=False, skip_non_faces=True, verbose=False):
         image_pixel_values = []
         all_id_embs = []
         faceless_img_count = 0
@@ -107,7 +107,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                     # fg_mask: [Hi, Wi]
                     # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
                     # If the ref image is not square, then the fg_mask will not match the image.
-                    # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
+                    # TODO: crop fg_mask and images to square before calling extract_init_id_embeds_from_images().
                     # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
                     fg_mask2 = torch.tensor(fg_mask, device=device).float().unsqueeze(0).unsqueeze(0)
                     fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
@@ -181,25 +181,12 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                     
         return clip_features, id_embs, faceless_img_count
 
-    def gen_face2img_prompt_embs(self, batch_size, pre_face_embs=None):
-        # if pre_face_embs is None, generate random face embeddings [BS, 512].
-        # Returns faceid_embeds, face2img_prompt_emb.
-        device = self.clip_image_encoder.device
-        return self.get_arc2face_id_prompt_embs(None, extract_faceid_embeds=False, 
-                                                pre_face_embs=pre_face_embs,
-                                                image_folder=None, image_paths=None,
-                                                images_np=None, 
-                                                id_batch_size=batch_size,
-                                                device=device,
-                                                input_max_length=21, # Remove all paddings.
-                                                noise_level=0, verbose=False)
-
     # In AdaFaceWrapper, input_max_length is 22.
-    def face_id_to_img_prompt_embs(self, face_id_embs, input_max_length=77, return_full_and_core_embs=True):
+    def init_id_to_img_prompt_embs(self, init_id_embs, input_max_length=77, return_full_and_core_embs=True):
 
         '''
         self.text_encoder: arc2face_models.py:CLIPTextModelWrapper instance.
-        face_id_embs: (N, 512) normalized Face ID embeddings.
+        init_id_embs: (N, 512) normalized Face ID embeddings.
         return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
                                 If False, return only the core embeddings.
 
@@ -215,13 +202,13 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                 padding="max_length",
                 max_length=input_max_length, 
                 return_tensors="pt",
-            ).input_ids.to(face_id_embs.device)
+            ).input_ids.to(init_id_embs.device)
         # input_ids: [1, 77] or [3, 77] (during training).
-        input_ids = input_ids.repeat(len(face_id_embs), 1)
-        face_embs_dtype = face_id_embs.dtype
-        face_id_embs = face_id_embs.to(self.text_encoder.dtype)
+        input_ids = input_ids.repeat(len(init_id_embs), 1)
+        face_embs_dtype = init_id_embs.dtype
+        init_id_embs = init_id_embs.to(self.text_encoder.dtype)
         # face_embs_padded: [1, 512] -> [1, 768].
-        face_embs_padded = F.pad(face_id_embs, (0, self.text_encoder.config.hidden_size - face_id_embs.shape[-1]), "constant", 0)
+        face_embs_padded = F.pad(init_id_embs, (0, self.text_encoder.config.hidden_size - init_id_embs.shape[-1]), "constant", 0)
         # self.text_encoder(input_ids=input_ids, ...) is called twice. The first is only to get the token embeddings (the shallowest mapping).
         # The second call does the ordinary CLIP text encoding pass.
         token_embs = self.text_encoder(input_ids=input_ids, return_token_embs=True)
@@ -245,16 +232,18 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
             # [N, 16, 768]
             return prompt_embeds[:, 4:20]
 
-    # if pre_face_embs is None, generate random face embeddings [BS, 512].
+    # If extract_faceid_embeds, then extract face ID embeds from image_paths or images_np, 
+    # and init_id_embs is ignored.
+    # Otherwise, if init_id_embs is None, generate random face embeddings [BS, 512].
     # image_folder is passed only for logging purpose. image_paths contains the paths of the images.
     # We don't plan to fine-tune Arc2Face. So disable the gradient computation.
     @torch.no_grad()
-    def get_arc2face_id_prompt_embs(self, face_app, extract_faceid_embeds, pre_face_embs, 
-                                    image_folder, image_paths, images_np,
+    def get_arc2face_id_prompt_embs(self, extract_faceid_embeds, init_id_embs, 
+                                    image_paths, images_np,
                                     id_batch_size, device, 
                                     input_max_length=77, noise_level=0.0, 
                                     noise_std_to_input=0.0, 
-                                    return_core_id_embs=True,
+                                    return_core_id_embs_only=True,
                                     avg_at_stage=None,  # id_emb, prompt_emb, or None.
                                     gen_neg_prompt=False, verbose=False):
         face_image_count = 0
@@ -284,7 +273,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                     noisy_image_np = add_noise_to_np_array(image_np, noise_std_to_input, 
                                                            noise_std_is_relative=True,
                                                            std_dim=(0,1))
-                    face_infos = face_app.get(noisy_image_np)
+                    face_infos = self.insightface_app.get(noisy_image_np)
                     if verbose and image_paths is not None and j == 0:
                         print(image_paths[i], len(face_infos))
                     # Assume all images belong to the same subject. Therefore, we can skip the images with no face detected.
@@ -300,11 +289,8 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                 face_image_count += 1
 
             if verbose:
-                if image_folder is not None:
-                    print(f"Extracted ID embeddings from {face_image_count} images in {image_folder}")
-                else:
-                    print(f"Extracted ID embeddings from {face_image_count} images")
-
+                print(f"Extracted ID embeddings from {face_image_count} images")
+ 
             if len(faceid_embeds) == 0:
                 print("No face detected. Use a random face instead.")
                 faceid_embeds = torch.randn(id_batch_size, 512).to(device=device, dtype=torch.float16)
@@ -318,11 +304,11 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                     faceid_embeds = faceid_embeds.mean(dim=0, keepdim=True)
         else:
             # Random face embeddings. faceid_embeds: [BS, 512].
-            if pre_face_embs is None:
+            if init_id_embs is None:
                 faceid_embeds = torch.randn(id_batch_size, 512)
             else:
-                faceid_embeds = pre_face_embs
-                if pre_face_embs.shape[0] == 1:
+                faceid_embeds = init_id_embs
+                if init_id_embs.shape[0] == 1:
                     faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
 
             faceid_embeds = faceid_embeds.to(device=device, dtype=torch.float16)
@@ -336,9 +322,9 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
         # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
         with torch.no_grad():
             arc2face_pos_prompt_emb, arc2face_pos_core_prompt_emb  = \
-                self.face_id_to_img_prompt_embs(faceid_embeds, input_max_length=input_max_length,
-                                          return_full_and_core_embs=True)
-            if return_core_id_embs:
+                self.init_id_to_img_prompt_embs(faceid_embeds, input_max_length=input_max_length,
+                                                return_full_and_core_embs=True)
+            if return_core_id_embs_only:
                 arc2face_pos_prompt_emb = arc2face_pos_core_prompt_emb
         
         if avg_at_stage == 'prompt_emb':
@@ -355,10 +341,10 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
         if gen_neg_prompt:
             with torch.no_grad():
                 arc2face_neg_prompt_emb, arc2face_neg_core_prompt_emb = \
-                    self.face_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
-                                              input_max_length=input_max_length,
-                                              return_full_and_core_embs=True)
-                if return_core_id_embs:
+                    self.init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
+                                                    input_max_length=input_max_length,
+                                                    return_full_and_core_embs=True)
+                if return_core_id_embs_only:
                     arc2face_neg_prompt_emb = arc2face_neg_core_prompt_emb
 
             #if extract_faceid_embeds:
@@ -366,6 +352,19 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
             return face_image_count, faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
         else:
             return face_image_count, faceid_embeds, arc2face_pos_prompt_emb
+
+    def gen_id2img_prompt_embs(self, batch_size, init_id_embs=None):
+        # if init_id_embs is None, generate random face embeddings [BS, 512].
+        # Returns faceid_embeds, face2img_prompt_emb.
+        device = self.clip_image_encoder.device
+        return self.get_arc2face_id_prompt_embs(extract_faceid_embeds=False, 
+                                                init_id_embs=init_id_embs,
+                                                image_paths=None,
+                                                images_np=None, 
+                                                id_batch_size=batch_size,
+                                                device=device,
+                                                input_max_length=21, # Remove all paddings.
+                                                noise_level=0, verbose=False)
 
 # ConsistentID_Face2ImgPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_Face2ImgPrompt:
@@ -379,20 +378,19 @@ class ConsistentID_Face2ImgPrompt:
             pipe.load_ConsistentID_model(consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
                                          bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth")
             # Since pipe is None, this should be called during inference,
-            # where the teacher ConsistentIDPipeline is not initialized. 
-            # Therefore, we release VAE and UNet to save memory.
-            pipe.release_components(["unet", "vae"])
+            # when the teacher ConsistentIDPipeline is not initialized. 
+            # Therefore, we release VAE, UNet and text_encoder to save memory.
+            pipe.release_components(["unet", "vae", "text_encoder"])
 
         self.pipe = pipe
     
-    # images: numpy.ndarray or torch.Tensor.
     # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
     # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, image_paths=None, size=(512, 512), 
+    def extract_init_id_embeds_from_images(self, images, fg_masks, image_paths=None, size=(512, 512), 
                                         calc_avg=False, skip_non_faces=True, verbose=False):
         return None
         
-    def gen_face2img_prompt_embs(self, batch_size, pre_face_embs=None):
+    def gen_id2img_prompt_embs(self, batch_size, init_id_embs=None):
         return None
     
 '''
@@ -410,7 +408,7 @@ class Objects_Vis2ImgPrompt(nn.Module):
     # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
     # DINO embedding will be extracted.
     # fg_masks: a list of [Hi, Wi].
-    def encode_zero_shot_image_features(self, images, fg_masks, image_paths=None, 
+    def extract_init_id_embeds_from_images(self, images, fg_masks, image_paths=None, 
                                         size=(512, 512), calc_avg=False, verbose=False):
         image_pixel_values = []
         all_id_embs = []
@@ -455,7 +453,7 @@ class Objects_Vis2ImgPrompt(nn.Module):
                     # fg_mask: [Hi, Wi]
                     # BUG: clip_preprocessor will do central crop on images. But fg_mask is not central cropped.
                     # If the ref image is not square, then the fg_mask will not match the image.
-                    # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
+                    # TODO: crop fg_mask and images to square before calling extract_init_id_embeds_from_images().
                     # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
                     fg_mask2 = torch.tensor(fg_mask, device=device).float().unsqueeze(0).unsqueeze(0)
                     fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
