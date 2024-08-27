@@ -564,10 +564,6 @@ class LatentDiffusion(DDPM):
                 param.requires_grad = False
 
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
-        if self.do_zero_shot:
-            # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
-            # which is used to generate the subject embeddings for subject-single prompts.
-            self.embedding_manager.make_frozen_copy_of_subj_basis_generators()
 
         self.generation_cache = []
         self.generation_cache_img_colors = []

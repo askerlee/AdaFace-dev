@@ -263,7 +263,6 @@ class EmbeddingManager(nn.Module):
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
             zs_prompt2token_proj_grad_scale=0.4,
-            zs_load_subj_basis_generators_from_ckpt=True,
             zs_extra_words_scale=0.5,
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
@@ -354,7 +353,6 @@ class EmbeddingManager(nn.Module):
 
             self.zs_cls_delta_string   = zs_cls_delta_string
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
-            self.zs_load_subj_basis_generators_from_ckpt = zs_load_subj_basis_generators_from_ckpt
             self.zs_extra_words_scale = zs_extra_words_scale
 
             self.face2img_embs = None
@@ -944,7 +942,8 @@ class EmbeddingManager(nn.Module):
         elif face2img_prompt_encoder_type == 'consistentID':
             # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
             # Only the consistentID modules and bise_net are used.
-            self.face2img_prompt_encoder = ConsistentID_Face2ImgPrompt(base_model_path="models/sd1.5-diffusers")
+            self.face2img_prompt_encoder = ConsistentID_Face2ImgPrompt(\
+                                            base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
         else:
             breakpoint()
 
@@ -1032,7 +1031,7 @@ class EmbeddingManager(nn.Module):
                 self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
             # Only load subj_basis_generator from ckpt if the ckpt is set with the same do_zero_shot.
-            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"] and self.zs_load_subj_basis_generators_from_ckpt:
+            if "do_zero_shot" in ckpt and self.do_zero_shot == ckpt["do_zero_shot"]:
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     ret = None
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
@@ -1047,7 +1046,8 @@ class EmbeddingManager(nn.Module):
                     ckpt_subj_basis_generator.face_proj_in = None
                     
                     if load_old_embman_ckpt:
-                        # Skip loadding lora2hira, latent_queries and layers, as the old ckpt has different shapes.
+                        # Delete lora2hira, latent_queries and layers, as lora2hira and layers belong to 
+                        # old ckpts, and latent_queries has different shapes.
                         ckpt_subj_basis_generator.lora2hira = None
                         ckpt_subj_basis_generator.latent_queries = None
                         ckpt_subj_basis_generator.latent_query_lns = None
@@ -1129,6 +1129,11 @@ class EmbeddingManager(nn.Module):
                     if self.zs_prompt2token_proj_grad_scale == 0:
                         # If it's for bg token, then freeze_prompt2token_proj() does nothing.
                         self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
+
+                if self.do_zero_shot and self.training:
+                    # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
+                    # which is used to generate the subject embeddings for subject-single prompts.
+                    self.make_frozen_copy_of_subj_basis_generators()
 
             else:
                 print(f"Skipping loading subj_basis_generator from {ckpt_path}")

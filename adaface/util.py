@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image
 from diffusers import UNet2DConditionModel
 from diffusers.models.unets.unet_2d_condition import UNet2DConditionOutput
@@ -7,6 +8,7 @@ from transformers import CLIPVisionModel
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from transformers.utils import ModelOutput
+import numpy as np
 
 # add_noise_to_tensor() adds a fixed amount of noise to the tensor.
 def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,

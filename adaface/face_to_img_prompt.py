@@ -14,6 +14,8 @@ import os
 
 class Arc2Face_Face2ImgPrompt(nn.Module):
     def __init__(self):
+        super().__init__()
+
         self.text_encoder = CLIPTextModelWrapper.from_pretrained(
                             'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
                             )
@@ -51,6 +53,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
         image_pixel_values = []
         all_id_embs = []
         faceless_img_count = 0
+        device = self.clip_image_encoder.device
 
         # images could be a batch of images that have been collated into a tensor or np array.
         # images can also be a list of images.
@@ -72,12 +75,12 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
             if len(face_info) == 0 and not skip_non_faces:
                 print(f'No face detected in {image_paths[idx]}. Use random face embedding.')
                 # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
-                id_emb = torch.randn(512, device=self.device)
+                id_emb = torch.randn(512, device=device)
                 faceless_img_count += 1
             elif len(face_info) > 0:
                 face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                 # id_emb: [512,]
-                id_emb = torch.from_numpy(face_info.normed_embedding).to(self.device)
+                id_emb = torch.from_numpy(face_info.normed_embedding).to(device)
             else:
                 # len(face_info) == 0 and skip_non_faces.
                 # Skip images without faces.
@@ -91,7 +94,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
 
         # image_pixel_values: [BS, 3, 224, 224]
         image_pixel_values = torch.cat(image_pixel_values, dim=0)
-        image_pixel_values = image_pixel_values.to(self.device)
+        image_pixel_values = image_pixel_values.to(device)
         # all_id_embs: [BS, 512].
         all_id_embs = torch.stack(all_id_embs, dim=0)
 
@@ -106,7 +109,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                     # If the ref image is not square, then the fg_mask will not match the image.
                     # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
                     # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
-                    fg_mask2 = torch.tensor(fg_mask, device=self.device).float().unsqueeze(0).unsqueeze(0)
+                    fg_mask2 = torch.tensor(fg_mask, device=device).float().unsqueeze(0).unsqueeze(0)
                     fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
                     fg_masks2.append(fg_mask2)
                 # fg_masks2: [BS, 224, 224]
@@ -116,30 +119,29 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
                 # The actual size doesn't matter, 
                 # as fg_mask2 will be resized to the same size as image features 
                 # (much smaller than image_pixel_values).            
-                fg_masks2 = fg_masks.to(device=self.device).float().unsqueeze(1)
+                fg_masks2 = fg_masks.to(device=device).float().unsqueeze(1)
                 # F.interpolate() always return a copy, even if scale_factor=1. So we don't need to clone fg_masks2.
                 fg_masks2 = F.interpolate(fg_masks2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
                 fg_masks2 = fg_masks2.squeeze(1)
         else:
             # fg_mask2: [BS, 224, 224]. 
-            fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=self.device)
+            fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=device)
 
         with torch.no_grad():
-            if self.neg_image_features is None:
-                # neg_pixel_values: [1, 3, 224, 224]
-                neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=self.device)
-                self.neg_image_features = self.clip_image_encoder(neg_pixel_values.half(), attn_mask=None, output_hidden_states=True).hidden_states[-2]
+            # neg_pixel_values: [1, 3, 224, 224]
+            neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=device)
+            neg_image_features = self.clip_image_encoder(neg_pixel_values.half(), attn_mask=None, output_hidden_states=True).hidden_states[-2]
 
             # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
             image_fg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=fg_masks2.half(), output_hidden_states=True)
             # attn_mask: [BS, 1, 257]
-            image_fg_features = image_fg_dict.hidden_states[-2] - self.neg_image_features
+            image_fg_features = image_fg_dict.hidden_states[-2] - neg_image_features
             if image_fg_dict.attn_mask is not None:
                 image_fg_features = image_fg_features * image_fg_dict.attn_mask
 
             # A negative mask is used to extract the background features.
             image_bg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=1-fg_masks2.half(), output_hidden_states=True)
-            image_bg_features = image_bg_dict.hidden_states[-2] - self.neg_image_features
+            image_bg_features = image_bg_dict.hidden_states[-2] - neg_image_features
             if image_bg_dict.attn_mask is not None:
                 image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 
@@ -182,12 +184,13 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
     def gen_face2img_prompt_embs(self, batch_size, pre_face_embs=None):
         # if pre_face_embs is None, generate random face embeddings [BS, 512].
         # Returns faceid_embeds, face2img_prompt_emb.
+        device = self.clip_image_encoder.device
         return self.get_arc2face_id_prompt_embs(None, extract_faceid_embeds=False, 
                                                 pre_face_embs=pre_face_embs,
                                                 image_folder=None, image_paths=None,
                                                 images_np=None, 
                                                 id_batch_size=batch_size,
-                                                device=self.device,
+                                                device=device,
                                                 input_max_length=21, # Remove all paddings.
                                                 noise_level=0, verbose=False)
 
@@ -365,7 +368,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
             return face_image_count, faceid_embeds, arc2face_pos_prompt_emb
 
 # ConsistentID_Face2ImgPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
-class ConsistentID_Face2ImgPrompt():
+class ConsistentID_Face2ImgPrompt:
     def __init__(self, pipe=None, base_model_path=None):
         if pipe is None:
             assert base_model_path is not None, "base_model_path should be provided."
@@ -398,11 +401,10 @@ class ConsistentID_Face2ImgPrompt():
 class Objects_Vis2ImgPrompt(nn.Module):
     def __init__(self):
         self.dino_encoder = ViTModel.from_pretrained('facebook/dino-vits16')
-        self.dino_encoder = self.dino_encoder.to(self.device)
         self.dino_encoder.eval()
         self.dino_encoder.half()
         self.dino_preprocess = ViTFeatureExtractor.from_pretrained('facebook/dino-vits16')
-        print(f'DINO encoder loaded on {self.device}.')
+        print(f'DINO encoder loaded.')
 
     # images: numpy.ndarray or torch.Tensor.
     # images: a list of np array or tensor [3, Hi, Wi] of different sizes. 
@@ -412,6 +414,7 @@ class Objects_Vis2ImgPrompt(nn.Module):
                                         size=(512, 512), calc_avg=False, verbose=False):
         image_pixel_values = []
         all_id_embs = []
+        device = self.clip_image_encoder.device
 
         # images could be a batch of images that have been collated into a tensor or np array.
         # images can also be a list of images.
@@ -426,7 +429,7 @@ class Objects_Vis2ImgPrompt(nn.Module):
 
             # DINO embedding.
             dino_input = self.dino_preprocess(images=image, return_tensors="pt")
-            dino_input = dino_input.to(self.device)
+            dino_input = dino_input.to(device)
             # last_hidden_states: [1, 197, 384]
             last_hidden_states = self.dino_encoder(**dino_input).last_hidden_state
             # We only use CLS token's features, so that the spatial location of the subject will not impact matching. 
@@ -439,7 +442,7 @@ class Objects_Vis2ImgPrompt(nn.Module):
 
         # image_pixel_values: [BS, 3, 224, 224]
         image_pixel_values = torch.cat(image_pixel_values, dim=0)
-        image_pixel_values = image_pixel_values.to(self.device)
+        image_pixel_values = image_pixel_values.to(device)
         # all_id_embs: [BS, 384].
         all_id_embs = torch.stack(all_id_embs, dim=0)
 
@@ -454,7 +457,7 @@ class Objects_Vis2ImgPrompt(nn.Module):
                     # If the ref image is not square, then the fg_mask will not match the image.
                     # TODO: crop fg_mask and images to square before calling encode_zero_shot_image_features().
                     # fg_mask2: [Hi, Wi] -> [1, 1, 224, 224]            
-                    fg_mask2 = torch.tensor(fg_mask, device=self.device).float().unsqueeze(0).unsqueeze(0)
+                    fg_mask2 = torch.tensor(fg_mask, device=device).float().unsqueeze(0).unsqueeze(0)
                     fg_mask2 = F.interpolate(fg_mask2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
                     fg_masks2.append(fg_mask2)
                 # fg_masks2: [BS, 224, 224]
@@ -464,30 +467,29 @@ class Objects_Vis2ImgPrompt(nn.Module):
                 # The actual size doesn't matter, 
                 # as fg_mask2 will be resized to the same size as image features 
                 # (much smaller than image_pixel_values).            
-                fg_masks2 = fg_masks.to(device=self.device).float().unsqueeze(1)
+                fg_masks2 = fg_masks.to(device=device).float().unsqueeze(1)
                 # F.interpolate() always return a copy, even if scale_factor=1. So we don't need to clone fg_masks2.
                 fg_masks2 = F.interpolate(fg_masks2, size=image_pixel_values.shape[-2:], mode='bilinear', align_corners=False)
                 fg_masks2 = fg_masks2.squeeze(1)
         else:
             # fg_mask2: [BS, 224, 224]. 
-            fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=self.device)
+            fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=device)
 
         with torch.no_grad():
-            if self.neg_image_features is None:
-                # neg_pixel_values: [1, 3, 224, 224]
-                neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=self.device)
-                self.neg_image_features = self.clip_image_encoder(neg_pixel_values.half(), attn_mask=None, output_hidden_states=True).hidden_states[-2]
+            # neg_pixel_values: [1, 3, 224, 224]
+            neg_pixel_values = torch.zeros_like(image_pixel_values[:1], device=device)
+            neg_image_features = self.clip_image_encoder(neg_pixel_values.half(), attn_mask=None, output_hidden_states=True).hidden_states[-2]
 
             # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
             image_fg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=fg_masks2.half(), output_hidden_states=True)
             # attn_mask: [BS, 1, 257]
-            image_fg_features = image_fg_dict.hidden_states[-2] - self.neg_image_features
+            image_fg_features = image_fg_dict.hidden_states[-2] - neg_image_features
             if image_fg_dict.attn_mask is not None:
                 image_fg_features = image_fg_features * image_fg_dict.attn_mask
 
             # A negative mask is used to extract the background features.
             image_bg_dict  = self.clip_image_encoder(image_pixel_values.half(), attn_mask=1-fg_masks2.half(), output_hidden_states=True)
-            image_bg_features = image_bg_dict.hidden_states[-2] - self.neg_image_features
+            image_bg_features = image_bg_dict.hidden_states[-2] - neg_image_features
             if image_bg_dict.attn_mask is not None:
                 image_bg_features = image_bg_features * image_bg_dict.attn_mask        
 

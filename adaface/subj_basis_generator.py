@@ -351,6 +351,10 @@ class CrossAttention(nn.Module):
 
 class ImgPrompt2TextPrompt(nn.Module):
     def __init__(self, max_prompt_length=77):
+        super().__init__()
+        self.initialize_text_components(max_prompt_length)
+
+    def initialize_text_components(self, max_prompt_length=77):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
         clip_text_embeddings = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").text_model.embeddings
@@ -362,7 +366,9 @@ class ImgPrompt2TextPrompt(nn.Module):
         pad_tokens = torch.tensor([self.tokenizer.pad_token_id]).repeat(max_prompt_length)
         # pad_embeddings: [77, 768]. 
         # pad_embeddings is still on CPU. But should be moved to GPU automatically.
-        self.pad_embeddings = clip_text_embeddings(pad_tokens)[0]
+        # Note: detach pad_embeddings from the computation graph, otherwise 
+        # deepcopy() in embedding_manager.py:make_frozen_copy_of_subj_basis_generators() will fail.
+        self.pad_embeddings = clip_text_embeddings(pad_tokens)[0].detach()
 
     # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra'].
     def inverse_face_prompt_embs(self, inverse_text_encoder, face_prompt_embs, list_extra_words,
@@ -723,12 +729,18 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.bg_prompt_translator_has_to_out_proj = False
         if not hasattr(self, 'num_out_embs'):
             self.num_out_embs = -1
-        
+        if not hasattr(self, 'num_nonface_in_id_vecs'):
+            self.num_nonface_in_id_vecs = self.num_id_vecs
+        if not hasattr(self, 'tokenizer'):
+            self.initialize_text_components()
+
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:
                 self.pos_embs = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, self.output_dim))
             if not hasattr(self, 'latent_queries') or self.latent_queries is None:        
                 self.latent_queries = nn.Parameter(torch.randn(1, self.num_out_embs, self.output_dim))
+        else:
+            self.initialize_hidden_state_layer_weights('per-layer', 'cpu')
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
