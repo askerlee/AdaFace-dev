@@ -7,7 +7,7 @@ import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
-from adaface.init_id_to_img_prompt import Arc2Face_ID2ImgPrompt, ConsistentID_ID2ImgPrompt
+from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt, ConsistentID_ID2ImgPrompt
 
 import torch.nn.functional as F
 import numpy as np
@@ -1060,7 +1060,7 @@ class EmbeddingManager(nn.Module):
                     # TODO: fix the logic below thoroughly in the future.
                     if extend_prompt2token_proj_attention_multiplier == -1:
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                        self.string_to_subj_basis_generator_dict[km].patch_old_prompt2token_proj()
+                        self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
                         continue
 
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
@@ -1125,7 +1125,7 @@ class EmbeddingManager(nn.Module):
                         print(f"Unexpected keys: {ret.unexpected_keys}")
 
                     # Fix missing variables in the old ckpt.
-                    self.string_to_subj_basis_generator_dict[km].patch_old_prompt2token_proj()
+                    self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
                     if self.zs_prompt2token_proj_grad_scale == 0:
                         # If it's for bg token, then freeze_prompt2token_proj() does nothing.
                         self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()

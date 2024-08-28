@@ -12,7 +12,7 @@ from diffusers import (
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from insightface.app import FaceAnalysis
 from adaface.util import UNetEnsemble
-from adaface.init_id_to_img_prompt import Arc2Face_ID2ImgPrompt
+from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import sys
@@ -65,6 +65,7 @@ class AdaFaceWrapper(nn.Module):
         # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
         # But we don't do layerwise embeddings here, so we set it to 1.
         self.subj_basis_generator.num_out_layers = 1
+        self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
         print(f"Loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
         self.subj_basis_generator.to(self.device)
@@ -274,12 +275,11 @@ class AdaFaceWrapper(nn.Module):
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
-                                    out_id_embs_cfg_scale=6., noise_level=0, noise_std_to_input=0, 
+                                    out_id_embs_cfg_scale=6., noise_level=0, 
                                     update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
-        # If faceid_embeds_from_images is True, faceid_embeds is *the same* embedding repeated by id_batch_size times.
-        # Otherwise, faceid_embeds is a batch of random embeddings, each instance is different.
-        # The same applies to id_prompt_emb.
+        # If gen_rand_face, faceid_embeds/id_prompt_emb is a batch of random embeddings, each instance is different.
+        # Otherwise, face_id_embs is used.
         # faceid_embeds is in the face analysis embeddings. id_prompt_emb is in the image prompt space.
         # Here id_batch_size = 1, so
         # faceid_embeds: [1, 512]. NOT used later.
@@ -289,23 +289,17 @@ class AdaFaceWrapper(nn.Module):
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
         face_image_count, faceid_embeds, id_prompt_emb \
             = self.arc2face_prompt_encoder.get_img_prompt_embs(\
-                faceid_embeds_from_images=not gen_rand_face,
-                init_id_embs=face_id_embs,
+                init_id_embs=None if gen_rand_face else face_id_embs,
                 # image_folder is passed only for logging purpose. 
                 # image_paths contains the paths of the images.
-                image_paths=image_paths,
-                images_np=None,
-                id_batch_size=1,
+                image_paths=image_paths, image_objs=None,
                 # input_max_length == 22: only keep the first 22 tokens, 
                 # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
                 # The results are indistinguishable from input_max_length=77.
-                input_max_length=22,
-                noise_level=noise_level,
-                noise_std_to_input=noise_std_to_input,
-                return_core_id_embs_only=True,
-                avg_at_stage=None,
-                gen_neg_prompt=False, 
-                verbose=True)
+                id_batch_size=1, input_max_length=22,
+                noise_level=noise_level, 
+                return_core_id_embs_only=True, avg_at_stage=None,
+                gen_neg_prompt=False, verbose=True)
         
         if face_image_count == 0:
             return None

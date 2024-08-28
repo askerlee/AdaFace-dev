@@ -15,6 +15,7 @@ from evaluation.dino_eval import DINOEvaluator
 from evaluation.community_prompts import community_prompt_list
 from insightface.app import FaceAnalysis
 from ldm.data.personalized import PersonalizedBase
+from adaface.util import pad_image_obj_to_square
 
 def set_tf_gpu(gpu_id):
     import tensorflow as tf
@@ -178,15 +179,6 @@ def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 
 
     """
 
-    images_np = []
-    for image_path in image_paths:
-        image_np = np.array(Image.open(image_path))
-        images_np.append(image_np)
-
-    for i, image_np in enumerate(images_np):
-        image_obj = Image.fromarray(image_np).resize((512, 512), Image.NEAREST)
-        image_np = cv2.cvtColor(np.array(image_obj), cv2.COLOR_RGB2BGR)
-
     # Only for one-off call. Otherwise it will be very slow.
     if insightface_app is None:
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
@@ -194,12 +186,20 @@ def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 
         insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
         insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
-    all_embeddings = []
-    for idx, image in enumerate(images_np):
+    image_nps = []
+    for image_path in image_paths:
+        image_obj = Image.open(image_path)
+        image_obj2, _, _ = pad_image_obj_to_square(image_obj)
         # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
         # PersonalizedBase dataset class.
-        image = np.array(Image.fromarray(image).resize(size, Image.NEAREST))   
-        face_infos = insightface_app.get(cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+        image_obj2 = image_obj2.resize(size, Image.NEAREST)
+        image_np = np.array(image_obj2)
+        image_np2 = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        image_nps.append(image_np2)
+
+    all_embeddings = []
+    for idx, image_np in enumerate(image_nps):
+        face_infos = insightface_app.get(image_np)
         if len(face_infos) > 0:
             face_info = sorted(face_infos, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
             # face_info.normed_embedding: [512,]. Already np.array, so no need to convert.

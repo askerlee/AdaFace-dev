@@ -214,9 +214,9 @@ class BaseModelOutputWithPooling2(ModelOutput):
 # https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py#L821
 # pixel_values: preprocessed B*C*H*W images. [BS, 3, 224, 224]
 # attn_mask: B*H*W attention mask.
-def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None, 
-                                  output_attentions = None,
-                                  output_hidden_states = None, return_dict = None):
+def CLIPVisionTransformer_forward_with_mask(self, pixel_values = None, attn_mask=None, 
+                                            output_attentions = None,
+                                            output_hidden_states = None, return_dict = None):
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -283,22 +283,28 @@ def CLIPVisionTransformer_forward(self, pixel_values = None, attn_mask=None,
             attn_mask=attn_mask.permute(0, 2, 1) if attn_mask is not None else None
         )
 
+def CLIPVisionModel_forward_with_mask(self, pixel_values = None, attn_mask = None, output_attentions = None,
+                                      output_hidden_states = None, return_dict = None):
+    
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    return self.vision_model(
+        pixel_values=pixel_values,
+        attn_mask=attn_mask,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+    )
+
+# patch_clip_image_encoder_with_mask() is applicable to both CLIPVisionModel and CLIPVisionModelWithProjection.
+def patch_clip_image_encoder_with_mask(clip_image_encoder):
+    clip_image_encoder.vision_model.forward = CLIPVisionTransformer_forward_with_mask.__get__(clip_image_encoder.vision_model)
+    clip_image_encoder.forward = CLIPVisionModel_forward_with_mask.__get__(clip_image_encoder)
+    return clip_image_encoder
+
 class CLIPVisionModelWithMask(CLIPVisionModel):
     def __init__(self, config):
         super().__init__(config)
         # Replace vision_model.forward() with the new one that supports mask.
-        self.vision_model.forward = CLIPVisionTransformer_forward.__get__(self.vision_model)
-    
-    def forward(self, pixel_values = None, attn_mask = None, output_attentions = None,
-                output_hidden_states = None, return_dict = None):
-        
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        return self.vision_model(
-            pixel_values=pixel_values,
-            attn_mask=attn_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
-        ) 
+        patch_clip_image_encoder_with_mask(self)
     

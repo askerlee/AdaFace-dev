@@ -366,9 +366,9 @@ def main(opt):
         if opt.zeroshot:
             # zs_clip_features: [1, 514, 1280]. 
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
-            zs_clip_features, zs_id_embs, _ = \
-                model.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images(\
-                    ref_images, fg_masks=None, image_paths=opt.ref_images, 
+            _, zs_id_embs, zs_clip_features = \
+                model.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images( \
+                    ref_images, opt.ref_images, fg_masks=None,
                     calc_avg=True, skip_non_faces=True, verbose=True)
         else:
             zs_clip_features, zs_id_embs = None, None

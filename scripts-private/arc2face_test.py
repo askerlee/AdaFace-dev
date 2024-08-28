@@ -10,7 +10,7 @@ from adaface.arc2face_models import CLIPTextModelWrapper
 import torch
 from PIL import Image
 import os, argparse, glob
-from adaface.init_id_to_img_prompt import Arc2Face_ID2ImgPrompt
+from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt
 
 def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
     
@@ -122,10 +122,9 @@ if __name__ == "__main__":
         # id_prompt_emb is in the image prompt space.
         face_image_count, faceid_embeds, id_prompt_emb \
             = arc2face_prompt_encoder.get_img_prompt_embs( \
-                faceid_embeds_from_images=not args.randface,
                 init_id_embs=init_id_embs,
                 image_paths=image_paths,
-                images_np=None,
+                image_objs=None,
                 id_batch_size=id_batch_size,
                 input_max_length=input_max_length,
                 noise_level=noise_level,

@@ -726,7 +726,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             print(f"{len(frozen_param_names)} params in Subj prompt2token_proj is frozen.")
             #print(f"Frozen parameters:\n{frozen_param_names}")
 
-    def patch_old_prompt2token_proj(self):
+    def patch_old_subj_basis_generator_ckpt(self):
         # Fix compatability with the previous version.
         if not hasattr(self, 'bg_prompt_translator_has_to_out_proj'):
             self.bg_prompt_translator_has_to_out_proj = False

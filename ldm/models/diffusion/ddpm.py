@@ -1158,9 +1158,9 @@ class LatentDiffusion(DDPM):
                 # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
                 # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
-                zs_clip_features, zs_id_embs, faceless_img_count = \
+                faceless_img_count, zs_id_embs, zs_clip_features  = \
                     self.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images(\
-                        images, fg_mask.squeeze(1), image_paths=image_paths, calc_avg=use_subj_avg_embedding)
+                        images, image_paths, fg_mask.squeeze(1), calc_avg=use_subj_avg_embedding)
                                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.

@@ -3,6 +3,7 @@ import numpy as np
 import pytorch_lightning as pl
 from diffusers import UNet2DConditionModel
 from adaface.util import UNetEnsemble
+from adaface.face_id_to_img_prompt import ConsistentID_ID2ImgPrompt
 from PIL import Image
 from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline
 
@@ -66,13 +67,13 @@ class UNetTeacher(pl.LightningModule):
 class Arc2FaceTeacher(UNetTeacher):
     def __init__(self, **kwargs):
         super().__init__()
-
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
                     )
 
 class UNetEnsembleTeacher(UNetTeacher):
+    # unet_weights are not model weights, but scalar weights for individual unets.
     def __init__(self, unet, extra_unet_paths, unet_weights, device, **kwargs):
         super().__init__()
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
@@ -93,11 +94,13 @@ class ConsistentIDTeacher(UNetTeacher):
             consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
             bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
         )
-        # Release VAE to save memory. UNet is still needed for denoising 
-        # (it's implemented in diffusers and is fp16, so probably faster than the LDM unet).
+        # Release VAE to save memory. UNet and text_encoder is still needed for denoising 
+        # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
         pipe.release_components(["vae"])
         self.pipe = pipe
+        # Compatible with the UNetTeacher interface.
         self.unet = pipe.unet
+        self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(pipe)
 
     # Only used for inference/distillation, so no_grad() is used.
     @torch.no_grad()
@@ -114,7 +117,7 @@ class ConsistentIDTeacher(UNetTeacher):
 
             text_embeds, _ = \
                 self.pipe.encode_prompt(prompt, device=self.pipe.device, num_images_per_prompt=1,
-                                   do_classifier_free_guidance=False, negative_prompt=None)
+                                        do_classifier_free_guidance=False, negative_prompt=None)
             # text_global_id_embeds: [1, 81, 768]      
             text_global_id_embeds = torch.cat([text_embeds, global_id_embeds], dim=1)      
             batch_text_global_id_embeds.append(text_global_id_embeds)
