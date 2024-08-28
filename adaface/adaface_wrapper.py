@@ -11,8 +11,8 @@ from diffusers import (
 )
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from insightface.app import FaceAnalysis
-from adaface.arc2face_models import CLIPTextModelWrapper
-from adaface.util import get_arc2face_id_prompt_embs, UNetEnsemble
+from adaface.util import UNetEnsemble
+from adaface.init_id_to_img_prompt import Arc2Face_ID2ImgPrompt
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import sys
@@ -75,14 +75,8 @@ class AdaFaceWrapper(nn.Module):
 
     def initialize_pipeline(self):
         self.load_subj_basis_generator(self.adaface_ckpt_path)
-
-        # arc2face_text_encoder maps the face analysis embedding to 16 face embeddings 
-        # in the UNet image space.
-        # arc2face_text_encoder always uses float16.
-        arc2face_text_encoder = CLIPTextModelWrapper.from_pretrained(
-            'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
-        )
-        self.arc2face_text_encoder = arc2face_text_encoder.to(self.device)
+        self.arc2face_prompt_encoder = Arc2Face_ID2ImgPrompt()
+        self.arc2face_prompt_encoder.to(self.device)
 
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.
@@ -180,6 +174,7 @@ class AdaFaceWrapper(nn.Module):
         # Otherwise, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
 
         self.pipeline = pipeline.to(self.device)
+
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.
         self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
@@ -278,12 +273,11 @@ class AdaFaceWrapper(nn.Module):
         return comp_prompt
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
-    def generate_adaface_embeddings(self, image_paths, image_folder=None, 
-                                    face_id_embs=None, gen_rand_face=False, 
+    def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
                                     out_id_embs_cfg_scale=6., noise_level=0, noise_std_to_input=0, 
                                     update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
-        # If extract_faceid_embeds is True, faceid_embeds is *the same* embedding repeated by id_batch_size times.
+        # If faceid_embeds_from_images is True, faceid_embeds is *the same* embedding repeated by id_batch_size times.
         # Otherwise, faceid_embeds is a batch of random embeddings, each instance is different.
         # The same applies to id_prompt_emb.
         # faceid_embeds is in the face analysis embeddings. id_prompt_emb is in the image prompt space.
@@ -294,25 +288,24 @@ class AdaFaceWrapper(nn.Module):
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
         face_image_count, faceid_embeds, id_prompt_emb \
-            = get_arc2face_id_prompt_embs(self.face_app, self.pipeline.tokenizer, self.arc2face_text_encoder,
-                                          extract_faceid_embeds=not gen_rand_face,
-                                          face_id_embs=face_id_embs,
-                                          # image_folder is passed only for logging purpose. 
-                                          # image_paths contains the paths of the images.
-                                          image_paths=image_paths,
-                                          images_np=None,
-                                          id_batch_size=1,
-                                          device=self.device,
-                                          # input_max_length == 22: only keep the first 22 tokens, 
-                                          # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
-                                          # The results are indistinguishable from input_max_length=77.
-                                          input_max_length=22,
-                                          noise_level=noise_level,
-                                          noise_std_to_input=noise_std_to_input,
-                                          return_core_id_embs_only=True,
-                                          avg_at_stage=None,
-                                          gen_neg_prompt=False, 
-                                          verbose=True)
+            = self.arc2face_prompt_encoder.get_img_prompt_embs(\
+                faceid_embeds_from_images=not gen_rand_face,
+                init_id_embs=face_id_embs,
+                # image_folder is passed only for logging purpose. 
+                # image_paths contains the paths of the images.
+                image_paths=image_paths,
+                images_np=None,
+                id_batch_size=1,
+                # input_max_length == 22: only keep the first 22 tokens, 
+                # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
+                # The results are indistinguishable from input_max_length=77.
+                input_max_length=22,
+                noise_level=noise_level,
+                noise_std_to_input=noise_std_to_input,
+                return_core_id_embs_only=True,
+                avg_at_stage=None,
+                gen_neg_prompt=False, 
+                verbose=True)
         
         if face_image_count == 0:
             return None

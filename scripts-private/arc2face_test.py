@@ -10,7 +10,7 @@ from adaface.arc2face_models import CLIPTextModelWrapper
 import torch
 from PIL import Image
 import os, argparse, glob
-from adaface.init_id_to_img_prompt import Arc2Face_Face2ImgPrompt
+from adaface.init_id_to_img_prompt import Arc2Face_ID2ImgPrompt
 
 def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
     
@@ -79,7 +79,7 @@ if __name__ == "__main__":
     pipeline.scheduler = noise_scheduler
     pipeline = pipeline.to('cuda')
 
-    arc2face_prompt_encoder = Arc2Face_Face2ImgPrompt()
+    arc2face_prompt_encoder = Arc2Face_ID2ImgPrompt()
     arc2face_prompt_encoder.to('cuda')
 
     if not args.randface:
@@ -121,13 +121,12 @@ if __name__ == "__main__":
 
         # id_prompt_emb is in the image prompt space.
         face_image_count, faceid_embeds, id_prompt_emb \
-            = arc2face_prompt_encoder.get_arc2face_id_prompt_embs( \
-                extract_faceid_embeds=not args.randface,
+            = arc2face_prompt_encoder.get_img_prompt_embs( \
+                faceid_embeds_from_images=not args.randface,
                 init_id_embs=init_id_embs,
                 image_paths=image_paths,
                 images_np=None,
                 id_batch_size=id_batch_size,
-                device='cuda',
                 input_max_length=input_max_length,
                 noise_level=noise_level,
                 return_core_id_embs_only=False,

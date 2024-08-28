@@ -12,7 +12,7 @@ from PIL import Image
 from insightface.app import FaceAnalysis
 import os
 
-class Arc2Face_Face2ImgPrompt(nn.Module):
+class Arc2Face_ID2ImgPrompt(nn.Module):
     def __init__(self):
         super().__init__()
 
@@ -34,7 +34,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
         'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
         'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
-        # Use the same model as Face2ImgPrompt does.
+        # Use the same model as ID2ImgPrompt does.
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
         # Note DON'T use CUDAExecutionProvider, as it will hang DDP training. 
@@ -182,7 +182,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
         return clip_features, id_embs, faceless_img_count
 
     # In AdaFaceWrapper, input_max_length is 22.
-    def init_id_to_img_prompt_embs(self, init_id_embs, input_max_length=77, return_full_and_core_embs=True):
+    def conv_init_id_to_img_prompt_embs(self, init_id_embs, input_max_length=77, return_full_and_core_embs=True):
 
         '''
         self.text_encoder: arc2face_models.py:CLIPTextModelWrapper instance.
@@ -232,23 +232,22 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
             # [N, 16, 768]
             return prompt_embeds[:, 4:20]
 
-    # If extract_faceid_embeds, then extract face ID embeds from image_paths or images_np, 
-    # and init_id_embs is ignored.
+    # If faceid_embeds_from_images, then ignore init_id_embs, and 
+    # extract face ID embeds from image_paths or images_np.
     # Otherwise, if init_id_embs is None, generate random face embeddings [BS, 512].
-    # image_folder is passed only for logging purpose. image_paths contains the paths of the images.
     # We don't plan to fine-tune Arc2Face. So disable the gradient computation.
     @torch.no_grad()
-    def get_arc2face_id_prompt_embs(self, extract_faceid_embeds, init_id_embs, 
-                                    image_paths, images_np,
-                                    id_batch_size, device, 
-                                    input_max_length=77, noise_level=0.0, 
-                                    noise_std_to_input=0.0, 
-                                    return_core_id_embs_only=True,
-                                    avg_at_stage=None,  # id_emb, prompt_emb, or None.
-                                    gen_neg_prompt=False, verbose=False):
+    def get_img_prompt_embs(self, faceid_embeds_from_images, init_id_embs, 
+                            image_paths, images_np,
+                            id_batch_size, input_max_length=77, 
+                            noise_level=0.0, noise_std_to_input=0.0, 
+                            return_core_id_embs_only=True,
+                            avg_at_stage=None,  # id_emb, prompt_emb, or None.
+                            gen_neg_prompt=False, verbose=False):
         face_image_count = 0
+        device = self.clip_image_encoder.device
 
-        if extract_faceid_embeds:
+        if faceid_embeds_from_images:
             faceid_embeds = []
             if image_paths is not None:
                 images_np = []
@@ -322,7 +321,7 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
         # arc2face_pos_prompt_emb, arc2face_neg_prompt_emb: [BS, 77, 768]
         with torch.no_grad():
             arc2face_pos_prompt_emb, arc2face_pos_core_prompt_emb  = \
-                self.init_id_to_img_prompt_embs(faceid_embeds, input_max_length=input_max_length,
+                self.conv_init_id_to_img_prompt_embs(faceid_embeds, input_max_length=input_max_length,
                                                 return_full_and_core_embs=True)
             if return_core_id_embs_only:
                 arc2face_pos_prompt_emb = arc2face_pos_core_prompt_emb
@@ -331,43 +330,43 @@ class Arc2Face_Face2ImgPrompt(nn.Module):
             arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.mean(dim=0, keepdim=True)
             arc2face_pos_core_prompt_emb = arc2face_pos_core_prompt_emb.mean(dim=0, keepdim=True)
 
-        # If extract_faceid_embeds, and the prompt embeddings are already averaged, then 
+        # If faceid_embeds_from_images, and the prompt embeddings are already averaged, then 
         # we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
         # So we need to repeat faceid_embeds.
-        if extract_faceid_embeds and avg_at_stage is not None:
+        if faceid_embeds_from_images and avg_at_stage is not None:
             faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
             arc2face_pos_prompt_emb = arc2face_pos_prompt_emb.repeat(id_batch_size, 1, 1)
 
         if gen_neg_prompt:
             with torch.no_grad():
                 arc2face_neg_prompt_emb, arc2face_neg_core_prompt_emb = \
-                    self.init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
+                    self.conv_init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
                                                     input_max_length=input_max_length,
                                                     return_full_and_core_embs=True)
                 if return_core_id_embs_only:
                     arc2face_neg_prompt_emb = arc2face_neg_core_prompt_emb
 
-            #if extract_faceid_embeds:
+            #if faceid_embeds_from_images:
             #    arc2face_neg_prompt_emb = arc2face_neg_prompt_emb.repeat(id_batch_size, 1, 1)
             return face_image_count, faceid_embeds, arc2face_pos_prompt_emb, arc2face_neg_prompt_emb
         else:
             return face_image_count, faceid_embeds, arc2face_pos_prompt_emb
 
-    def gen_id2img_prompt_embs(self, batch_size, init_id_embs=None):
+    # get_batched_img_prompt_embs() is a wrapper of get_img_prompt_embs() 
+    # that's convenient for batched training.
+    def get_batched_img_prompt_embs(self, batch_size, init_id_embs=None):
         # if init_id_embs is None, generate random face embeddings [BS, 512].
-        # Returns faceid_embeds, face2img_prompt_emb.
-        device = self.clip_image_encoder.device
-        return self.get_arc2face_id_prompt_embs(extract_faceid_embeds=False, 
-                                                init_id_embs=init_id_embs,
-                                                image_paths=None,
-                                                images_np=None, 
-                                                id_batch_size=batch_size,
-                                                device=device,
-                                                input_max_length=21, # Remove all paddings.
-                                                noise_level=0, verbose=False)
+        # Returns faceid_embeds, id2img_prompt_emb.
+        return self.get_img_prompt_embs(faceid_embeds_from_images=False, 
+                                        init_id_embs=init_id_embs,
+                                        image_paths=None,
+                                        images_np=None, 
+                                        id_batch_size=batch_size,
+                                        input_max_length=21, # Remove all paddings.
+                                        noise_level=0, verbose=False)
 
-# ConsistentID_Face2ImgPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
-class ConsistentID_Face2ImgPrompt:
+# ConsistentID_ID2ImgPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
+class ConsistentID_ID2ImgPrompt:
     def __init__(self, pipe=None, base_model_path=None):
         if pipe is None:
             assert base_model_path is not None, "base_model_path should be provided."
@@ -390,7 +389,7 @@ class ConsistentID_Face2ImgPrompt:
                                         calc_avg=False, skip_non_faces=True, verbose=False):
         return None
         
-    def gen_id2img_prompt_embs(self, batch_size, init_id_embs=None):
+    def get_batched_img_prompt_embs(self, batch_size, init_id_embs=None):
         return None
     
 '''

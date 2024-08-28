@@ -134,14 +134,14 @@ if __name__ == "__main__":
         image_folder = None
 
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
-    rand_face_id_embs = torch.randn(1, 512)
+    rand_init_id_embs = torch.randn(1, 512)
 
-    face_id_embs = rand_face_id_embs if args.randface else None
+    init_id_embs = rand_init_id_embs if args.randface else None
     noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
     # args.noise_level: the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-    adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, image_folder, face_id_embs, args.randface, 
+    adaface_subj_embs = adaface.generate_adaface_embeddings(image_paths, init_id_embs, args.randface, 
                                                             out_id_embs_cfg_scale=args.id_cfg_scale, noise_level=args.noise_level, 
                                                             update_text_encoder=True)    
     images = adaface(noise, args.prompt, None, args.guidance_scale, args.out_image_count, verbose=True)

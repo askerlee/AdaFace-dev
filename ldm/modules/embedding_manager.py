@@ -7,7 +7,7 @@ import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
-from adaface.init_id_to_img_prompt import Arc2Face_Face2ImgPrompt, ConsistentID_Face2ImgPrompt
+from adaface.init_id_to_img_prompt import Arc2Face_ID2ImgPrompt, ConsistentID_ID2ImgPrompt
 
 import torch.nn.functional as F
 import numpy as np
@@ -258,7 +258,7 @@ class EmbeddingManager(nn.Module):
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             do_zero_shot=True,
-            face2img_prompt_encoder_type='arc2face',
+            id2img_prompt_encoder_type='arc2face',
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
@@ -355,13 +355,13 @@ class EmbeddingManager(nn.Module):
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_extra_words_scale = zs_extra_words_scale
 
-            self.face2img_embs = None
+            self.id2img_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            self.init_face2img_prompt_encoder(face2img_prompt_encoder_type)
+            self.initialize_id2img_prompt_encoder(id2img_prompt_encoder_type)
 
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens   = self.get_tokens_for_string(zs_cls_delta_string)
@@ -439,7 +439,7 @@ class EmbeddingManager(nn.Module):
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
         self.clear_prompt_adhoc_info()
-        # 'recon_iter', 'compos_distill_iter', 'face2img_only_iter', 'empty'.
+        # 'recon_iter', 'compos_distill_iter', 'id2img_only_iter', 'empty'.
         self.iter_type = None       
         if self.do_zero_shot:
             self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
@@ -485,8 +485,8 @@ class EmbeddingManager(nn.Module):
             # to zs_cls_delta_string, the default class delta string.
             subj_name_to_cls_delta_string['zs_default'] = zs_cls_delta_string
 
-        # We don't know the gender of a rand_face_to_img_prompt subject.
-        subj_name_to_cls_delta_string['rand_face_to_img_prompt'] = 'person'
+        # We don't know the gender of a rand_id_to_img_prompt subject.
+        subj_name_to_cls_delta_string['rand_id_to_img_prompt'] = 'person'
 
         self.subj_name_to_cls_delta_string  = subj_name_to_cls_delta_string
         self.subj_name_to_cls_delta_tokens  = {}
@@ -517,7 +517,7 @@ class EmbeddingManager(nn.Module):
         # subj_name_to_being_faces is used in ddpm.py and not here.
         self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
                                             else {subj_name: True for subj_name in self.subject_strings}
-        self.subj_name_to_being_faces['rand_face_to_img_prompt'] = True
+        self.subj_name_to_being_faces['rand_id_to_img_prompt'] = True
         self.subj_name_to_being_faces['zs_default']              = True
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
@@ -648,16 +648,16 @@ class EmbeddingManager(nn.Module):
                     zs_id_embs = zs_image_feat_dict['id']
                     subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                         
-                    # Load face2img_prompt_encoder weight. No need to update face2img_prompt_encoder.
+                    # Load id2img_prompt_encoder weight. No need to update id2img_prompt_encoder.
                     # So it's is frozen.
                     if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
                         with torch.no_grad():
-                            # face2img_embs: [BS, 77, 768]. face2img_id_embs: [BS, 16, 768].
-                            placeholder_face2img_embs, face2img_id_embs = \
-                                self.face2img_prompt_encoder.init_id_to_img_prompt_embs( \
+                            # id2img_embs: [BS, 77, 768]. face2img_id_embs: [BS, 16, 768].
+                            placeholder_id2img_embs, face2img_id_embs = \
+                                self.id2img_prompt_encoder.conv_init_id_to_img_prompt_embs( \
                                     zs_id_embs, return_full_and_core_embs=True)
                     else:
-                        placeholder_face2img_embs = None
+                        placeholder_id2img_embs = None
                         face2img_id_embs = None
 
                     # zs_clip_features: [BS, 257, 1280]
@@ -679,10 +679,10 @@ class EmbeddingManager(nn.Module):
                         adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
 
                     if self.do_zero_shot and not placeholder_is_bg:
-                        # NOTE: face2img_embs is the Face2ImgPrompt forward embeddings, while 
-                        if self.iter_type in ['face2img_only_iter']:
-                            # face2img_embs: [BS, 77, 768].
-                            self.face2img_embs = placeholder_face2img_embs
+                        # NOTE: id2img_embs is the ID2ImgPrompt forward embeddings, while 
+                        if self.iter_type in ['id2img_only_iter']:
+                            # id2img_embs: [BS, 77, 768].
+                            self.id2img_embs = placeholder_id2img_embs
                         if self.iter_type in ['compos_distill_iter']:
                             assert placeholder_adaface_prompt_embs is not None
 
@@ -720,7 +720,7 @@ class EmbeddingManager(nn.Module):
                             # Still allow a small inference from the updated subj-single embeddings, 
                             # maybe this will make the images more natural?
                             adaface_subj_embs[:NUM_HALF_SUBJS] = adaface_subj_embs0.to(adaface_subj_embs.dtype) * 0.9 \
-                                                              + adaface_subj_embs[:NUM_HALF_SUBJS] * 0.1
+                                                                + adaface_subj_embs[:NUM_HALF_SUBJS] * 0.1
                             
                             if self.rank == 0:
                                 print(f"compos_distill_iter. Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
@@ -799,9 +799,9 @@ class EmbeddingManager(nn.Module):
                                             placeholder_is_bg=placeholder_is_bg)
         
 
-        # NOTE: if self.iter_type == 'face2img_only_iter', we CANNOT return self.face2img_embs
+        # NOTE: if self.iter_type == 'id2img_only_iter', we CANNOT return self.id2img_embs
         # as the updated embedded_text, since the returned embedded_text will be encoded again by the text encoder.
-        # Instead, we replace the prompt embeddings with the face2img_embs in ddpm.py:get_learned_conditioning().
+        # Instead, we replace the prompt embeddings with the id2img_embs in ddpm.py:get_learned_conditioning().
 
         return embedded_text, tokenized_text, static_subj_embs_dict
 
@@ -936,13 +936,13 @@ class EmbeddingManager(nn.Module):
             print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
                   f", with prob = {training_add_noise_prob}")
 
-    def init_face2img_prompt_encoder(self, face2img_prompt_encoder_type):
-        if face2img_prompt_encoder_type == 'arc2face':
-            self.face2img_prompt_encoder = Arc2Face_Face2ImgPrompt()
-        elif face2img_prompt_encoder_type == 'consistentID':
+    def initialize_id2img_prompt_encoder(self, id2img_prompt_encoder_type):
+        if id2img_prompt_encoder_type == 'arc2face':
+            self.id2img_prompt_encoder = Arc2Face_ID2ImgPrompt()
+        elif id2img_prompt_encoder_type == 'consistentID':
             # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
             # Only the consistentID modules and bise_net are used.
-            self.face2img_prompt_encoder = ConsistentID_Face2ImgPrompt(\
+            self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(\
                                             base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
         else:
             breakpoint()

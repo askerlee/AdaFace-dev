@@ -215,7 +215,7 @@ def get_parser(**parser_kwargs):
                         help="Scale of the extra words embeddings")
     parser.add_argument("--zs_prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
-    parser.add_argument("--p_gen_face2img_rand_face", type=float, default=0.4,
+    parser.add_argument("--p_gen_id2img_rand_id", type=float, default=0.4,
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--max_num_denoising_steps", type=int, default=3,
                         help="Maximum number of denoising steps (default 3)")    
@@ -711,7 +711,7 @@ if __name__ == "__main__":
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
-        config.model.params.p_gen_face2img_rand_face    = opt.p_gen_face2img_rand_face
+        config.model.params.p_gen_id2img_rand_id    = opt.p_gen_id2img_rand_id
         config.model.params.max_num_denoising_steps     = opt.max_num_denoising_steps
         config.model.params.p_add_noise_to_real_id_embs = opt.p_add_noise_to_real_id_embs
         config.model.params.extend_prompt2token_proj_attention_multiplier = opt.extend_prompt2token_proj_attention_multiplier

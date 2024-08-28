@@ -221,7 +221,7 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--apply_face2img_embs", action="store_true",
+    parser.add_argument("--apply_id2img_embs", action="store_true",
                         help="Evaluate Arc2Face forward embeddings")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
@@ -367,7 +367,7 @@ def main(opt):
             # zs_clip_features: [1, 514, 1280]. 
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
             zs_clip_features, zs_id_embs, _ = \
-                model.embedding_manager.face2img_prompt_encoder.extract_init_id_embeds_from_images(\
+                model.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images(\
                     ref_images, fg_masks=None, image_paths=opt.ref_images, 
                     calc_avg=True, skip_non_faces=True, verbose=True)
         else:
@@ -388,7 +388,7 @@ def main(opt):
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-                adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, None, False, 
+                adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, False, 
                                                                          out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
                                                                          noise_level=0, 
                                                                          update_text_encoder=True)
@@ -566,12 +566,12 @@ def main(opt):
                         prompts = list(prompts)
 
                     if not opt.eval_blip and not opt.diffusers:
-                        apply_face2img_embs         = opt.zeroshot and opt.apply_face2img_embs
+                        apply_id2img_embs         = opt.zeroshot and opt.apply_id2img_embs
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
                                                            zs_id_embs=zs_id_embs,
-                                                           apply_face2img_embs=apply_face2img_embs)
+                                                           apply_id2img_embs=apply_id2img_embs)
 
                         if opt.debug:
                             c[2]['debug_attn'] = True
