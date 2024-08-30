@@ -199,10 +199,10 @@ def get_parser(**parser_kwargs):
         help="One or more word tso be used in class-level prompts for delta loss")
     
     parser.add_argument("--num_vectors_per_subj_token",
-        type=int, default=18,
+        type=int, default=argparse.SUPPRESS,
         help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--num_vectors_per_bg_token",
-        type=int, default=4,
+        type=int, default=argparse.SUPPRESS,
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
@@ -303,16 +303,18 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.initializer_strings                = dataset.cls_delta_strings
         personalization_config_params.subj_name_to_cls_delta_string      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.token2num_vectors                  = dict()
-        for subject_string in dataset.subject_strings:
-            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+        if hasattr(opt, 'num_vectors_per_subj_token'):
+            for subject_string in dataset.subject_strings:
+                personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
             personalization_config_params.background_strings             = dataset.background_strings
             personalization_config_params.initializer_strings           += dataset.bg_initializer_strings
 
-            for background_string in dataset.background_strings:
-                personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
+            if hasattr(opt, 'num_vectors_per_bg_token'):
+                for background_string in dataset.background_strings:
+                    personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
 
         if opt.wds_db_path is not None:
             # wds_background_strings share the same settings of the background string.

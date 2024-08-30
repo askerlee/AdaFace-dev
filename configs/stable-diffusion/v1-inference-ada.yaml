@@ -30,7 +30,7 @@ model:
         # But it doesn't matter, as EmbeddingManager.load() will completely replace self.string_to_static_embedder_dict,
         # including the wrongly initialized LoraEmbedding object(s).
         initializer_strings: [ "person", "unknown" ]
-        num_vectors_per_subj_token: 16
+        token2num_vectors:   {'z': 16, 'y': 4}
         use_layerwise_embedding: True
 
     unet_config:
