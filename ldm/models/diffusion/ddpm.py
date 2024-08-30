@@ -706,7 +706,6 @@ class LatentDiffusion(DDPM):
             # when we wish to evaluate the original ID2ImgPrompt model.
             # static_prompt_embedding: [1, 77, 768]. Need to repeat 16 times for 16 layers, and then BS times for BS instances.
             static_prompt_embedding = self.embedding_manager.id2img_embs
-
         if self.training:
             # If cls_delta_string_indices is not empty, then it must be a compositional 
             # distillation iteration, and placeholder_indices only contains the indices of the subject 

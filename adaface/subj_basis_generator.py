@@ -394,7 +394,6 @@ class ImgPrompt2TextPrompt(nn.Module):
         return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
                                    If False, return only the core embeddings.
         '''
-
         if list_extra_words is not None:
             if len(list_extra_words) != len(face_prompt_embs):
                 if len(face_prompt_embs) > 1:
@@ -750,7 +749,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'num_id_vecs'):
             self.num_nonface_in_id_vecs = self.num_id_vecs
         if not hasattr(self, 'tokenizer'):
-            self.initialize_text_components(max_prompt_length = 77)
+            self.initialize_text_components(max_prompt_length=77, num_id_vecs=self.num_out_embs_per_layer)
 
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:

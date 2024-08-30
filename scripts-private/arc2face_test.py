@@ -116,7 +116,7 @@ if __name__ == "__main__":
         init_id_embs = rand_face_id_embs if args.randface else None
 
         # id_prompt_emb is in the image prompt space.
-        face_image_count, faceid_embeds, id_prompt_emb \
+        face_image_count, faceid_embeds, id_prompt_emb, _ \
             = arc2face_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=init_id_embs,
                 pre_clip_features=None,

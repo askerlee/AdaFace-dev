@@ -543,9 +543,9 @@ class EmbeddingManager(nn.Module):
         # The keys of static_subj_embs_dict are the placeholder strings.
         static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
                         self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                    self.zs_image_feat_dict,
-                                                    self.string_to_static_embedder_dict,
-                                                    B, N, self.num_unet_ca_layers, device)
+                                                  self.zs_image_feat_dict,
+                                                  self.string_to_static_embedder_dict,
+                                                  B, N, self.num_unet_ca_layers, device)
         # Cache the static embeddings to be used in ada embedding computation and
         # embedding orthogonal loss later.
         self.static_subj_embs_dict = {}
@@ -951,7 +951,7 @@ class EmbeddingManager(nn.Module):
         elif id2img_prompt_encoder_type == 'consistentID':
             # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
             # Only the consistentID modules and bise_net are used.
-            self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(\
+            self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
                                             base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
         else:
             breakpoint()

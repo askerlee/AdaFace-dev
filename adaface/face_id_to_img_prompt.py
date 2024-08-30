@@ -304,7 +304,7 @@ class FaceID2ImgPrompt(nn.Module):
 
             return face_image_count, faceid_embeds, pos_prompt_emb, neg_prompt_emb
         else:
-            return face_image_count, faceid_embeds, pos_prompt_emb
+            return face_image_count, faceid_embeds, pos_prompt_emb, None
 
     # NOTE: get_batched_img_prompt_embs() should only be called during training.
     # It is a wrapper of get_img_prompt_embs() which is convenient for batched training.
@@ -441,6 +441,7 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
         # So we don't release the components.
         self.pipe                           = pipe
         self.face_app                       = pipe.face_app
+        # ConsistentID uses 'laion/CLIP-ViT-H-14-laion2B-s32B-b79K'.
         self.clip_image_encoder             = patch_clip_image_encoder_with_mask(pipe.clip_encoder)
         self.clip_preprocessor              = pipe.clip_preprocessor
         self.text_to_image_prompt_encoder   = pipe.text_encoder
@@ -454,7 +455,7 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
             self.image_proj_model.half()
 
         # Model behavior configurations.
-        self.id_img_prompt_max_length       = 77
+        # self.id_img_prompt_max_length       = 77
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
         self.contrast_clip_embs             = False

@@ -222,7 +222,7 @@ def parse_args():
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
     parser.add_argument("--apply_id2img_embs", action="store_true",
-                        help="Evaluate Arc2Face forward embeddings")
+                        help="Evaluate ID2Img embeddings of a teacher method")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
@@ -243,6 +243,8 @@ def parse_args():
                         help="Zeroshot uses the diffusers implementation")
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
+    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
+                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")
     # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
@@ -319,6 +321,7 @@ def main(opt):
         ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
     else:
         ref_images = None
+        ref_image_paths = opt.ref_images
 
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
@@ -336,7 +339,7 @@ def main(opt):
             # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
-
+        config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.id2img_prompt_encoder_type
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.embedding_paths is not None:
             model.embedding_manager.load(opt.embedding_paths, load_old_embman_ckpt=opt.load_old_embman_ckpt)
@@ -368,9 +371,9 @@ def main(opt):
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
             _, zs_id_embs, zs_clip_fgbg_features, clip_neg_features = \
                 model.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images( \
-                    ref_images, opt.ref_images, fg_masks=None,
+                    ref_images, ref_image_paths, fg_masks=None,
                     calc_avg=True, skip_non_faces=True, 
-                    return_clip_embs=False, contrast_clip_embs=False, 
+                    return_clip_embs=True, contrast_clip_embs=False, 
                     verbose=True)
         else:
             zs_clip_fgbg_features, zs_id_embs = None, None
@@ -388,7 +391,8 @@ def main(opt):
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, device, 
                                           opt.subject_string, opt.num_vectors_per_subj_token, opt.ddim_steps,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
-                                          unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt)
+                                          unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
+                                          id2img_prompt_encoder_type=opt.id2img_prompt_encoder_type)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
                 adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, False, 
                                                                          out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
@@ -581,7 +585,6 @@ def main(opt):
                         c = model.get_learned_conditioning(prompts, zs_clip_fgbg_features=zs_clip_fgbg_features,
                                                            zs_id_embs=zs_id_embs,
                                                            apply_id2img_embs=apply_id2img_embs)
-
                         if opt.debug:
                             c[2]['debug_attn'] = True
 

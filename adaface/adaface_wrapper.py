@@ -12,7 +12,7 @@ from diffusers import (
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from insightface.app import FaceAnalysis
 from adaface.util import UNetEnsemble
-from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt
+from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt, ConsistentID_ID2ImgPrompt
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import sys
@@ -24,7 +24,7 @@ class AdaFaceWrapper(nn.Module):
                  num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
-                 is_training=False):
+                 id2img_prompt_encoder_type='arc2face', is_training=False):
         '''
         pipeline_name: "text2img" or "img2img" or None. If None, the unet and vae are
         removed from the pipeline to release RAM.
@@ -41,6 +41,7 @@ class AdaFaceWrapper(nn.Module):
         self.main_unet_path = main_unet_path
         self.extra_unet_paths = extra_unet_paths
         self.unet_weights = unet_weights
+        self.id2img_prompt_encoder_type = id2img_prompt_encoder_type
         self.device = device
         self.is_training = is_training
         self.initialize_pipeline()
@@ -74,10 +75,21 @@ class AdaFaceWrapper(nn.Module):
         else:
             self.subj_basis_generator.eval()
 
+    def initialize_id2img_prompt_encoder(self, id2img_prompt_encoder_type):
+        if id2img_prompt_encoder_type == 'arc2face':
+            self.id2img_prompt_encoder = Arc2Face_ID2ImgPrompt()
+        elif id2img_prompt_encoder_type == 'consistentID':
+            # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
+            # Only the consistentID modules and bise_net are used.
+            self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
+                                            base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
+        else:
+            breakpoint()
+
     def initialize_pipeline(self):
         self.load_subj_basis_generator(self.adaface_ckpt_path)
-        self.arc2face_prompt_encoder = Arc2Face_ID2ImgPrompt()
-        self.arc2face_prompt_encoder.to(self.device)
+        self.initialize_id2img_prompt_encoder(self.id2img_prompt_encoder_type)
+        self.id2img_prompt_encoder.to(self.device)
 
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.
@@ -277,8 +289,8 @@ class AdaFaceWrapper(nn.Module):
         # NOTE: Since return_core_id_embs_only is True, id_prompt_emb is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
-        face_image_count, faceid_embeds, id_prompt_emb \
-            = self.arc2face_prompt_encoder.get_img_prompt_embs(\
+        face_image_count, faceid_embeds, id_prompt_emb, _ \
+            = self.id2img_prompt_encoder.get_img_prompt_embs(\
                 init_id_embs=None if gen_rand_face else face_id_embs,
                 pre_clip_features=None,
                 # image_folder is passed only for logging purpose. 
