@@ -1306,11 +1306,13 @@ class LatentDiffusion(DDPM):
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        captions, zs_clip_fgbg_features, zs_id_embs, id2img_prompt_emb = \
+                        captions, zs_clip_fgbg_features, zs_clip_neg_features, \
+                        zs_id_embs, id2img_prompt_emb = \
                             repeat_selected_instances(slice(0, HALF_BS), 1, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      captions, zs_clip_fgbg_features, zs_id_embs, id2img_prompt_emb)
+                                                      captions, zs_clip_fgbg_features, zs_clip_neg_features,
+                                                      zs_id_embs, id2img_prompt_emb)
 
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
