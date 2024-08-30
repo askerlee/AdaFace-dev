@@ -422,7 +422,7 @@ class EmbeddingManager(nn.Module):
                                                           num_out_layers = self.num_unet_ca_layers,
                                                           # zs_image_emb_dim: laion: 1280, openai: 1024.
                                                           # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-                                                          bg_image_embedding_dim = 1024, 
+                                                          bg_image_embedding_dim = self.clip_embedding_dim, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
@@ -948,11 +948,13 @@ class EmbeddingManager(nn.Module):
     def initialize_id2img_prompt_encoder(self, id2img_prompt_encoder_type):
         if id2img_prompt_encoder_type == 'arc2face':
             self.id2img_prompt_encoder = Arc2Face_ID2ImgPrompt()
+            self.clip_embedding_dim = 1024
         elif id2img_prompt_encoder_type == 'consistentID':
             # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
             # Only the consistentID modules and bise_net are used.
             self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
                                             base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
+            self.clip_embedding_dim = 1280
         else:
             breakpoint()
 

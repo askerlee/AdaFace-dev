@@ -34,7 +34,7 @@ model:
     do_zero_shot:                     True
     unet_teacher_type:                'consistentID'
     # The percentage of unet_distill_iter among do_normal_recon iters.
-    p_unet_distill_iter:              1
+    p_unet_distill_iter:              0.5
     # Never generate random IDs for consistentID distillation, as
     # consistentID relies on CLIP features of the input image, 
     # which are not available when the IDs are random and there are no actual input images.

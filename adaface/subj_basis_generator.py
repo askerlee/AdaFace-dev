@@ -613,6 +613,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         else:
             # If bg, then face2img_id_embs is set to None, but clip_features is not None.
             BS = clip_features.shape[0]
+            clip_features = clip_features.to(self.dtype)
 
         adaface_prompt_embs = None
 
