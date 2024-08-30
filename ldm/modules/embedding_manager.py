@@ -566,7 +566,11 @@ class EmbeddingManager(nn.Module):
         # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
         # at that time.
         if self.rank == -1:
-            self.rank = dist.get_rank()
+            try:
+                # During inference, dist.get_rank() will raise an exception.
+                self.rank = dist.get_rank()
+            except:
+                self.rank = 0
 
         orig_tokenized_text = tokenized_text
         static_subj_embs_dict = {}
@@ -956,7 +960,11 @@ class EmbeddingManager(nn.Module):
         # zs_clip_fgbg_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         # zs_id_embs: [1, 512]. 
-        zs_clip_subj_features, zs_clip_bg_features = zs_clip_fgbg_features.chunk(2, dim=1)
+        if zs_clip_fgbg_features is None:
+            zs_clip_subj_features = None
+            zs_clip_bg_features   = None
+        else:
+            zs_clip_subj_features, zs_clip_bg_features = zs_clip_fgbg_features.chunk(2, dim=1)
 
         # Add noise to all_id_embs during training with probability 0.5.
         # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.

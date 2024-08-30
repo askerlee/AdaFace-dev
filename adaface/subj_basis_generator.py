@@ -350,23 +350,23 @@ class CrossAttention(nn.Module):
             return out
 
 class ImgPrompt2TextPrompt(nn.Module):
-    def __init__(self, max_prompt_length=77, num_id_vecs=16, dtype=torch.float32):
+    def __init__(self, *args, **kwargs):
         super().__init__()
-        self.N_ID = num_id_vecs
-        self.initialize_text_components()
+        self.initialize_text_components(*args, **kwargs)
         # prompt2token_proj: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
         # prompt2token_proj is with the same architecture as the original arc2face text encoder, 
         # but retrained to do inverse mapping.
         # To be initialized in the subclass.
         self.prompt2token_proj = None
-        self.dtype = dtype
 
     # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
     # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
     # ckpts which were not subclassed from ImgPrompt2TextPrompt.
-    def initialize_text_components(self, max_prompt_length=77):
+    def initialize_text_components(self, max_prompt_length=77, num_id_vecs=16, dtype=torch.float32):
+        self.N_ID = num_id_vecs
+        self.dtype = dtype
         self.max_prompt_length = max_prompt_length
-        self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+        self.tokenizer       = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
         clip_text_embeddings = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").text_model.embeddings
         # clip_text_embeddings() and clip_text_embeddings.token_embedding() differ in that 
@@ -688,7 +688,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         # If out_id_embs_cfg_scale < 1, adaface_subj_embs is a mix of adaface_subj_embs and pad_embeddings.
         if out_id_embs_cfg_scale != 1:
             # pad_embeddings: [77, 768] -> [16, 768] -> [1, 1, 16, 768].
-            pad_embeddings = self.pad_embeddings[4:4+self.num_out_embs_per_layer].unsqueeze(0).unsqueeze(0)
+            pad_embeddings = self.pad_embeddings[4:4+self.num_out_embs_per_layer].unsqueeze(0).unsqueeze(0).to(adaface_subj_embs.device)
             adaface_subj_embs =   adaface_subj_embs * out_id_embs_cfg_scale \
                                 + pad_embeddings    * (1 - out_id_embs_cfg_scale)
         
@@ -719,6 +719,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             print(f"{num_extended_layers} layers in prompt2token_proj_attention are x{multiplier}")
 
     def freeze_prompt2token_proj(self):
+        # Only applicable to fg basis generator.
+        if self.placeholder_is_bg:
+            return
         # If bg, then prompt2token_proj is set to None. Therefore no need to freeze it.
         # Then we don't have to check whether it's for subj or bg.
         if self.prompt2token_proj_grad_scale == 0:
@@ -748,7 +751,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.num_nonface_in_id_vecs = self.num_id_vecs
         if not hasattr(self, 'tokenizer'):
             self.initialize_text_components(max_prompt_length = 77)
-            
+
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:
                 self.pos_embs = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, self.output_dim))

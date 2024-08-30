@@ -199,7 +199,7 @@ def parse_args():
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
 
-    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
+    parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1],
                         help="Weight of the skip connections of the last few layers of CLIP text embedder. " 
                              "NOTE: the last element is the weight of the last layer.")
 
@@ -247,9 +247,9 @@ def parse_args():
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
     parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
-                        default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
+                        default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")
     parser.add_argument("--out_id_embs_cfg_scale", type=float, default=6.0,
                         help="CFG Scale for the adaface output id embeddings")
@@ -537,6 +537,7 @@ def main(opt):
         start_code = None
 
     if not opt.eval_blip and not opt.diffusers:
+        placeholder_tokens_str = opt.subject_string + "".join([", "] * (opt.num_vectors_per_subj_token - 1))
         if opt.scale != 1.0:
             try:
                 uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], embman_iter_type='empty')
@@ -568,7 +569,13 @@ def main(opt):
                         prompts = list(prompts)
 
                     if not opt.eval_blip and not opt.diffusers:
-                        apply_id2img_embs         = opt.zeroshot and opt.apply_id2img_embs
+                        apply_id2img_embs = opt.zeroshot and opt.apply_id2img_embs
+                        prompts2 = []
+                        for prompt in prompts:
+                            # Replace the subject string 'z' with 'z, , ,...'.
+                            prompt2 = re.sub(r'\b' + opt.subject_string + r'\b', placeholder_tokens_str, prompt)  
+                            prompts2.append(prompt2)
+                        prompts = prompts2                           
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_learned_conditioning(prompts, zs_clip_fgbg_features=zs_clip_fgbg_features,
@@ -583,22 +590,22 @@ def main(opt):
                         # The first half contains negative samples, and the second half positive.
                         # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
                         samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                            conditioning=c,
-                                                            batch_size=batch_size,
-                                                            shape=shape,
-                                                            verbose=False,
-                                                            guidance_scale=opt.scale,
-                                                            unconditional_conditioning=uc,
-                                                            eta=opt.ddim_eta,
-                                                            x0=None,
-                                                            mask=None,
-                                                            x_T=start_code)
+                                                         conditioning=c,
+                                                         batch_size=batch_size,
+                                                         shape=shape,
+                                                         verbose=False,
+                                                         guidance_scale=opt.scale,
+                                                         unconditional_conditioning=uc,
+                                                         eta=opt.ddim_eta,
+                                                         x0=None,
+                                                         mask=None,
+                                                         x_T=start_code)
 
                         x_samples_ddim = model.decode_first_stage(samples_ddim)
                         # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
                         x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
-                    if opt.diffusers:
+                    elif opt.diffusers:
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
                         if opt.method == "adaface":                                
                             x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale, 
@@ -617,7 +624,7 @@ def main(opt):
                         x_samples_ddim = []
                         blip_seed = 8888
                         for i_sample, prompt in enumerate(prompts):
-                            stripped_prompt_parts = re.split("of z[, ]*", prompt)
+                            stripped_prompt_parts = re.split(" z[, ]+", prompt)
                             if stripped_prompt_parts[1] == "":
                                 stripped_prompt = re.sub("^a ", "", stripped_prompt_parts[0])
                                 stripped_prompt = stripped_prompt.strip()

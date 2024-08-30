@@ -169,21 +169,11 @@ class AdaFaceWrapper(nn.Module):
                 beta_schedule="scaled_linear",
                 clip_sample=False,
                 set_alpha_to_one=False,
-                steps_offset=1,
             )
             pipeline.scheduler = noise_scheduler
         # Otherwise, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
 
         self.pipeline = pipeline.to(self.device)
-
-        # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
-        # Note there's a second "model" in the path.
-        self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
-        self.face_app.prepare(ctx_id=0, det_size=(512, 512))
-        # Patch the missing tokenizer in the subj_basis_generator.
-        if not hasattr(self.subj_basis_generator, 'clip_tokenizer'):
-            self.subj_basis_generator.clip_tokenizer = self.pipeline.tokenizer
-            print("Patched the missing tokenizer in the subj_basis_generator.")
 
     def load_unet_from_file(self, unet_path, device=None):
         if os.path.isfile(unet_path):
@@ -295,7 +285,7 @@ class AdaFaceWrapper(nn.Module):
                 # image_paths contains the paths of the images.
                 image_paths=image_paths, image_objs=None,
                 id_batch_size=1, noise_level=noise_level, 
-                return_core_id_embs_only=True, avg_at_stage=None,
+                return_core_id_embs_only=True, avg_at_stage='id_emb',
                 verbose=True)
         
         if face_image_count == 0:
@@ -308,8 +298,8 @@ class AdaFaceWrapper(nn.Module):
                                       out_id_embs_cfg_scale=out_id_embs_cfg_scale,
                                       is_face=True, is_training=False,
                                       adaface_prompt_embs_inf_type='full_half_pad')
-        # adaface_subj_embs: [N, 16, 768] -> [16, 768]
-        adaface_subj_embs = adaface_subj_embs.mean(dim=0).squeeze(0)
+        # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
+        adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
         if update_text_encoder:
             self.update_text_encoder_subj_embs(adaface_subj_embs)
         return adaface_subj_embs

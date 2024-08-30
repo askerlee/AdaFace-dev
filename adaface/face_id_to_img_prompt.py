@@ -325,7 +325,7 @@ class FaceID2ImgPrompt(nn.Module):
 
 class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
     def __init__(self, *args, **kwargs):
-        super().__init__(args, kwargs)
+        super().__init__(*args, **kwargs)
 
         self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained('openai/clip-vit-large-patch14')
         self.clip_preprocessor  = CLIPImageProcessor.from_pretrained('openai/clip-vit-large-patch14')
@@ -423,7 +423,7 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
 # ConsistentID_ID2ImgPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
     def __init__(self, pipe=None, base_model_path=None, *args, **kwargs):
-        super().__init__(args, kwargs)
+        super().__init__(*args, **kwargs)
         if pipe is None:
             assert base_model_path is not None, "base_model_path should be provided."
             pipe = ConsistentIDPipeline.from_single_file(
