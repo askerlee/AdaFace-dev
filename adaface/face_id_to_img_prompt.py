@@ -220,7 +220,7 @@ class FaceID2ImgPrompt(nn.Module):
     # Otherwise, we generate random face embeddings [id_batch_size, 512].
     def get_img_prompt_embs(self, init_id_embs, pre_clip_features, image_paths, image_objs,
                             id_batch_size, noise_level=0.0, 
-                            return_core_id_embs_only=True,
+                            skip_non_faces=True, return_core_id_embs_only=True,
                             avg_at_stage=None,  # id_emb, prompt_emb, or None.
                             verbose=False):
         face_image_count = 0
@@ -242,7 +242,7 @@ class FaceID2ImgPrompt(nn.Module):
                     = self.extract_init_id_embeds_from_images( \
                         image_objs, image_paths=image_paths, size=(512, 512), 
                         calc_avg=(avg_at_stage == 'id_emb'), 
-                        skip_non_faces=True, 
+                        skip_non_faces=skip_non_faces, 
                         verbose=verbose)
 
                 if image_paths is not None:
@@ -306,17 +306,19 @@ class FaceID2ImgPrompt(nn.Module):
         else:
             return face_image_count, faceid_embeds, pos_prompt_emb
 
-    # get_batched_img_prompt_embs() is a wrapper of get_img_prompt_embs() 
-    # which is convenient for batched training.
+    # NOTE: get_batched_img_prompt_embs() should only be called during training.
+    # It is a wrapper of get_img_prompt_embs() which is convenient for batched training.
     # If init_id_embs is None, generate random face embeddings [BS, 512].
     # Returns faceid_embeds, id2img_prompt_emb.
     def get_batched_img_prompt_embs(self, batch_size, init_id_embs, pre_clip_features):
-
         return self.get_img_prompt_embs(init_id_embs=init_id_embs,
                                         pre_clip_features=pre_clip_features,
                                         image_paths=None,
                                         image_objs=None, 
                                         id_batch_size=batch_size,
+                                        # During training, don't skip non-face images. Instead, 
+                                        # setting skip_non_faces=False will replace them by random face embeddings.
+                                        skip_non_faces=False,
                                         return_core_id_embs_only=True, 
                                         avg_at_stage=None, 
                                         verbose=False)
@@ -439,7 +441,6 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
         # So we don't release the components.
         self.pipe                           = pipe
         self.face_app                       = pipe.face_app
-
         self.clip_image_encoder             = patch_clip_image_encoder_with_mask(pipe.clip_encoder)
         self.clip_preprocessor              = pipe.clip_preprocessor
         self.text_to_image_prompt_encoder   = pipe.text_encoder
@@ -489,6 +490,9 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
         # image_proj_model maps 1280-dim OpenCLIP embeddings to 768-dim face prompt embeddings.
         # clip_image_embeds are used as queries to transform faceid_embeds.
         # faceid_embeds -> kv, clip_image_embeds -> q
+        if faceid_embeds.shape[0] != clip_image_embeds.shape[0]:
+            breakpoint()
+
         global_id_embeds = self.image_proj_model(faceid_embeds, clip_image_embeds, shortcut=self.shortcut, scale=self.s_scale)
         
         if return_full_and_core_embs:
