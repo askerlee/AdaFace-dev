@@ -352,7 +352,6 @@ class CrossAttention(nn.Module):
 class ImgPrompt2TextPrompt(nn.Module):
     def __init__(self, max_prompt_length=77, num_id_vecs=16, dtype=torch.float32):
         super().__init__()
-        self.max_prompt_length = max_prompt_length
         self.N_ID = num_id_vecs
         self.initialize_text_components()
         # prompt2token_proj: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
@@ -365,7 +364,8 @@ class ImgPrompt2TextPrompt(nn.Module):
     # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
     # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
     # ckpts which were not subclassed from ImgPrompt2TextPrompt.
-    def initialize_text_components(self):
+    def initialize_text_components(self, max_prompt_length=77):
+        self.max_prompt_length = max_prompt_length
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
         clip_text_embeddings = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").text_model.embeddings
@@ -747,8 +747,8 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'num_id_vecs'):
             self.num_nonface_in_id_vecs = self.num_id_vecs
         if not hasattr(self, 'tokenizer'):
-            self.initialize_text_components()
-
+            self.initialize_text_components(max_prompt_length = 77)
+            
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:
                 self.pos_embs = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, self.output_dim))
