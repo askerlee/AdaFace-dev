@@ -364,14 +364,16 @@ def main(opt):
                 f"Zero-shot learning mismatch: command line {opt.zeroshot} != ckpt {model.embedding_manager.do_zero_shot}."
         
         if opt.zeroshot:
-            # zs_clip_features: [1, 514, 1280]. 
+            # zs_clip_fgbg_features: [1, 514, 1280]. 
             # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
-            _, zs_id_embs, zs_clip_features = \
+            _, zs_id_embs, zs_clip_fgbg_features, clip_neg_features = \
                 model.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images( \
                     ref_images, opt.ref_images, fg_masks=None,
-                    calc_avg=True, skip_non_faces=True, verbose=True)
+                    calc_avg=True, skip_non_faces=True, 
+                    return_clip_embs=False, contrast_clip_embs=False, 
+                    verbose=True)
         else:
-            zs_clip_features, zs_id_embs = None, None
+            zs_clip_fgbg_features, zs_id_embs = None, None
 
         sampler = DDIMSampler(model)
 
@@ -569,7 +571,7 @@ def main(opt):
                         apply_id2img_embs         = opt.zeroshot and opt.apply_id2img_embs
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
-                        c = model.get_learned_conditioning(prompts, zs_clip_features=zs_clip_features,
+                        c = model.get_learned_conditioning(prompts, zs_clip_fgbg_features=zs_clip_fgbg_features,
                                                            zs_id_embs=zs_id_embs,
                                                            apply_id2img_embs=apply_id2img_embs)
 

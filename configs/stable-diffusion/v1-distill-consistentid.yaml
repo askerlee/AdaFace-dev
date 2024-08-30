@@ -35,6 +35,10 @@ model:
     unet_teacher_type:                'consistentID'
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              1
+    # Never generate random IDs for consistentID distillation, as
+    # consistentID relies on CLIP features of the input image, 
+    # which are not available when the IDs are random and there are no actual input images.
+    p_gen_id2img_rand_id:             0
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5

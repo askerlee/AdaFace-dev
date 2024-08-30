@@ -3,8 +3,7 @@ from diffusers import (
     UNet2DConditionModel,
     DDIMScheduler,
 )
-from transformers import CLIPTextModel, CLIPTokenizer
-from insightface.app import FaceAnalysis
+from transformers import CLIPTextModel
 from adaface.arc2face_models import CLIPTextModelWrapper
 
 import torch
@@ -47,17 +46,14 @@ if __name__ == "__main__":
 
     base_model = 'runwayml/stable-diffusion-v1-5'
 
+    orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
+
     text_encoder = CLIPTextModelWrapper.from_pretrained(
         'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
     )
-    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    
-    orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
-
     unet = UNet2DConditionModel.from_pretrained(
         'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
     )
-
     pipeline = StableDiffusionPipeline.from_pretrained(
             base_model,
             text_encoder=text_encoder,
@@ -123,13 +119,12 @@ if __name__ == "__main__":
         face_image_count, faceid_embeds, id_prompt_emb \
             = arc2face_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=init_id_embs,
+                pre_clip_features=None,
                 image_paths=image_paths,
                 image_objs=None,
                 id_batch_size=id_batch_size,
-                input_max_length=input_max_length,
                 noise_level=noise_level,
                 return_core_id_embs_only=False,
-                gen_neg_prompt=False, 
                 avg_at_stage='id_emb',
                 verbose=True)
 

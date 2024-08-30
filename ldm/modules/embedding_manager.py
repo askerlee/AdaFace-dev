@@ -652,10 +652,15 @@ class EmbeddingManager(nn.Module):
                     # So it's is frozen.
                     if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
                         with torch.no_grad():
-                            # id2img_embs: [BS, 77, 768]. face2img_id_embs: [BS, 16, 768].
+                            # id2img_embs (full prompt):             [BS, 77, 768]. 
+                            # face2img_id_embs (ID embeddings only): [BS, 16, 768].
+                            # TODO: if id2img_prompt_encoder is ConsistentID_ID2ImgPrompt, it also requires
+                            # a separate call to map_init_id_to_img_prompt_embs() to generate uncond_global_id_embeds.
+                            # This needs the clip_neg_features, which is not available yet.
+                            # We will implement this in the future.
                             placeholder_id2img_embs, face2img_id_embs = \
-                                self.id2img_prompt_encoder.conv_init_id_to_img_prompt_embs( \
-                                    zs_id_embs, return_full_and_core_embs=True)
+                                self.id2img_prompt_encoder.map_init_id_to_img_prompt_embs( \
+                                    zs_id_embs, zs_clip_features, return_full_and_core_embs=True)
                     else:
                         placeholder_id2img_embs = None
                         face2img_id_embs = None
@@ -947,11 +952,11 @@ class EmbeddingManager(nn.Module):
         else:
             breakpoint()
 
-    def set_zs_image_features(self, zs_clip_features, zs_id_embs, add_noise_to_zs_id_embs=False):
-        # zs_clip_features: [1, 514, 1280]
+    def set_zs_image_features(self, zs_clip_fgbg_features, zs_id_embs, add_noise_to_zs_id_embs=False):
+        # zs_clip_fgbg_features: [1, 514, 1280]
         # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
         # zs_id_embs: [1, 512]. 
-        zs_clip_subj_features, zs_clip_bg_features = zs_clip_features.chunk(2, dim=1)
+        zs_clip_subj_features, zs_clip_bg_features = zs_clip_fgbg_features.chunk(2, dim=1)
 
         # Add noise to all_id_embs during training with probability 0.5.
         # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.
@@ -1060,7 +1065,9 @@ class EmbeddingManager(nn.Module):
                     # TODO: fix the logic below thoroughly in the future.
                     if extend_prompt2token_proj_attention_multiplier == -1:
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
+                        # Never update token and positional embeddings of the original CLIPTextModel.
                         self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
+                        self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
                         continue
 
                     # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
@@ -1126,9 +1133,7 @@ class EmbeddingManager(nn.Module):
 
                     # Fix missing variables in the old ckpt.
                     self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
-                    if self.zs_prompt2token_proj_grad_scale == 0:
-                        # If it's for bg token, then freeze_prompt2token_proj() does nothing.
-                        self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
+                    self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
 
                 if self.do_zero_shot and self.training:
                     # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 

@@ -149,7 +149,7 @@ class DDPM(pl.LightningModule):
         self.unet_weights                           = unet_weights
         self.unet_teacher_base_model_path           = unet_teacher_base_model_path
         
-        self.p_gen_id2img_rand_id               = p_gen_id2img_rand_id
+        self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
@@ -670,7 +670,7 @@ class LatentDiffusion(DDPM):
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
     # apply_id2img_embs: apply_id2img_embs is enabled only 
     # when we wish to evaluate the original ID2ImgPrompt model.
-    def get_learned_conditioning(self, cond_in, zs_clip_features=None, zs_id_embs=None, 
+    def get_learned_conditioning(self, cond_in, zs_clip_fgbg_features=None, zs_id_embs=None, 
                                  randomize_clip_weights=False, 
                                  apply_id2img_embs=False, embman_iter_type=None):
         if self.cond_stage_forward is None:
@@ -682,12 +682,12 @@ class LatentDiffusion(DDPM):
                 if randomize_clip_weights:
                     self.cond_stage_model.sample_last_layers_skip_weights()
 
-                # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_features is None.
-                # We don't update the zs_clip_features in this case.
+                # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_fgbg_features is None.
+                # We don't update the zs_clip_fgbg_features in this case.
                 # If iter_flags['add_noise_to_real_id_embs'], then 
                 # noise has been added to zs_id_embs. Don't add noise again.
-                if zs_clip_features is not None or zs_id_embs is not None:
-                    self.embedding_manager.set_zs_image_features(zs_clip_features, zs_id_embs, 
+                if zs_clip_fgbg_features is not None or zs_id_embs is not None:
+                    self.embedding_manager.set_zs_image_features(zs_clip_fgbg_features, zs_id_embs, 
                                                                  add_noise_to_zs_id_embs=not self.iter_flags['add_noise_to_real_id_embs'])
                     
                 if embman_iter_type is None:
@@ -1110,7 +1110,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_mix_prompt_distillation']:
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-            # After image_unnorm is repeated, the extracted zs_clip_features and zs_id_embs, extracted from image_unnorm,
+            # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and zs_id_embs, extracted from image_unnorm,
             # will be repeated automatically. Therefore, we don't need to manually repeat them later.
             batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
                 repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
@@ -1152,13 +1152,13 @@ class LatentDiffusion(DDPM):
                 else:
                     breakpoint()
 
-                # If self.iter_flags['same_subject_in_batch']:  zs_clip_features: [1, 514, 1280]. zs_id_embs: [1, 512].
-                # Otherwise:                      zs_clip_features: [3, 514, 1280]. zs_id_embs: [3, 512].
-                # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_features and zs_id_embs to get 
+                # If self.iter_flags['same_subject_in_batch']:  zs_clip_fgbg_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+                # Otherwise:                                    zs_clip_fgbg_features: [3, 514, 1280]. zs_id_embs: [3, 512].
+                # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_fgbg_features and zs_id_embs to get 
                 # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
                 # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
-                faceless_img_count, zs_id_embs, zs_clip_features  = \
+                faceless_img_count, zs_id_embs, zs_clip_fgbg_features, zs_clip_neg_features = \
                     self.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images(\
                         images, image_paths, fg_mask.squeeze(1), calc_avg=use_subj_avg_embedding)
                                 
@@ -1184,11 +1184,11 @@ class LatentDiffusion(DDPM):
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        zs_clip_features, zs_id_embs = \
+                        zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      zs_clip_features, zs_id_embs)
+                                                      zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs)
                         
                     # Add noise to the zero-shot ID embeddings.
                     # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
@@ -1204,17 +1204,23 @@ class LatentDiffusion(DDPM):
 
                 # Sometimes gen_id2img_rand_id is False and do_unet_distill is True.
                 if self.iter_flags['do_unet_distill']:
+                    pre_clip_features = (zs_clip_fgbg_features, zs_clip_neg_features)
                     # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_emb.
-                    _, _, id2img_prompt_emb \
-                        = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(images.shape[0], init_id_embs=zs_id_embs)
+                    # results is either (face_image_count, faceid_embeds, pos_prompt_emb),
+                    # or (face_image_count, faceid_embeds, pos_prompt_emb, neg_prompt_emb).
+                    results = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(
+                                images.shape[0], init_id_embs=zs_id_embs, 
+                                pre_clip_features=pre_clip_features)
+                    id2img_prompt_emb = results[2]
 
             # gen_id2img_rand_id == True. It implies it's not do_mix_prompt_distillation.
             else:
-                # Since it's a batch of random IDs, the CLIP features are all zeros as a placeholder.
-                zs_clip_features = torch.zeros(x_start.shape[0], 514, 1280).to(x_start.device)
                 # zs_id_embs: [4, 512]. id2img_prompt_emb: [4, 21, 768]
-                _, zs_id_embs, id2img_prompt_emb \
-                    = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(images.shape[0], init_id_embs=None)
+                results = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(
+                                images.shape[0], init_id_embs=None, pre_clip_features=None)
+                zs_id_embs, id2img_prompt_emb = results[1], results[2]
+                zs_clip_fgbg_features = torch.zeros((BS, 514, 1280), device=x_start.device)
+                zs_clip_neg_features  = torch.zeros((BS, 257, 1280), device=x_start.device)
                 # On random IDs, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None
@@ -1300,11 +1306,11 @@ class LatentDiffusion(DDPM):
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        captions, zs_clip_features, zs_id_embs, id2img_prompt_emb = \
+                        captions, zs_clip_fgbg_features, zs_id_embs, id2img_prompt_emb = \
                             repeat_selected_instances(slice(0, HALF_BS), 1, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      captions, zs_clip_features, zs_id_embs, id2img_prompt_emb)
+                                                      captions, zs_clip_fgbg_features, zs_id_embs, id2img_prompt_emb)
 
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
@@ -1319,19 +1325,20 @@ class LatentDiffusion(DDPM):
 
         # Not do_zero_shot.
         else:
-            zs_clip_features = None
-            zs_id_embs       = None
-            id2img_prompt_emb = None
+            zs_clip_fgbg_features, zs_clip_neg_features = None, None
+            zs_id_embs              = None
+            id2img_prompt_emb       = None
 
         # aug_mask is renamed as img_mask.
-        self.iter_flags['img_mask']             = img_mask
-        self.iter_flags['fg_mask']              = fg_mask
-        self.iter_flags['batch_have_fg_mask']   = batch_have_fg_mask
-        self.iter_flags['delta_prompts']        = delta_prompts
-        self.iter_flags['zs_clip_features']     = zs_clip_features
-        self.iter_flags['zs_id_embs']           = zs_id_embs
-        self.iter_flags['id2img_prompt_emb']  = id2img_prompt_emb
-        self.iter_flags['image_unnorm']         = batch_images_unnorm
+        self.iter_flags['img_mask']                 = img_mask
+        self.iter_flags['fg_mask']                  = fg_mask
+        self.iter_flags['batch_have_fg_mask']       = batch_have_fg_mask
+        self.iter_flags['delta_prompts']            = delta_prompts
+        self.iter_flags['zs_clip_fgbg_features']    = zs_clip_fgbg_features
+        self.iter_flags['zs_clip_neg_features']     = zs_clip_neg_features
+        self.iter_flags['zs_id_embs']               = zs_id_embs
+        self.iter_flags['id2img_prompt_emb']        = id2img_prompt_emb
+        self.iter_flags['image_unnorm']             = batch_images_unnorm
 
         # reuse_init_conds, discard the prompts offered in shared_step().
         if self.iter_flags['reuse_init_conds']:
@@ -1345,7 +1352,8 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
             self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
-            self.iter_flags['zs_clip_features']         = cached_inits['zs_clip_features']
+            self.iter_flags['zs_clip_fgbg_features']    = cached_inits['zs_clip_fgbg_features']
+            self.iter_flags['zs_clip_neg_features']     = cached_inits['zs_clip_neg_features']
             self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
             self.iter_flags['id2img_prompt_emb']      = cached_inits['id2img_prompt_emb']
             self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
@@ -1428,12 +1436,12 @@ class LatentDiffusion(DDPM):
                     # extra_info: a dict that contains extra info.
                     c_static_emb, _, extra_info = \
                         self.get_learned_conditioning(delta_prompts, 
-                                                      self.iter_flags['zs_clip_features'],
+                                                      self.iter_flags['zs_clip_fgbg_features'],
                                                       self.iter_flags['zs_id_embs'],
                                                       randomize_clip_weights=True)
                     
-                    # Release zs_clip_features and zs_id_embs.
-                    # del self.iter_flags['zs_clip_features'], self.iter_flags['zs_id_embs']
+                    # Release zs_clip_fgbg_features and zs_id_embs.
+                    # del self.iter_flags['zs_clip_fgbg_features'], self.iter_flags['zs_id_embs']
 
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
@@ -1556,7 +1564,7 @@ class LatentDiffusion(DDPM):
 
                     c_static_emb, c_in, extra_info0 = \
                         self.get_learned_conditioning(captions, 
-                                                      self.iter_flags['zs_clip_features'],
+                                                      self.iter_flags['zs_clip_fgbg_features'],
                                                       self.iter_flags['zs_id_embs'],                                                      
                                                       randomize_clip_weights=True)
                     
@@ -2083,16 +2091,20 @@ class LatentDiffusion(DDPM):
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
                 if self.iter_flags['use_unet_teacher_as_target']:
+                    # student_prompt_embs is the prompt embedding of the student model.
+                    # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
+                    # So we only need to take the first one.
+                    # [16, 77, 768] -> [1, 77, 768]
+                    student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
                     if self.unet_teacher_type == 'arc2face':
                         teacher_context = self.iter_flags['id2img_prompt_emb']
                     elif self.unet_teacher_type == 'unet_ensemble':
-                        # teacher_context is the same prompt embedding of the student model.
-                        # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
-                        # So we only need to take the first one.
-                        # [16, 77, 768] -> [1, 77, 768]
-                        teacher_context = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                        teacher_context = student_prompt_embs
                     elif self.unet_teacher_type == 'consistentID':
-                        teacher_context = (cond[1], batch_images_unnorm)
+                        global_id_embeds = self.iter_flags['id2img_prompt_emb']
+                        # text_global_id_embeds: [BS, 81, 768]
+                        # For consistentID, student_prompt_embs is the text prompt embedding.
+                        teacher_context = torch.cat([student_prompt_embs, global_id_embeds], dim=1)                            
                     else:
                         breakpoint()
 
@@ -2313,14 +2325,15 @@ class LatentDiffusion(DDPM):
                             'use_background_token':   self.iter_flags['use_background_token'],
                             'use_wds_comp':           self.iter_flags['use_wds_comp'],
                             'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                            # If not do_zero_shot, 'zs_clip_features', 'zs_id_embs' and 'id2img_prompt_emb' 
+                            # If not do_zero_shot, 'zs_clip_fgbg_features', 'zs_id_embs' and 'id2img_prompt_emb' 
                             # are all None.
                             # We don't need to cache other flags, such as do_unet_distill,
                             # as they are only applicable to recon iters. 
                             # We reuse init conds only in compositional iters.
-                            'zs_clip_features':       self.iter_flags['zs_clip_features'],
+                            'zs_clip_fgbg_features':  self.iter_flags['zs_clip_fgbg_features'],
+                            'zs_clip_neg_features':   self.iter_flags['zs_clip_neg_features'],
                             'zs_id_embs':             self.iter_flags['zs_id_embs'],
-                            'id2img_prompt_emb':    self.iter_flags['id2img_prompt_emb'],
+                            'id2img_prompt_emb':      self.iter_flags['id2img_prompt_emb'],
                             'image_unnorm':           self.iter_flags['image_unnorm'],
                         }
                     if len(self.cached_inits) > 100:

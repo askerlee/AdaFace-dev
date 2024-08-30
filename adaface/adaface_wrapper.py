@@ -290,16 +290,13 @@ class AdaFaceWrapper(nn.Module):
         face_image_count, faceid_embeds, id_prompt_emb \
             = self.arc2face_prompt_encoder.get_img_prompt_embs(\
                 init_id_embs=None if gen_rand_face else face_id_embs,
+                pre_clip_features=None,
                 # image_folder is passed only for logging purpose. 
                 # image_paths contains the paths of the images.
                 image_paths=image_paths, image_objs=None,
-                # input_max_length == 22: only keep the first 22 tokens, 
-                # including 3 template tokens and 16 ID tokens, and BOS and EOS tokens.
-                # The results are indistinguishable from input_max_length=77.
-                id_batch_size=1, input_max_length=22,
-                noise_level=noise_level, 
+                id_batch_size=1, noise_level=noise_level, 
                 return_core_id_embs_only=True, avg_at_stage=None,
-                gen_neg_prompt=False, verbose=True)
+                verbose=True)
         
         if face_image_count == 0:
             return None

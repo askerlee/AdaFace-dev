@@ -350,14 +350,22 @@ class CrossAttention(nn.Module):
             return out
 
 class ImgPrompt2TextPrompt(nn.Module):
-    def __init__(self, max_prompt_length=77):
+    def __init__(self, max_prompt_length=77, num_id_vecs=16, dtype=torch.float32):
         super().__init__()
-        self.initialize_text_components(max_prompt_length)
+        self.max_prompt_length = max_prompt_length
+        self.N_ID = num_id_vecs
+        self.initialize_text_components()
+        # prompt2token_proj: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
+        # prompt2token_proj is with the same architecture as the original arc2face text encoder, 
+        # but retrained to do inverse mapping.
+        # To be initialized in the subclass.
+        self.prompt2token_proj = None
+        self.dtype = dtype
 
     # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
     # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
     # ckpts which were not subclassed from ImgPrompt2TextPrompt.
-    def initialize_text_components(self, max_prompt_length=77):
+    def initialize_text_components(self):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
         clip_text_embeddings = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").text_model.embeddings
@@ -366,26 +374,25 @@ class ImgPrompt2TextPrompt(nn.Module):
         # Adding positional embeddings seems to help somewhat.
         # pad_tokens: pad_token_id 49407 repeated 77 times.
         # pad_token_id is the EOS token. But BOS is 49406.
-        pad_tokens = torch.tensor([self.tokenizer.pad_token_id]).repeat(max_prompt_length)
+        pad_tokens = torch.tensor([self.tokenizer.pad_token_id]).repeat(self.max_prompt_length)
         # pad_embeddings: [77, 768]. 
         # pad_embeddings is still on CPU. But should be moved to GPU automatically.
         # Note: detach pad_embeddings from the computation graph, otherwise 
         # deepcopy() in embedding_manager.py:make_frozen_copy_of_subj_basis_generators() will fail.
         self.pad_embeddings = clip_text_embeddings(pad_tokens)[0].detach()
 
-    # return_emb_types: a list of strings, each string is among ['full', 'core', 'full_zeroed_extra'].
-    def inverse_img_prompt_embs(self, inverse_text_encoder, face_prompt_embs, list_extra_words,
-                                return_emb_types, pad_embeddings, hidden_state_layer_weights=None, 
-                                input_max_length=77, zs_extra_words_scale=0.5):
+    # return_emb_types: a list of strings, each string is among 
+    # ['full', 'core', 'full_pad', 'full_half_pad'].
+    def inverse_img_prompt_embs(self, face_prompt_embs, list_extra_words,
+                                return_emb_types, hidden_state_layer_weights=None, 
+                                zs_extra_words_scale=0.5):
 
         '''
-        inverse_text_encoder: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
-        inverse_text_encoder is with the same architecture as the original arc2face text encoder, 
-        but retrained to do inverse mapping.
-        face_prompt_embs: (BS, 16, 768). Only the core embeddings, no paddings.
-        list_extra_words: [s_1, ..., s_BS], each s_i is a list of extra words to be added to the prompt.
+        face_prompt_embs: (BS, self.N_ID, 768), in the image prompt space. 
+        Only the core embeddings, no paddings.
+        list_extra_words: None or [s_1, ..., s_BS], each s_i is a list of extra words to be added to the prompt.
         return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
-                                If False, return only the core embeddings.
+                                   If False, return only the core embeddings.
         '''
 
         if list_extra_words is not None:
@@ -403,12 +410,13 @@ class ImgPrompt2TextPrompt(nn.Module):
                     
             for extra_words in list_extra_words:
                 assert len(extra_words.split()) <= 2, "Each extra_words string should consist of at most 2 words."
-            # 16 ", " are placeholders for face_prompt_embs.
-            prompt_templates = [ "photo of a " + ", " * 16 + list_extra_words[i] for i in range(len(list_extra_words)) ]
+            # 16 or 4 ", " are placeholders for face_prompt_embs.
+            prompt_templates = [ "photo of a " + ", " * self.N_ID + list_extra_words[i] for i in range(len(list_extra_words)) ]
         else:
-            # 16 ", " are placeholders for face_prompt_embs.
-            # No extra words are added to the prompt.
-            prompt_templates = [ "photo of a " + ", " * 16 for _ in range(len(face_prompt_embs)) ]
+            # 16 or 4 ", " are placeholders for face_prompt_embs.
+            # No extra words are added to the prompt. So we add 2 more ", " to the template to keep 
+            # the number of tokens roughly the same as when extra words are added.
+            prompt_templates = [ "photo of a " + ", " * (self.N_ID + 2) for _ in range(len(face_prompt_embs)) ]
 
         # This step should be quite fast, and there's no need to cache the input_ids.
         # input_ids: [BS, 77].
@@ -416,21 +424,24 @@ class ImgPrompt2TextPrompt(nn.Module):
                 prompt_templates,
                 truncation=True,
                 padding="max_length",
-                max_length=input_max_length,
+                max_length=self.max_prompt_length,
                 return_tensors="pt",
             ).input_ids.to(face_prompt_embs.device)
 
-        face_prompt_embs_dtype  = face_prompt_embs.dtype
-        face_prompt_embs        = face_prompt_embs.to(inverse_text_encoder.dtype)
+        face_prompt_embs_orig_dtype = face_prompt_embs.dtype
+        face_prompt_embs            = face_prompt_embs.to(self.dtype)
+
+        ID_END      = 4 + self.N_ID
+        PAD_BEGIN   = ID_END + 2
 
         # token_embs: [1, 77, 768]. This call is only to get the template token embeddings (the shallowest mapping).
-        token_embs = inverse_text_encoder(input_ids=input_ids, return_token_embs=True)
+        token_embs = self.prompt2token_proj(input_ids=input_ids, return_token_embs=True)
         # token 4: first ", " in the template prompt.
-        # Replace embeddings of 16 placeholder ", " with face_prompt_embs.
-        token_embs[:, 4:20] = face_prompt_embs
+        # Replace embeddings of 16 or 4 placeholder ", " with face_prompt_embs.
+        token_embs[:, 4:ID_END] = face_prompt_embs
 
         # This call does the ordinary CLIP text encoding pass.
-        prompt_embeds = inverse_text_encoder(
+        prompt_embeds = self.prompt2token_proj(
             input_ids=input_ids,
             input_token_embs=token_embs,
             hidden_state_layer_weights=hidden_state_layer_weights,
@@ -438,15 +449,16 @@ class ImgPrompt2TextPrompt(nn.Module):
         )[0]
 
         # Restore the original dtype of prompt_embeds: float16 -> float32.
-        prompt_embeds = prompt_embeds.to(face_prompt_embs_dtype)
+        prompt_embeds = prompt_embeds.to(face_prompt_embs_orig_dtype)
         # token 4: first ", " in the template prompt.
-        # 4:20 are the most important 16 embeddings that contain the subject's identity.
+        # When N_ID == 16,
+        # prompt_embeds 4:20 are the most important 16 embeddings that contain the subject's identity.
         # 20:22 are embeddings of the (at most) two extra words.
         # [N, 77, 768] -> [N, 16, 768]
-        core_prompt_embs = prompt_embeds[:, 4:20]
+        core_prompt_embs = prompt_embeds[:, 4:ID_END]
         if list_extra_words is not None:
             # [N, 16, 768] -> [N, 18, 768]
-            extra_words_embs = prompt_embeds[:, 20:22] * zs_extra_words_scale
+            extra_words_embs = prompt_embeds[:, ID_END:PAD_BEGIN] * zs_extra_words_scale
             core_prompt_embs = torch.cat([core_prompt_embs, extra_words_embs], dim=1)
 
         returned_prompt_embs = []
@@ -455,25 +467,23 @@ class ImgPrompt2TextPrompt(nn.Module):
                 returned_prompt_embs.append(prompt_embeds)
             elif emb_type == 'full_half_pad':
                 prompt_embeds2 = prompt_embeds.clone()
-                PADS  = prompt_embeds2.shape[1] - 23
+                # PAD_BEGIN is 22 or 10. Also exclude the last EOS token. 
+                # So we subtract max_prompt_length by (PAD_BEGIN + 1).
+                PADS  = self.max_prompt_length - PAD_BEGIN - 1
                 if PADS >= 2:
                     # Fill half of the remaining embeddings with pad embeddings.
-                    prompt_embeds2[:, 22:22+PADS//2] = pad_embeddings[22:22+PADS//2]
+                    prompt_embeds2[:, PAD_BEGIN:PAD_BEGIN+PADS//2] = self.pad_embeddings[PAD_BEGIN:PAD_BEGIN+PADS//2]
                 returned_prompt_embs.append(prompt_embeds2)
             elif emb_type == 'full_pad':
                 prompt_embeds2 = prompt_embeds.clone()
-                # Fill the 22nd to the second last embeddings with pad embeddings.
-                prompt_embeds2[:, 22:-1] = pad_embeddings[22:-1]
+                # Replace the PAD_BEGIN-th to the second last embeddings with pad embeddings.
+                # Skip replacing the last embedding, which might has special roles.
+                # (Although all padding tokens are the same EOS, the last token might acquire special semantics
+                # due to its special position.)
+                prompt_embeds2[:, PAD_BEGIN:-1] = self.pad_embeddings[PAD_BEGIN:-1]
                 returned_prompt_embs.append(prompt_embeds2)
             elif emb_type == 'core':
                 returned_prompt_embs.append(core_prompt_embs)
-            elif emb_type == 'full_zeroed_extra':
-                prompt_embeds2 = prompt_embeds.clone()
-                # Only add two pad embeddings. The remaining embeddings are set to 0.
-                # Make the positional embeddings align with the actual positions.
-                prompt_embeds2[:, 22:24] = pad_embeddings[22:24]
-                prompt_embeds2[:, 24:-1] = 0
-                returned_prompt_embs.append(prompt_embeds2)
             else:
                 breakpoint()
 
@@ -501,7 +511,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         learnable_hidden_state_weights_scheme: str = 'per-layer',   # none, per-layer.
         bg_prompt_translator_has_to_out_proj: bool = False,         # Whether the prompt_trans_layers have a to_out projection.
     ):
-        super().__init__()
+        super().__init__(max_prompt_length=77, num_id_vecs=num_out_embs_per_layer)
 
         self.placeholder_is_bg      = placeholder_is_bg
         self.num_out_layers         = num_out_layers
@@ -528,10 +538,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
             print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
-            # Freeze prompt2token_proj if prompt2token_proj_grad_scale is 0.
-            # Set requires_grad to False for all parameters in prompt2token_proj, to save memory taken by the optimizer.
-            if prompt2token_proj_grad_scale == 0:
-                self.freeze_prompt2token_proj()
+            # If prompt2token_proj_grad_scale is 0, freeze all params in prompt2token_proj.
+            # Otherwise, only freeze token and positional embeddings of the original CLIPTextModel.
+            self.freeze_prompt2token_proj()
 
             self.prompt2token_proj_attention_multiplier = -1
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
@@ -613,7 +622,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             if is_face:
                 assert face2img_id_embs is not None
                 # id2img_embs has been projected to the (modified) prompt embedding space 
-                # by ID2ImgPrompt::conv_init_id_to_img_prompt_embs(). This prompt embedding space is modified because 
+                # by ID2ImgPrompt::map_init_id_to_img_prompt_embs(). This prompt embedding space is modified because 
                 # the ID2ImgPrompt model (at least when it's arc2face) may have finetuned the 
                 # text encoder and the U-Net.
                 # in embedding_manager: [BS, 16, 768] -> [BS, 77, 768].
@@ -624,14 +633,12 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                 # hidden_state_layer_weights: [[0.9163], [0.9483], [2.0762]]
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
                 # return_emb_types: a list of strings, each string is among 
-                # ['full', 'core', 'full_pad', 'full_half_pad', 'full_zeroed_extra'].
+                # ['full', 'core', 'full_pad', 'full_half_pad'].
                 if is_training:
                     return_emb_types = ['full_pad', 'core']
                 else:
                     # adaface_prompt_embs_inf_type: default is 'full_half_pad', slightly different from training.
                     return_emb_types = [adaface_prompt_embs_inf_type, 'core']
-
-                self.pad_embeddings = self.pad_embeddings.to(face2img_id_embs.device)
 
                 with torch.set_grad_enabled(self.training and self.prompt2token_proj_grad_scale != 0):
                     # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
@@ -641,13 +648,11 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                     # zs_extra_words_scale is only effective when list_extra_words is not None.
                     # adaface_prompt_embs: [BS, 77, 768], core_id_embs: [BS, 16, 768].
                     adaface_prompt_embs, core_id_embs = \
-                        self.inverse_img_prompt_embs(self.prompt2token_proj, 
-                                                      face2img_id_embs, 
-                                                      list_extra_words=None,
-                                                      return_emb_types=return_emb_types, 
-                                                      pad_embeddings=self.pad_embeddings,
-                                                      hidden_state_layer_weights=hidden_state_layer_weights,
-                                                      input_max_length=77, zs_extra_words_scale=self.zs_extra_words_scale)
+                        self.inverse_img_prompt_embs(face2img_id_embs, 
+                                                     list_extra_words=None,
+                                                     return_emb_types=return_emb_types, 
+                                                     hidden_state_layer_weights=hidden_state_layer_weights,
+                                                     zs_extra_words_scale=self.zs_extra_words_scale)
                 # Reduce the update rate to prompt2token_proj.
                 adaface_prompt_embs = self.prompt2token_proj_grad_scaler(adaface_prompt_embs)
                 core_id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)
@@ -716,14 +721,21 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
     def freeze_prompt2token_proj(self):
         # If bg, then prompt2token_proj is set to None. Therefore no need to freeze it.
         # Then we don't have to check whether it's for subj or bg.
+        if self.prompt2token_proj_grad_scale == 0:
+            frozen_components_name = 'all'
+            frozen_param_set = self.prompt2token_proj.named_parameters()
+        else:
+            frozen_components_name = 'token_pos_embeddings'
+            frozen_param_set = self.prompt2token_proj.text_model.embeddings.named_parameters()
+
         if self.prompt2token_proj is not None:
             frozen_param_names = []
-            for param_name, param in self.prompt2token_proj.named_parameters():
+            for param_name, param in frozen_param_set:
                 if param.requires_grad:
                     param.requires_grad = False
                     frozen_param_names.append(param_name)
                 # If param is already frozen, then no need to freeze it again.
-            print(f"{len(frozen_param_names)} params in Subj prompt2token_proj is frozen.")
+            print(f"{frozen_components_name} {len(frozen_param_names)} params in Subj prompt2token_proj is frozen.")
             #print(f"Frozen parameters:\n{frozen_param_names}")
 
     def patch_old_subj_basis_generator_ckpt(self):
@@ -732,7 +744,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.bg_prompt_translator_has_to_out_proj = False
         if not hasattr(self, 'num_out_embs'):
             self.num_out_embs = -1
-        if not hasattr(self, 'num_nonface_in_id_vecs'):
+        if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'num_id_vecs'):
             self.num_nonface_in_id_vecs = self.num_id_vecs
         if not hasattr(self, 'tokenizer'):
             self.initialize_text_components()
