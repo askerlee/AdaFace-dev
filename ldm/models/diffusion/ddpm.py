@@ -1151,7 +1151,8 @@ class LatentDiffusion(DDPM):
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
                 faceless_img_count, zs_id_embs, zs_clip_fgbg_features, zs_clip_neg_features = \
                     self.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images(\
-                        images, image_paths, fg_mask.squeeze(1), calc_avg=use_subj_avg_embedding)
+                        images, image_paths, fg_mask.squeeze(1), skip_non_faces=False, 
+                        calc_avg=use_subj_avg_embedding)
                                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
