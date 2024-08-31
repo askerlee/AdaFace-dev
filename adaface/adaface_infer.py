@@ -45,8 +45,10 @@ def parse_args():
                         help="Type of pipeline to use (default: txt2img)")
     parser.add_argument("--base_model_path", type=str, default=None, 
                         help="Type of checkpoints to use (default: None, using the official model)")
-    parser.add_argument("--embman_ckpt", type=str, required=True,
-                        help="Path to the checkpoint of the embedding manager")
+    parser.add_argument('--adaface_ckpt_path', type=str, 
+                        default='models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt')
+    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
+                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")    
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
@@ -94,11 +96,12 @@ if __name__ == "__main__":
         args.extra_unet_paths = None
         args.unet_weights = None
         
-    adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, args.embman_ckpt, args.device, 
+    adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
+                             args.adaface_ckpt_path, args.id2img_prompt_encoder_type,
                              args.subject_string, args.num_vectors, args.num_inference_steps,
                              main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,
-                             unet_weights=args.unet_weights)
+                             unet_weights=args.unet_weights, device=args.device)
 
     if not args.randface:
         image_folder = args.subject

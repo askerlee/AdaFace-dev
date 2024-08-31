@@ -19,31 +19,34 @@ import sys
 #sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, device,
+    def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, id2img_prompt_encoder_type,
                  subject_string='z', num_vectors=16, 
                  num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
-                 id2img_prompt_encoder_type='arc2face', is_training=False):
+                 device='cuda', is_training=False):
         '''
-        pipeline_name: "text2img" or "img2img" or None. If None, the unet and vae are
+        pipeline_name: "text2img", "img2img", "text2img3", "flux", or None. 
+        If None, it's used only as a face encoder, and the unet and vae are
         removed from the pipeline to release RAM.
         '''
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
         self.adaface_ckpt_path = adaface_ckpt_path
-        self.use_840k_vae = use_840k_vae
-        self.use_ds_text_encoder = use_ds_text_encoder
+        self.id2img_prompt_encoder_type = id2img_prompt_encoder_type
         self.subject_string = subject_string
         self.num_vectors = num_vectors
+
         self.num_inference_steps = num_inference_steps
+        self.use_840k_vae = use_840k_vae
+        self.use_ds_text_encoder = use_ds_text_encoder
         self.main_unet_path = main_unet_path
         self.extra_unet_paths = extra_unet_paths
         self.unet_weights = unet_weights
-        self.id2img_prompt_encoder_type = id2img_prompt_encoder_type
         self.device = device
         self.is_training = is_training
+
         self.initialize_pipeline()
         self.extend_tokenizer_and_text_encoder()
         if negative_prompt is None:
