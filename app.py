@@ -3,8 +3,6 @@ sys.path.append('./')
 
 from adaface.adaface_wrapper import AdaFaceWrapper
 import torch
-from insightface.app import FaceAnalysis
-from PIL import Image
 import numpy as np
 import random
 
@@ -14,21 +12,28 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--adaface_ckpt_path', type=str, 
                     default='models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt')
+parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
+                    choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")
+parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
+parser.add_argument('--extra_unet_paths', type=str, nargs="+", default=['models/ensemble/rv4-unet', 
+                                                                        'models/ensemble/ar18-unet'], 
+                    help="Extra paths to the checkpoints of the UNet models")
+parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+                    help="Weights for the UNet models")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
 
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
-if torch.cuda.is_available():
-    device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
-else:
-    device = "cpu"
-dtype = torch.float16
+device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
+print(f"Device: {device}")
 
-# base_model_path is only used for initialization, not really used in the inference.
-adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path="models/sar/sar.safetensors",
-                         adaface_ckpt_path=args.adaface_ckpt_path, device=device)
+adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_model_path,
+                         adaface_ckpt_path=args.adaface_ckpt_path, 
+                         id2img_prompt_encoder_type=args.id2img_prompt_encoder_type, 
+                         extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights,
+                         device=device)
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
@@ -49,11 +54,12 @@ def remove_back_to_files():
 
 def update_out_gallery(images):
     #rows = (len(images) + 1) // 2  # Calculate the number of rows needed
-    return gr.update(height=600)
+    return gr.update(height=800)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale,
-                   num_images, prompt, negative_prompt, seed, progress=gr.Progress(track_tqdm=True)):
+def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale, noise_std_to_input,
+                   num_images, prompt, negative_prompt, enhance_face,
+                   seed, progress=gr.Progress(track_tqdm=True)):
 
     if image_paths is None or len(image_paths) == 0:
         raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
@@ -62,20 +68,28 @@ def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale,
         prompt = ""
 
     adaface_subj_embs = \
-        adaface.generate_adaface_embeddings(image_paths=image_paths,
+        adaface.generate_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
                                             out_id_embs_cfg_scale=adaface_id_cfg_scale, 
+                                            noise_level=noise_std_to_input,
                                             update_text_encoder=True)
     
     if adaface_subj_embs is None:
         raise gr.Error(f"Failed to detect any faces! Please try with other images")
 
+    # Sometimes the pipeline is on CPU, although we've put it on CUDA (due to some offloading mechanism).
+    # Therefore we set the generator to the correct device.
     generator = torch.Generator(device=device).manual_seed(seed)
     print(f"Manual seed: {seed}")
     # Generate two images each time for the user to select from.
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
-    samples = adaface(noise, prompt, negative_prompt, guidance_scale=guidance_scale, out_image_count=num_images, generator=generator, verbose=True)
+    if enhance_face and "face portrait" not in prompt:
+        prompt = "face portrait, " + prompt
+
+    generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
+    samples = adaface(noise, prompt, negative_prompt, guidance_scale=guidance_scale, 
+                      out_image_count=num_images, generator=generator, verbose=True)
     return samples
 
 ### Description
@@ -99,7 +113,14 @@ description = r"""
 """
 
 css = '''
-.gradio-container {width: 85% !important}
+.gradio-container {width: 95% !important},
+.custom-gallery { 
+    height: 800px; 
+    width: 100%; 
+    margin: 10px auto; 
+    padding: 10px; 
+    overflow-y: auto; 
+}
 '''
 with gr.Blocks(css=css) as demo:
 
@@ -122,23 +143,25 @@ with gr.Blocks(css=css) as demo:
                 remove_and_reupload = gr.ClearButton(value="Remove and upload subject images", components=img_files, size="sm")
 
             prompt = gr.Dropdown(label="Prompt",
-                       info="Try something like 'man/woman walking on the beach'. If the face is not in focus, try adding 'face portrait of' at the beginning.",
+                       info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance_face'.",
                        value=None,
                        allow_custom_value=True,
                        filterable=False,
                        choices=[
-                            "woman ((best quality)), ((masterpiece)), ((realistic)), long highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
-                            "woman walking on the beach, sunset, orange sky",
-                            "woman in a white apron and chef hat, garnishing a gourmet dish, full body view, long shot",
-                            "woman dancing pose among folks in a park, waving hands",
-                            "woman in iron man costume flying pose, the sky ablaze with hues of orange and purple, full body view, long shot",
-                            "woman jedi wielding a lightsaber, star wars, full body view, eye level shot",
-                            "woman playing guitar on a boat, ocean waves",
-                            "woman with a passion for reading, curled up with a book in a cozy nook near a window",
-                            "woman running pose in a park, eye level shot",
-                            "woman in superman costume flying pose, the sky ablaze with hues of orange and purple, full body view, long shot"
+                            "((best quality)), ((masterpiece)), ((realistic)), highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
+                            "walking on the beach, sunset, orange sky",
+                            "in a white apron and chef hat, garnishing a gourmet dish",
+                            "dancing pose among folks in a park, waving hands",
+                            "in iron man costume, the sky ablaze with hues of orange and purple",
+                            "jedi wielding a lightsaber, star wars, eye level shot",
+                            "playing guitar on a boat, ocean waves",
+                            "with a passion for reading, curled up with a book in a cozy nook near a window",
+                            "running pose in a park, eye level shot",
+                            "in superman costume, the sky ablaze with hues of orange and purple"
                        ])
             
+            enhance_face = gr.Checkbox(label="Enhance face", value=True, info="Enhance the face features by prepending 'face portrait' to the prompt")
+
             submit = gr.Button("Submit", variant="primary")
 
             negative_prompt = gr.Textbox(
@@ -149,20 +172,28 @@ with gr.Blocks(css=css) as demo:
             adaface_id_cfg_scale = gr.Slider(
                     label="AdaFace CFG Scale",
                     info="The CFG scale of the AdaFace ID embeddings (influencing fine facial features)",
-                    minimum=0.5,
-                    maximum=8.0,
-                    step=0.5,
-                    value=4.0,
+                    minimum=1,
+                    maximum=12.0,
+                    step=1,
+                    value=6.0,
                 )
             
             guidance_scale = gr.Slider(
                 label="Guidance scale",
-                minimum=0.5,
-                maximum=8.0,
-                step=0.5,
-                value=4.0,
+                minimum=1.0,
+                maximum=16.0,
+                step=1.0,
+                value=8.0,
             )
 
+            noise_std_to_input = gr.Slider(
+                label="Std of noise added to input (may help stablize face embeddings)",
+                minimum=0.0,
+                maximum=0.05,
+                step=0.025,
+                value=0.0,
+                visible=False,
+            )
             num_images = gr.Slider(
                 label="Number of output images",
                 minimum=1,
@@ -180,7 +211,8 @@ with gr.Blocks(css=css) as demo:
             randomize_seed = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
 
         with gr.Column():
-            out_gallery = gr.Gallery(label="Generated Images", columns=2, rows=2, height=600)
+            out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=2, height=800,
+                                     elem_classes="custom-gallery")
 
         img_files.upload(fn=swap_to_gallery, inputs=img_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
         remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
@@ -193,7 +225,8 @@ with gr.Blocks(css=css) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, adaface_id_cfg_scale, num_images, prompt, negative_prompt, seed],
+            inputs=[img_files, guidance_scale, adaface_id_cfg_scale, noise_std_to_input, num_images, 
+                    prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         ).then(
             fn=update_out_gallery,

@@ -2096,9 +2096,9 @@ class LatentDiffusion(DDPM):
                         teacher_context = student_prompt_embs
                     elif self.unet_teacher_type == 'consistentID':
                         global_id_embeds = self.iter_flags['id2img_prompt_emb']
-                        # text_global_id_embeds: [BS, 81, 768]
-                        # For consistentID, student_prompt_embs is the text prompt embedding.
-                        teacher_context = torch.cat([student_prompt_embs, global_id_embeds], dim=1)                            
+                        # global_id_embeds: [BS, 4, 768]
+                        # TODO: concatenate the class text prompt embedding with global_id_embeds.
+                        teacher_context = global_id_embeds                         
                     else:
                         breakpoint()
 
