@@ -388,11 +388,11 @@ def main(opt):
                 from adaface.adaface_wrapper import AdaFaceWrapper
 
                 opt.subj_model_path = opt.embedding_paths[0]
-                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, device, 
+                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, opt.id2img_prompt_encoder_type, 
                                           opt.subject_string, opt.num_vectors_per_subj_token, opt.ddim_steps,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
-                                          id2img_prompt_encoder_type=opt.id2img_prompt_encoder_type)
+                                          device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
                 adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, False, 
                                                                          out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
@@ -522,9 +522,10 @@ def main(opt):
             if opt.face_engine == "insightface":
                 # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
                 # Note there's a second "model" in the path.
-                insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+                insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
                 insightface_app.prepare(ctx_id=opt.gpu, det_size=(512, 512))
             else:
+                # face_engine == "deepface". It cannot be pre-initialized.
                 insightface_app = None
                 if hasattr(opt, 'tfgpu'):
                     set_tf_gpu(opt.tfgpu)

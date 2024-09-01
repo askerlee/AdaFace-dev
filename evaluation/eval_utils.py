@@ -9,6 +9,7 @@ import glob
 import numpy as np
 from PIL import Image
 import cv2
+import time
 
 from evaluation.clip_eval import ImageDirEvaluator
 from evaluation.dino_eval import DINOEvaluator
@@ -16,6 +17,11 @@ from evaluation.community_prompts import community_prompt_list
 from insightface.app import FaceAnalysis
 from ldm.data.personalized import PersonalizedBase
 from adaface.util import pad_image_obj_to_square
+#from evaluation import retinaface_pytorch
+# Monkey patch deepface.models.face_detection.RetinaFace with the pytorch version.
+# The original RetinaFace is in tensorflow, which is very slow.
+#import sys
+#sys.modules['deepface.models.face_detection.RetinaFace'] = retinaface_pytorch
 
 def set_tf_gpu(gpu_id):
     import tensorflow as tf
@@ -88,8 +94,7 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     return sim_img, sim_text, sim_dino
 
 def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='retinaface', 
-                          enforce_detection=True,
-                          align=True, normalization="base"):
+                          enforce_detection=True, align=True, normalization="base", size=(512, 512)):
     """
     This function extracts faces from a list of images, and embeds them as embeddings. 
 
@@ -114,27 +119,49 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
     """
     from deepface import DeepFace
 
+    '''
+    tasks = ['facial_recognition', 'spoofing', 'facial_attribute', 'face_detector']
+    if 'cached_models' not in deepface.modules.modeling.__dict__:
+        deepface.modules.modeling.cached_models = { task: {} for task in tasks }
+
+    # Replace the original tensorflow retinaface with the pytorch version, which is much faster.
+    deepface.modules.modeling.cached_models['face_detector']['retinaface'] = retinaface_pytorch.RetinaFaceClient()
+    '''
+
     # --------------------------------
     all_embeddings = []
+    det_time = 0
+    rep_time = 0
 
     for img_path in image_paths:
         embeddings = []
 
+        image_obj = Image.open(img_path)
+        image_obj2, _, _ = pad_image_obj_to_square(image_obj)
+        # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
+        # PersonalizedBase dataset class.
+        image_obj2 = image_obj2.resize(size, Image.NEAREST)
+        # Keep the original RGB image for face detection.
+        image_np = np.array(image_obj2)
+
         try:
+            start = time.time()
             # img_path might have many faces
             img_objs = DeepFace.extract_faces(
-                img_path=img_path,
+                img_path=image_np,
                 detector_backend=detector_backend,
                 grayscale=False,
                 enforce_detection=enforce_detection,
                 align=align,
             )
+            det_time += time.time() - start
 
         except Exception as e: 
             print(img_path)
             print(e)
             continue
         
+        start = time.time()
         # now we will find the face pair with minimum distance
         for img_obj in img_objs:
             img_content = img_obj["face"]
@@ -149,10 +176,11 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
 
             embedding = img_embedding_obj[0]["embedding"]
             embeddings.append(embedding)
-        
+        rep_time += time.time() - start
+        #print(f"det_time: {det_time:.3f}, rep_time: {rep_time:.3f}")
         embeddings = np.array(embeddings)
         all_embeddings.append(embeddings)
-
+        
     return all_embeddings
 
 def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 512)):
@@ -183,7 +211,7 @@ def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 
     if insightface_app is None:
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
-        insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
+        insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
         insightface_app.prepare(ctx_id=gpu_id, det_size=(512, 512))
 
     image_nps = []

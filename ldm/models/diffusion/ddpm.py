@@ -2188,14 +2188,25 @@ class LatentDiffusion(DDPM):
                         loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
                     else:
                         # use_unet_teacher_as_target could be True or False.
-                        # If use_unet_teacher_as_target, we don't want to distill using the background pixels, 
-                        # as those pixels are suppressed by the ID2ImgPrompt UNet. So bg_pixel_weight = 0.
-                        # Otherwise, we use the original image (noise) as target, and still wish to keep the original background
+                        # If we use the original image (noise) as target, and still wish to keep the original background
                         # after being reconstructed with id2img_prompt_emb, so as not to suppress the background pixels. 
                         # Therefore, bg_pixel_weight = 0.1.
-                        # NOTE: we still use the input img_mask and fg_mask, but the foreground reconstructed with 
-                        # ID2ImgPrompt UNet might be slightly off. Anyway, hopefully the error is small.
-                        bg_pixel_weight = 0 if self.iter_flags['use_unet_teacher_as_target'] else 0.1
+                        if not self.iter_flags['use_unet_teacher_as_target']:
+                            bg_pixel_weight = 0.1
+                        # If we use comp_prompt as condition, then the background is compositional, and 
+                        # we want to do recon on the whole image. But considering background is not perfect, 
+                        # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
+                        elif self.iter_flags['unet_distill_uses_comp_prompt']:
+                            bg_pixel_weight = 0.5
+                        elif self.unet_teacher_type == 'arc2face':
+                            bg_pixel_weight = 0
+                        elif self.unet_teacher_type == 'consistentID':
+                            # The mask is extracted from the input image, and the reconstructed image
+                            # by consistentID may be slightly off. So we don't suppress the background so much,
+                            # for example the generated face might partially fall in the original background.
+                            bg_pixel_weight = 0.5
+                        else:
+                            breakpoint()
 
                         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                         loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 

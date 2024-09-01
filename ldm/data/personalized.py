@@ -409,7 +409,7 @@ class PersonalizedBase(Dataset):
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
-            self.common_placeholder_prefixes   = re.split("\s*,\s*", common_placeholder_prefix)
+            self.common_placeholder_prefixes   = re.split(r"\s*,\s*", common_placeholder_prefix)
         else:
             self.common_placeholder_prefixes   = None
 

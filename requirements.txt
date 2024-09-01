@@ -1,24 +1,19 @@
 setuptools>=68.0.0
-torch>=2.3.1
-torchvision
+torch>=2.4
+torchvision>=0.19.0
 pytorch-lightning==1.9.5
-albumentations>=1.1.0
-opencv-python>=4.2.0.34
+albumentations>=1.4
+opencv-python>=4.10
 pudb>=2019.2
-imageio>=2.14.1
-imageio-ffmpeg>=0.4.7
 omegaconf>=2.1.1
 test-tube>=0.7.5
-streamlit>=1.24.0
 setuptools>=59.5.0
 pillow>=9.0.1
 einops>=0.4.1
-torch-fidelity>=0.3.0
-transformers>=4.32.0
-torchmetrics>=0.6.0
+transformers>=4.44.2
 kornia>=0.6
 exrex
-tensorflow>=2.12.0
+tensorflow>=2.17.0
 deepface>=0.0.93
 nvidia-pyindex
 nvidia-tensorrt
@@ -34,4 +29,5 @@ onnxruntime-gpu
 insightface
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
 -e git+https://github.com/openai/CLIP.git@main#egg=clip
+-e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
 -e .
