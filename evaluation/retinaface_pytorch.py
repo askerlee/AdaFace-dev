@@ -2,14 +2,13 @@ from typing import List
 import numpy as np
 from deepface.models.Detector import Detector, FacialAreaRegion
 from retinaface.pre_trained_models import get_model
-from PIL import Image
 
 # pylint: disable=too-few-public-methods
 class RetinaFaceClient(Detector):
     def __init__(self):
         # We have called torch.cuda.set_device(opt.gpu) in stable_txt2img.py, so to("cuda") 
         # will put the model on the correct GPU.
-        self.model = get_model("resnet50_2020-07-20", max_size=1024, device='cuda')
+        self.model = get_model("biubug6", max_size=1024, device='cuda')
 
     def detect_faces(self, img: np.ndarray) -> List[FacialAreaRegion]:
         """

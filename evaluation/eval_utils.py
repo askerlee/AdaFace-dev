@@ -114,8 +114,8 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
 
     """
     from deepface import DeepFace
-    '''
-    MonkeyPatch_RetinaFace_Pytorch = False
+
+    MonkeyPatch_RetinaFace_Pytorch = True
     if MonkeyPatch_RetinaFace_Pytorch:
         import sys
         from evaluation import retinaface_pytorch
@@ -130,7 +130,6 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
 
         # Replace the original tensorflow retinaface with the pytorch version, which is much faster.
         deepface.modules.modeling.cached_models['face_detector']['retinaface'] = retinaface_pytorch.RetinaFaceClient()
-    '''
 
     # --------------------------------
     all_embeddings = []
