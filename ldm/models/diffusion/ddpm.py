@@ -1274,11 +1274,13 @@ class LatentDiffusion(DDPM):
                     num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
                     self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
-                    if self.unet_teacher_type == 'unet_ensemble' or self.unet_teacher_type == 'consistentID':
+                    if self.unet_teacher_type in ['unet_ensemble', 'consistentID']:
                         if self.unet_teacher_type == 'unet_ensemble':
                             p_unet_distill_uses_comp_prompt = 0.5
+                        elif self.unet_teacher_type == 'consistentID':
+                            p_unet_distill_uses_comp_prompt = 0.2
                         else:
-                            p_unet_distill_uses_comp_prompt = 0.1
+                            breakpoint()
 
                         # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
                         if random.random() < p_unet_distill_uses_comp_prompt:
@@ -1388,8 +1390,10 @@ class LatentDiffusion(DDPM):
             if self.cond_stage_trainable:
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
-                
-                if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation']:
+                # We use the global flag self.do_static_prompt_delta_reg instead of self.iter_flags['do_static_prompt_delta_reg'],
+                # because when distilling on ConsistentID, we disable self.iter_flags['do_static_prompt_delta_reg'], but still
+                # want to access the static embeddings of the class comp prompts.
+                if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
@@ -1517,8 +1521,14 @@ class LatentDiffusion(DDPM):
                         extra_info['iter_type'] = 'normal_recon'
                         c_in2                   = captions
                         # Use the original "captions" prompts and embeddings.
-                        # captions == subj_single_prompts should always hold.
-                        assert captions == subj_single_prompts
+                        # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
+                        # it holds in all other cases.
+                        if not self.iter_flags['unet_distill_uses_comp_prompt']:
+                            assert captions == subj_single_prompts
+                        else:
+                            assert captions == subj_comp_prompts
+                        # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
+                        # So in this case, subj_single_emb == subj_comp_emb.
                         c_static_emb = subj_single_emb
                         # The blocks as input to get_learned_conditioning() are not halved. 
                         # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
@@ -1535,6 +1545,8 @@ class LatentDiffusion(DDPM):
 
                     extra_info['cls_single_prompts'] = cls_single_prompts
                     extra_info['cls_comp_prompts']   = cls_comp_prompts
+                    extra_info['cls_comp_emb']       = cls_comp_emb
+                                        
                     # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
                     # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
                     # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
@@ -1564,8 +1576,8 @@ class LatentDiffusion(DDPM):
                     
                     extra_info = extra_info0
                     extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
-                    extra_info['c_static_emb_1b']   = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                           *c_static_emb.shape[1:])
+                    extra_info['c_static_emb_1b']        = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
+                                                                                *c_static_emb.shape[1:])
                                         
                     extra_info['iter_type'] = 'normal_recon'
 
@@ -2086,7 +2098,7 @@ class LatentDiffusion(DDPM):
                     # student_prompt_embs is the prompt embedding of the student model.
                     # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
                     # So we only need to take the first one.
-                    # [16, 77, 768] -> [1, 77, 768]
+                    # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
                     student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
                     if self.unet_teacher_type == 'arc2face':
                         teacher_context = self.iter_flags['id2img_prompt_emb']
@@ -2096,12 +2108,9 @@ class LatentDiffusion(DDPM):
                         global_id_embeds = self.iter_flags['id2img_prompt_emb']
                         # global_id_embeds: [BS, 4, 768]
                         if self.iter_flags['unet_distill_uses_comp_prompt']:
-                            # TODO: concatenate the class text prompt embedding with global_id_embeds, instead
-                            # of the subject text prompt embedding. But this is quite complicated to do,
-                            # as extra_info['c_static_emb_4b'] only contains the cls_comp_emb 
-                            # of the **first** instance in the batch.
-                            breakpoint()
-                            teacher_context = torch.cat([student_prompt_embs, global_id_embeds], dim=1)
+                            # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
+                            cls_comp_prompt_embs = extra_info['cls_comp_emb'].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                            teacher_context = torch.cat([cls_comp_prompt_embs, global_id_embeds], dim=1)
                         else:
                             teacher_context = global_id_embeds                         
                     else:
