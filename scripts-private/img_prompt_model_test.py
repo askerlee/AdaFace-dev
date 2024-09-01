@@ -9,7 +9,7 @@ from adaface.arc2face_models import CLIPTextModelWrapper
 import torch
 from PIL import Image
 import os, argparse, glob
-from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt
+from adaface.face_id_to_img_prompt import create_id2img_prompt_encoder
 
 def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
     
@@ -34,7 +34,10 @@ def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-a
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    
     parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
+    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
+                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")    
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
     # "a man in superman costume"
@@ -75,8 +78,8 @@ if __name__ == "__main__":
     pipeline.scheduler = noise_scheduler
     pipeline = pipeline.to('cuda')
 
-    arc2face_prompt_encoder = Arc2Face_ID2ImgPrompt()
-    arc2face_prompt_encoder.to('cuda')
+    id2img_prompt_encoder = create_id2img_prompt_encoder(args.id2img_prompt_encoder_type)
+    id2img_prompt_encoder.to('cuda')
 
     if not args.randface:
         image_folder = args.subject
@@ -117,7 +120,7 @@ if __name__ == "__main__":
 
         # id_prompt_emb is in the image prompt space.
         face_image_count, faceid_embeds, id_prompt_emb, _ \
-            = arc2face_prompt_encoder.get_img_prompt_embs( \
+            = id2img_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=init_id_embs,
                 pre_clip_features=None,
                 image_paths=image_paths,
@@ -148,7 +151,7 @@ if __name__ == "__main__":
         # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
         # the resulting images are quite similar to those generated with id_prompt_emb. 
         # This shows id_prompt_emb 4:20 contains the ID of the person.
-        prompt_embeds_[:, 4:20] = id_prompt_emb[:, 4:20]
+        prompt_embeds_[:, 4:4+id_prompt_emb.shape[1]] = id_prompt_emb
 
         noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
 

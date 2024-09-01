@@ -29,7 +29,7 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
-from ldm.modules.teachers import Arc2FaceTeacher, UNetEnsembleTeacher, ConsistentIDTeacher
+from adaface.teacher_pipelines import Arc2FaceTeacher, UNetEnsembleTeacher, ConsistentIDTeacher
 
 import copy
 from functools import partial
@@ -363,6 +363,7 @@ class DDPM(pl.LightningModule):
                             'do_ada_prompt_delta_reg':      False,
                             # 'do_comp_teacher_filter':        False,
                             # 'is_teachable':             False,
+                            'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
                             'use_wds_comp':                 False,  
                             'use_wds_cls_captions':         False,
@@ -406,10 +407,11 @@ class DDPM(pl.LightningModule):
         N_CAND_REGS = len(cand_reg_types)
         cand_reg_probs = np.array(cand_reg_probs) / np.sum(cand_reg_probs)
 
-        # If N_CAND_REGS == 0, then no intermittent regularizations, set the two flags to False.
+        # If N_CAND_REGS == 0, then no prompt distillation/regularizations, 
+        # and the flags below take the default False value.
         if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0:
             if self.global_step % self.composition_regs_iter_gap == 0:
-                # Alternate among the regularizations in cand_reg_types. 
+                # Alternate between the two types of regularizations in cand_reg_types. 
                 # If both do_ada_prompt_delta_reg and do_mix_prompt_distillation,
                 # then alternate between do_ada_prompt_delta_reg and do_mix_prompt_distillation.
                 # The two regularizations cannot be done in the same batch, as they require
@@ -1274,13 +1276,14 @@ class LatentDiffusion(DDPM):
 
                     if self.unet_teacher_type == 'unet_ensemble' or self.unet_teacher_type == 'consistentID':
                         if self.unet_teacher_type == 'unet_ensemble':
-                            p_unet_ensemble_use_comp_prompt = 0.5
+                            p_unet_distill_uses_comp_prompt = 0.5
                         else:
-                            p_unet_ensemble_use_comp_prompt = 0.1
+                            p_unet_distill_uses_comp_prompt = 0.1
 
                         # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
-                        if random.random() < p_unet_ensemble_use_comp_prompt:
+                        if random.random() < p_unet_distill_uses_comp_prompt:
                             captions = batch[SUBJ_PROMPT_COMP]
+                            self.iter_flags['unet_distill_uses_comp_prompt'] = True
 
                     if num_denoising_steps > 1:
                         # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
@@ -1433,9 +1436,6 @@ class LatentDiffusion(DDPM):
                                                       self.iter_flags['zs_clip_fgbg_features'],
                                                       self.iter_flags['zs_id_embs'],
                                                       randomize_clip_weights=True)
-                    
-                    # Release zs_clip_fgbg_features and zs_id_embs.
-                    # del self.iter_flags['zs_clip_fgbg_features'], self.iter_flags['zs_id_embs']
 
                     subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                         c_static_emb.chunk(4)
@@ -1689,7 +1689,6 @@ class LatentDiffusion(DDPM):
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
-        batch_images_unnorm = self.iter_flags['image_unnorm']
 
         c_static_emb, c_in, extra_info = cond
 
@@ -1953,8 +1952,7 @@ class LatentDiffusion(DDPM):
             # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
             # so subj indices of the second-half batch are the repetitions of the 
             # original extra_info['placeholder2indices_1b'].
-            c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
-                             emb_k_mixer, emb_k_layers_cls_mix_scales = \
+            c_static_emb_vk = \
                 mix_static_vk_embeddings(cond[0], all_subj_indices_1b[1], 
                                          self.training_percent,
                                          t_frac = t_frac, 
@@ -2097,8 +2095,15 @@ class LatentDiffusion(DDPM):
                     elif self.unet_teacher_type == 'consistentID':
                         global_id_embeds = self.iter_flags['id2img_prompt_emb']
                         # global_id_embeds: [BS, 4, 768]
-                        # TODO: concatenate the class text prompt embedding with global_id_embeds.
-                        teacher_context = global_id_embeds                         
+                        if self.iter_flags['unet_distill_uses_comp_prompt']:
+                            # TODO: concatenate the class text prompt embedding with global_id_embeds, instead
+                            # of the subject text prompt embedding. But this is quite complicated to do,
+                            # as extra_info['c_static_emb_4b'] only contains the cls_comp_emb 
+                            # of the **first** instance in the batch.
+                            breakpoint()
+                            teacher_context = torch.cat([student_prompt_embs, global_id_embeds], dim=1)
+                        else:
+                            teacher_context = global_id_embeds                         
                     else:
                         breakpoint()
 
@@ -2233,8 +2238,7 @@ class LatentDiffusion(DDPM):
                     # and the first half-batch (subject instances) is not affected.
                     # So providing all_subj_indices_1b[1] is enough. 
                     # No need to repeat it to be the same size as the first half-batch.                     
-                    c_static_emb_orig_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, \
-                                          emb_k_mixer, emb_k_layers_cls_mix_scales = \
+                    c_static_emb_orig_vk = \
                         mix_static_vk_embeddings(cond_orig[0], all_subj_indices_1b[1], 
                                                  self.training_percent,
                                                  t_frac = t_frac, 
@@ -2388,7 +2392,7 @@ class LatentDiffusion(DDPM):
             loss_static_prompt_delta = calc_prompt_emb_delta_loss( 
                         extra_info['c_static_emb_4b'], extra_info['prompt_emb_mask'])
 
-            loss_dict.update({f'{prefix}/static_prompt_delta':      loss_static_prompt_delta.mean().detach().item() })
+            loss_dict.update({f'{prefix}/static_prompt_delta': loss_static_prompt_delta.mean().detach().item() })
 
             # prompt_emb_delta_loss_scale == 0.1 if do_zero_shot and use Prodigy. prompt_emb_delta_reg_weight is 2e-4.
             # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.

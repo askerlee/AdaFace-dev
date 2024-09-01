@@ -1702,7 +1702,8 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
     # extra_info['emb_v_mixer']                   = emb_v_mixer
     # extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales
     
-    return c_static_emb_vk, emb_v_mixer, emb_v_layers_cls_mix_scales, emb_k_mixer, emb_k_layers_cls_mix_scales
+    return c_static_emb_vk 
+    #, emb_v_mixer, emb_v_layers_cls_mix_scales, emb_k_mixer, emb_k_layers_cls_mix_scales
 
 def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []

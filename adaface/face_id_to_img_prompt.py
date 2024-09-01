@@ -25,10 +25,11 @@ class FaceID2ImgPrompt(nn.Module):
         self.dtype                          = kwargs.get('dtype', torch.float16)
 
         # Model behavior configurations.
-        self.id_img_prompt_max_length       = 77
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
         self.contrast_clip_embs             = False
+        self.id_img_prompt_max_length       = 77
+        self.clip_embedding_dim             = 1024
 
     # images: numpy.ndarray or torch.Tensor.
     # images: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
@@ -360,10 +361,11 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
         print(f'Arc2Face text-to-image prompt encoder loaded.')
 
         # Model behavior configurations.
-        self.id_img_prompt_max_length       = 22
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
         self.contrast_clip_embs             = False
+        self.id_img_prompt_max_length       = 22
+        self.clip_embedding_dim             = 1024
 
     # Arc2Face_ID2ImgPrompt never uses clip_features or generate_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
@@ -460,6 +462,7 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
         self.use_clip_embs                  = True
         self.contrast_clip_embs             = False
         # ConsistentIDPipeline specific configurations.
+        self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
 
@@ -502,6 +505,19 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
         else:
             return global_id_embeds
 
+
+def create_id2img_prompt_encoder(id2img_prompt_encoder_type):
+    if id2img_prompt_encoder_type == 'arc2face':
+        id2img_prompt_encoder = Arc2Face_ID2ImgPrompt()
+    elif id2img_prompt_encoder_type == 'consistentID':
+        # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
+        # Only the consistentID modules and bise_net are used.
+        id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
+                                        base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
+    else:
+        breakpoint()
+
+    return id2img_prompt_encoder
 
 '''
 # For ip-adapter distillation on objects. Strictly speaking, it's not face-to-image prompts, but
