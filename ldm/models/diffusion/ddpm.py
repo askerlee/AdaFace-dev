@@ -128,7 +128,7 @@ class DDPM(pl.LightningModule):
         self.static_embedding_reg_weight = static_embedding_reg_weight
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
-        self.prompt_emb_delta_reg_weight        = prompt_emb_delta_reg_weight
+        self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
@@ -1113,7 +1113,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['same_subject_in_batch'] = False
 
         # do_unet_distill == do_normal_recon and random() < p_unet_distill_iter.
-        # p_gen_id2img_rand_id: 0.4
+        # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0 if distilling on consistentID.
         if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_id2img_rand_id:
             self.iter_flags['gen_id2img_rand_id'] = True
             self.batch_subject_names = [ "rand_id_to_img_prompt" ] * len(batch['subject_name'])
@@ -1130,7 +1130,7 @@ class LatentDiffusion(DDPM):
 
             # 'gen_id2img_rand_id' is only True in do_normal_recon iters.
             # So if not do_normal_recon, then this branch is always executed.
-            #    If     do_normal_recon, then this branch is sometimes executed.
+            #    If     do_normal_recon, then this branch is executed at 50% of the time.
             if not self.iter_flags['gen_id2img_rand_id']:
                 # When possible, don't always use the average embedding of the same subject in the batch.
                 # Otherwise, the model may memorize the subject embedding and tend to generate subjects
@@ -1207,7 +1207,9 @@ class LatentDiffusion(DDPM):
                                 pre_clip_features=pre_clip_features)
                     id2img_prompt_emb = results[2]
 
-            # gen_id2img_rand_id == True. It implies it's not do_mix_prompt_distillation.
+            # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
+            # Therefore, zs_clip_fgbg_features, zs_clip_neg_features are not available.
+            # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
             else:
                 # zs_id_embs: [4, 512]. id2img_prompt_emb: [4, 21, 768]
                 results = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(
@@ -1240,17 +1242,23 @@ class LatentDiffusion(DDPM):
                   or self.iter_flags['faceless_img_count'] > 0:
                     self.iter_flags['use_unet_teacher_as_target'] = True
                 else:
-                    # Prob of this branch is (1 - 0.4) * 0.4 = 0.24 (ignoring the cases when faceless_img_count > 0, which are rare).
-                    # Still with a probability of 0.5, we use the original image as target.
-                    # Therefore, overall, the probability of using the original image as target is 0.5 * 0.24 = 0.12.
-                    # The probability of using the unet recon as target is 0.88.
                     if self.unet_teacher_type == 'arc2face':
+                        # Prob of this branch is (1 - 0.4) * 0.5 = 0.3 (ignoring the cases when faceless_img_count > 0, which are rare).
+                        # For arc2face distillation, still with a probability of 0.5, we use the original image as target.
+                        # Because arc2face output may contain artifacts and is not be better than the original image, 
+                        # and since we have access to the original image, we can use it as target to reduce the 
+                        # artifacts in the arc2face output.
+                        # Therefore, overall, the probability of using the original image as target is 0.5 * 0.24 = 0.12.
+                        # The probability of using the unet recon as target is 0.88.
                         p_use_unet_teacher_as_target = 0.5
                         self.iter_flags['use_unet_teacher_as_target'] = random.random() < p_use_unet_teacher_as_target
                     # UNet ensemble always uses the unet teacher as target.
                     elif self.unet_teacher_type == 'unet_ensemble':
                         self.iter_flags['use_unet_teacher_as_target'] = True
-                    # consistentID: always uses the unet teacher as target.
+                    # consistentID: always uses the unet teacher as target when do_unet_distill.
+                    # But because p_unet_distill_iter == 0.5 implies that do_unet_distill is only True at 50% of the time,
+                    # and the other 50% of the time, we still do_normal_recon, so the overall probability 
+                    # of using the consistentID unet teacher as target is 0.5.
                     elif self.unet_teacher_type == 'consistentID':
                         self.iter_flags['use_unet_teacher_as_target'] = True
                     else:
@@ -1276,8 +1284,12 @@ class LatentDiffusion(DDPM):
 
                     if self.unet_teacher_type in ['unet_ensemble', 'consistentID']:
                         if self.unet_teacher_type == 'unet_ensemble':
+                            # The overall probability of using the compositional prompts to distill is
+                            # p_use_unet_teacher_as_target * p_unet_distill_uses_comp_prompt = 0.5 * 0.5 = 0.25.
                             p_unet_distill_uses_comp_prompt = 0.5
                         elif self.unet_teacher_type == 'consistentID':
+                            # The overall probability of using the compositional prompts to distill is 
+                            # p_use_unet_teacher_as_target * p_unet_distill_uses_comp_prompt = 0.5 * 0.2 = 0.1.
                             p_unet_distill_uses_comp_prompt = 0.2
                         else:
                             breakpoint()
@@ -1390,10 +1402,10 @@ class LatentDiffusion(DDPM):
             if self.cond_stage_trainable:
                 # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
                 # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
-                # We use the global flag self.do_static_prompt_delta_reg instead of self.iter_flags['do_static_prompt_delta_reg'],
-                # because when distilling on ConsistentID, we disable self.iter_flags['do_static_prompt_delta_reg'], but still
-                # want to access the static embeddings of the class comp prompts.
-                if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
+                # When unet_distill_uses_comp_prompt (sometimes enabled when distilling on ConsistentID), we still
+                # need to provide cls_comp_prompts embeddings to the UNet teacher to get compositional features.
+                if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation'] \
+                  or self.iter_flags['unet_distill_uses_comp_prompt']:
                     # reuse_init_conds, discard the prompts offered in shared_step().
                     if self.iter_flags['reuse_init_conds']:
                         # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
