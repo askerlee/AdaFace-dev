@@ -17,11 +17,6 @@ from evaluation.community_prompts import community_prompt_list
 from insightface.app import FaceAnalysis
 from ldm.data.personalized import PersonalizedBase
 from adaface.util import pad_image_obj_to_square
-#from evaluation import retinaface_pytorch
-# Monkey patch deepface.models.face_detection.RetinaFace with the pytorch version.
-# The original RetinaFace is in tensorflow, which is very slow.
-#import sys
-#sys.modules['deepface.models.face_detection.RetinaFace'] = retinaface_pytorch
 
 def set_tf_gpu(gpu_id):
     import tensorflow as tf
@@ -94,7 +89,8 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     return sim_img, sim_text, sim_dino
 
 def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='retinaface', 
-                          enforce_detection=True, align=True, normalization="base", size=(512, 512)):
+                          enforce_detection=True, align=True, normalization="base", size=(512, 512),
+                          cache_embeds=False):
     """
     This function extracts faces from a list of images, and embeds them as embeddings. 
 
@@ -118,22 +114,38 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
 
     """
     from deepface import DeepFace
-
     '''
-    tasks = ['facial_recognition', 'spoofing', 'facial_attribute', 'face_detector']
-    if 'cached_models' not in deepface.modules.modeling.__dict__:
-        deepface.modules.modeling.cached_models = { task: {} for task in tasks }
+    MonkeyPatch_RetinaFace_Pytorch = False
+    if MonkeyPatch_RetinaFace_Pytorch:
+        import sys
+        from evaluation import retinaface_pytorch
+        import deepface
+        import deepface.modules.modeling
+        # Monkey patch deepface.models.face_detection.RetinaFace with the pytorch version.
+        # The original RetinaFace is in tensorflow, which is very slow.
+        sys.modules['deepface.models.face_detection.RetinaFace'] = retinaface_pytorch
+        tasks = ['facial_recognition', 'spoofing', 'facial_attribute', 'face_detector']
+        if 'cached_models' not in deepface.modules.modeling.__dict__:
+            deepface.modules.modeling.cached_models = { task: {} for task in tasks }
 
-    # Replace the original tensorflow retinaface with the pytorch version, which is much faster.
-    deepface.modules.modeling.cached_models['face_detector']['retinaface'] = retinaface_pytorch.RetinaFaceClient()
+        # Replace the original tensorflow retinaface with the pytorch version, which is much faster.
+        deepface.modules.modeling.cached_models['face_detector']['retinaface'] = retinaface_pytorch.RetinaFaceClient()
     '''
 
     # --------------------------------
     all_embeddings = []
     det_time = 0
     rep_time = 0
+    global cached_embeddings
 
     for img_path in image_paths:
+        if not "cached_embeddings" in globals():
+            cached_embeddings = {}
+        if img_path in cached_embeddings:
+            embeddings = cached_embeddings[img_path]
+            all_embeddings.append(embeddings)
+            continue
+
         embeddings = []
 
         image_obj = Image.open(img_path)
@@ -154,6 +166,7 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
                 enforce_detection=enforce_detection,
                 align=align,
             )
+
             det_time += time.time() - start
 
         except Exception as e: 
@@ -180,7 +193,9 @@ def deepface_embed_folder(image_paths, model_name='ArcFace', detector_backend='r
         #print(f"det_time: {det_time:.3f}, rep_time: {rep_time:.3f}")
         embeddings = np.array(embeddings)
         all_embeddings.append(embeddings)
-        
+        if cache_embeds:
+            cached_embeddings[img_path] = embeddings
+
     return all_embeddings
 
 def insightface_embed_folder(insightface_app, image_paths, gpu_id=0, size=(512, 512)):
@@ -295,7 +310,7 @@ def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
 
 # src_path, dst_path: a folder or a single image path
 def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
-                              face_engine="deepface", insightface_app=None):
+                              face_engine="deepface", insightface_app=None, cache_src_embeds=True):
 
     img_extensions = [ "jpg", "jpeg", "png", "bmp" ]
 
@@ -325,8 +340,10 @@ def compare_face_folders_fast(src_path, dst_path, src_num_samples=-1, dst_num_sa
         dst_paths = dst_paths[-dst_num_samples:]
 
     if   face_engine == "deepface":
-        src_list_embeds = deepface_embed_folder(src_paths, model_name="ArcFace", detector_backend = "retinaface")
-        dst_list_embeds = deepface_embed_folder(dst_paths, model_name="ArcFace", detector_backend = "retinaface")
+        src_list_embeds = deepface_embed_folder(src_paths, model_name="ArcFace", detector_backend = "retinaface",
+                                                cache_embeds=cache_src_embeds)
+        dst_list_embeds = deepface_embed_folder(dst_paths, model_name="ArcFace", detector_backend = "retinaface",
+                                                cache_embeds=False)
     elif face_engine == "insightface":
         src_list_embeds = insightface_embed_folder(insightface_app, src_paths)
         dst_list_embeds = insightface_embed_folder(insightface_app, dst_paths)
