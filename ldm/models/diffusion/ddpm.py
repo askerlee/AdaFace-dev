@@ -2201,10 +2201,9 @@ class LatentDiffusion(DDPM):
                         elif self.unet_teacher_type == 'arc2face':
                             bg_pixel_weight = 0
                         elif self.unet_teacher_type == 'consistentID':
-                            # The mask is extracted from the input image, and the reconstructed image
-                            # by consistentID may be slightly off. So we don't suppress the background so much,
-                            # for example the generated face might partially fall in the original background.
-                            bg_pixel_weight = 0.5
+                            # If without negative prompt embeddings, consistentID will generate
+                            # totally blank backgrounds. So we don't learn from its backgrounds.
+                            bg_pixel_weight = 0
                         else:
                             breakpoint()
 
