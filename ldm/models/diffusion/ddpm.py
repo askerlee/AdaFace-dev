@@ -1213,8 +1213,9 @@ class LatentDiffusion(DDPM):
                 results = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(
                                 images.shape[0], init_id_embs=None, pre_clip_features=None)
                 zs_id_embs, id2img_prompt_emb = results[1], results[2]
-                zs_clip_fgbg_features = torch.zeros((BS, 514, 1280), device=x_start.device)
-                zs_clip_neg_features  = torch.zeros((BS, 257, 1280), device=x_start.device)
+                # For ConsistentID, random clip features are much better than zero clip features.
+                zs_clip_fgbg_features = torch.randn((BS, 514, 1280), device=x_start.device)
+                zs_clip_neg_features  = torch.randn((BS, 257, 1280), device=x_start.device)
                 # On random IDs, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None

@@ -100,7 +100,6 @@ if __name__ == "__main__":
         image_folder = None
 
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
-    rand_face_id_embs=torch.randn(1, 512)
     id_batch_size = args.out_image_count
 
     input_max_length = 22
@@ -110,14 +109,27 @@ if __name__ == "__main__":
     # Noise level is the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     for noise_level in (0,): # 0.03):
-        init_id_embs = rand_face_id_embs if args.randface else None
+        if args.randface:
+            init_id_embs = torch.randn(1, 512, device='cuda', dtype=torch.float16)
+            if args.id2img_prompt_encoder_type == "arc2face":
+                pre_clip_features = None
+            elif args.id2img_prompt_encoder_type == "consistentID":
+                # For ConsistentID, random clip features are much better than zero clip features.
+                rand_clip_fgbg_features = torch.randn(1, 514, 1280, device='cuda', dtype=torch.float16)
+                rand_clip_neg_features  = torch.randn(1, 257, 1280, device='cuda', dtype=torch.float16)
+                pre_clip_features = (rand_clip_fgbg_features, rand_clip_neg_features)
+            else:
+                breakpoint()
+        else:
+            init_id_embs = None
+            pre_clip_features = None
 
         # id_prompt_emb is in the image prompt space.
         # neg_id_prompt_emb is used in ConsistentID only.
         face_image_count, faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
             = id2img_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=init_id_embs,
-                pre_clip_features=None,
+                pre_clip_features=pre_clip_features,
                 image_paths=image_paths,
                 image_objs=None,
                 id_batch_size=id_batch_size,
@@ -125,11 +137,6 @@ if __name__ == "__main__":
                 return_core_id_embs_only=False,
                 avg_at_stage='id_emb',
                 verbose=True)
-
-        if args.randface:
-            id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
-            if neg_id_prompt_emb is not None:
-                neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
 
         pipeline.text_encoder = orig_text_encoder
 
@@ -140,7 +147,6 @@ if __name__ == "__main__":
             pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt=args.out_image_count,
                                    do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         #pipeline.text_encoder = text_encoder
-
         # Postpend the id prompt embeddings to the prompt embeddings.
         # For arc2face, id_prompt_emb can be either pre- or post-pended.
         # But for ConsistentID, id_prompt_emb has to be **post-pended**. Otherwise, the result images are blank.
@@ -157,9 +163,9 @@ if __name__ == "__main__":
             negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, neg_id_prompt_emb], dim=1)
 
         if args.use_core_only:
-            prompt_embeds_          = id_prompt_emb
+            prompt_embeds_ = id_prompt_emb
             if (not args.use_teacher_neg) or neg_id_prompt_emb is None:
-                negative_prompt_embeds_ = negative_prompt_embeds_[:, -M:]
+                negative_prompt_embeds_ = negative_prompt_embeds_[:, :M]
             else:
                 negative_prompt_embeds_ = neg_id_prompt_emb
 

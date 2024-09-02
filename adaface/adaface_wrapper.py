@@ -304,7 +304,7 @@ class AdaFaceWrapper(nn.Module):
                 verbose=True)
         
         if face_image_count == 0:
-            return None
+            return None, None
         
         # adaface_subj_embs: [1, 1, 16, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
@@ -389,12 +389,16 @@ class AdaFaceWrapper(nn.Module):
             negative_pooled_prompt_embeds_ = \
                 self.encode_prompt(prompt, negative_prompt, device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
-        prompt_embeds_          = prompt_embeds_.repeat(out_image_count, 1, 1)
+        prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
         if negative_prompt_embeds_ is not None:
+            if teacher_neg_id_prompt_embs is not None:
+                # Since pos_id_prompt_embs is embedded in the beginning of prompt_embeds_,
+                # to keep the same length, we insert teacher_neg_id_prompt_embs at the end of negative_prompt_embeds_.
+                # negative_prompt_embeds_: [1, 77, 768].
+                # For consistentID, teacher_neg_id_prompt_embs: [1, 4, 768]. 
+                # For arc2face,     teacher_neg_id_prompt_embs: None.
+                negative_prompt_embeds_[:, -teacher_neg_id_prompt_embs.shape[1]:]  = teacher_neg_id_prompt_embs
             negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
-        if teacher_neg_id_prompt_embs is not None:
-            teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs.repeat(out_image_count, 1, 1)
-            negative_prompt_embeds_[:, -teacher_neg_id_prompt_embs.shape[1]:]  = teacher_neg_id_prompt_embs
 
         if self.pipeline_name == "text2img3":
             pooled_prompt_embeds_           = pooled_prompt_embeds_.repeat(out_image_count, 1)

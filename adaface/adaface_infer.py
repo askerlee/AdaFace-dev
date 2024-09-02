@@ -71,8 +71,6 @@ def parse_args():
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
-    parser.add_argument("--num_vectors", type=int, default=16,
-                        help="Number of vectors used to represent the subject.")
     parser.add_argument("--num_images_per_row", type=int, default=4,
                         help="Number of images to display in a row in the output grid image.")
     parser.add_argument("--num_inference_steps", type=int, default=50,
@@ -85,10 +83,12 @@ def parse_args():
     return args
 
 if __name__ == "__main__":
+    img_prompt_encoder2num_id_vectors = { 'arc2face': 16, 'consistentID': 4 }
     args = parse_args()
     if args.seed != -1:
         seed_everything(args.seed)
 
+    num_id_vectors = img_prompt_encoder2num_id_vectors[args.id2img_prompt_encoder_type]
     if re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
     print(f"Using device {args.device}")
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
                              args.adaface_ckpt_path, args.id2img_prompt_encoder_type,
-                             args.subject_string, args.num_vectors, args.num_inference_steps,
+                             args.subject_string, num_id_vectors, args.num_inference_steps,
                              main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,
                              unet_weights=args.unet_weights, device=args.device)
