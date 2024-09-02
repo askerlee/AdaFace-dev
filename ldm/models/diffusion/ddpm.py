@@ -1224,9 +1224,9 @@ class LatentDiffusion(DDPM):
 
             # During training, zs_id_embs, id2img_prompt_embs are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
+            id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
 
             if self.iter_flags['do_unet_distill']:
-                id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
                 # or if there are faceless input images in the batch, we have to use the unet recon as target.
                 # Otherwise, use the unet recon as target with a probability of 0.5, and use the original image (noise) 
@@ -1325,14 +1325,13 @@ class LatentDiffusion(DDPM):
 
             # Do zero-shot training but not unet distillation.
             else:
-                id2img_prompt_embs = None
                 self.iter_flags['use_unet_teacher_as_target'] = False
 
         # Not do_zero_shot.
         else:
             zs_clip_fgbg_features, zs_clip_neg_features = None, None
             zs_id_embs              = None
-            id2img_prompt_embs       = None
+            id2img_prompt_embs      = None
 
         # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']                 = img_mask

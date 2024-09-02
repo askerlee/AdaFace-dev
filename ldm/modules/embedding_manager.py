@@ -314,7 +314,7 @@ class EmbeddingManager(nn.Module):
         self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
                                             else {subj_name: True for subj_name in self.subject_strings}
         self.subj_name_to_being_faces['rand_id_to_img_prompt'] = True
-        self.subj_name_to_being_faces['zs_default']              = True
+        self.subj_name_to_being_faces['zs_default']            = True
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
