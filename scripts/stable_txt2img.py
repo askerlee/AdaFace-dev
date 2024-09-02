@@ -16,7 +16,7 @@ from contextlib import nullcontext
 
 from ldm.util import save_grid, load_model_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
-from evaluation.eval_utils import compare_folders, compare_face_folders_fast, \
+from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                   init_evaluators, set_tf_gpu
 from insightface.app import FaceAnalysis
 
@@ -193,8 +193,8 @@ def parse_args():
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use.')
     #parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
-    parser.add_argument("--compare_with", type=str, default=None,
-                        help="A folder of reference images, or a single reference image, used to evaluate the similarity of generated samples")
+    parser.add_argument("--compare_with", type=str, nargs='+', default=None,
+                        help="A list of reference images/folders, used to evaluate the similarity of generated samples")    
     parser.add_argument("--class_prompt", type=str, default=None,
                         help="the original prompt used for text/image matching evaluation "
                              "(requires --compare_with to be specified)")
@@ -512,6 +512,8 @@ def main(opt):
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
+    if opt.compare_with is None:
+        opt.compare_with = opt.ref_images
     if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(-1)
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
@@ -704,7 +706,7 @@ def main(opt):
 
                                 if opt.calc_face_sim:
                                     sim_face, normal_img_count, except_img_count = \
-                                        compare_face_folders_fast(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
+                                        compare_face_folders(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
                                                                     face_engine=opt.face_engine, insightface_app=insightface_app)
                                     # sim_face is a float, so no need to detach().cpu().numpy().
                                     all_sims_face.append(sim_face)
@@ -722,9 +724,10 @@ def main(opt):
                 # additionally, save as grid
                 # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
                 if opt.zeroshot and opt.compare_with:
-                    if opt.compare_with.endswith("/") or opt.compare_with.endswith("\\"):
-                        opt.compare_with = opt.compare_with[:-1]
-                    subj_gt_folder_name = os.path.basename(opt.compare_with)
+                    first_compared_folder = opt.compare_with[0]
+                    if first_compared_folder.endswith("/") or first_compared_folder.endswith("\\"):
+                        first_compared_folder = first_compared_folder[:-1]
+                    subj_gt_folder_name = os.path.basename(first_compared_folder)
 
                 if opt.method == "adaface":
                     subjfolder_mat = re.search(r"([^\/]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+).*-(\d+)\.pt", opt.subj_model_path)

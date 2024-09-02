@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning. If not specified, use subject_gt_dir.")
 
-    parser.add_argument("--prompt_set", dest='prompt_set_name', type=str, default='all', 
+    parser.add_argument("--prompt_set", dest='prompt_set_name', type=str, default='dreambench', 
                         choices=['dreambench', 'community', 'all'],
                         help="Subset of prompts to evaluate if --prompt is not specified")
     parser.add_argument("--gen_prompt_set_only", action="store_true",
@@ -61,7 +61,7 @@ def parse_args():
     # Possible z_prefix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_prefix_type", type=str, default=argparse.SUPPRESS,
                         help="Prefix to prepend to z")
-    parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
     # Possible z_suffix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_suffix_type", type=str, default=argparse.SUPPRESS, 
