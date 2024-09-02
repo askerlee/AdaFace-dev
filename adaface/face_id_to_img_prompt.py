@@ -212,7 +212,7 @@ class FaceID2ImgPrompt(nn.Module):
     # We don't plan to fine-tune the ID2ImgPrompt model. So disable the gradient computation.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
-                                       generate_neg_img_prompt=False,
+                                       called_for_neg_img_prompt=False,
                                        return_full_and_core_embs=True):
         raise NotImplementedError
         
@@ -233,9 +233,11 @@ class FaceID2ImgPrompt(nn.Module):
                 # Use random face embeddings as faceid_embeds. [BS, 512].
                 faceid_embeds       = torch.randn(id_batch_size, 512).to(device=device, dtype=torch.float16)
                 # Since it's a batch of random IDs, the CLIP features are all zeros as a placeholder.
-                clip_fgbg_features  = torch.zeros(id_batch_size, 514, 1280).to(device=device, dtype=torch.float16) \
+                # Only ConsistentID_ID2ImgPrompt will use clip_fgbg_features and clip_neg_features.
+                # Experiments show that using random clip features yields much better images than using zeros.
+                clip_fgbg_features  = torch.randn(id_batch_size, 514, 1280).to(device=device, dtype=torch.float16) \
                                         if self.use_clip_embs else None
-                clip_neg_features   = torch.zeros(id_batch_size, 257, 1280).to(device=device, dtype=torch.float16) \
+                clip_neg_features   = torch.randn(id_batch_size, 257, 1280).to(device=device, dtype=torch.float16) \
                                         if self.use_clip_embs else None
             else:
                 faceid_embeds_from_images = True
@@ -276,7 +278,7 @@ class FaceID2ImgPrompt(nn.Module):
         with torch.no_grad():
             pos_prompt_emb, pos_core_prompt_emb  = \
                 self.map_init_id_to_img_prompt_embs(faceid_embeds, clip_fgbg_features,
-                                                    generate_neg_img_prompt=False,
+                                                    called_for_neg_img_prompt=False,
                                                     return_full_and_core_embs=True)
         
         if avg_at_stage == 'prompt_emb':
@@ -302,7 +304,7 @@ class FaceID2ImgPrompt(nn.Module):
                 neg_prompt_emb, neg_core_prompt_emb = \
                     self.map_init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
                                                         clip_neg_features,
-                                                        generate_neg_img_prompt=True,
+                                                        called_for_neg_img_prompt=True,
                                                         return_full_and_core_embs=True)
                 if return_core_id_embs_only:
                     neg_prompt_emb = neg_core_prompt_emb
@@ -316,6 +318,8 @@ class FaceID2ImgPrompt(nn.Module):
     # If init_id_embs is None, generate random face embeddings [BS, 512].
     # Returns faceid_embeds, id2img_prompt_emb.
     def get_batched_img_prompt_embs(self, batch_size, init_id_embs, pre_clip_features):
+        # pos_prompt_emb, neg_prompt_emb are generated without gradient computation.
+        # So we don't need to worry that the teacher model weights are updated.
         return self.get_img_prompt_embs(init_id_embs=init_id_embs,
                                         pre_clip_features=pre_clip_features,
                                         image_paths=None,
@@ -371,10 +375,10 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
 
-    # Arc2Face_ID2ImgPrompt never uses clip_features or generate_neg_img_prompt.
+    # Arc2Face_ID2ImgPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
-                                       generate_neg_img_prompt=False,
+                                       called_for_neg_img_prompt=False,
                                        return_full_and_core_embs=True):
 
         '''
@@ -472,14 +476,14 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
 
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
-                                       generate_neg_img_prompt=False,
+                                       called_for_neg_img_prompt=False,
                                        return_full_and_core_embs=True):
         assert init_id_embs is not None, "init_id_embs should be provided."
 
         init_id_embs  = init_id_embs.to(self.dtype)
         clip_features = clip_features.to(self.dtype)
 
-        if not generate_neg_img_prompt:
+        if not called_for_neg_img_prompt:
             # clip_features: [BS, 514, 1280].
             # clip_features is provided when the function is called within 
             # ConsistentID_ID2ImgPrompt:extract_init_id_embeds_from_images(), which is

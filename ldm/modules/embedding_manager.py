@@ -157,7 +157,6 @@ class EmbeddingManager(nn.Module):
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_extra_words_scale = zs_extra_words_scale
 
-            self.id2img_embs = None
             if zs_prompt2token_proj_grad_scale == 0:
                 print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
@@ -259,8 +258,11 @@ class EmbeddingManager(nn.Module):
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
         self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
-        # zs_image_feat_dict have three keys: 'subj', 'bg', 'id'.
-        self.zs_image_feat_dict = {}
+        # zs_image_prompt_dict have two keys: 'subj', 'bg'.
+        # zs_image_prompt_dict['subj'] is the image prompt embs for the subject, which is ready to be used.
+        # zs_image_prompt_dict['bg'] is the clip features for the background, 
+        # which needs to be translated by a bg SubjBasisGenerator.
+        self.zs_image_prompt_dict = {}
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s)".format(
                self.subject_strings, self.background_strings, self.token2num_vectors))
@@ -337,7 +339,7 @@ class EmbeddingManager(nn.Module):
         # The keys of static_subj_embs_dict are the placeholder strings.
         static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
                         self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                  self.zs_image_feat_dict,
+                                                  self.zs_image_prompt_dict,
                                                   B, N, self.num_unet_ca_layers)
         # Cache the static embeddings to be used in ada embedding computation and
         # embedding orthogonal loss later.
@@ -353,7 +355,7 @@ class EmbeddingManager(nn.Module):
         return static_embeded_text
     
     # N: length of sequence (including padding).
-    def get_static_embedding(self, tokenized_text, embedded_text, zs_image_feat_dict, 
+    def get_static_embedding(self, tokenized_text, embedded_text, zs_image_prompt_dict, 
                              BS, N, num_unet_ca_layers):
         
         # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
@@ -435,39 +437,19 @@ class EmbeddingManager(nn.Module):
             # subj_static_embedding: [16, K, 768].
             if self.do_zero_shot:
                 if placeholder_is_bg:
-                    zs_clip_features = zs_image_feat_dict['bg']
+                    zs_clip_features = zs_image_prompt_dict['bg']
+                    id2img_prompt_embs = None
                 else:
-                    zs_clip_features = zs_image_feat_dict['subj']
+                    # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
+                    id2img_prompt_embs = zs_image_prompt_dict['subj'] if self.curr_subj_is_face else None
 
-                # zs_id_embs: [1, 512].
-                zs_id_embs = zs_image_feat_dict['id']
                 subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                     
-                # Load id2img_prompt_encoder weight. No need to update id2img_prompt_encoder.
-                # So it's is frozen.
-                if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
-                    with torch.no_grad():
-                        # id2img_embs_full_length:          [BS, 77, 768]. 
-                        # id2img_embs_full_length has the full prompt length generated from a plain template 
-                        # (not the compositional prompts), and the semantics in it is merely those of the ID tokens.
-                        # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
-                        # TODO: if id2img_prompt_encoder is ConsistentID_ID2ImgPrompt, it also requires
-                        # a separate call to map_init_id_to_img_prompt_embs() to generate uncond_global_id_embeds.
-                        # This needs the clip_neg_features, which is not available yet.
-                        # We will implement this in the future.
-                        id2img_embs_full_length, id2img_embs = \
-                            self.id2img_prompt_encoder.map_init_id_to_img_prompt_embs( \
-                                zs_id_embs, zs_clip_features, return_full_and_core_embs=True)
-                else:
-                    id2img_embs_full_length = None
-                    id2img_embs             = None
-
                 # zs_clip_features: [BS, 257, 1280]
                 # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
-                # zs_id_embs: the low-level ID embeddings from FaceAnalysis. Not actually used.
                 adaface_subj_embs, placeholder_adaface_prompt_embs = \
-                        subj_basis_generator(id2img_embs,
-                                             zs_clip_features, zs_id_embs, 
+                        subj_basis_generator(id2img_prompt_embs,
+                                             zs_clip_features, None, 
                                              out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                              is_training=self.training,
                                              adaface_prompt_embs_inf_type='full_half_pad')
@@ -481,8 +463,8 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
 
                 if self.do_zero_shot and not placeholder_is_bg:
-                    # id2img_embs: [BS, 77, 768] is the ID2ImgPrompt forward embeddings. 
-                    self.id2img_embs = id2img_embs_full_length
+                    # id2img_prompt_embs: [BS, 16, 768] or [BS, 4, 768] is the ID2ImgPrompt forward embeddings. 
+                    self.id2img_embs = id2img_prompt_embs
                     if self.iter_type in ['compos_distill_iter']:
                         assert placeholder_adaface_prompt_embs is not None
 
@@ -495,15 +477,15 @@ class EmbeddingManager(nn.Module):
                 # So we will replace the subject-single embeddings when computing the delta loss in ddpm.py later.
                 if self.training and not placeholder_is_bg and self.iter_type in ['compos_distill_iter']: #, 'recon_iter']:
                     # compos_distill_iter always has same_subject_in_batch == True. 
-                    # So zs_id_embs: [1, 512].
-                    if zs_id_embs.shape[0] != 1:
+                    # So id2img_prompt_embs: [1, 512].
+                    if id2img_prompt_embs.shape[0] != 1:
                         breakpoint()
                     subj_basis_generator0 = self.frozen_string_to_subj_basis_generator_dict[placeholder_string]
                     with torch.no_grad():
                         # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
                         # This is to reduce overfitting of subj_basis_generator after it's been finetuned.
                         adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
-                                subj_basis_generator0(id2img_embs, zs_clip_features, zs_id_embs, 
+                                subj_basis_generator0(id2img_prompt_embs, zs_clip_features, None, 
                                                       out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                                       is_training=self.training,
                                                       adaface_prompt_embs_inf_type='full_half_pad')
@@ -730,31 +712,13 @@ class EmbeddingManager(nn.Module):
             print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
                   f", with prob = {training_add_noise_prob}")
 
-    def set_zs_image_features(self, zs_clip_fgbg_features, zs_id_embs, add_noise_to_zs_id_embs=False):
-        # zs_clip_fgbg_features: [1, 514, 1280]
-        # zs_clip_subj_features, zs_clip_bg_features: [1, 257, 1280].
-        # zs_id_embs: [1, 512]. 
-        if zs_clip_fgbg_features is None:
-            zs_clip_subj_features = None
-            zs_clip_bg_features   = None
-        else:
-            zs_clip_subj_features, zs_clip_bg_features = zs_clip_fgbg_features.chunk(2, dim=1)
+    def set_zs_image_features(self, id2img_prompt_embs, zs_clip_bg_features):
+        # id2img_prompt_embs: [1, 16, 768] or [1, 4, 768].
+        # zs_clip_bg_features: [1, 257, 1280].
 
-        # Add noise to all_id_embs during training with probability 0.5.
-        # Noise level is gradually reduced from [0.01, 0.02] to [0.005, 0.01] during training.
-        # Noise std is absolute, not relative (to the std of all_id_embs).
-        # If add_noise_to_real_id_embs in ddpm.py, zs_id_embs has been added with noise of
-        # std [0.02, 0.06]. Here we add noise again, but it's much smaller than the previous noise.
-        # Therefore it doesn't matter.
-        if self.training and add_noise_to_zs_id_embs:
-            zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, self.training_percent,
-                                                       begin_noise_std_range=[0.01, 0.02], 
-                                                       end_noise_std_range  =[0.01, 0.02],
-                                                       add_noise_prob=0.5, noise_std_is_relative=True,
-                                                       keep_norm=True)
-
-        self.zs_image_feat_dict = { 'subj': zs_clip_subj_features, 'bg': zs_clip_bg_features,
-                                    'id':   zs_id_embs }
+        self.zs_image_prompt_dict = { 'subj': id2img_prompt_embs,
+                                      'bg':   zs_clip_bg_features,
+                                    }
 
         # Clear the saved subj_embs.
         self.static_subj_embs_dict = {}
