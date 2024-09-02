@@ -221,7 +221,7 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--apply_id2img_embs", action="store_true",
+    parser.add_argument("--return_id2img_embs", action="store_true",
                         help="Evaluate ID2Img embeddings of a teacher method")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
@@ -576,7 +576,7 @@ def main(opt):
                         prompts = list(prompts)
 
                     if not opt.eval_blip and not opt.diffusers:
-                        apply_id2img_embs = opt.zeroshot and opt.apply_id2img_embs
+                        return_id2img_embs = opt.zeroshot and opt.return_id2img_embs
                         prompts2 = []
                         for prompt in prompts:
                             # Replace the subject string 'z' with 'z, , ,...'.
@@ -587,7 +587,7 @@ def main(opt):
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_learned_conditioning(prompts, zs_clip_fgbg_features=zs_clip_fgbg_features,
                                                            zs_id_embs=zs_id_embs,
-                                                           apply_id2img_embs=apply_id2img_embs)
+                                                           return_id2img_embs=return_id2img_embs)
                         if opt.debug:
                             c[2]['debug_attn'] = True
 

@@ -4,6 +4,7 @@ import os, argparse, glob
 from .face_id_to_img_prompt import create_id2img_prompt_encoder
 from .teacher_pipelines import create_arc2face_pipeline, create_consistentid_pipeline
 from transformers import CLIPTextModel
+import numpy as np
 
 def save_images(images, subject_name, id2img_prompt_encoder_type,
                 prompt, noise_level, save_dir = "samples-ada"):
@@ -33,6 +34,14 @@ def save_images(images, subject_name, id2img_prompt_encoder_type,
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
 
+def seed_everything(seed):
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ["PL_GLOBAL_SEED"] = str(seed)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
@@ -43,12 +52,16 @@ if __name__ == "__main__":
     parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
-    # "a man in superman costume"
-    parser.add_argument("--prompt", type=str, default="portrait photo of a person")
+    parser.add_argument("--prompt", type=str, default="portrait photo of a person in superman costume")
+    parser.add_argument("--use_old_neg", action="store_true")
+    parser.add_argument("--use_core_only", action="store_true")
     parser.add_argument("--noise", type=float, default=0)
     parser.add_argument("--randface", action="store_true")
+    parser.add_argument("--seed", type=int, default=-1)
 
     args = parser.parse_args()
+    if args.seed > 0:
+        seed_everything(args.seed)
 
     if args.id2img_prompt_encoder_type == "arc2face":
         pipeline = create_arc2face_pipeline(args.base_model_path)
@@ -128,16 +141,27 @@ if __name__ == "__main__":
                                    do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         #pipeline.text_encoder = text_encoder
 
+        # Postpend the id prompt embeddings to the prompt embeddings.
+        # For arc2face, id_prompt_emb can be either pre- or post-pended.
+        # But for ConsistentID, id_prompt_emb has to be **post-pended**. Otherwise, the result images are blank.
         prompt_embeds_ = torch.cat([prompt_embeds_, id_prompt_emb], dim=1)
-        if neg_id_prompt_emb is not None:
+        M = id_prompt_emb.shape[1]
+
+        if args.use_old_neg or neg_id_prompt_emb is None:
+            # For arc2face, neg_id_prompt_emb is None. So we concatenate the last M negative prompt embeddings,
+            # to make the negative prompt embeddings have the same length as the prompt embeddings.
+            negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, negative_prompt_embeds_[:, -M:]], dim=1)
+        else:
             # NOTE: For ConsistentID, neg_id_prompt_emb has to be present in the negative prompt embeddings.
             # Otherwise, the result images are cartoonish.
             negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, neg_id_prompt_emb], dim=1)
-        else:
-            # For arc2face, neg_id_prompt_emb is None. So we concatenate the last M negative prompt embeddings,
-            # to make the negative prompt embeddings have the same length as the prompt embeddings.
-            M = id_prompt_emb.shape[1]
-            negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, negative_prompt_embeds_[:, -M:]], dim=1)
+
+        if args.use_core_only:
+            prompt_embeds_          = id_prompt_emb
+            if args.use_old_neg or neg_id_prompt_emb is None:
+                negative_prompt_embeds_ = negative_prompt_embeds_[:, -M:]
+            else:
+                negative_prompt_embeds_ = neg_id_prompt_emb
 
         noise = torch.randn(args.out_image_count, 4, 64, 64, device='cuda', dtype=torch.float16)
         

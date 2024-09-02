@@ -517,7 +517,7 @@ def create_id2img_prompt_encoder(id2img_prompt_encoder_type):
         # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
         # Only the consistentID modules and bise_net are used.
         id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
-                                        base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
+                                  base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
     else:
         breakpoint()
 

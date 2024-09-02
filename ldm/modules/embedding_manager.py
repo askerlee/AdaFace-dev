@@ -447,28 +447,30 @@ class EmbeddingManager(nn.Module):
                 # So it's is frozen.
                 if self.do_zero_shot and not placeholder_is_bg and self.curr_subj_is_face:
                     with torch.no_grad():
-                        # id2img_embs (full prompt):             [BS, 77, 768]. 
-                        # face2img_id_embs (ID embeddings only): [BS, 16, 768].
+                        # id2img_embs_full_length:          [BS, 77, 768]. 
+                        # id2img_embs_full_length has the full prompt length generated from a plain template 
+                        # (not the compositional prompts), and the semantics in it is merely those of the ID tokens.
+                        # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
                         # TODO: if id2img_prompt_encoder is ConsistentID_ID2ImgPrompt, it also requires
                         # a separate call to map_init_id_to_img_prompt_embs() to generate uncond_global_id_embeds.
                         # This needs the clip_neg_features, which is not available yet.
                         # We will implement this in the future.
-                        placeholder_id2img_embs, face2img_id_embs = \
+                        id2img_embs_full_length, id2img_embs = \
                             self.id2img_prompt_encoder.map_init_id_to_img_prompt_embs( \
                                 zs_id_embs, zs_clip_features, return_full_and_core_embs=True)
                 else:
-                    placeholder_id2img_embs = None
-                    face2img_id_embs = None
+                    id2img_embs_full_length = None
+                    id2img_embs             = None
 
                 # zs_clip_features: [BS, 257, 1280]
                 # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
                 # zs_id_embs: the low-level ID embeddings from FaceAnalysis. Not actually used.
                 adaface_subj_embs, placeholder_adaface_prompt_embs = \
-                        subj_basis_generator(face2img_id_embs,
-                                                zs_clip_features, zs_id_embs, 
-                                                out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
-                                                is_training=self.training,
-                                                adaface_prompt_embs_inf_type='full_half_pad')
+                        subj_basis_generator(id2img_embs,
+                                             zs_clip_features, zs_id_embs, 
+                                             out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
+                                             is_training=self.training,
+                                             adaface_prompt_embs_inf_type='full_half_pad')
                 # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
                 # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
                 # But adaface_subj_embs is generated from the subject-single instance only.
@@ -479,10 +481,8 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
 
                 if self.do_zero_shot and not placeholder_is_bg:
-                    # NOTE: id2img_embs is the ID2ImgPrompt forward embeddings, while 
-                    if self.iter_type in ['id2img_only_iter']:
-                        # id2img_embs: [BS, 77, 768].
-                        self.id2img_embs = placeholder_id2img_embs
+                    # id2img_embs: [BS, 77, 768] is the ID2ImgPrompt forward embeddings. 
+                    self.id2img_embs = id2img_embs_full_length
                     if self.iter_type in ['compos_distill_iter']:
                         assert placeholder_adaface_prompt_embs is not None
 
@@ -503,10 +503,10 @@ class EmbeddingManager(nn.Module):
                         # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
                         # This is to reduce overfitting of subj_basis_generator after it's been finetuned.
                         adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
-                                subj_basis_generator0(face2img_id_embs, zs_clip_features, zs_id_embs, 
-                                                        out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
-                                                        is_training=self.training,
-                                                        adaface_prompt_embs_inf_type='full_half_pad')
+                                subj_basis_generator0(id2img_embs, zs_clip_features, zs_id_embs, 
+                                                      out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
+                                                      is_training=self.training,
+                                                      adaface_prompt_embs_inf_type='full_half_pad')
                         
                     # adaface_subj_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
                     adaface_subj_embs0 = adaface_subj_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
@@ -977,20 +977,6 @@ class EmbeddingManager(nn.Module):
         # Convert the frozen copy of subj_basis_generators to float16 to save RAM.
         self.frozen_string_to_subj_basis_generator_dict.to(dtype=dtype)
         print("Made a frozen copy of subj_basis_generators")
-
-    def perturb_model_parameters(self, perturb_ratio=0.2):
-        param_group_list = self.optimized_parameters()
-        num_perturbed_params = 0
-        for param_group in param_group_list:
-            for param in param_group['params']:
-                if param.requires_grad:
-                    # 0.5 -> uniform in [0.4, 0.7]. Inject randomness to reduce overfitting.
-                    perturbation = torch_uniform(1 - perturb_ratio, 1 + perturb_ratio, 
-                                                 param.shape, device=param.device)
-                    param.data = param.data * perturbation
-                    num_perturbed_params += 1
-        
-        print(f"Perturbed {num_perturbed_params} parameters with range = ({1 - perturb_ratio}, {1 + perturb_ratio})")
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
