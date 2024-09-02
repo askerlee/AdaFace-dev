@@ -245,6 +245,8 @@ def parse_args():
                         choices=["adaface", "pulid"])
     parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
                         choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")
+    parser.add_argument("--use_teacher_neg", action="store_true",
+                        help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
@@ -308,7 +310,9 @@ def main(opt):
 
     if opt.neg_prompt != "":
         print("Negative prompt:", opt.neg_prompt)
-        
+
+    teacher_neg_id_prompt_embs = None
+
     if opt.zeroshot:
         assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
         ref_image_paths = []
@@ -383,7 +387,6 @@ def main(opt):
     else:        
         if opt.diffusers:
             opt.scale = opt.scale[0]
-
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
 
@@ -394,10 +397,13 @@ def main(opt):
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-                adaface_subj_embs = pipeline.generate_adaface_embeddings(ref_image_paths, None, False, 
-                                                                         out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
-                                                                         noise_level=0, 
-                                                                         update_text_encoder=True)
+                # If id2img_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.
+                # If id2img_prompt_encoder_type == "consistentID", teacher_neg_id_prompt_embs will be used for CFG.
+                adaface_subj_embs, teacher_neg_id_prompt_embs = \
+                    pipeline.generate_adaface_embeddings(ref_image_paths, None, False, 
+                                                         out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
+                                                         noise_level=0, 
+                                                         update_text_encoder=True)
             elif opt.method == "pulid":
                 sys.path.append("pulid")
                 from pulid.pipeline import PuLIDPipeline
@@ -613,9 +619,10 @@ def main(opt):
 
                     elif opt.diffusers:
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-                        if opt.method == "adaface":                                
-                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale, 
-                                                      batch_size, verbose=True)
+                        if opt.method == "adaface":                      
+                            teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if opt.use_teacher_neg else None
+                            x_samples_ddim = pipeline(noise, prompts[0], None, teacher_neg_id_prompt_embs, 
+                                                      opt.scale, batch_size, verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []
                             prompt = re.sub(r"a\s+z,? ", "", prompts[0])

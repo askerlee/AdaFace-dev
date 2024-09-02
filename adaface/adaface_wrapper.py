@@ -283,16 +283,16 @@ class AdaFaceWrapper(nn.Module):
                                     out_id_embs_cfg_scale=6., noise_level=0, 
                                     update_text_encoder=True):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
-        # If gen_rand_face, faceid_embeds/id_prompt_emb is a batch of random embeddings, each instance is different.
+        # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
         # Otherwise, face_id_embs is used.
-        # faceid_embeds is in the face analysis embeddings. id_prompt_emb is in the image prompt space.
+        # faceid_embeds is in the face analysis embeddings. id_prompt_embs is in the image prompt space.
         # Here id_batch_size = 1, so
         # faceid_embeds: [1, 512]. NOT used later.
-        # id_prompt_emb: [1, 16, 768]. 
-        # NOTE: Since return_core_id_embs_only is True, id_prompt_emb is only the 16 core ID embeddings.
+        # id_prompt_embs: [1, 16, 768]. 
+        # NOTE: Since return_core_id_embs_only is True, id_prompt_embs is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
-        face_image_count, faceid_embeds, id_prompt_emb, _ \
+        face_image_count, faceid_embeds, id_prompt_embs, teacher_neg_id_prompt_embs \
             = self.id2img_prompt_encoder.get_img_prompt_embs(\
                 init_id_embs=None if gen_rand_face else face_id_embs,
                 pre_clip_features=None,
@@ -309,7 +309,7 @@ class AdaFaceWrapper(nn.Module):
         # adaface_subj_embs: [1, 1, 16, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
         adaface_subj_embs, adaface_prompt_embs = \
-            self.subj_basis_generator(id_prompt_emb, None, None, 
+            self.subj_basis_generator(id_prompt_embs, None, None, 
                                       out_id_embs_cfg_scale=out_id_embs_cfg_scale,
                                       is_face=True, is_training=False,
                                       adaface_prompt_embs_inf_type='full_half_pad')
@@ -317,7 +317,7 @@ class AdaFaceWrapper(nn.Module):
         adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
         if update_text_encoder:
             self.update_text_encoder_subj_embs(adaface_subj_embs)
-        return adaface_subj_embs
+        return adaface_subj_embs, teacher_neg_id_prompt_embs
 
     def encode_prompt(self, prompt, negative_prompt=None, device=None, verbose=False):
         if negative_prompt is None:
@@ -378,7 +378,7 @@ class AdaFaceWrapper(nn.Module):
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, negative_prompt=None, guidance_scale=4.0, 
+    def forward(self, noise, prompt, negative_prompt=None, teacher_neg_id_prompt_embs=None, guidance_scale=4.0, 
                 out_image_count=4, ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
 
@@ -392,6 +392,9 @@ class AdaFaceWrapper(nn.Module):
         prompt_embeds_          = prompt_embeds_.repeat(out_image_count, 1, 1)
         if negative_prompt_embeds_ is not None:
             negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
+        if teacher_neg_id_prompt_embs is not None:
+            teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs.repeat(out_image_count, 1, 1)
+            negative_prompt_embeds_[:, -teacher_neg_id_prompt_embs.shape[1]:]  = teacher_neg_id_prompt_embs
 
         if self.pipeline_name == "text2img3":
             pooled_prompt_embeds_           = pooled_prompt_embeds_.repeat(out_image_count, 1)

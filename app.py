@@ -67,7 +67,7 @@ def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale, noise_std_
     if prompt is None:
         prompt = ""
 
-    adaface_subj_embs = \
+    adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.generate_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
                                             out_id_embs_cfg_scale=adaface_id_cfg_scale, 
                                             noise_level=noise_std_to_input,

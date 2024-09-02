@@ -53,7 +53,7 @@ if __name__ == "__main__":
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
     parser.add_argument("--prompt", type=str, default="portrait photo of a person in superman costume")
-    parser.add_argument("--use_old_neg", action="store_true")
+    parser.add_argument("--use_teacher_neg", action="store_true")
     parser.add_argument("--use_core_only", action="store_true")
     parser.add_argument("--noise", type=float, default=0)
     parser.add_argument("--randface", action="store_true")
@@ -147,7 +147,7 @@ if __name__ == "__main__":
         prompt_embeds_ = torch.cat([prompt_embeds_, id_prompt_emb], dim=1)
         M = id_prompt_emb.shape[1]
 
-        if args.use_old_neg or neg_id_prompt_emb is None:
+        if (not args.use_teacher_neg) or neg_id_prompt_emb is None:
             # For arc2face, neg_id_prompt_emb is None. So we concatenate the last M negative prompt embeddings,
             # to make the negative prompt embeddings have the same length as the prompt embeddings.
             negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, negative_prompt_embeds_[:, -M:]], dim=1)
@@ -158,7 +158,7 @@ if __name__ == "__main__":
 
         if args.use_core_only:
             prompt_embeds_          = id_prompt_emb
-            if args.use_old_neg or neg_id_prompt_emb is None:
+            if (not args.use_teacher_neg) or neg_id_prompt_emb is None:
                 negative_prompt_embeds_ = negative_prompt_embeds_[:, -M:]
             else:
                 negative_prompt_embeds_ = neg_id_prompt_emb

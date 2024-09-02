@@ -2123,6 +2123,7 @@ class LatentDiffusion(DDPM):
                         # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
                         cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
                         cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                        # teacher_context: [4, 81, 768]
                         teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)                
                     else:
                         breakpoint()
