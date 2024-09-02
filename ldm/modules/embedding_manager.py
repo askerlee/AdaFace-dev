@@ -442,6 +442,7 @@ class EmbeddingManager(nn.Module):
                 else:
                     # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
                     id2img_prompt_embs = zs_image_prompt_dict['subj'] if self.curr_subj_is_face else None
+                    zs_clip_features = None
 
                 subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                     
@@ -712,7 +713,7 @@ class EmbeddingManager(nn.Module):
             print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
                   f", with prob = {training_add_noise_prob}")
 
-    def set_zs_image_features(self, id2img_prompt_embs, zs_clip_bg_features):
+    def set_zs_image_prompts_and_features(self, id2img_prompt_embs, zs_clip_bg_features):
         # id2img_prompt_embs: [1, 16, 768] or [1, 4, 768].
         # zs_clip_bg_features: [1, 257, 1280].
 

@@ -684,7 +684,7 @@ class LatentDiffusion(DDPM):
         # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_bg_features is None.
         # We don't update subj_id2img_prompt_embs / zs_clip_bg_features in this case.
         if subj_id2img_prompt_embs is not None or zs_clip_bg_features is not None:
-            self.embedding_manager.set_zs_image_features(subj_id2img_prompt_embs, zs_clip_bg_features)
+            self.embedding_manager.set_zs_image_prompts_and_features(subj_id2img_prompt_embs, zs_clip_bg_features)
             
         if embman_iter_type is None:
             if self.iter_flags['is_compos_iter']:
