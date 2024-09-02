@@ -28,7 +28,7 @@ def save_images(images, subject_name, id2img_prompt_encoder_type,
             grid_count += 1
             grid_filepath = os.path.join(save_dir, 
                         "-".join([ subject_name, id2img_prompt_encoder_type, 
-                                   prompt_sig, f"noise{noise_level:.02f}", str(grid_count) ] + ".png"))
+                                   prompt_sig, f"noise{noise_level:.02f}", str(grid_count) ]) + ".png")
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
     # "a man in superman costume"
-    parser.add_argument("--prompt", type=str, default="")
+    parser.add_argument("--prompt", type=str, default="portrait photo of a person")
     parser.add_argument("--noise", type=float, default=0)
     parser.add_argument("--randface", action="store_true")
 
@@ -120,12 +120,7 @@ if __name__ == "__main__":
 
         pipeline.text_encoder = orig_text_encoder
 
-        filler_prompt = "photo of a id person"
-        comp_prompt = args.prompt 
-        test_core_embs = True
-        if test_core_embs:
-            comp_prompt = filler_prompt
-
+        comp_prompt     = args.prompt 
         negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
         # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
         prompt_embeds_, negative_prompt_embeds_ = \
