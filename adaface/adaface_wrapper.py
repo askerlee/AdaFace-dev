@@ -70,7 +70,7 @@ class AdaFaceWrapper(nn.Module):
         # But we don't do layerwise embeddings here, so we set it to 1.
         self.subj_basis_generator.num_out_layers = 1
         self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
-        print(f"Loaded subject basis generator for '{self.subject_string}'.")
+        print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
         self.subj_basis_generator.to(self.device)
         if self.is_training:

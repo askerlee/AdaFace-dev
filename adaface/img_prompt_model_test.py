@@ -1,18 +1,12 @@
-from diffusers import (
-    StableDiffusionPipeline,
-    UNet2DConditionModel,
-    DDIMScheduler,
-)
-from transformers import CLIPTextModel
-from adaface.arc2face_models import CLIPTextModelWrapper
-
 import torch
 from PIL import Image
 import os, argparse, glob
-from adaface.face_id_to_img_prompt import create_id2img_prompt_encoder
+from .face_id_to_img_prompt import create_id2img_prompt_encoder
+from .teacher_pipelines import create_arc2face_pipeline, create_consistentid_pipeline
+from transformers import CLIPTextModel
 
-def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-ada"):
-    
+def save_images(images, subject_name, id2img_prompt_encoder_type,
+                prompt, noise_level, save_dir = "samples-ada"):
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
     grid_image = Image.new('RGB', (512 * 2, 512 * 2))
@@ -21,23 +15,32 @@ def save_images(images, subject_name, prompt, noise_level, save_dir = "samples-a
         grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
     prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level:.02f}.png")
+    grid_filepath = os.path.join(save_dir, 
+                "-".join([subject_name, id2img_prompt_encoder_type, 
+                          prompt_sig, f"noise{noise_level:.02f}.png"]))
+    
     if os.path.exists(grid_filepath):
         grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
+        grid_filepath = os.path.join(save_dir, 
+                        "-".join([ subject_name, id2img_prompt_encoder_type, 
+                                   prompt_sig, f"noise{noise_level:.02f}", str(grid_count) ]) + ".png")
         while os.path.exists(grid_filepath):
             grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
+            grid_filepath = os.path.join(save_dir, 
+                        "-".join([ subject_name, id2img_prompt_encoder_type, 
+                                   prompt_sig, f"noise{noise_level:.02f}", str(grid_count) ] + ".png"))
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    
-    parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
+
+    # --base_model_path models/Realistic_Vision_V4.0_noVAE
+    parser.add_argument("--base_model_path", type=str, default="models/sar/sar.safetensors")    
     parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
                         choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")    
+    parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
     # "a man in superman costume"
@@ -47,36 +50,12 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    base_model = 'runwayml/stable-diffusion-v1-5'
+    if args.id2img_prompt_encoder_type == "arc2face":
+        pipeline = create_arc2face_pipeline(args.base_model_path)
+    elif args.id2img_prompt_encoder_type == "consistentID":
+        pipeline = create_consistentid_pipeline(args.base_model_path)
 
-    orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
-
-    text_encoder = CLIPTextModelWrapper.from_pretrained(
-        'models/arc2face', subfolder="encoder", torch_dtype=torch.float16
-    )
-    unet = UNet2DConditionModel.from_pretrained(
-        'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
-    )
-    pipeline = StableDiffusionPipeline.from_pretrained(
-            base_model,
-            text_encoder=text_encoder,
-            unet=unet,
-            torch_dtype=torch.float16,
-            safety_checker=None
-        )
-
-    noise_scheduler = DDIMScheduler(
-        num_train_timesteps=1000,
-        beta_start=0.00085,
-        beta_end=0.012,
-        beta_schedule="scaled_linear",
-        clip_sample=False,
-        set_alpha_to_one=False,
-        steps_offset=1,
-    )
-
-    pipeline.scheduler = noise_scheduler
-    pipeline = pipeline.to('cuda')
+    pipeline = pipeline.to('cuda', torch.float16)
 
     id2img_prompt_encoder = create_id2img_prompt_encoder(args.id2img_prompt_encoder_type)
     id2img_prompt_encoder.to('cuda')
@@ -112,14 +91,17 @@ if __name__ == "__main__":
     id_batch_size = args.out_image_count
 
     input_max_length = 22
+    text_encoder = pipeline.text_encoder
+    orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
 
     # Noise level is the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
-    for noise_level in (0, 0.03):
+    for noise_level in (0,): # 0.03):
         init_id_embs = rand_face_id_embs if args.randface else None
 
         # id_prompt_emb is in the image prompt space.
-        face_image_count, faceid_embeds, id_prompt_emb, _ \
+        # neg_id_prompt_emb is used in ConsistentID only.
+        face_image_count, faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
             = id2img_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=init_id_embs,
                 pre_clip_features=None,
@@ -133,6 +115,8 @@ if __name__ == "__main__":
 
         if args.randface:
             id_prompt_emb = id_prompt_emb.repeat(args.out_image_count, 1, 1)
+            if neg_id_prompt_emb is not None:
+                neg_id_prompt_emb = neg_id_prompt_emb.repeat(args.out_image_count, 1, 1)
 
         pipeline.text_encoder = orig_text_encoder
 
@@ -144,23 +128,31 @@ if __name__ == "__main__":
 
         negative_prompt = "monochrome, lowres, bad anatomy, worst quality, low quality"
         # prompt_embeds_, negative_prompt_embeds_: [4, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_ = pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt = args.out_image_count,
-                                                                         do_classifier_free_guidance=True, negative_prompt=negative_prompt)
-        pipeline.text_encoder = text_encoder
+        prompt_embeds_, negative_prompt_embeds_ = \
+            pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt=args.out_image_count,
+                                   do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+        #pipeline.text_encoder = text_encoder
 
-        # By replacing comp_prompt with filler_prompt, and replacing prompt_embeds_ 4:20 with id_prompt_emb 4:20,
-        # the resulting images are quite similar to those generated with id_prompt_emb. 
-        # This shows id_prompt_emb 4:20 contains the ID of the person.
-        prompt_embeds_[:, 4:4+id_prompt_emb.shape[1]] = id_prompt_emb
+        prompt_embeds_ = torch.cat([prompt_embeds_, id_prompt_emb], dim=1)
+        if neg_id_prompt_emb is not None:
+            # NOTE: For ConsistentID, neg_id_prompt_emb has to be present in the negative prompt embeddings.
+            # Otherwise, the result images are cartoonish.
+            negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, neg_id_prompt_emb], dim=1)
+        else:
+            # For arc2face, neg_id_prompt_emb is None. So we concatenate the last M negative prompt embeddings,
+            # to make the negative prompt embeddings have the same length as the prompt embeddings.
+            M = id_prompt_emb.shape[1]
+            negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, negative_prompt_embeds_[:, -M:]], dim=1)
 
-        noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
-
-        for guidance_scale in [2, 4]:
-            images = pipeline(image=noise,
+        noise = torch.randn(args.out_image_count, 4, 64, 64, device='cuda', dtype=torch.float16)
+        
+        for guidance_scale in [4]:
+            images = pipeline(latents=noise,
                               prompt_embeds=prompt_embeds_, 
                               negative_prompt_embeds=negative_prompt_embeds_, 
                               num_inference_steps=40, 
                               guidance_scale=guidance_scale, 
                               num_images_per_prompt=1).images
 
-            save_images(images, subject_name, f"guide{guidance_scale}", noise_level)
+            save_images(images, subject_name, args.id2img_prompt_encoder_type, 
+                        f"guide{guidance_scale}", noise_level)

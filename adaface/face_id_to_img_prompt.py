@@ -292,7 +292,11 @@ class FaceID2ImgPrompt(nn.Module):
         if faceid_embeds_from_images and avg_at_stage is not None:
             faceid_embeds  = faceid_embeds.repeat(id_batch_size, 1)
             pos_prompt_emb = pos_prompt_emb.repeat(id_batch_size, 1, 1)
-
+            if clip_fgbg_features is not None:
+                clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
+            if clip_neg_features is not None:
+                clip_neg_features  = clip_neg_features.repeat(id_batch_size, 1, 1)
+            
         if self.gen_neg_img_prompt:
             with torch.no_grad():
                 neg_prompt_emb, neg_core_prompt_emb = \

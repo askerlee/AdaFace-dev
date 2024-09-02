@@ -79,7 +79,7 @@ def parse_args():
         help="number of ddim sampling steps",
     )
     parser.add_argument(
-        "--fixed_code",
+        "--same_start_code_for_prompts",
         action='store_true',
         help="if enabled, uses the same starting code across samples",
     )
@@ -537,7 +537,7 @@ def main(opt):
     else:
         clip_evator, dino_evator = None, None
 
-    if opt.fixed_code:
+    if opt.same_start_code_for_prompts:
         # start_code is independent of the samples. Therefore it's shared by all samples.
         start_code = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
     else:

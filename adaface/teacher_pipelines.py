@@ -3,9 +3,13 @@ import numpy as np
 import pytorch_lightning as pl
 from diffusers import UNet2DConditionModel
 from adaface.util import UNetEnsemble
-from adaface.face_id_to_img_prompt import ConsistentID_ID2ImgPrompt
-from PIL import Image
 from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline
+from diffusers import (
+    StableDiffusionPipeline,
+    UNet2DConditionModel,
+    DDIMScheduler,
+)
+from adaface.arc2face_models import CLIPTextModelWrapper
 
 class UNetTeacher(pl.LightningModule):
     def __init__(self, **kwargs):
@@ -63,6 +67,31 @@ class UNetTeacher(pl.LightningModule):
         pred_x0s = x_starts[1:]
         return noise_preds, pred_x0s, noises, ts
     
+def create_arc2face_pipeline(base_model_path, dtype=torch.float16):
+    text_encoder = CLIPTextModelWrapper.from_pretrained(
+        'models/arc2face', subfolder="encoder", torch_dtype=dtype
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        'models/arc2face', subfolder="arc2face", torch_dtype=dtype
+    )
+    noise_scheduler = DDIMScheduler(
+        num_train_timesteps=1000,
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        clip_sample=False,
+        set_alpha_to_one=False,
+        steps_offset=1,
+    )    
+    pipeline = StableDiffusionPipeline.from_single_file(
+            base_model_path,
+            text_encoder=text_encoder,
+            unet=unet,
+            torch_dtype=dtype,
+            safety_checker=None
+        )
+    pipeline.scheduler = noise_scheduler
+    return pipeline
 
 class Arc2FaceTeacher(UNetTeacher):
     def __init__(self, **kwargs):
@@ -78,6 +107,31 @@ class UNetEnsembleTeacher(UNetTeacher):
         super().__init__()
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
 
+def create_consistentid_pipeline(base_model_path, dtype=torch.float16):
+    pipe = ConsistentIDPipeline.from_single_file(
+        base_model_path, 
+        torch_dtype=dtype, 
+    )
+    # consistentID specific modules are still in fp32. Will be converted to fp16 
+    # later with .to(device, torch_dtype) by the caller.
+    pipe.load_ConsistentID_model(
+        consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
+        bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
+    )
+
+    noise_scheduler = DDIMScheduler(
+        num_train_timesteps=1000,
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        clip_sample=False,
+        set_alpha_to_one=False,
+        steps_offset=1,
+    )        
+    pipe.scheduler = noise_scheduler
+
+    return pipe
+
 class ConsistentIDTeacher(UNetTeacher):
     def __init__(self, base_model_path, **kwargs):
         super().__init__()
@@ -85,15 +139,7 @@ class ConsistentIDTeacher(UNetTeacher):
         # In contrast to Arc2FaceTeacher or UNetEnsembleTeacher, ConsistentIDPipeline is not a torch.nn.Module.
         # We couldn't initialize the ConsistentIDPipeline to CPU first and wait it to be automatically moved to GPU.
         # Instead, we have to initialize it to GPU directly.
-        pipe = ConsistentIDPipeline.from_single_file(
-            base_model_path, 
-            torch_dtype=torch.float16, 
-        )
-        ### Load consistentID_model checkpoints (these paths are fixed, so they are hardcoded).
-        pipe.load_ConsistentID_model(
-            consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
-            bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
-        )
+        pipe = create_consistentid_pipeline(base_model_path)
         # Release VAE to save memory. UNet and text_encoder is still needed for denoising 
         # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
         pipe.release_components(["vae"])
