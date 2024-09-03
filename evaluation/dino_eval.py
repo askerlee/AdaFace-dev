@@ -1,9 +1,5 @@
-import clip
 import torch
-from torchvision import transforms
 from transformers import ViTFeatureExtractor, ViTModel
-from PIL import Image
-from transformers.image_utils  import ImageInput
 
 class DINOEvaluator(object):
     def __init__(self, device, vit_model='facebook/dino-vits16') -> None:
@@ -42,7 +38,7 @@ ViTImageProcessor {
     '''
 
     @torch.no_grad()
-    def encode_images(self, images: ImageInput) -> torch.Tensor:
+    def encode_images(self, images):
         inputs  = self.preprocess(images=images, return_tensors="pt")
         inputs  = inputs.to(self.device)
         outputs = self.model(**inputs)
@@ -53,7 +49,7 @@ ViTImageProcessor {
         # [B, 384]
         return last_hidden_states[:, 0]
 
-    def get_image_features(self, img: ImageInput, norm: bool = True) -> torch.Tensor:
+    def get_image_features(self, img, norm = True) -> torch.Tensor:
         image_features = self.encode_images(img)
         
         if norm:

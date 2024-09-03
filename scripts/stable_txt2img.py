@@ -410,6 +410,7 @@ def main(opt):
                                                          out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
                                                          noise_level=0, 
                                                          update_text_encoder=True)
+                
             elif opt.method == "pulid":
                 sys.path.append("pulid")
                 from pulid.pipeline import PuLIDPipeline

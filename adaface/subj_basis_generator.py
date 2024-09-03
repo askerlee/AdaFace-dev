@@ -481,6 +481,13 @@ class ImgPrompt2TextPrompt(nn.Module):
                 # due to its special position.)
                 prompt_embeds2[:, PAD_BEGIN:-1] = self.pad_embeddings[PAD_BEGIN:-1]
                 returned_prompt_embs.append(prompt_embeds2)
+            elif emb_type == 'full_zeroed_extra':
+                prompt_embeds2 = prompt_embeds.clone()
+                # Only add two pad embeddings. The remaining embeddings are set to 0.
+                # Make the positional embeddings align with the actual positions.
+                prompt_embeds2[:, 22:24] = self.pad_embeddings[22:24]
+                prompt_embeds2[:, 24:-1] = 0
+                returned_prompt_embs.append(prompt_embeds2)
             elif emb_type == 'core':
                 returned_prompt_embs.append(core_prompt_embs)
             else:
@@ -653,6 +660,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                                                      return_emb_types=return_emb_types, 
                                                      hidden_state_layer_weights=hidden_state_layer_weights,
                                                      zs_extra_words_scale=self.zs_extra_words_scale)
+
                 # Reduce the update rate to prompt2token_proj.
                 adaface_prompt_embs = self.prompt2token_proj_grad_scaler(adaface_prompt_embs)
                 core_id_embs = self.prompt2token_proj_grad_scaler(core_id_embs)

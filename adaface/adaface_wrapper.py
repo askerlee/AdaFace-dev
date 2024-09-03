@@ -10,7 +10,6 @@ from diffusers import (
     AutoencoderKL,
 )
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
-from insightface.app import FaceAnalysis
 from adaface.util import UNetEnsemble
 from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt, ConsistentID_ID2ImgPrompt
 from safetensors.torch import load_file as safetensors_load_file
@@ -161,7 +160,7 @@ class AdaFaceWrapper(nn.Module):
             pipeline.unet = unet_ensemble
 
         print(f"Loaded pipeline from {self.base_model_path}.")
-
+        
         if self.use_840k_vae:
             pipeline.vae = vae
             print("Replaced the VAE with the 840k-step VAE.")
@@ -242,7 +241,7 @@ class AdaFaceWrapper(nn.Module):
         
         # placeholder_token_ids: [49408, ..., 49423].
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.placeholder_tokens)
-        # print(self.placeholder_token_ids)
+        print("New tokens:", self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
         old_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.shape
         self.pipeline.text_encoder.resize_token_embeddings(len(tokenizer))
@@ -253,6 +252,7 @@ class AdaFaceWrapper(nn.Module):
     # subj_embs: [16, 768].
     def update_text_encoder_subj_embs(self, subj_embs):
         # Initialise the newly added placeholder token with the embeddings of the initializer token
+        # token_embeds: [49412, 768]
         token_embeds = self.pipeline.text_encoder.get_input_embeddings().weight.data
         with torch.no_grad():
             for i, token_id in enumerate(self.placeholder_token_ids):
@@ -267,15 +267,11 @@ class AdaFaceWrapper(nn.Module):
         if self.placeholder_tokens_str in prompt:
             return prompt
         
-        # If the subject string 'z' is not in the prompt, then simply prepend the placeholder tokens to the prompt.
-        if re.search(r'\b' + self.subject_string + r'\b', prompt) is None:
-            print(f"Subject string '{self.subject_string}' not found in the prompt. Adding it.")
-            comp_prompt = self.placeholder_tokens_str + " " + prompt
-        else:
-            # Replace the subject string 'z' with the placeholder tokens.
-            # If there is a word 'a' before the subject string, then replace 'a z' with the placeholder tokens.
-            prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b', self.placeholder_tokens_str, prompt)
-            comp_prompt = re.sub(r'\b' + self.subject_string + r'\b', self.placeholder_tokens_str, prompt)
+        # Remove the subject string 'z', then postpend the placeholder tokens to the prompt.
+        # If there is a word 'a' before the subject string or ',' after, then remove 'a z,'.
+        prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
+        prompt = re.sub(r'\b' + self.subject_string + r'\b,?', "", prompt)
+        comp_prompt = prompt + " " + self.placeholder_tokens_str
         return comp_prompt
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
@@ -288,7 +284,7 @@ class AdaFaceWrapper(nn.Module):
         # faceid_embeds is in the face analysis embeddings. id_prompt_embs is in the image prompt space.
         # Here id_batch_size = 1, so
         # faceid_embeds: [1, 512]. NOT used later.
-        # id_prompt_embs: [1, 16, 768]. 
+        # id_prompt_embs: [1, 16/4, 768]. 
         # NOTE: Since return_core_id_embs_only is True, id_prompt_embs is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
@@ -306,8 +302,10 @@ class AdaFaceWrapper(nn.Module):
         if face_image_count == 0:
             return None, None
         
-        # adaface_subj_embs: [1, 1, 16, 768]. 
+        # adaface_subj_embs: [16/4, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
+        # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
+        # adaface_prompt_embs, which is not used.
         adaface_subj_embs, adaface_prompt_embs = \
             self.subj_basis_generator(id_prompt_embs, None, None, 
                                       out_id_embs_cfg_scale=out_id_embs_cfg_scale,
