@@ -3807,7 +3807,9 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError()
             
         # self.learning_rate and self.weight_decay are set in main.py.
-        # self.learning_rate = base_lr * 2, 2 is the batch size.
+        # self.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr.
+        # If accumulate_grad_batches = 2, ngpu = 2, bs = 4, base_lr = 8e-04, then
+        # learning_rate = 2 * 2 * 4 * 1e-05 = 1.6e-04.
         lr          = self.learning_rate
         scheduler   = None
 
@@ -3884,7 +3886,7 @@ class LatentDiffusion(DDPM):
                     # total_iters = second_phase_steps * 1.1, so that the LR is reduced to 0.1/1.1 = 0.09
                     # of the full LR at the end.
                     linear_cycle_scheduler = PolynomialLR(opt, power=1,
-                                                            total_iters=cycle_steps * 1.1)
+                                                          total_iters=cycle_steps * 1.1)
                     schedulers.append(linear_cycle_scheduler)
             elif self.prodigy_config.scheduler_type == 'CosineAnnealingWarmRestarts':
                 # eta_min should be 0.1 instead of 0.1 * LR, since the full LR is 1 for Prodigy.

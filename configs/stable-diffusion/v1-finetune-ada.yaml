@@ -49,7 +49,7 @@ model:
     # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
     fg_bg_complementary_loss_weight:  2e-4
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
-    fg_bg_xlayer_consist_loss_weight: 5e-5
+    fg_bg_xlayer_consist_loss_weight: 5e-
     # fg_wds_comple: used in wds recon iters.
     fg_wds_complementary_loss_weight: 0 #1e-4
     wds_bg_recon_discount:            0.05
@@ -173,3 +173,5 @@ lightning:
     limit_val_batches: 0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
+    accumulate_grad_batches: 2
+    
