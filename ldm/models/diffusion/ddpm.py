@@ -77,7 +77,6 @@ class DDPM(pl.LightningModule):
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='Prodigy',
                  grad_clip=0.5,
-                 accumulate_grad_batches=1,
                  adam_config=None,
                  prodigy_config=None,
                  use_layerwise_embedding=True,
@@ -174,7 +173,6 @@ class DDPM(pl.LightningModule):
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
         self.grad_clip = grad_clip
-        self.accumulate_grad_batches = accumulate_grad_batches
     
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
@@ -381,8 +379,6 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
-        # global_step is updated every self.accumulate_grad_batches iterations.
-        # So training_percent is multiplied by self.accumulate_grad_batches.
         self.training_percent = self.global_step / self.trainer.max_steps
 
         # How many regularizations are done intermittently during the training iterations?

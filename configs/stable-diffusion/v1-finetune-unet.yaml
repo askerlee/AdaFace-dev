@@ -66,7 +66,6 @@ model:
     # how well it works.
     optimizer_type: Adam8bit           # AdamW, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
-    accumulate_grad_batches: 8
     adam_config:
       betas:    [0.9,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
       scheduler_config:

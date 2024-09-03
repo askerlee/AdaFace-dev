@@ -673,7 +673,7 @@ if __name__ == "__main__":
         # accumulate_grad_batches: Default is 2, specified in v1-finetune-ada.yaml.
         # If specified in command line, then override the default value.
         if opt.accumulate_grad_batches is not None:
-            config.model.params.accumulate_grad_batches = opt.accumulate_grad_batches
+            lightning_config.trainer.accumulate_grad_batches = opt.accumulate_grad_batches
 
         if opt.max_steps > 0:
             trainer_opt.max_steps = opt.max_steps
