@@ -707,6 +707,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # hidden_state_layer_weights: [3, 1].
             self.hidden_state_layer_weights = nn.Parameter(torch.tensor([[1.0], [2.0], [4.0]], device=device),
                                                             requires_grad=True)
+            # A gradient scaler of 5 makes the gradients on hidden_state_layer_weights 5 times larger.
             self.hidden_state_layer_weights_grad_scaler = gen_gradient_scaler(5)
             print("hidden_state_layer_weights initialized as per-layer [1, 2, 4], with grad scaler 5.")
         else:

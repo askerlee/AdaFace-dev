@@ -31,13 +31,12 @@ class FaceID2ImgPrompt(nn.Module):
         self.id_img_prompt_max_length       = 77
         self.clip_embedding_dim             = 1024
 
-    # images: numpy.ndarray or torch.Tensor.
-    # images: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
-    # If images is a list of tensors, then each tensor should be [3, Hi, Wi].
-    # If images is None, then image_paths should be provided, 
-    # and images will be loaded from image_paths.
+    # image_objs: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
+    # If image_objs is a list of tensors, then each tensor should be [3, Hi, Wi].
+    # If image_objs is None, then image_paths should be provided, 
+    # and image_objs will be loaded from image_paths.
     # fg_masks: None, or a list of [Hi, Wi].
-    def extract_init_id_embeds_from_images(self, images, image_paths, fg_masks=None, 
+    def extract_init_id_embeds_from_images(self, image_objs, image_paths, fg_masks=None, 
                                            size=(512, 512), calc_avg=False, 
                                            skip_non_faces=True, 
                                            return_clip_embs=None, contrast_clip_embs=None, 
@@ -56,34 +55,33 @@ class FaceID2ImgPrompt(nn.Module):
         all_id_embs         = []
         faceless_img_count  = 0
 
-        if images is None and image_paths is not None:
+        if image_objs is None and image_paths is not None:
             image_objs = []
             for image_path in image_paths:
                 image_obj = Image.open(image_path)
                 image_objs.append(image_obj)
-            images = image_objs
-            print(f'Loaded {len(images)} images from {image_paths[0]}...')
+            print(f'Loaded {len(image_objs)} images from {image_paths[0]}...')
 
-        # images could be a batch of images that have been collated into a tensor or np array.
-        # images can also be a list of images.
+        # image_objs could be a batch of images that have been collated into a tensor or np array.
+        # image_objs can also be a list of images.
         # The code below that processes them one by one can be applied in both cases.
-        # If images are a collated batch, processing them one by one will not add much overhead.
-        for idx, image in enumerate(images):
+        # If image_objs are a collated batch, processing them one by one will not add much overhead.
+        for idx, image_obj in enumerate(image_objs):
             if return_clip_embs:
                 # input to clip_preprocessor: an image or a batch of images, each being PIL.Image.Image, numpy.ndarray, 
                 # torch.Tensor, tf.Tensor or jax.ndarray.
                 # Different sizes of images are standardized to the same size 224*224.
-                clip_image_pixel_values = self.clip_preprocessor(images=image, return_tensors="pt").pixel_values
+                clip_image_pixel_values = self.clip_preprocessor(images=image_obj, return_tensors="pt").pixel_values
                 image_pixel_values.append(clip_image_pixel_values)
 
             # Convert tensor to numpy array.
-            if isinstance(image, torch.Tensor):
-                image = image.cpu().numpy().transpose(1, 2, 0)
-            if isinstance(image, np.ndarray):
-                image = Image.fromarray(image)
-            # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
+            if isinstance(image_obj, torch.Tensor):
+                image_obj = image_obj.cpu().numpy().transpose(1, 2, 0)
+            if isinstance(image_obj, np.ndarray):
+                image_obj = Image.fromarray(image_obj)
+            # Resize image_obj to (512, 512). The scheme is Image.NEAREST, to be consistent with 
             # PersonalizedBase dataset class.
-            image_obj, _, _ = pad_image_obj_to_square(image)
+            image_obj, _, _ = pad_image_obj_to_square(image_obj)
             image_np = np.array(image_obj.resize(size, Image.NEAREST))
             face_info = self.face_app.get(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
             if len(face_info) == 0 and not skip_non_faces:
@@ -114,7 +112,7 @@ class FaceID2ImgPrompt(nn.Module):
             image_pixel_values = image_pixel_values.to(device=device, dtype=torch.float16)
 
             if fg_masks is not None:
-                assert len(fg_masks) == len(images)
+                assert len(fg_masks) == len(image_objs)
                 # fg_masks is a list of masks.
                 if isinstance(fg_masks, (list, tuple)):
                     fg_masks2 = []
@@ -274,26 +272,26 @@ class FaceID2ImgPrompt(nn.Module):
 
         faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
-        # pos_prompt_emb, neg_prompt_emb: [BS, 77, 768] or [BS, 22, 768].
+        # pos_prompt_embs, neg_prompt_embs: [BS, 77, 768] or [BS, 22, 768].
         with torch.no_grad():
-            pos_prompt_emb, pos_core_prompt_emb  = \
+            pos_prompt_embs, pos_core_prompt_emb  = \
                 self.map_init_id_to_img_prompt_embs(faceid_embeds, clip_fgbg_features,
                                                     called_for_neg_img_prompt=False,
                                                     return_full_and_core_embs=True)
         
         if avg_at_stage == 'prompt_emb':
-            pos_prompt_emb      = pos_prompt_emb.mean(dim=0, keepdim=True)
+            pos_prompt_embs      = pos_prompt_embs.mean(dim=0, keepdim=True)
             pos_core_prompt_emb = pos_core_prompt_emb.mean(dim=0, keepdim=True)
 
         if return_core_id_embs_only:
-            pos_prompt_emb = pos_core_prompt_emb
+            pos_prompt_embs = pos_core_prompt_emb
 
         # If faceid_embeds_from_images, and the prompt embeddings are already averaged, then 
         # we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
         # So we need to repeat faceid_embeds.
         if faceid_embeds_from_images and avg_at_stage is not None:
             faceid_embeds  = faceid_embeds.repeat(id_batch_size, 1)
-            pos_prompt_emb = pos_prompt_emb.repeat(id_batch_size, 1, 1)
+            pos_prompt_embs = pos_prompt_embs.repeat(id_batch_size, 1, 1)
             if clip_fgbg_features is not None:
                 clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
             if clip_neg_features is not None:
@@ -301,24 +299,24 @@ class FaceID2ImgPrompt(nn.Module):
             
         if self.gen_neg_img_prompt:
             with torch.no_grad():
-                neg_prompt_emb, neg_core_prompt_emb = \
+                neg_prompt_embs, neg_core_prompt_emb = \
                     self.map_init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
                                                         clip_neg_features,
                                                         called_for_neg_img_prompt=True,
                                                         return_full_and_core_embs=True)
                 if return_core_id_embs_only:
-                    neg_prompt_emb = neg_core_prompt_emb
+                    neg_prompt_embs = neg_core_prompt_emb
 
-            return face_image_count, faceid_embeds, pos_prompt_emb, neg_prompt_emb
+            return face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs
         else:
-            return face_image_count, faceid_embeds, pos_prompt_emb, None
+            return face_image_count, faceid_embeds, pos_prompt_embs, None
 
     # NOTE: get_batched_img_prompt_embs() should only be called during training.
     # It is a wrapper of get_img_prompt_embs() which is convenient for batched training.
     # If init_id_embs is None, generate random face embeddings [BS, 512].
     # Returns faceid_embeds, id2img_prompt_emb.
     def get_batched_img_prompt_embs(self, batch_size, init_id_embs, pre_clip_features):
-        # pos_prompt_emb, neg_prompt_emb are generated without gradient computation.
+        # pos_prompt_embs, neg_prompt_embs are generated without gradient computation.
         # So we don't need to worry that the teacher model weights are updated.
         return self.get_img_prompt_embs(init_id_embs=init_id_embs,
                                         pre_clip_features=pre_clip_features,

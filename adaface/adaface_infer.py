@@ -83,12 +83,12 @@ def parse_args():
     return args
 
 if __name__ == "__main__":
-    img_prompt_encoder2num_id_vectors = { 'arc2face': 16, 'consistentID': 4 }
+    img_prompt_encoder2num_id_vecs = { 'arc2face': 16, 'consistentID': 4 }
     args = parse_args()
     if args.seed != -1:
         seed_everything(args.seed)
 
-    num_id_vectors = img_prompt_encoder2num_id_vectors[args.id2img_prompt_encoder_type]
+    num_id_vecs = img_prompt_encoder2num_id_vecs[args.id2img_prompt_encoder_type]
     if re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
     print(f"Using device {args.device}")
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
                              args.adaface_ckpt_path, args.id2img_prompt_encoder_type,
-                             args.subject_string, num_id_vectors, args.num_inference_steps,
+                             args.subject_string, num_id_vecs, args.num_inference_steps,
                              main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,
                              unet_weights=args.unet_weights, device=args.device)

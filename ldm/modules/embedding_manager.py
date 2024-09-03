@@ -232,7 +232,7 @@ class EmbeddingManager(nn.Module):
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
         self.clear_prompt_adhoc_info()
-        # 'recon_iter', 'compos_distill_iter', 'id2img_only_iter', 'empty'.
+        # 'recon_iter', 'compos_distill_iter', 'empty'.
         self.iter_type = None       
         if self.do_zero_shot:
             self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
@@ -574,12 +574,7 @@ class EmbeddingManager(nn.Module):
             self.update_placeholder_indices(orig_tokenized_text, placeholder_string, placeholder_token, 
                                             self.token2num_vectors[placeholder_string],
                                             placeholder_is_bg=placeholder_is_bg)
-        
-
-        # NOTE: if self.iter_type == 'id2img_only_iter', we CANNOT return self.id2img_embs
-        # as the updated embedded_text, since the returned embedded_text will be encoded again by the text encoder.
-        # Instead, we replace the prompt embeddings with the id2img_embs in ddpm.py:get_learned_conditioning().
-
+  
         return embedded_text, tokenized_text, static_subj_embs_dict
 
     # extend_placeholders() should only be called during inference, 

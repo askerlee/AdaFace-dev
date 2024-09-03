@@ -221,8 +221,8 @@ def parse_args():
 
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
-    parser.add_argument("--return_id2img_embs", action="store_true",
-                        help="Evaluate ID2Img embeddings of a teacher method")
+    parser.add_argument("--return_prompt_embs_type", type=str, choices=["text", "id", "text_id"],
+                        default="text", help="The type of the returned prompt embeddings from get_learned_conditioning()")
     parser.add_argument("--load_old_embman_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
@@ -371,16 +371,22 @@ def main(opt):
                 f"Zero-shot learning mismatch: command line {opt.zeroshot} != ckpt {model.embedding_manager.do_zero_shot}."
         
         if opt.zeroshot:
-            # zs_clip_fgbg_features: [1, 514, 1280]. 
-            # zs_id_embs: [1, 512] if is_face, or [2, 16, 512] if uses IP-adapter warm start; or [1, 384] if is object.
-            _, zs_id_embs, zs_clip_fgbg_features, clip_neg_features = \
-                model.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images( \
-                    ref_images, ref_image_paths, fg_masks=None,
-                    calc_avg=True, skip_non_faces=True, 
-                    return_clip_embs=True, contrast_clip_embs=False, 
+            # subj_id_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
+            # neg_id_prompt_embs is used in ConsistentID only.
+            face_image_count, faceid_embeds, subj_id_prompt_embs, neg_id_prompt_embs \
+                = model.embedding_manager.id2img_prompt_encoder.get_img_prompt_embs( \
+                    init_id_embs=None,
+                    pre_clip_features=None,
+                    image_paths=ref_image_paths,
+                    image_objs=ref_images,
+                    id_batch_size=1,
+                    noise_level=0,
+                    return_core_id_embs_only=True,
+                    avg_at_stage='id_emb',
                     verbose=True)
+            
         else:
-            zs_clip_fgbg_features, zs_id_embs = None, None
+            subj_id_prompt_embs = None
 
         sampler = DDIMSampler(model)
 
@@ -551,9 +557,17 @@ def main(opt):
 
     if not opt.eval_blip and not opt.diffusers:
         placeholder_tokens_str = opt.subject_string + "".join([", "] * (opt.num_vectors_per_subj_token - 1))
+        if not opt.zeroshot:
+            # "id" and "text_id" are only used when doing zero-shot inference.
+            opt.return_prompt_embs_type = "text"
         if opt.scale != 1.0:
             try:
-                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], embman_iter_type='empty')
+                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], 
+                                                    subj_id2img_prompt_embs = None,
+                                                    zs_clip_bg_features=None,
+                                                    return_prompt_embs_type = opt.return_prompt_embs_type,
+                                                    num_id_vecs = opt.num_vectors_per_subj_token,
+                                                    embman_iter_type = 'empty')
             except:
                 breakpoint()
         else:
@@ -582,7 +596,6 @@ def main(opt):
                         prompts = list(prompts)
 
                     if not opt.eval_blip and not opt.diffusers:
-                        return_id2img_embs = opt.zeroshot and opt.return_id2img_embs
                         prompts2 = []
                         for prompt in prompts:
                             # Replace the subject string 'z' with 'z, , ,...'.
@@ -591,9 +604,10 @@ def main(opt):
                         prompts = prompts2                           
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
-                        c = model.get_learned_conditioning(prompts, zs_clip_fgbg_features=zs_clip_fgbg_features,
-                                                           zs_id_embs=zs_id_embs,
-                                                           return_id2img_embs=return_id2img_embs)
+                        c = model.get_learned_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
+                                                           zs_clip_bg_features = None,
+                                                           return_prompt_embs_type = opt.return_prompt_embs_type,
+                                                           num_id_vecs = opt.num_vectors_per_subj_token)
                         if opt.debug:
                             c[2]['debug_attn'] = True
 
