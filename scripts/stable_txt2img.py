@@ -599,10 +599,13 @@ def main(opt):
                     if not opt.eval_blip and not opt.diffusers:
                         prompts2 = []
                         for prompt in prompts:
-                            # Replace the subject string 'z' with 'z, , ,...'.
-                            prompt2 = re.sub(r'\b' + opt.subject_string + r'\b', placeholder_tokens_str, prompt)  
+                            # Remove the subject string 'z', then postpend the placeholder tokens to the prompt.
+                            # If there is a word 'a' before the subject string or ',' after, then remove 'a z,'.
+                            prompt2 = re.sub(r'\b(a|an|the)\s+' + opt.subject_string + r'\b,?', "", prompt)
+                            prompt2 = re.sub(r'\b' + opt.subject_string + r'\b,?', "", prompt2)
+                            prompt2 = prompt2 + " " + placeholder_tokens_str
                             prompts2.append(prompt2)
-                        prompts = prompts2                           
+                        prompts = prompts2
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_learned_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
@@ -640,7 +643,7 @@ def main(opt):
                                                       opt.scale, batch_size, verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []
-                            prompt = re.sub(r"a\s+z,? ", "", prompts[0])
+                            prompt = re.sub(rf"a\s+{opt.subject_string},? ", "", prompts[0])
                             print("pulid:", prompt)
                             for bi in range(batch_size):
                                 sample = pipeline.inference(prompt, (1, 768, 768), opt.neg_prompt,
