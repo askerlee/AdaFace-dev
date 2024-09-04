@@ -275,8 +275,9 @@ class AdaFaceWrapper(nn.Module):
             # adaface_subj_embs: [16, 768] or [4, 768].
             all_adaface_subj_embs.append(adaface_subj_embs * id2ada_prompt_encoder_weight)
             if teacher_neg_id_prompt_embs is None:
-                all_teacher_neg_id_prompt_embs.append(torch.zeros_like(adaface_subj_embs))
-
+                teacher_neg_id_prompt_embs = torch.zeros_like(adaface_subj_embs)
+            all_teacher_neg_id_prompt_embs.append(teacher_neg_id_prompt_embs)
+            
         # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then all_adaface_subj_embs: [20, 768].
         all_adaface_subj_embs           = torch.cat(all_adaface_subj_embs, dim=0)
         all_teacher_neg_id_prompt_embs  = torch.cat(all_teacher_neg_id_prompt_embs, dim=0)

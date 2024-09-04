@@ -15,7 +15,7 @@ import numpy as np
 from ldm.util import extract_first_index_in_each_instance, \
                      anneal_add_noise_to_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings, torch_uniform, calc_init_word_embeddings
+                     scan_cls_delta_strings, calc_init_word_embeddings
                      
 from functools import partial
 from collections import OrderedDict
@@ -147,7 +147,7 @@ class EmbeddingManager(nn.Module):
             # num_vectors_each_subj_bg_pair: the number of vectors per (subj, bg) placeholder pair.
             # It's implied that all subj placeholders have the same number of vectors,
             # and all bg placeholders have the same number of vectors.
-            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0], 9)
+            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0], 16)
             if len(self.background_strings) > 0:
                 self.num_vectors_each_bg = self.token2num_vectors.get(self.background_strings[0], 4)
             else:
