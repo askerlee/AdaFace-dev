@@ -397,6 +397,9 @@ class FaceID2AdaPrompt(nn.Module):
                                       adaface_prompt_embs_inf_type='full_half_pad')
         # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
         adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
+        if teacher_neg_id_prompt_embs is not None:
+            # teacher_neg_id_prompt_embs: [1, 4, 768] -> [4, 768]
+            teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs.squeeze(0)
         return adaface_subj_embs, teacher_neg_id_prompt_embs
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):

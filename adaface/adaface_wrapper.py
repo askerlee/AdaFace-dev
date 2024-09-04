@@ -64,7 +64,7 @@ class AdaFaceWrapper(nn.Module):
             self.negative_prompt = negative_prompt
 
         self.initialize_pipeline()
-        self.total_num_id_vecs = sum([id2ada_prompt_encoder.num_id_vecs for id2ada_prompt_encoder in self.id2ada_prompt_encoders])
+        self.encoders_num_id_vecs = [id2ada_prompt_encoder.num_id_vecs for id2ada_prompt_encoder in self.id2ada_prompt_encoders]
         self.extend_tokenizer_and_text_encoder()
 
     def initialize_pipeline(self):
@@ -202,30 +202,37 @@ class AdaFaceWrapper(nn.Module):
         return unet_state_dict
         
     def extend_tokenizer_and_text_encoder(self):
-        if self.total_num_id_vecs < 1:
-            raise ValueError(f"total_num_id_vecs has to be larger or equal to 1, but is {self.total_num_id_vecs}")
+        if np.sum(self.encoders_num_id_vecs) < 1:
+            raise ValueError(f"encoders_num_id_vecs has to be larger or equal to 1, but is {self.encoders_num_id_vecs}")
 
         tokenizer = self.pipeline.tokenizer
         # If id2ada_prompt_encoder_types is ["arc2face", "consistentID"], then total_num_id_vecs = 20.
-        # We add z0, z1, z2, ..., z15, z16, z17, ..., z19 to the tokenizer.
-        self.placeholder_tokens = []
-        for i in range(0, self.total_num_id_vecs):
-            self.placeholder_tokens.append(f"{self.subject_string}_{i}")
+        # We add z_0_0, z_0_1, z_0_2, ..., z_0_15, z_1_0, z_1_1, z_1_2, z_1_3 to the tokenizer.
+        self.all_placeholder_tokens = []
+        self.placeholder_tokens_strs = []
+        for i in range(len(self.id2ada_prompt_encoder_types)):
+            placeholder_tokens = []
+            for j in range(self.encoders_num_id_vecs[i]):
+                placeholder_tokens.append(f"{self.subject_string}_{i}_{j}")
+                placeholder_tokens_str = " ".join(placeholder_tokens)
 
-        self.placeholder_tokens_str = " ".join(self.placeholder_tokens)
+            self.all_placeholder_tokens.extend(placeholder_tokens)
+            self.placeholder_tokens_strs.append(placeholder_tokens_str)
+
+        self.all_placeholder_tokens_str = " | ".join(self.placeholder_tokens_strs)
 
         # Add the new tokens to the tokenizer.
-        num_added_tokens = tokenizer.add_tokens(self.placeholder_tokens)
-        if num_added_tokens != self.total_num_id_vecs:
+        num_added_tokens = tokenizer.add_tokens(self.all_placeholder_tokens)
+        if num_added_tokens != np.sum(self.encoders_num_id_vecs):
             raise ValueError(
-                f"The tokenizer already contains the token {self.subject_string}. Please pass a different"
+                f"The tokenizer already contains some of the tokens {self.all_placeholder_tokens_str}. Please pass a different"
                 " `subject_string` that is not already in the tokenizer.")
 
-        print(f"Added {num_added_tokens} tokens ({self.placeholder_tokens_str}) to the tokenizer.")
+        print(f"Added {num_added_tokens} tokens ({self.all_placeholder_tokens_str}) to the tokenizer.")
         
         # placeholder_token_ids: [49408, ..., 49423].
-        self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.placeholder_tokens)
-        print("New tokens:", self.placeholder_token_ids)
+        self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.all_placeholder_tokens)
+        #print("New tokens:", self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
         old_weight_shape = self.pipeline.text_encoder.get_input_embeddings().weight.shape
         self.pipeline.text_encoder.resize_token_embeddings(len(tokenizer))
@@ -241,22 +248,27 @@ class AdaFaceWrapper(nn.Module):
         with torch.no_grad():
             for i, token_id in enumerate(self.placeholder_token_ids):
                 token_embeds[token_id] = subj_embs[i]
-            print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.placeholder_tokens_str}) in the text encoder.")
+            print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.all_placeholder_tokens_str}) in the text encoder.")
 
     def update_prompt(self, prompt):
         if prompt is None:
             prompt = ""
-            
-        # If the placeholder tokens are already in the prompt, then return the prompt as is.
-        if self.placeholder_tokens_str in prompt:
-            return prompt
-        
-        # Remove the subject string 'z', then postpend the placeholder tokens to the prompt.
+
+        # Remove the subject string 'z', then concatenate the placeholder tokens to the prompt.
         # If there is a word 'a' before the subject string or ',' after, then remove 'a z,'.
         prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
         prompt = re.sub(r'\b' + self.subject_string + r'\b,?', "", prompt)
-        comp_prompt = prompt + " " + self.placeholder_tokens_str
-        return comp_prompt
+        
+        for i, placeholder_tokens_str in enumerate(self.placeholder_tokens_strs):
+            id2ada_prompt_encoder_type = self.id2ada_prompt_encoder_types[i]
+            if id2ada_prompt_encoder_type == "arc2face":
+                # arc2face     ada embeddings work better when they are at the beginning of the prompt.
+                prompt = placeholder_tokens_str + " " + prompt
+            elif id2ada_prompt_encoder_type == "consistentID":
+                # consistentID ada embeddings work better when they are at the end       of the prompt.
+                prompt = prompt + " " + placeholder_tokens_str
+
+        return prompt
 
     def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
                                    out_id_embs_cfg_scale=6., noise_level=0, 
