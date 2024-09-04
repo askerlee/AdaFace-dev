@@ -7,7 +7,7 @@ import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
-from adaface.face_id_to_ada_prompt import create_id2img_prompt_encoder
+from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
 
 import torch.nn.functional as F
 import numpy as np
@@ -162,7 +162,7 @@ class EmbeddingManager(nn.Module):
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            self.id2img_prompt_encoder = create_id2img_prompt_encoder(id2img_prompt_encoder_type)
+            self.id2img_prompt_encoder = create_id2ada_prompt_encoder(id2img_prompt_encoder_type)
 
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens   = self.get_tokens_for_string(zs_cls_delta_string)

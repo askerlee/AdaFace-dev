@@ -14,13 +14,16 @@ from adaface.util import UNetEnsemble
 from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
+import numpy as np
 import sys
-#sys.modules['ldm.modules'] = sys.modules['adaface']
+# Monkey patch the missing ldm module in the old arc2face adaface checkpoint.
+sys.modules['ldm'] = sys.modules['adaface']
+sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, pipeline_name, base_model_path, adaface_ckpt_path, id2img_prompt_encoder_type,
-                 subject_string='z', num_vectors=16, 
-                 num_inference_steps=50, negative_prompt=None,
+    def __init__(self, pipeline_name, base_model_path, id2ada_prompt_encoder_types, 
+                 adaface_ckpt_paths, id2ada_prompt_encoder_weights=None,
+                 subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
                  device='cuda', is_training=False):
@@ -32,10 +35,15 @@ class AdaFaceWrapper(nn.Module):
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
-        self.adaface_ckpt_path = adaface_ckpt_path
-        self.id2img_prompt_encoder_type = id2img_prompt_encoder_type
+        self.id2ada_prompt_encoder_types = id2ada_prompt_encoder_types
+        if id2ada_prompt_encoder_weights is None:
+            self.id2ada_prompt_encoder_weights = [1.0] * len(id2ada_prompt_encoder_types)
+        else:
+            # Do not normalize the weights, and just use them as is.
+            self.id2ada_prompt_encoder_weights = id2ada_prompt_encoder_weights
+
+        self.adaface_ckpt_paths = adaface_ckpt_paths
         self.subject_string = subject_string
-        self.num_vectors = num_vectors
 
         self.num_inference_steps = num_inference_steps
         self.use_840k_vae = use_840k_vae
@@ -46,8 +54,6 @@ class AdaFaceWrapper(nn.Module):
         self.device = device
         self.is_training = is_training
 
-        self.initialize_pipeline()
-        self.extend_tokenizer_and_text_encoder()
         if negative_prompt is None:
             self.negative_prompt = \
             "flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, " \
@@ -57,10 +63,18 @@ class AdaFaceWrapper(nn.Module):
         else:
             self.negative_prompt = negative_prompt
 
+        self.initialize_pipeline()
+        self.total_num_id_vecs = sum([id2ada_prompt_encoder.num_id_vecs for id2ada_prompt_encoder in self.id2ada_prompt_encoders])
+        self.extend_tokenizer_and_text_encoder()
+
     def initialize_pipeline(self):
-        self.id2img_prompt_encoder = create_id2ada_prompt_encoder(self.id2img_prompt_encoder_type,
-                                                                  self.adaface_ckpt_path)
-        self.id2img_prompt_encoder.to(self.device)
+        self.id2ada_prompt_encoders = nn.ModuleList()
+        for id2ada_prompt_encoder_type, adaface_ckpt_path in zip(self.id2ada_prompt_encoder_types, self.adaface_ckpt_paths):
+            id2ada_prompt_encoder = create_id2ada_prompt_encoder(id2ada_prompt_encoder_type,
+                                                                 adaface_ckpt_path)
+            self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
+        self.id2ada_prompt_encoders.to(self.device)
+        print(f"id2ada_prompt_encoder_weights: {self.id2ada_prompt_encoder_weights}")
 
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.
@@ -188,20 +202,21 @@ class AdaFaceWrapper(nn.Module):
         return unet_state_dict
         
     def extend_tokenizer_and_text_encoder(self):
-        if self.num_vectors < 1:
-            raise ValueError(f"num_vectors has to be larger or equal to 1, but is {self.num_vectors}")
+        if self.total_num_id_vecs < 1:
+            raise ValueError(f"total_num_id_vecs has to be larger or equal to 1, but is {self.total_num_id_vecs}")
 
         tokenizer = self.pipeline.tokenizer
-        # Add z0, z1, z2, ..., z15.
+        # If id2ada_prompt_encoder_types is ["arc2face", "consistentID"], then total_num_id_vecs = 20.
+        # We add z0, z1, z2, ..., z15, z16, z17, ..., z19 to the tokenizer.
         self.placeholder_tokens = []
-        for i in range(0, self.num_vectors):
+        for i in range(0, self.total_num_id_vecs):
             self.placeholder_tokens.append(f"{self.subject_string}_{i}")
 
         self.placeholder_tokens_str = " ".join(self.placeholder_tokens)
 
         # Add the new tokens to the tokenizer.
         num_added_tokens = tokenizer.add_tokens(self.placeholder_tokens)
-        if num_added_tokens != self.num_vectors:
+        if num_added_tokens != self.total_num_id_vecs:
             raise ValueError(
                 f"The tokenizer already contains the token {self.subject_string}. Please pass a different"
                 " `subject_string` that is not already in the tokenizer.")
@@ -246,17 +261,30 @@ class AdaFaceWrapper(nn.Module):
     def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
                                    out_id_embs_cfg_scale=6., noise_level=0, 
                                    update_text_encoder=True):
-        adaface_subj_embs, teacher_neg_id_prompt_embs = \
-            self.id2img_prompt_encoder.generate_adaface_embeddings(\
-                image_paths, face_id_embs=face_id_embs, 
-                gen_rand_face=gen_rand_face, 
-                out_id_embs_cfg_scale=out_id_embs_cfg_scale, 
-                noise_level=noise_level)
+        all_adaface_subj_embs = []
+        all_teacher_neg_id_prompt_embs = []
+        for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
+            adaface_subj_embs, teacher_neg_id_prompt_embs = \
+                id2ada_prompt_encoder.generate_adaface_embeddings(\
+                    image_paths, face_id_embs=face_id_embs, 
+                    gen_rand_face=gen_rand_face, 
+                    out_id_embs_cfg_scale=out_id_embs_cfg_scale, 
+                    noise_level=noise_level)
+            
+            id2ada_prompt_encoder_weight = self.id2ada_prompt_encoder_weights[i]
+            # adaface_subj_embs: [16, 768] or [4, 768].
+            all_adaface_subj_embs.append(adaface_subj_embs * id2ada_prompt_encoder_weight)
+            if teacher_neg_id_prompt_embs is None:
+                all_teacher_neg_id_prompt_embs.append(torch.zeros_like(adaface_subj_embs))
+
+        # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then all_adaface_subj_embs: [20, 768].
+        all_adaface_subj_embs           = torch.cat(all_adaface_subj_embs, dim=0)
+        all_teacher_neg_id_prompt_embs  = torch.cat(all_teacher_neg_id_prompt_embs, dim=0)
 
         if update_text_encoder:
-            self.update_text_encoder_subj_embs(adaface_subj_embs)
+            self.update_text_encoder_subj_embs(all_adaface_subj_embs)
 
-        return adaface_subj_embs, teacher_neg_id_prompt_embs
+        return all_adaface_subj_embs, all_teacher_neg_id_prompt_embs
 
     def encode_prompt(self, prompt, negative_prompt=None, device=None, verbose=False):
         if negative_prompt is None:

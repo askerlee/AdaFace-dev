@@ -39,9 +39,11 @@ class FaceID2AdaPrompt(nn.Module):
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
         self.contrast_clip_embs             = False
+        # num_id_vecs as the output embeddings of the ID2ImgPrompt module, 
+        # as well as the output embeddings of the subject basis generator.
+        self.num_id_vecs                    = -1
         self.id_img_prompt_max_length       = 77
         self.clip_embedding_dim             = 1024
-
 
     # image_objs: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
     # If image_objs is a list of tensors, then each tensor should be [3, Hi, Wi].
@@ -431,14 +433,16 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
                                                 torch_dtype=self.dtype
                                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-        print(f'Arc2Face text-to-image prompt encoder loaded.')
 
         # Model behavior configurations.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
         self.contrast_clip_embs             = False
+        self.num_id_vecs                    = 16
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
+
+        print(f'Arc2Face text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
 
     # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
@@ -531,6 +535,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
 
         # Model behavior configurations.
         # self.id_img_prompt_max_length       = 77
+        self.num_id_vecs                    = 4
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
         self.contrast_clip_embs             = False
@@ -538,6 +543,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
+
+        print(f'ConsistentID text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
 
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
@@ -578,33 +585,19 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         else:
             return global_id_embeds
 
-
-def create_id2img_prompt_encoder(id2img_prompt_encoder_type):
-    if id2img_prompt_encoder_type == 'arc2face':
-        id2img_prompt_encoder = Arc2Face_ID2AdaPrompt()
-    elif id2img_prompt_encoder_type == 'consistentID':
+def create_id2ada_prompt_encoder(id2ada_prompt_encoder_type, adaface_ckpt_path=None):
+    if id2ada_prompt_encoder_type == 'arc2face':
+        id2ada_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path)
+    elif id2ada_prompt_encoder_type == 'consistentID':
         # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
         # Only the consistentID modules and bise_net are used.
-        id2img_prompt_encoder = ConsistentID_ID2AdaPrompt(
-                                  base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
-    else:
-        breakpoint()
-
-    return id2img_prompt_encoder
-
-def create_id2ada_prompt_encoder(id2img_prompt_encoder_type, adaface_ckpt_path=None):
-    if id2img_prompt_encoder_type == 'arc2face':
-        id2img_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path)
-    elif id2img_prompt_encoder_type == 'consistentID':
-        # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
-        # Only the consistentID modules and bise_net are used.
-        id2img_prompt_encoder = ConsistentID_ID2AdaPrompt(
+        id2ada_prompt_encoder = ConsistentID_ID2AdaPrompt(
                                         base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
                                         adaface_ckpt_path=adaface_ckpt_path)
     else:
         breakpoint()
     
-    return id2img_prompt_encoder
+    return id2ada_prompt_encoder
 
 '''
 # For ip-adapter distillation on objects. Strictly speaking, it's not face-to-image prompts, but

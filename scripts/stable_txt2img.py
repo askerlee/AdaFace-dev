@@ -243,8 +243,13 @@ def parse_args():
                         help="Zeroshot uses the diffusers implementation")
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
-    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
-                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")
+    parser.add_argument("--id2ada_prompt_encoder_types", type=str, nargs="+", default=["arc2face"],
+                        choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
+    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
+                        default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+    # If id2ada_prompt_encoder_weights is not specified, the weights will be set to all 1.0.
+    parser.add_argument('--id2ada_prompt_encoder_weights', type=float, nargs="+", default=None,    
+                        help="Weights for the ID2Ada prompt encoders")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
@@ -327,6 +332,12 @@ def main(opt):
         ref_images = None
         ref_image_paths = opt.ref_images
 
+    if opt.adaface_ckpt_paths is not None:
+        opt.subj_model_path = opt.adaface_ckpt_paths[0]
+    else:
+        # Legacy branch left by DreamBooth. No longer used.
+        opt.subj_model_path = opt.ckpt
+
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.do_zero_shot = opt.zeroshot
@@ -343,14 +354,11 @@ def main(opt):
             # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
-        config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.id2img_prompt_encoder_type
+        config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.id2ada_prompt_encoder_types[0]
         model = load_model_from_config(config, f"{opt.ckpt}")
-        if opt.embedding_paths is not None:
-            model.embedding_manager.load(opt.embedding_paths, load_old_embman_ckpt=opt.load_old_embman_ckpt)
+        if opt.adaface_ckpt_paths is not None:
+            model.embedding_manager.load(opt.subj_model_path, load_old_embman_ckpt=opt.load_old_embman_ckpt)
             model.embedding_manager.eval()
-            opt.subj_model_path = opt.embedding_paths[0]
-        else:
-            opt.subj_model_path = opt.ckpt
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
         model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
@@ -396,9 +404,9 @@ def main(opt):
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
 
-                opt.subj_model_path = opt.embedding_paths[0]
-                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.subj_model_path, opt.id2img_prompt_encoder_type, 
-                                          opt.subject_string, opt.num_vectors_per_subj_token, opt.ddim_steps,
+                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.id2ada_prompt_encoder_types, 
+                                          opt.adaface_ckpt_paths, opt.id2ada_prompt_encoder_weights,
+                                          opt.subject_string, opt.ddim_steps,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
                                           device=device)

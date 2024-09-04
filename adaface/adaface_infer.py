@@ -45,10 +45,10 @@ def parse_args():
                         help="Type of pipeline to use (default: txt2img)")
     parser.add_argument("--base_model_path", type=str, default=None, 
                         help="Type of checkpoints to use (default: None, using the official model)")
-    parser.add_argument('--adaface_ckpt_path', type=str, 
-                        default='models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt')
-    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
-                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")    
+    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
+                        default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+    parser.add_argument("--id2ada_prompt_encoder_types", type=str, nargs="+", default=["arc2face"],
+                        choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
@@ -83,12 +83,10 @@ def parse_args():
     return args
 
 if __name__ == "__main__":
-    img_prompt_encoder2num_id_vecs = { 'arc2face': 16, 'consistentID': 4 }
     args = parse_args()
     if args.seed != -1:
         seed_everything(args.seed)
 
-    num_id_vecs = img_prompt_encoder2num_id_vecs[args.id2img_prompt_encoder_type]
     if re.match(r"^\d+$", args.device):
         args.device = f"cuda:{args.device}"
     print(f"Using device {args.device}")
@@ -98,8 +96,8 @@ if __name__ == "__main__":
         args.unet_weights = None
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
-                             args.adaface_ckpt_path, args.id2img_prompt_encoder_type,
-                             args.subject_string, num_id_vecs, args.num_inference_steps,
+                             args.id2ada_prompt_encoder_types, args.adaface_ckpt_paths, 
+                             args.subject_string, args.num_inference_steps,
                              main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,
                              unet_weights=args.unet_weights, device=args.device)
@@ -147,8 +145,8 @@ if __name__ == "__main__":
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths, init_id_embs, args.randface, 
-                                            out_id_embs_cfg_scale=args.id_cfg_scale, noise_level=args.noise_level, 
-                                            update_text_encoder=True)    
+                                           out_id_embs_cfg_scale=args.id_cfg_scale, noise_level=args.noise_level, 
+                                           update_text_encoder=True)    
     teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if args.use_teacher_neg else None
     images = adaface(noise, args.prompt, None, teacher_neg_id_prompt_embs, args.guidance_scale, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.noise_level)

@@ -27,10 +27,10 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base_model_path", type=str, default='models/realisticvision/realisticVisionV40_v40VAE.safetensors', 
                         help="Path to the UNet checkpoint (default: RealisticVision 4.0)")
-    parser.add_argument('--adaface_ckpt_path', type=str, 
-                        default='models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt')
-    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
-                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")       
+    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
+                        default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+    parser.add_argument("--id2ada_prompt_encoder_types", type=str, nargs="+", default=["arc2face"],
+                        choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")      
     parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
@@ -54,8 +54,6 @@ def parse_args():
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
-    parser.add_argument("--num_vectors", type=int, default=16,
-                        help="Number of vectors used to represent the subject.")
     parser.add_argument("--prompt", type=str, default="a person z")
     parser.add_argument("--num_images_per_row", type=int, default=4,
                         help="Number of images to display in a row in the output grid image.")
@@ -75,7 +73,7 @@ if __name__ == "__main__":
         seed_everything(args.seed)
  
 # screen -dm -L -Logfile trans_rv4-2.txt accelerate launch --multi_gpu --num_processes=2 scripts/adaface-translate.py 
-# --adaface_ckpt_path logs/subjects-celebrity2024-05-16T17-22-46_zero3-ada/checkpoints/embeddings_gs-30000.pt 
+# --adaface_ckpt_paths logs/subjects-celebrity2024-05-16T17-22-46_zero3-ada/checkpoints/embeddings_gs-30000.pt 
 # --base_model_path models/realisticvision/realisticVisionV40_v40VAE.safetensors --in_folder /path/to/VGGface2_HQ_masks/ 
 # --is_mix_subj_folder 0 --out_folder /path/to/VGGface2_HQ_masks_rv4a --copy_masks --num_gpus 2
     if args.num_gpus > 1:
@@ -89,8 +87,8 @@ if __name__ == "__main__":
         process_index = 0
 
     adaface = AdaFaceWrapper("img2img", args.base_model_path, 
-                             args.adaface_ckpt_path, args.id2img_prompt_encoder_type,
-                             args.subject_string, args.num_vectors, args.num_inference_steps,
+                             args.id2ada_prompt_encoder_types, args.adaface_ckpt_paths,
+                             args.subject_string, args.num_inference_steps,
                              extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights, 
                              device=args.device)
 

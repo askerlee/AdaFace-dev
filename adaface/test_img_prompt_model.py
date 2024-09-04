@@ -1,7 +1,7 @@
 import torch
 from PIL import Image
 import os, argparse, glob
-from .face_id_to_ada_prompt import create_id2img_prompt_encoder
+from .face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from .teacher_pipelines import create_arc2face_pipeline, create_consistentid_pipeline
 from transformers import CLIPTextModel
 import numpy as np
@@ -70,7 +70,10 @@ if __name__ == "__main__":
 
     pipeline = pipeline.to('cuda', torch.float16)
 
-    id2img_prompt_encoder = create_id2img_prompt_encoder(args.id2img_prompt_encoder_type)
+    # When the second argument, adaface_ckpt_path = None, create_id2ada_prompt_encoder()
+    # returns only an id2img_prompt_encoder object, instead of an id2ada_prompt_encoder object.
+    # The difference is .subj_basis_generator is None in an id2img_prompt_encoder.
+    id2img_prompt_encoder = create_id2ada_prompt_encoder(args.id2img_prompt_encoder_type)
     id2img_prompt_encoder.to('cuda')
 
     if not args.randface:
