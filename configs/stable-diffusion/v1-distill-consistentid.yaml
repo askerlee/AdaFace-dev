@@ -58,7 +58,7 @@ model:
     fg_wds_complementary_loss_weight: 0 #1e-4
     wds_bg_recon_discount:            0.05
     
-    optimizer_type: Prodigy           # AdamW, Adam8bit, NAdam, Prodigy
+    optimizer_type: AdamW           # AdamW, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
       betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        
