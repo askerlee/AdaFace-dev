@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from transformers import CLIPTokenizer, CLIPImageProcessor
 from .arc2face_models import CLIPTextModelWrapper
+from .subj_basis_generator import SubjBasisGenerator
 from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline 
 from .util import add_noise_to_tensor, pad_image_obj_to_square, \
                   calc_stats, patch_clip_image_encoder_with_mask, CLIPVisionModelWithMask
@@ -12,11 +13,14 @@ from PIL import Image
 from insightface.app import FaceAnalysis
 import os
 
-class FaceID2ImgPrompt(nn.Module):
+class FaceID2AdaPrompt(nn.Module):
     # To be initialized in derived classes.
     def __init__(self, *args, **kwargs):
         super().__init__()
-        # Model components.
+        # Initialize model components.
+        # These components of ConsistentID_ID2AdaPrompt will be shared with the teacher model.
+        # So we don't initialize them in the ctor(), but borrow them from the teacher model.
+        # These components of Arc2Face_ID2AdaPrompt will be initialized in its ctor().
         self.clip_image_encoder             = None
         self.clip_preprocessor              = None
         self.face_app                       = None
@@ -24,12 +28,20 @@ class FaceID2ImgPrompt(nn.Module):
         self.tokenizer                      = None
         self.dtype                          = kwargs.get('dtype', torch.float16)
 
-        # Model behavior configurations.
+        # Load Img2Ada SubjectBasisGenerator.
+        self.subject_string                 = kwargs.get('subject_string', 'z')
+        self.adaface_ckpt_path              = kwargs.get('adaface_ckpt_path', None)
+        self.subj_basis_generator           = None
+        if self.adaface_ckpt_path is not None:
+            self.load_subj_basis_generator(self.adaface_ckpt_path)
+            
+        # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
         self.contrast_clip_embs             = False
         self.id_img_prompt_max_length       = 77
         self.clip_embedding_dim             = 1024
+
 
     # image_objs: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
     # If image_objs is a list of tensors, then each tensor should be [3, Hi, Wi].
@@ -207,7 +219,7 @@ class FaceID2ImgPrompt(nn.Module):
         return faceless_img_count, id_embs, clip_fgbg_features, clip_neg_features
 
     # This function should be implemented in derived classes.
-    # We don't plan to fine-tune the ID2ImgPrompt model. So disable the gradient computation.
+    # We don't plan to fine-tune the ID2ImgPrompt module. So disable the gradient computation.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
                                        called_for_neg_img_prompt=False,
@@ -231,7 +243,7 @@ class FaceID2ImgPrompt(nn.Module):
                 # Use random face embeddings as faceid_embeds. [BS, 512].
                 faceid_embeds       = torch.randn(id_batch_size, 512).to(device=device, dtype=torch.float16)
                 # Since it's a batch of random IDs, the CLIP features are all zeros as a placeholder.
-                # Only ConsistentID_ID2ImgPrompt will use clip_fgbg_features and clip_neg_features.
+                # Only ConsistentID_ID2AdaPrompt will use clip_fgbg_features and clip_neg_features.
                 # Experiments show that using random clip features yields much better images than using zeros.
                 clip_fgbg_features  = torch.randn(id_batch_size, 514, 1280).to(device=device, dtype=torch.float16) \
                                         if self.use_clip_embs else None
@@ -330,7 +342,62 @@ class FaceID2ImgPrompt(nn.Module):
                                         avg_at_stage=None, 
                                         verbose=False)
 
-class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
+    def load_subj_basis_generator(self, adaface_ckpt_path):
+        ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
+        string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
+        if self.subject_string not in string_to_subj_basis_generator_dict:
+            print(f"Subject '{self.subject_string}' not found in the embedding manager.")
+            breakpoint()
+
+        self.subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
+        # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
+        # But we don't do layerwise embeddings here, so we set it to 1.
+        self.subj_basis_generator.num_out_layers = 1
+        self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
+        print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
+        print(repr(self.subj_basis_generator))
+
+    # image_paths: a list of image paths. image_folder: the parent folder name.
+    def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
+                                    out_id_embs_cfg_scale=6., noise_level=0):
+        # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
+        # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
+        # Otherwise, face_id_embs is used.
+        # faceid_embeds is in the face analysis embeddings. id_prompt_embs is in the image prompt space.
+        # Here id_batch_size = 1, so
+        # faceid_embeds: [1, 512]. NOT used later.
+        # id_prompt_embs: [1, 16/4, 768]. 
+        # NOTE: Since return_core_id_embs_only is True, id_prompt_embs is only the 16 core ID embeddings.
+        # arc2face prompt template: "photo of a id person"
+        # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
+        face_image_count, faceid_embeds, id_prompt_embs, teacher_neg_id_prompt_embs \
+            = self.get_img_prompt_embs(\
+                init_id_embs=None if gen_rand_face else face_id_embs,
+                pre_clip_features=None,
+                # image_folder is passed only for logging purpose. 
+                # image_paths contains the paths of the images.
+                image_paths=image_paths, image_objs=None,
+                id_batch_size=1, noise_level=noise_level, 
+                return_core_id_embs_only=True, avg_at_stage='id_emb',
+                verbose=True)
+        
+        if face_image_count == 0:
+            return None, None
+        
+        # adaface_subj_embs: [16/4, 768]. 
+        # adaface_prompt_embs: [1, 77, 768] (not used).
+        # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
+        # adaface_prompt_embs, which is not used.
+        adaface_subj_embs, adaface_prompt_embs = \
+            self.subj_basis_generator(id_prompt_embs, None, None, 
+                                      out_id_embs_cfg_scale=out_id_embs_cfg_scale,
+                                      is_face=True, is_training=False,
+                                      adaface_prompt_embs_inf_type='full_half_pad')
+        # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
+        adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
+        return adaface_subj_embs, teacher_neg_id_prompt_embs
+
+class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -348,7 +415,7 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
         'genderage': <insightface.model_zoo.attribute.Attribute object at 0x7f8e3f0cc1f0>, 
         'recognition': <insightface.model_zoo.arcface_onnx.ArcFaceONNX object at 0x7f8e3f0cc0d0>}
         '''
-        # Use the same model as ID2ImgPrompt does.
+        # Use the same model as ID2AdaPrompt does.
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
         # Note DON'T use CUDAExecutionProvider, as it will hang DDP training. 
@@ -373,7 +440,7 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
 
-    # Arc2Face_ID2ImgPrompt never uses clip_features or called_for_neg_img_prompt.
+    # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
                                        called_for_neg_img_prompt=False,
@@ -395,7 +462,7 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
                 "photo of a id person",
                 truncation=True,
                 padding="max_length",
-                # In Arc2Face_ID2ImgPrompt, id_img_prompt_max_length is 22.
+                # In Arc2Face_ID2AdaPrompt, id_img_prompt_max_length is 22.
                 # Arc2Face's image prompt is meanlingless in tokens other than ID tokens.
                 max_length=self.id_img_prompt_max_length, 
                 return_tensors="pt",
@@ -428,8 +495,8 @@ class Arc2Face_ID2ImgPrompt(FaceID2ImgPrompt):
             # [N, 16, 768]
             return prompt_embeds[:, 4:20]
 
-# ConsistentID_ID2ImgPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
-class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
+# ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
+class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, pipe=None, base_model_path=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if pipe is None:
@@ -484,10 +551,10 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
         if not called_for_neg_img_prompt:
             # clip_features: [BS, 514, 1280].
             # clip_features is provided when the function is called within 
-            # ConsistentID_ID2ImgPrompt:extract_init_id_embeds_from_images(), which is
+            # ConsistentID_ID2AdaPrompt:extract_init_id_embeds_from_images(), which is
             # image_fg_features and image_bg_features concatenated at dim=1. 
             # Therefore, we split clip_image_double_embeds into image_fg_features and image_bg_features.
-            # image_bg_features is not used in ConsistentID_ID2ImgPrompt.
+            # image_bg_features is not used in ConsistentID_ID2AdaPrompt.
             image_fg_features, image_bg_features = clip_features.chunk(2, dim=1)
             # clip_image_embeds: [BS, 257, 1280].
             clip_image_embeds = image_fg_features
@@ -514,15 +581,29 @@ class ConsistentID_ID2ImgPrompt(FaceID2ImgPrompt):
 
 def create_id2img_prompt_encoder(id2img_prompt_encoder_type):
     if id2img_prompt_encoder_type == 'arc2face':
-        id2img_prompt_encoder = Arc2Face_ID2ImgPrompt()
+        id2img_prompt_encoder = Arc2Face_ID2AdaPrompt()
     elif id2img_prompt_encoder_type == 'consistentID':
         # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
         # Only the consistentID modules and bise_net are used.
-        id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
+        id2img_prompt_encoder = ConsistentID_ID2AdaPrompt(
                                   base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
     else:
         breakpoint()
 
+    return id2img_prompt_encoder
+
+def create_id2ada_prompt_encoder(id2img_prompt_encoder_type, adaface_ckpt_path=None):
+    if id2img_prompt_encoder_type == 'arc2face':
+        id2img_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path)
+    elif id2img_prompt_encoder_type == 'consistentID':
+        # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
+        # Only the consistentID modules and bise_net are used.
+        id2img_prompt_encoder = ConsistentID_ID2AdaPrompt(
+                                        base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
+                                        adaface_ckpt_path=adaface_ckpt_path)
+    else:
+        breakpoint()
+    
     return id2img_prompt_encoder
 
 '''

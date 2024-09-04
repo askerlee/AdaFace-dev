@@ -406,10 +406,10 @@ def main(opt):
                 # If id2img_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.
                 # If id2img_prompt_encoder_type == "consistentID", teacher_neg_id_prompt_embs will be used for CFG.
                 adaface_subj_embs, teacher_neg_id_prompt_embs = \
-                    pipeline.generate_adaface_embeddings(ref_image_paths, None, False, 
-                                                         out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
-                                                         noise_level=0, 
-                                                         update_text_encoder=True)
+                    pipeline.prepare_adaface_embeddings(ref_image_paths, None, False, 
+                                                        out_id_embs_cfg_scale=opt.out_id_embs_cfg_scale, 
+                                                        noise_level=0, 
+                                                        update_text_encoder=True)
                 
             elif opt.method == "pulid":
                 sys.path.append("pulid")

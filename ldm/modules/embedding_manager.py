@@ -7,7 +7,7 @@ import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
 sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
 sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
-from adaface.face_id_to_img_prompt import create_id2img_prompt_encoder
+from adaface.face_id_to_ada_prompt import create_id2img_prompt_encoder
 
 import torch.nn.functional as F
 import numpy as np
@@ -464,7 +464,7 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1, 1)
 
                 if self.do_zero_shot and not placeholder_is_bg:
-                    # id2img_prompt_embs: [BS, 16, 768] or [BS, 4, 768] is the ID2ImgPrompt forward embeddings. 
+                    # id2img_prompt_embs: [BS, 16, 768] or [BS, 4, 768] is the ID2ImgPrompt embeddings. 
                     self.id2img_embs = id2img_prompt_embs
                     if self.iter_type in ['compos_distill_iter']:
                         assert placeholder_adaface_prompt_embs is not None

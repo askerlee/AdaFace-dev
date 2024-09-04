@@ -11,7 +11,7 @@ from diffusers import (
 )
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.util import UNetEnsemble
-from adaface.face_id_to_img_prompt import Arc2Face_ID2ImgPrompt, ConsistentID_ID2ImgPrompt
+from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import sys
@@ -57,40 +57,9 @@ class AdaFaceWrapper(nn.Module):
         else:
             self.negative_prompt = negative_prompt
 
-    def load_subj_basis_generator(self, adaface_ckpt_path):
-        ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
-        string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
-        if self.subject_string not in string_to_subj_basis_generator_dict:
-            print(f"Subject '{self.subject_string}' not found in the embedding manager.")
-            breakpoint()
-
-        self.subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
-        # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
-        # But we don't do layerwise embeddings here, so we set it to 1.
-        self.subj_basis_generator.num_out_layers = 1
-        self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
-        print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
-        print(repr(self.subj_basis_generator))
-        self.subj_basis_generator.to(self.device)
-        if self.is_training:
-            self.subj_basis_generator.train()
-        else:
-            self.subj_basis_generator.eval()
-
-    def initialize_id2img_prompt_encoder(self, id2img_prompt_encoder_type):
-        if id2img_prompt_encoder_type == 'arc2face':
-            self.id2img_prompt_encoder = Arc2Face_ID2ImgPrompt()
-        elif id2img_prompt_encoder_type == 'consistentID':
-            # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
-            # Only the consistentID modules and bise_net are used.
-            self.id2img_prompt_encoder = ConsistentID_ID2ImgPrompt(
-                                            base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors")
-        else:
-            breakpoint()
-
     def initialize_pipeline(self):
-        self.load_subj_basis_generator(self.adaface_ckpt_path)
-        self.initialize_id2img_prompt_encoder(self.id2img_prompt_encoder_type)
+        self.id2img_prompt_encoder = create_id2ada_prompt_encoder(self.id2img_prompt_encoder_type,
+                                                                  self.adaface_ckpt_path)
         self.id2img_prompt_encoder.to(self.device)
 
         if self.use_840k_vae:
@@ -274,47 +243,19 @@ class AdaFaceWrapper(nn.Module):
         comp_prompt = prompt + " " + self.placeholder_tokens_str
         return comp_prompt
 
-    # image_paths: a list of image paths. image_folder: the parent folder name.
-    def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
-                                    out_id_embs_cfg_scale=6., noise_level=0, 
-                                    update_text_encoder=True):
-        # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
-        # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
-        # Otherwise, face_id_embs is used.
-        # faceid_embeds is in the face analysis embeddings. id_prompt_embs is in the image prompt space.
-        # Here id_batch_size = 1, so
-        # faceid_embeds: [1, 512]. NOT used later.
-        # id_prompt_embs: [1, 16/4, 768]. 
-        # NOTE: Since return_core_id_embs_only is True, id_prompt_embs is only the 16 core ID embeddings.
-        # arc2face prompt template: "photo of a id person"
-        # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
-        face_image_count, faceid_embeds, id_prompt_embs, teacher_neg_id_prompt_embs \
-            = self.id2img_prompt_encoder.get_img_prompt_embs(\
-                init_id_embs=None if gen_rand_face else face_id_embs,
-                pre_clip_features=None,
-                # image_folder is passed only for logging purpose. 
-                # image_paths contains the paths of the images.
-                image_paths=image_paths, image_objs=None,
-                id_batch_size=1, noise_level=noise_level, 
-                return_core_id_embs_only=True, avg_at_stage='id_emb',
-                verbose=True)
-        
-        if face_image_count == 0:
-            return None, None
-        
-        # adaface_subj_embs: [16/4, 768]. 
-        # adaface_prompt_embs: [1, 77, 768] (not used).
-        # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
-        # adaface_prompt_embs, which is not used.
-        adaface_subj_embs, adaface_prompt_embs = \
-            self.subj_basis_generator(id_prompt_embs, None, None, 
-                                      out_id_embs_cfg_scale=out_id_embs_cfg_scale,
-                                      is_face=True, is_training=False,
-                                      adaface_prompt_embs_inf_type='full_half_pad')
-        # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
-        adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
+    def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
+                                   out_id_embs_cfg_scale=6., noise_level=0, 
+                                   update_text_encoder=True):
+        adaface_subj_embs, teacher_neg_id_prompt_embs = \
+            self.id2img_prompt_encoder.generate_adaface_embeddings(\
+                image_paths, face_id_embs=face_id_embs, 
+                gen_rand_face=gen_rand_face, 
+                out_id_embs_cfg_scale=out_id_embs_cfg_scale, 
+                noise_level=noise_level)
+
         if update_text_encoder:
             self.update_text_encoder_subj_embs(adaface_subj_embs)
+
         return adaface_subj_embs, teacher_neg_id_prompt_embs
 
     def encode_prompt(self, prompt, negative_prompt=None, device=None, verbose=False):

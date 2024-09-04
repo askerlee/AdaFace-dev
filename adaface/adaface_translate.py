@@ -159,7 +159,7 @@ if __name__ == "__main__":
         print(f"Translating {images_sig}...")
         with torch.no_grad():
             adaface_subj_embs, teacher_neg_id_prompt_embs = \
-                adaface.generate_adaface_embeddings(image_paths, None, False, 
+                adaface.prepare_adaface_embeddings(image_paths, None, False, 
                                                     out_id_embs_cfg_scale=6, noise_level=args.noise_level, 
                                                     update_text_encoder=True)
 

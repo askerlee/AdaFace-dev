@@ -146,7 +146,7 @@ if __name__ == "__main__":
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
-        adaface.generate_adaface_embeddings(image_paths, init_id_embs, args.randface, 
+        adaface.prepare_adaface_embeddings(image_paths, init_id_embs, args.randface, 
                                             out_id_embs_cfg_scale=args.id_cfg_scale, noise_level=args.noise_level, 
                                             update_text_encoder=True)    
     teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if args.use_teacher_neg else None

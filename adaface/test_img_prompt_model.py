@@ -1,7 +1,7 @@
 import torch
 from PIL import Image
 import os, argparse, glob
-from .face_id_to_img_prompt import create_id2img_prompt_encoder
+from .face_id_to_ada_prompt import create_id2img_prompt_encoder
 from .teacher_pipelines import create_arc2face_pipeline, create_consistentid_pipeline
 from transformers import CLIPTextModel
 import numpy as np

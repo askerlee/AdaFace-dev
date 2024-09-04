@@ -35,3 +35,4 @@ subjects-private
 /pulid
 lightning_logs/*
 lightning_logs
+logs-backup
