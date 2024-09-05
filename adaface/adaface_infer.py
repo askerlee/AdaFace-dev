@@ -47,7 +47,7 @@ def parse_args():
                         help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-    parser.add_argument("--id2ada_prompt_encoder_types", type=str, nargs="+", default=["arc2face"],
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
@@ -96,7 +96,7 @@ if __name__ == "__main__":
         args.unet_weights = None
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
-                             args.id2ada_prompt_encoder_types, args.adaface_ckpt_paths, 
+                             args.adaface_encoder_types, args.adaface_ckpt_paths, 
                              args.subject_string, args.num_inference_steps,
                              main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,

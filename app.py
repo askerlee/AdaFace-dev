@@ -12,7 +12,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                     default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-parser.add_argument("--id2ada_prompt_encoder_types", type=str, nargs="+", default=["arc2face"],
+parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
 parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
 parser.add_argument('--extra_unet_paths', type=str, nargs="+", default=['models/ensemble/rv4-unet', 
@@ -30,7 +30,7 @@ device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
 print(f"Device: {device}")
 
 adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_model_path,
-                         id2ada_prompt_encoder_types=args.id2ada_prompt_encoder_types, 
+                         adaface_encoder_types=args.adaface_encoder_types, 
                          adaface_ckpt_paths=args.adaface_ckpt_paths, 
                          extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights,
                          device=device)

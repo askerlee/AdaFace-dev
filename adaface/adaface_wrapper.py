@@ -21,8 +21,8 @@ sys.modules['ldm'] = sys.modules['adaface']
 sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
-    def __init__(self, pipeline_name, base_model_path, id2ada_prompt_encoder_types, 
-                 adaface_ckpt_paths, id2ada_prompt_encoder_weights=None,
+    def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
+                 adaface_ckpt_paths, adaface_encoder_weights=None,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
@@ -35,12 +35,12 @@ class AdaFaceWrapper(nn.Module):
         super().__init__()
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
-        self.id2ada_prompt_encoder_types = id2ada_prompt_encoder_types
-        if id2ada_prompt_encoder_weights is None:
-            self.id2ada_prompt_encoder_weights = [1.0] * len(id2ada_prompt_encoder_types)
+        self.adaface_encoder_types = adaface_encoder_types
+        if adaface_encoder_weights is None:
+            self.adaface_encoder_weights = [1.0] * len(adaface_encoder_types)
         else:
             # Do not normalize the weights, and just use them as is.
-            self.id2ada_prompt_encoder_weights = id2ada_prompt_encoder_weights
+            self.adaface_encoder_weights = adaface_encoder_weights
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
         self.subject_string = subject_string
@@ -69,12 +69,12 @@ class AdaFaceWrapper(nn.Module):
 
     def initialize_pipeline(self):
         self.id2ada_prompt_encoders = nn.ModuleList()
-        for id2ada_prompt_encoder_type, adaface_ckpt_path in zip(self.id2ada_prompt_encoder_types, self.adaface_ckpt_paths):
-            id2ada_prompt_encoder = create_id2ada_prompt_encoder(id2ada_prompt_encoder_type,
+        for adaface_encoder_type, adaface_ckpt_path in zip(self.adaface_encoder_types, self.adaface_ckpt_paths):
+            id2ada_prompt_encoder = create_id2ada_prompt_encoder(adaface_encoder_type,
                                                                  adaface_ckpt_path)
             self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
         self.id2ada_prompt_encoders.to(self.device)
-        print(f"id2ada_prompt_encoder_weights: {self.id2ada_prompt_encoder_weights}")
+        print(f"adaface_encoder_weights: {self.adaface_encoder_weights}")
 
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.
@@ -206,11 +206,11 @@ class AdaFaceWrapper(nn.Module):
             raise ValueError(f"encoders_num_id_vecs has to be larger or equal to 1, but is {self.encoders_num_id_vecs}")
 
         tokenizer = self.pipeline.tokenizer
-        # If id2ada_prompt_encoder_types is ["arc2face", "consistentID"], then total_num_id_vecs = 20.
+        # If adaface_encoder_types is ["arc2face", "consistentID"], then total_num_id_vecs = 20.
         # We add z_0_0, z_0_1, z_0_2, ..., z_0_15, z_1_0, z_1_1, z_1_2, z_1_3 to the tokenizer.
         self.all_placeholder_tokens = []
         self.placeholder_tokens_strs = []
-        for i in range(len(self.id2ada_prompt_encoder_types)):
+        for i in range(len(self.adaface_encoder_types)):
             placeholder_tokens = []
             for j in range(self.encoders_num_id_vecs[i]):
                 placeholder_tokens.append(f"{self.subject_string}_{i}_{j}")
@@ -260,11 +260,11 @@ class AdaFaceWrapper(nn.Module):
         prompt = re.sub(r'\b' + self.subject_string + r'\b,?', "", prompt)
         
         for i, placeholder_tokens_str in enumerate(self.placeholder_tokens_strs):
-            id2ada_prompt_encoder_type = self.id2ada_prompt_encoder_types[i]
-            if id2ada_prompt_encoder_type == "arc2face":
+            adaface_encoder_type = self.adaface_encoder_types[i]
+            if adaface_encoder_type == "arc2face":
                 # arc2face     ada embeddings work better when they are at the beginning of the prompt.
                 prompt = placeholder_tokens_str + " " + prompt
-            elif id2ada_prompt_encoder_type == "consistentID":
+            elif adaface_encoder_type == "consistentID":
                 # consistentID ada embeddings work better when they are at the end       of the prompt.
                 prompt = prompt + " " + placeholder_tokens_str
 
@@ -283,9 +283,9 @@ class AdaFaceWrapper(nn.Module):
                     out_id_embs_cfg_scale=out_id_embs_cfg_scale, 
                     noise_level=noise_level)
             
-            id2ada_prompt_encoder_weight = self.id2ada_prompt_encoder_weights[i]
+            adaface_encoder_weight = self.adaface_encoder_weights[i]
             # adaface_subj_embs: [16, 768] or [4, 768].
-            all_adaface_subj_embs.append(adaface_subj_embs * id2ada_prompt_encoder_weight)
+            all_adaface_subj_embs.append(adaface_subj_embs * adaface_encoder_weight)
             if teacher_neg_id_prompt_embs is None:
                 teacher_neg_id_prompt_embs = torch.zeros_like(adaface_subj_embs)
             all_teacher_neg_id_prompt_embs.append(teacher_neg_id_prompt_embs)

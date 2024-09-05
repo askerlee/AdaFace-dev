@@ -588,10 +588,10 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         else:
             return global_id_embeds
 
-def create_id2ada_prompt_encoder(id2ada_prompt_encoder_type, adaface_ckpt_path=None):
-    if id2ada_prompt_encoder_type == 'arc2face':
+def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None):
+    if adaface_encoder_type == 'arc2face':
         id2ada_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path)
-    elif id2ada_prompt_encoder_type == 'consistentID':
+    elif adaface_encoder_type == 'consistentID':
         # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
         # Only the consistentID modules and bise_net are used.
         id2ada_prompt_encoder = ConsistentID_ID2AdaPrompt(

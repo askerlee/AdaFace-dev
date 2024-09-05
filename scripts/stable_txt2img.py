@@ -243,12 +243,12 @@ def parse_args():
                         help="Zeroshot uses the diffusers implementation")
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
-    parser.add_argument("--id2ada_prompt_encoder_types", type=str, nargs="+", default=["arc2face"],
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-    # If id2ada_prompt_encoder_weights is not specified, the weights will be set to all 1.0.
-    parser.add_argument('--id2ada_prompt_encoder_weights', type=float, nargs="+", default=None,    
+    # If adaface_encoder_weights is not specified, the weights will be set to all 1.0.
+    parser.add_argument('--adaface_encoder_weights', type=float, nargs="+", default=None,    
                         help="Weights for the ID2Ada prompt encoders")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
@@ -355,8 +355,8 @@ def main(opt):
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
         # Currently embedding manager only supports one type of prompt encoder.
-        config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.id2ada_prompt_encoder_types[0]
-        opt.id2ada_prompt_encoder_types = opt.id2ada_prompt_encoder_types[:1]
+        config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.adaface_encoder_types[0]
+        opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
             model.embedding_manager.load(opt.subj_model_path, load_old_embman_ckpt=opt.load_old_embman_ckpt)
@@ -406,8 +406,8 @@ def main(opt):
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
 
-                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.id2ada_prompt_encoder_types, 
-                                          opt.adaface_ckpt_paths, opt.id2ada_prompt_encoder_weights,
+                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
+                                          opt.adaface_ckpt_paths, opt.adaface_encoder_weights,
                                           opt.subject_string, opt.ddim_steps,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
@@ -803,8 +803,8 @@ def main(opt):
                 if opt.bb_type:
                     experiment_sig += "-" + opt.bb_type
                 if opt.zeroshot:
-                    experiment_sig += "-" + ",".join(opt.id2ada_prompt_encoder_types)
-                    
+                    experiment_sig += "-" + ",".join(opt.adaface_encoder_types)
+
                 # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                 if opt.from_file:
                     prompt = prompts[0]
