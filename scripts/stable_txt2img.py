@@ -354,7 +354,9 @@ def main(opt):
             # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
+        # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.id2ada_prompt_encoder_types[0]
+        opt.id2ada_prompt_encoder_types = opt.id2ada_prompt_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
             model.embedding_manager.load(opt.subj_model_path, load_old_embman_ckpt=opt.load_old_embman_ckpt)
@@ -800,9 +802,9 @@ def main(opt):
 
                 if opt.bb_type:
                     experiment_sig += "-" + opt.bb_type
-                if opt.neg_prompt != "":
-                    experiment_sig += "-neg"
-
+                if opt.zeroshot:
+                    experiment_sig += "-" + ",".join(opt.id2ada_prompt_encoder_types)
+                    
                 # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                 if opt.from_file:
                     prompt = prompts[0]
