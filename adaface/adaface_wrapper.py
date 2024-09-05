@@ -22,7 +22,7 @@ sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
-                 adaface_ckpt_paths, adaface_encoder_weights=None,
+                 adaface_ckpt_paths, adaface_encoder_scales=None,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
@@ -36,11 +36,11 @@ class AdaFaceWrapper(nn.Module):
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
         self.adaface_encoder_types = adaface_encoder_types
-        if adaface_encoder_weights is None:
-            self.adaface_encoder_weights = [1.0] * len(adaface_encoder_types)
+        if adaface_encoder_scales is None:
+            self.adaface_encoder_scales = [6.0] * len(adaface_encoder_types)
         else:
             # Do not normalize the weights, and just use them as is.
-            self.adaface_encoder_weights = adaface_encoder_weights
+            self.adaface_encoder_scales = adaface_encoder_scales
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
         self.subject_string = subject_string
@@ -69,12 +69,16 @@ class AdaFaceWrapper(nn.Module):
 
     def initialize_pipeline(self):
         self.id2ada_prompt_encoders = nn.ModuleList()
-        for adaface_encoder_type, adaface_ckpt_path in zip(self.adaface_encoder_types, self.adaface_ckpt_paths):
+        for i, adaface_encoder_type in enumerate(self.adaface_encoder_types):
+            adaface_ckpt_path = self.adaface_ckpt_paths[i]
+            out_id_embs_cfg_scale = self.adaface_encoder_scales[i]
             id2ada_prompt_encoder = create_id2ada_prompt_encoder(adaface_encoder_type,
-                                                                 adaface_ckpt_path)
+                                                                 adaface_ckpt_path, 
+                                                                 out_id_embs_cfg_scale=out_id_embs_cfg_scale)
+            
             self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
         self.id2ada_prompt_encoders.to(self.device)
-        print(f"adaface_encoder_weights: {self.adaface_encoder_weights}")
+        print(f"adaface_encoder_scales: {self.adaface_encoder_scales}")
 
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.
@@ -283,9 +287,9 @@ class AdaFaceWrapper(nn.Module):
                     out_id_embs_cfg_scale=out_id_embs_cfg_scale, 
                     noise_level=noise_level)
             
-            adaface_encoder_weight = self.adaface_encoder_weights[i]
+            adaface_encoder_scale = self.adaface_encoder_scales[i]
             # adaface_subj_embs: [16, 768] or [4, 768].
-            all_adaface_subj_embs.append(adaface_subj_embs * adaface_encoder_weight)
+            all_adaface_subj_embs.append(adaface_subj_embs * adaface_encoder_scale)
             if teacher_neg_id_prompt_embs is None:
                 teacher_neg_id_prompt_embs = torch.zeros_like(adaface_subj_embs)
             all_teacher_neg_id_prompt_embs.append(teacher_neg_id_prompt_embs)

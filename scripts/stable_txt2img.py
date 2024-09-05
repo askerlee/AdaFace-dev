@@ -247,8 +247,8 @@ def parse_args():
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-    # If adaface_encoder_weights is not specified, the weights will be set to all 1.0.
-    parser.add_argument('--adaface_encoder_weights', type=float, nargs="+", default=None,    
+    # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
+    parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
                         help="Weights for the ID2Ada prompt encoders")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
@@ -407,7 +407,7 @@ def main(opt):
                 from adaface.adaface_wrapper import AdaFaceWrapper
 
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
-                                          opt.adaface_ckpt_paths, opt.adaface_encoder_weights,
+                                          opt.adaface_ckpt_paths, opt.adaface_encoder_scales,
                                           opt.subject_string, opt.ddim_steps,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,

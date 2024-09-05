@@ -34,7 +34,8 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator           = None
         if self.adaface_ckpt_path is not None:
             self.load_subj_basis_generator(self.adaface_ckpt_path)
-            
+        self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', 6.)
+
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
@@ -361,7 +362,7 @@ class FaceID2AdaPrompt(nn.Module):
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
-                                    out_id_embs_cfg_scale=6., noise_level=0):
+                                    noise_level=0):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
         # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
         # Otherwise, face_id_embs is used.
@@ -392,7 +393,7 @@ class FaceID2AdaPrompt(nn.Module):
         # adaface_prompt_embs, which is not used.
         adaface_subj_embs, adaface_prompt_embs = \
             self.subj_basis_generator(id_prompt_embs, None, None, 
-                                      out_id_embs_cfg_scale=out_id_embs_cfg_scale,
+                                      out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
                                       is_face=True, is_training=False,
                                       adaface_prompt_embs_inf_type='full_half_pad')
         # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
@@ -588,15 +589,15 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         else:
             return global_id_embeds
 
-def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None):
+def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None, *args, **kwargs):
     if adaface_encoder_type == 'arc2face':
-        id2ada_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path)
+        id2ada_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
     elif adaface_encoder_type == 'consistentID':
         # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
         # Only the consistentID modules and bise_net are used.
         id2ada_prompt_encoder = ConsistentID_ID2AdaPrompt(
                                         base_model_path="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
-                                        adaface_ckpt_path=adaface_ckpt_path)
+                                        adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
     else:
         breakpoint()
     
