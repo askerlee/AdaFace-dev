@@ -53,6 +53,8 @@ class AdaFaceWrapper(nn.Module):
         self.main_unet_path = main_unet_path
         self.extra_unet_paths = extra_unet_paths
         self.unet_weights = unet_weights
+        # apply_neg_img_prompt leads to worse results. So it's disabled.
+        self.apply_neg_img_prompt = False
         self.device = device
         self.is_training = is_training
 
@@ -301,6 +303,7 @@ class AdaFaceWrapper(nn.Module):
         if update_text_encoder:
             self.update_text_encoder_subj_embs(all_adaface_subj_embs)
 
+        self.all_teacher_neg_id_prompt_embs = all_teacher_neg_id_prompt_embs
         return all_adaface_subj_embs, all_teacher_neg_id_prompt_embs
 
     def encode_prompt(self, prompt, negative_prompt=None, device=None, verbose=False):
@@ -317,6 +320,7 @@ class AdaFaceWrapper(nn.Module):
         # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
         # So we manually move it to GPU here.
         self.pipeline.text_encoder.to(device)
+        # pooled_prompt_embeds_, negative_pooled_prompt_embeds_ are used by text2img3 and flux.
         pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = None, None
 
         # Compatible with older versions of diffusers.
@@ -358,6 +362,9 @@ class AdaFaceWrapper(nn.Module):
                                                 num_images_per_prompt=1, 
                                                 do_classifier_free_guidance=True,
                                                 negative_prompt=negative_prompt)
+
+        if self.pipeline_name == "text2img" and self.all_teacher_neg_id_prompt_embs is not None and self.apply_neg_img_prompt:
+            negative_prompt_embeds_[:, -self.all_teacher_neg_id_prompt_embs.shape[0]:] = self.all_teacher_neg_id_prompt_embs
 
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
