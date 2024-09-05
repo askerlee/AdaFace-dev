@@ -275,8 +275,7 @@ class AdaFaceWrapper(nn.Module):
         return prompt
 
     def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
-                                   out_id_embs_cfg_scale=6., noise_level=0, 
-                                   update_text_encoder=True):
+                                   noise_level=0, update_text_encoder=True):
         all_adaface_subj_embs = []
         all_teacher_neg_id_prompt_embs = []
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
@@ -284,7 +283,6 @@ class AdaFaceWrapper(nn.Module):
                 id2ada_prompt_encoder.generate_adaface_embeddings(\
                     image_paths, face_id_embs=face_id_embs, 
                     gen_rand_face=gen_rand_face, 
-                    out_id_embs_cfg_scale=out_id_embs_cfg_scale, 
                     noise_level=noise_level)
             
             adaface_encoder_scale = self.adaface_encoder_scales[i]

@@ -14,6 +14,9 @@ parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+",
                     default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
+# If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
+parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
+                    help="Weights for the ID2Ada prompt encoders")
 parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
 parser.add_argument('--extra_unet_paths', type=str, nargs="+", default=['models/ensemble/rv4-unet', 
                                                                         'models/ensemble/ar18-unet'], 
@@ -32,6 +35,7 @@ print(f"Device: {device}")
 adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_model_path,
                          adaface_encoder_types=args.adaface_encoder_types, 
                          adaface_ckpt_paths=args.adaface_ckpt_paths, 
+                         adaface_encoder_scales=args.adaface_encoder_scales,
                          extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights,
                          device=device)
 
@@ -69,9 +73,7 @@ def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale, noise_std_
 
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
-                                            out_id_embs_cfg_scale=adaface_id_cfg_scale, 
-                                            noise_level=noise_std_to_input,
-                                            update_text_encoder=True)
+                                           noise_level=noise_std_to_input, update_text_encoder=True)
     
     if adaface_subj_embs is None:
         raise gr.Error(f"Failed to detect any faces! Please try with other images")

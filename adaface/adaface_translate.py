@@ -31,6 +31,9 @@ def parse_args():
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")      
+    # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
+    parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
+                        help="Weights for the ID2Ada prompt encoders")    
     parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
@@ -88,6 +91,7 @@ if __name__ == "__main__":
 
     adaface = AdaFaceWrapper("img2img", args.base_model_path, 
                              args.adaface_encoder_types, args.adaface_ckpt_paths,
+                             args.adaface_encoder_scales, 
                              args.subject_string, args.num_inference_steps,
                              extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights, 
                              device=args.device)
@@ -158,8 +162,8 @@ if __name__ == "__main__":
         with torch.no_grad():
             adaface_subj_embs, teacher_neg_id_prompt_embs = \
                 adaface.prepare_adaface_embeddings(image_paths, None, False, 
-                                                    out_id_embs_cfg_scale=6, noise_level=args.noise_level, 
-                                                    update_text_encoder=True)
+                                                   noise_level=args.noise_level, 
+                                                   update_text_encoder=True)
 
         # Replace the first occurrence of "in_folder" with "out_folder" in the path of the subject_folder.
         subject_out_folder = subject_folder.replace(args.in_folder, args.out_folder, 1)
