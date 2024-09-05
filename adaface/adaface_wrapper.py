@@ -289,9 +289,8 @@ class AdaFaceWrapper(nn.Module):
                     gen_rand_face=gen_rand_face, 
                     noise_level=noise_level)
             
-            adaface_encoder_scale = self.adaface_encoder_scales[i]
             # adaface_subj_embs: [16, 768] or [4, 768].
-            all_adaface_subj_embs.append(adaface_subj_embs * adaface_encoder_scale)
+            all_adaface_subj_embs.append(adaface_subj_embs)
             if teacher_neg_id_prompt_embs is None:
                 teacher_neg_id_prompt_embs = torch.zeros_like(adaface_subj_embs)
             all_teacher_neg_id_prompt_embs.append(teacher_neg_id_prompt_embs)
@@ -363,7 +362,7 @@ class AdaFaceWrapper(nn.Module):
                                                 do_classifier_free_guidance=True,
                                                 negative_prompt=negative_prompt)
 
-        if self.pipeline_name == "text2img" and self.all_teacher_neg_id_prompt_embs is not None and self.apply_neg_img_prompt:
+        if self.pipeline_name == "text2img" and self.apply_neg_img_prompt and self.all_teacher_neg_id_prompt_embs is not None:
             negative_prompt_embeds_[:, -self.all_teacher_neg_id_prompt_embs.shape[0]:] = self.all_teacher_neg_id_prompt_embs
 
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_

@@ -440,7 +440,8 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
                                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
-        self.out_id_embs_cfg_scale          = 6
+        if self.out_id_embs_cfg_scale == -1:
+            self.out_id_embs_cfg_scale      = 1
         # Arc2Face pipeline specific behaviors.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
@@ -540,7 +541,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             self.clip_image_encoder.half()
             self.image_proj_model.half()
 
-        self.out_id_embs_cfg_scale          = 1
+        if self.out_id_embs_cfg_scale == -1:
+            self.out_id_embs_cfg_scale      = 6
         # ConsistentIDPipeline specific behaviors.
         self.num_id_vecs                    = 4
         self.gen_neg_img_prompt             = True

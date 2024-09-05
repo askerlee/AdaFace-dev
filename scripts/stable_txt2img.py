@@ -247,7 +247,7 @@ def parse_args():
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-    # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
+    # If adaface_encoder_scales is not specified, the weights will be set to 1 for arc2face and 6 for consistentID.
     parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
                         help="Weights for the ID2Ada prompt encoders")
     parser.add_argument("--use_teacher_neg", action="store_true",
