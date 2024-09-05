@@ -34,7 +34,9 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator           = None
         if self.adaface_ckpt_path is not None:
             self.load_subj_basis_generator(self.adaface_ckpt_path)
-        self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', 6.)
+        # -1: use the default scale for the adaface encoder type.
+        # i.e., 6 for arc2face and 1 for consistentID.
+        self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
 
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
@@ -438,7 +440,8 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
                                             )
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
-        # Model behavior configurations.
+        self.out_id_embs_cfg_scale          = 6
+        # Arc2Face pipeline specific behaviors.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
         self.contrast_clip_embs             = False
@@ -537,13 +540,12 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             self.clip_image_encoder.half()
             self.image_proj_model.half()
 
-        # Model behavior configurations.
-        # self.id_img_prompt_max_length       = 77
+        self.out_id_embs_cfg_scale          = 1
+        # ConsistentIDPipeline specific behaviors.
         self.num_id_vecs                    = 4
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
         self.contrast_clip_embs             = False
-        # ConsistentIDPipeline specific configurations.
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False

@@ -37,7 +37,9 @@ class AdaFaceWrapper(nn.Module):
         self.base_model_path = base_model_path
         self.adaface_encoder_types = adaface_encoder_types
         if adaface_encoder_scales is None:
-            self.adaface_encoder_scales = [6.0] * len(adaface_encoder_types)
+            # -1: use the default scale for the adaface encoder type.
+            # i.e., 6 for arc2face and 1 for consistentID.
+            self.adaface_encoder_scales = [-1] * len(adaface_encoder_types)
         else:
             # Do not normalize the weights, and just use them as is.
             self.adaface_encoder_scales = adaface_encoder_scales
