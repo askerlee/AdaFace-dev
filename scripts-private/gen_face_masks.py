@@ -2,8 +2,8 @@
 # -*- encoding: utf-8 -*-
 import sys
 # git clone https://github.com/zllrunning/face-parsing.PyTorch face_parsing
-sys.path.append('/path/to/face_parsing')
-from model import BiSeNet
+sys.path.append('face_parsing')
+from face_parsing.model import BiSeNet
 
 import torch
 import os
@@ -12,7 +12,6 @@ import numpy as np
 from PIL import Image
 import torchvision.transforms as transforms
 import cv2
-import shutil
 from pprint import pprint
 
 def vis_parsing_maps(im, parsing_anno, stride, save_im, save_path):
@@ -173,14 +172,16 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
                                 save_path=osp.join(result_path, subj_dir, img_path))
 
 if __name__ == "__main__":
-    ckpt_path = osp.join('/path/to/face_parsing/res/cp', '79999_iter.pth')
+    ckpt_path = osp.join('models/BiSeNet', '79999_iter.pth')
     '''
     gen_masks(ckpt_path, src_paths='/path/to/VGGface2_HQ', 
              result_path='/path/to/VGGface2_HQ_masks2', 
              exist_path='/path/to/VGGface2_HQ_masks',
              max_imgs_per_person=-1)
     '''
-    # The FFHQ folder doesn't have subfolders. Therefore, we need to put it in a list/tuple.
-    gen_masks(ckpt_path, src_paths=['/path/to/FFHQ'], 
-              result_path='/path/to/FFHQ_masks')
-        
+    face_folder = sys.argv[1]
+    face_folder_par_dir, face_folder_name = osp.split(face_folder)
+    # If the face folder doesn't have subfolders, we need to put it in a list/tuple.
+    gen_masks(ckpt_path, src_paths=[face_folder], 
+              result_path=osp.join(face_folder_par_dir, f"{face_folder_name}_masks"))
+            

@@ -10,15 +10,15 @@ import gradio as gr
 import spaces
 import argparse
 parser = argparse.ArgumentParser()
+parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face", "consistentID"],
+                    choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
 parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                     default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
-                    choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
 # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
 parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
                     help="Weights for the ID2Ada prompt encoders")
 parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
-parser.add_argument('--extra_unet_paths', type=str, nargs="+", default=['models/ensemble/rv4-unet', 
+parser.add_argument('--extra_unet_paths', type=str, nargs="*", default=['models/ensemble/rv4-unet', 
                                                                         'models/ensemble/ar18-unet'], 
                     help="Extra paths to the checkpoints of the UNet models")
 parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
@@ -61,7 +61,7 @@ def update_out_gallery(images):
     return gr.update(height=800)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, adaface_id_cfg_scale, noise_std_to_input,
+def generate_image(image_paths, guidance_scale, noise_std_to_input,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
 
@@ -104,7 +104,7 @@ description = r"""
 
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
-2. Increase <b>AdaFace CFG Scale</b> (preferred) or <b>Guidance scale</b> and/or to highlight fine facial features.
+2. Check "Enhance Face" to highlight fine facial features.
 3. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
   AdaFace-Animate 
   <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
@@ -170,16 +170,7 @@ with gr.Blocks(css=css) as demo:
                 label="Negative Prompt", 
                 value="flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, deformed eyeballs, cross-eyed, blurry, mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, nude, naked, nsfw, topless, bare breasts",
             )
-                        
-            adaface_id_cfg_scale = gr.Slider(
-                    label="AdaFace CFG Scale",
-                    info="The CFG scale of the AdaFace ID embeddings (influencing fine facial features)",
-                    minimum=1,
-                    maximum=12.0,
-                    step=1,
-                    value=6.0,
-                )
-            
+
             guidance_scale = gr.Slider(
                 label="Guidance scale",
                 minimum=1.0,
@@ -227,7 +218,7 @@ with gr.Blocks(css=css) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, adaface_id_cfg_scale, noise_std_to_input, num_images, 
+            inputs=[img_files, guidance_scale, noise_std_to_input, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         ).then(
