@@ -2239,9 +2239,15 @@ class LatentDiffusion(DDPM):
                                                              fg_pixel_weight=1,
                                                              bg_pixel_weight=bg_pixel_weight)
 
+                    print(f"Rank {self.trainer.global_rank} Step {s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
+                    # For consistentID, if gen_id2img_rand_id, then the CLIP features are also randomly generated.
+                    # Due to this issue, the loss of the first denoising iteration tends to be very high.
+                    # So we reduce this loss by 10 times. In the following iterations, 
+                    # the loss will be very small, since the UNet is not influenced so much by CLIP features,
+                    # but more relies on the partially-denoised latent features.
+                    if self.iter_flags['gen_id2img_rand_id'] and self.unet_teacher_type == 'consistentID':
+                        loss_recon *= 0.1
                     loss_recons.append(loss_recon)
-                    if True:
-                        print(f"Rank {self.trainer.global_rank} Step {s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
 
                 # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.

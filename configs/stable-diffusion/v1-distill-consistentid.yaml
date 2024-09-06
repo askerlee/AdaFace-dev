@@ -30,7 +30,7 @@ model:
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_teachers:           2
-    composition_regs_iter_gap:        3
+    composition_regs_iter_gap:        -1
     do_zero_shot:                     True
     unet_teacher_type:                'consistentID'
     # The percentage of unet_distill_iter among do_normal_recon iters.
