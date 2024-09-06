@@ -114,6 +114,8 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
 
         subj_img_count = 0
         for img_path in sorted(os.listdir(subj_path)):
+            if img_path[-4:].lower() not in ['.jpg', '.png', 'jpeg', '.bmp', '.tif', 'tiff', 'webp']:
+                continue
             if img_path.endswith("_mask.png"):
                 continue
             
