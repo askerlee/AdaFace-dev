@@ -13,6 +13,7 @@ from PIL import Image
 import torchvision.transforms as transforms
 import cv2
 from pprint import pprint
+import argparse
 
 def vis_parsing_maps(im, parsing_anno, stride, save_im, save_path):
     # Colors for all 20 parts
@@ -52,7 +53,8 @@ def vis_parsing_maps(im, parsing_anno, stride, save_im, save_path):
     # return vis_im
 
 def gen_masks(ckpt_path, src_paths, result_path, exist_path=None, 
-              trash_path_suffix='trash', inspect_path_suffix='inspect', max_imgs_per_person=-1):
+              trash_path_suffix='trash', inspect_path_suffix='inspect', max_imgs_per_person=-1,
+              device='cuda'):
 
     if not os.path.exists(result_path):
         os.makedirs(result_path)
@@ -76,7 +78,7 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
 
     n_classes = 19
     net = BiSeNet(n_classes=n_classes)
-    net.cuda()
+    net.to(device)
     net.load_state_dict(torch.load(ckpt_path))
     net.eval()
 
@@ -132,7 +134,7 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
             image_obj = image_obj.resize((512, 512), Image.BILINEAR).convert("RGB") 
             img = to_tensor(image_obj)
             img = torch.unsqueeze(img, 0)
-            img = img.cuda()
+            img = img.to(device)
             with torch.no_grad():
                 out = net(img)[0]
 
@@ -174,16 +176,22 @@ def gen_masks(ckpt_path, src_paths, result_path, exist_path=None,
                                 save_path=osp.join(result_path, subj_dir, img_path))
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--face_folder', type=str, help='The folder containing face images.')
+    parser.add_argument('--device', type=int, default=0, help='GPU index to run the model.')
+    args = parser.parse_args()
+
+    device = f'cuda:{args.device}' if torch.cuda.is_available() else 'cpu'
     ckpt_path = osp.join('models/BiSeNet', '79999_iter.pth')
-    '''
-    gen_masks(ckpt_path, src_paths='/path/to/VGGface2_HQ', 
-             result_path='/path/to/VGGface2_HQ_masks2', 
-             exist_path='/path/to/VGGface2_HQ_masks',
-             max_imgs_per_person=-1)
-    '''
-    face_folder = sys.argv[1]
+
+    face_folder = args.face_folder
+    if face_folder.endswith('/') or face_folder.endswith('\\'):
+        face_folder = face_folder[:-1]
+
     face_folder_par_dir, face_folder_name = osp.split(face_folder)
     # If the face folder doesn't have subfolders, we need to put it in a list/tuple.
     gen_masks(ckpt_path, src_paths=[face_folder], 
-              result_path=osp.join(face_folder_par_dir, f"{face_folder_name}_masks"))
+              result_path=osp.join(face_folder_par_dir, f"{face_folder_name}_masks"), 
+              device=device)
             
