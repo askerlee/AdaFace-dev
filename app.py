@@ -13,10 +13,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face", "consistentID"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
 parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
-                    default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+                    default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt',
+                             'models/adaface/VGGface2_HQ_masks2024-09-06T17-37-32_zero3-ada-10000.pt'])
 # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
 parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
-                    help="Weights for the ID2Ada prompt encoders")
+                    help="Scales for the ID2Ada prompt encoders")
 parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
 parser.add_argument('--extra_unet_paths', type=str, nargs="*", default=['models/ensemble/rv4-unet', 
                                                                         'models/ensemble/ar18-unet'], 
