@@ -158,7 +158,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--data_roots", 
         type=str, 
         nargs='+', 
-        required=True, 
         help="Path(s) containing training images")
     parser.add_argument("--mix_subj_data_roots",
         type=str, nargs='+', default=None,
@@ -624,7 +623,8 @@ if __name__ == "__main__":
 
         datadir_in_name = True
         if datadir_in_name:
-            basename = os.path.basename(os.path.normpath(opt.data_roots[0]))
+            first_data_folder = opt.data_roots[0] if len(opt.data_roots) > 0 else opt.mix_subj_data_roots[0]
+            basename = os.path.basename(os.path.normpath(first_data_folder))
             # If we do multi-subject training, we need to replace the * with "all".
             basename = basename.replace("*", "all")
             timesig  = basename + timesig

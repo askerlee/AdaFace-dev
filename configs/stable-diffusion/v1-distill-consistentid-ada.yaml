@@ -1,5 +1,5 @@
 model:
-  base_lr: 8e-04
+  base_lr: 1e-05
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -30,11 +30,15 @@ model:
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_teachers:           2
-    composition_regs_iter_gap:        3
+    composition_regs_iter_gap:        -1
     do_zero_shot:                     True
-    unet_teacher_type:                'arc2face'
+    unet_teacher_type:                'consistentID'
     # The percentage of unet_distill_iter among do_normal_recon iters.
-    p_unet_distill_iter:       0.1
+    p_unet_distill_iter:              0.5
+    # Never generate random IDs for consistentID distillation, as
+    # consistentID relies on CLIP features of the input image, 
+    # which are not available when the IDs are random and there are no actual input images.
+    p_gen_id2img_rand_id:             0
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5
@@ -49,14 +53,14 @@ model:
     # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
     fg_bg_complementary_loss_weight:  2e-4
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
-    fg_bg_xlayer_consist_loss_weight: 5e-
+    fg_bg_xlayer_consist_loss_weight: 5e-5
     # fg_wds_comple: used in wds recon iters.
     fg_wds_complementary_loss_weight: 0 #1e-4
     
-    optimizer_type: Prodigy           # AdamW, Adam8bit, NAdam, Prodigy
+    optimizer_type: AdamW           # AdamW, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
-      betas:    [0.9,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
+      betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
@@ -85,7 +89,7 @@ model:
         background_strings:       ['y']
         initializer_strings:      ["person", "unknown"]
         subj_name_to_cls_delta_string: { 'z': "person", 'rand_id_to_img_prompt': 'person' }
-        token2num_vectors:         {'z': 16, 'y': 4}
+        token2num_vectors:         {'z': 4, 'y': 4}
         use_layerwise_embedding: True
         training_begin_add_noise_std_range:  [ 0.02, 0.04 ]
         training_end_add_noise_std_range:    [ 0.02, 0.04 ]
@@ -93,7 +97,9 @@ model:
         training_add_noise_prob:   { 'recon_iter':            0.6, 
                                      'unet_distill_iter':     0,
                                      'compos_distill_iter':   0.4 }
-        embedding_manager_ckpt:     null
+        embedding_manager_ckpt:             null
+        do_zero_shot:                       True
+        id2img_prompt_encoder_type:       'consistentID'
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:
@@ -171,4 +177,3 @@ lightning:
     deterministic: False
     replace_sampler_ddp: False
     accumulate_grad_batches: 2
-    

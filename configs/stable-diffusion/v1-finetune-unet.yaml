@@ -58,7 +58,6 @@ model:
     fg_bg_xlayer_consist_loss_weight: 5e-5
     # fg_wds_comple: used in wds recon iters.
     fg_wds_complementary_loss_weight: 0 #1e-4
-    wds_bg_recon_discount:            0.05
     
     # Finetuning the u-net consumes a huge amount of RAM. Even if we have BS=1,
     # using optimizers other than Adam8bit and "--max_num_denoising_steps 2" will cause OOM.

@@ -14,7 +14,7 @@ parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["ar
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
 parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                     default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt',
-                             'models/adaface/VGGface2_HQ_masks2024-09-06T17-37-32_zero3-ada-10000.pt'])
+                             'models/adaface/VGGface2_HQ_masks2024-09-07T23-14-17_zero3-ada-23000.pt'])
 # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
 parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
                     help="Scales for the ID2Ada prompt encoders")

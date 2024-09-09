@@ -61,7 +61,7 @@ class EmbeddingManager(nn.Module):
             training_end_add_noise_std_range=None,
             training_add_noise_prob=None,
             do_zero_shot=True,
-            id2img_prompt_encoder_type='arc2face',
+            id2ada_prompt_encoder_type='arc2face',
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
@@ -153,7 +153,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.num_vectors_each_bg = 0
 
-            self.zs_cls_delta_string   = zs_cls_delta_string
+            self.zs_cls_delta_string  = zs_cls_delta_string
             self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
             self.zs_extra_words_scale = zs_extra_words_scale
 
@@ -162,10 +162,10 @@ class EmbeddingManager(nn.Module):
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            self.id2img_prompt_encoder = create_id2ada_prompt_encoder(id2img_prompt_encoder_type)
+            self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(id2ada_prompt_encoder_type)
 
             if self.zs_cls_delta_string is not None:
-                self.zs_cls_delta_tokens   = self.get_tokens_for_string(zs_cls_delta_string)
+                self.zs_cls_delta_tokens = self.get_tokens_for_string(zs_cls_delta_string)
                 if zs_cls_delta_token_weights is None:
                     self.zs_cls_delta_token_weights = torch.ones(len(self.zs_cls_delta_tokens))
                     self.zs_cls_delta_token_weights[-1] = 2
@@ -215,7 +215,7 @@ class EmbeddingManager(nn.Module):
                                                           num_out_layers = self.num_unet_ca_layers,
                                                           # zs_image_emb_dim: laion: 1280, openai: 1024.
                                                           # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-                                                          bg_image_embedding_dim = self.id2img_prompt_encoder.clip_embedding_dim, 
+                                                          bg_image_embedding_dim = self.id2ada_prompt_encoder.clip_embedding_dim, 
                                                           output_dim = out_emb_dim,
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
@@ -824,6 +824,7 @@ class EmbeddingManager(nn.Module):
                     # So only extend self.string_to_subj_basis_generator_dict[km] after loading the state_dict.
                     # This should happen only during training, not inference. 
                     # Therefore, whether noise_std is 0 or not doesn't really matter the inference result.
+                    breakpoint()
                     if ckpt_subj_basis_generator.placeholder_is_bg or (not hasattr(ckpt_subj_basis_generator, "prompt2token_proj_attention_multiplier")) \
                       or ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier == -1:
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.

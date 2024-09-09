@@ -34,7 +34,11 @@ model:
     do_zero_shot:                     True
     unet_teacher_type:                'consistentID'
     # The percentage of unet_distill_iter among do_normal_recon iters.
+    # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
+    # at the other 50%, we use the original image as the target.
     p_unet_distill_iter:              0.5
+    id2img_prompt_encoder_trainable:  True
+    id2img_prompt_encoder_lr_ratio:   0.001
     # Never generate random IDs for consistentID distillation, as
     # consistentID relies on CLIP features of the input image, 
     # which are not available when the IDs are random and there are no actual input images.
@@ -56,9 +60,8 @@ model:
     fg_bg_xlayer_consist_loss_weight: 5e-5
     # fg_wds_comple: used in wds recon iters.
     fg_wds_complementary_loss_weight: 0 #1e-4
-    wds_bg_recon_discount:            0.05
     
-    optimizer_type: AdamW           # AdamW, Adam8bit, NAdam, Prodigy
+    optimizer_type: Adam8bit           # AdamW, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
       betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        

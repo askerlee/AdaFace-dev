@@ -88,7 +88,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 wds_bg_recon_discount=1.,
+                 wds_bg_recon_discount=0.05,
                  do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
                  use_background_token=True,
@@ -99,6 +99,8 @@ class DDPM(pl.LightningModule):
                  do_zero_shot=True,
                  p_unet_distill_iter=0,
                  unet_teacher_type=None,
+                 id2img_prompt_encoder_trainable=False,
+                 id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_paths=None,
                  unet_weights=None,
                  unet_teacher_base_model_path=None,
@@ -144,6 +146,8 @@ class DDPM(pl.LightningModule):
         self.p_unet_distill_iter                    = p_unet_distill_iter if (do_zero_shot and self.training) \
                                                         else 0
         self.unet_teacher_type                      = unet_teacher_type
+        self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
+        self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
         self.extra_unet_paths                       = extra_unet_paths
         self.unet_weights                           = unet_weights
         self.unet_teacher_base_model_path           = unet_teacher_base_model_path
@@ -1175,7 +1179,7 @@ class LatentDiffusion(DDPM):
                 # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
                 faceless_img_count, zs_id_embs, zs_clip_fgbg_features, zs_clip_neg_features = \
-                    self.embedding_manager.id2img_prompt_encoder.extract_init_id_embeds_from_images(\
+                    self.embedding_manager.id2ada_prompt_encoder.extract_init_id_embeds_from_images(\
                         images, image_paths, fg_mask.squeeze(1), skip_non_faces=False, 
                         calc_avg=use_subj_avg_embedding)
                                 
@@ -1223,9 +1227,10 @@ class LatentDiffusion(DDPM):
                 # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
                 # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
                 # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
-                results = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(
+                results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
                             images.shape[0], init_id_embs=zs_id_embs, 
-                            pre_clip_features=pre_clip_features)
+                            pre_clip_features=pre_clip_features, 
+                            id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
                 id2img_prompt_embs = results[2]
 
             # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
@@ -1233,8 +1238,12 @@ class LatentDiffusion(DDPM):
             # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
             else:
                 # zs_id_embs: [4, 512]. id2img_prompt_embs: [4, 21, 768]
-                results = self.embedding_manager.id2img_prompt_encoder.get_batched_img_prompt_embs(
-                                images.shape[0], init_id_embs=None, pre_clip_features=None)
+                results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
+                                images.shape[0], init_id_embs=None, pre_clip_features=None,
+                                # Random ID embeddings have no ground truth images, but the objective
+                                # is to align with the unet teacher output. Therefore, we are still
+                                # able to train the id2img prompt encoder, if it's enabled.
+                                id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
                 zs_id_embs, id2img_prompt_embs = results[1], results[2]
                 # For ConsistentID, random clip features are much better than zero clip features.
                 zs_clip_fgbg_features   = torch.randn((BS, 514, 1280), device=x_start.device)
@@ -3820,6 +3829,12 @@ class LatentDiffusion(DDPM):
             embedding_params = self.embedding_manager.optimized_parameters()
             embedding_params_with_lrs = [ {'params': embedding_params, 'lr': lr} ]
             opt_params_with_lrs += embedding_params_with_lrs
+
+        if self.id2img_prompt_encoder_trainable:
+            id2img_prompt_encoder_params = self.embedding_manager.id2img_prompt_encoder.parameters()
+            id2img_prompt_encoder_params_with_lrs = [ {'params': id2img_prompt_encoder_params, 
+                                                       'lr': lr * self.id2img_prompt_encoder_lr_ratio } ]
+            opt_params_with_lrs += id2img_prompt_encoder_params_with_lrs
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_unet: 
