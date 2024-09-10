@@ -17,8 +17,6 @@ class UNetTeacher(pl.LightningModule):
         # self.unet will be initialized in the child class.
         self.unet = None
 
-    # Only used for inference/distillation, so no_grad() is used.
-    @torch.no_grad()
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
         assert num_denoising_steps <= 10
 

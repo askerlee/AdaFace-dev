@@ -2144,7 +2144,9 @@ class LatentDiffusion(DDPM):
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
                 # use_unet_teacher_as_target implies num_denoising_steps >= 1.
-                if self.iter_flags['use_unet_teacher_as_target']:
+                # If self.id2img_prompt_encoder_trainable, we still denoise the images with the UNet teacher,
+                # to train the id2img prompt encoder, preventing it from degeneration.
+                if self.iter_flags['use_unet_teacher_as_target']: # or self.id2img_prompt_encoder_trainable:
                     # student_prompt_embs is the prompt embedding of the student model.
                     # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
                     # So we only need to take the first one.
@@ -2165,8 +2167,10 @@ class LatentDiffusion(DDPM):
                     else:
                         breakpoint()
 
-                    unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
-                        self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
+                    #with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
+                    with torch.no_grad():
+                        unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
+                            self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
                         
                     MAX_ACCUMU_BATCH_SIZE = 7
                     # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 

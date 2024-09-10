@@ -717,7 +717,7 @@ class EmbeddingManager(nn.Module):
                      }
         
         if self.id2img_prompt_encoder_trainable:
-            id2img_learnable_modules = self.id2img_prompt_encoder.get_id2img_learnable_modules()
+            id2img_learnable_modules = self.id2ada_prompt_encoder.get_id2img_learnable_modules()
             saved_dict["id2img_prompt_encoder_learnable_modules"] = [ module.state_dict() for module in id2img_learnable_modules ]
 
         torch.save(saved_dict, ckpt_path)
@@ -784,8 +784,7 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.proj_in = None
                         ckpt_subj_basis_generator.pos_embs = None
 
-                    # No extension. So we just assign the ckpt to the current subj_basis_generator.
-                    # TODO: fix the logic below thoroughly in the future.
+                    # No extension or state_dict loading, instead, directly use the ckpt_subj_basis_generator.
                     if extend_prompt2token_proj_attention_multiplier == -1:
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
                         # Never update token and positional embeddings of the original CLIPTextModel.
