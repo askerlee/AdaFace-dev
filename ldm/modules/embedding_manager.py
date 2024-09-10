@@ -739,7 +739,8 @@ class EmbeddingManager(nn.Module):
                      }
         
         if self.id2img_prompt_encoder_trainable:
-            saved_dict["id2img_prompt_encoder"] = self.id2ada_prompt_encoder.text_to_image_prompt_encoder.state_dict()
+            id2img_learnable_modules = self.id2img_prompt_encoder.get_id2img_learnable_modules()
+            saved_dict["id2img_prompt_encoder_learnable_modules"] = [ module.state_dict() for module in id2img_learnable_modules ]
 
         torch.save(saved_dict, ckpt_path)
 

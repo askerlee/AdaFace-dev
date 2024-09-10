@@ -3834,9 +3834,10 @@ class LatentDiffusion(DDPM):
             opt_params_with_lrs += embedding_params_with_lrs
 
         if self.id2img_prompt_encoder_trainable:
-            id2img_prompt_encoder_params = self.embedding_manager.id2ada_prompt_encoder.id2img_optimized_parameters()
-            id2img_prompt_encoder_params_with_lrs = [ {'params': id2img_prompt_encoder_params, 
-                                                       'lr': lr * self.id2img_prompt_encoder_lr_ratio } ]
+            id2img_prompt_encoder_learnable_modules = self.embedding_manager.id2ada_prompt_encoder.get_id2img_learnable_modules()
+            id2img_prompt_encoder_params_with_lrs = [ {'params': module.parameters(), 
+                                                       'lr': lr * self.id2img_prompt_encoder_lr_ratio } 
+                                                        for module in id2img_prompt_encoder_learnable_modules ]
             opt_params_with_lrs += id2img_prompt_encoder_params_with_lrs
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
