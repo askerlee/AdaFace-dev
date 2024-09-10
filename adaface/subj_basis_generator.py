@@ -743,7 +743,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(prompt2token_proj_attention_multipliers, noise_std)
         # Update prompt2token_proj_attention_multipliers (relative to the original CLIPTextModel).
         for i in range(begin_layer_idx, end_layer_idx+1):
-            self.prompt2token_proj_attention_multipliers[i] *= multiplier
+            self.prompt2token_proj_attention_multipliers[i] *= prompt2token_proj_attention_multipliers[i]
 
         print(f"{num_extended_layers} layers in prompt2token_proj_attention are extended by {multiplier}x")
 
