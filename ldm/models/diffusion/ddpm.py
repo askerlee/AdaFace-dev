@@ -3813,6 +3813,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = torch.optim.NAdam
         elif self.optimizer_type == 'Adam8bit':
             OptimizerClass = bnb.optim.Adam8bit
+        elif self.optimizer_type == 'AdamW8bit':
+            OptimizerClass = bnb.optim.AdamW8bit
         elif self.optimizer_type == 'Prodigy':
             OptimizerClass = Prodigy
         else:
