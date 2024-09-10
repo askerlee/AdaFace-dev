@@ -353,7 +353,7 @@ def main(opt):
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
         # Currently embedding manager only supports one type of prompt encoder.
-        config.model.params.personalization_config.params.id2img_prompt_encoder_type = opt.adaface_encoder_types[0]
+        config.model.params.personalization_config.params.id2ada_prompt_encoder_type = opt.adaface_encoder_types[0]
         opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
@@ -411,8 +411,8 @@ def main(opt):
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-                # If id2img_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.
-                # If id2img_prompt_encoder_type == "consistentID", teacher_neg_id_prompt_embs will be used for CFG.
+                # If id2ada_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.
+                # If id2ada_prompt_encoder_type == "consistentID", teacher_neg_id_prompt_embs will be used for CFG.
                 adaface_subj_embs, teacher_neg_id_prompt_embs = \
                     pipeline.prepare_adaface_embeddings(ref_image_paths, None, False, 
                                                         noise_level=0, 

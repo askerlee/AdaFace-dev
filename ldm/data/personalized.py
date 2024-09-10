@@ -176,8 +176,12 @@ class PersonalizedBase(Dataset):
         self.do_zero_shot = do_zero_shot
         # If data_roots is a single string, convert it to a list of strings.
         # Otherwise, data_roots is already a list of strings.
-        if isinstance(data_roots, str):
+
+        if data_roots is None:
+            data_roots = []
+        elif isinstance(data_roots, str):
             data_roots = [ data_roots ]
+
         if isinstance(mix_subj_data_roots, str):
             mix_subj_data_roots = [ mix_subj_data_roots ]
         # Now mix_subj_data_roots is either None or a list of folders.

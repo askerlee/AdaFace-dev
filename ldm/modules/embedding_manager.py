@@ -62,6 +62,7 @@ class EmbeddingManager(nn.Module):
             training_add_noise_prob=None,
             do_zero_shot=True,
             id2ada_prompt_encoder_type='arc2face',
+            id2img_prompt_encoder_trainable=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
@@ -163,6 +164,7 @@ class EmbeddingManager(nn.Module):
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
             self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(id2ada_prompt_encoder_type)
+            self.id2img_prompt_encoder_trainable = id2img_prompt_encoder_trainable
 
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens = self.get_tokens_for_string(zs_cls_delta_string)
@@ -213,7 +215,7 @@ class EmbeddingManager(nn.Module):
 
                 subj_basis_generator = SubjBasisGenerator(num_out_embs_per_layer = num_out_embs_per_layer,
                                                           num_out_layers = self.num_unet_ca_layers,
-                                                          # zs_image_emb_dim: laion: 1280, openai: 1024.
+                                                          # bg_image_embedding_dim: laion: 1280, openai: 1024.
                                                           # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
                                                           bg_image_embedding_dim = self.id2ada_prompt_encoder.clip_embedding_dim, 
                                                           output_dim = out_emb_dim,
@@ -725,17 +727,21 @@ class EmbeddingManager(nn.Module):
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, ckpt_path):
-        torch.save({ "string_to_subj_basis_generator_dict": self.string_to_subj_basis_generator_dict,
-                     "token2num_vectors":                self.token2num_vectors,
-                     "placeholder_strings":              self.placeholder_strings,
-                     "subject_strings":                  self.subject_strings,
-                     "background_strings":               self.background_strings,
-                     # Used to normalize attention features for calc_comp_fg_bg_preserve_loss() during training.
-                     "ca_q_bns":                         self.ca_q_bns,
-                     "ca_outfeat_lns":                   self.ca_outfeat_lns,
-                     "do_zero_shot":                     self.do_zero_shot,
-                   }, 
-                    ckpt_path)
+        saved_dict = { "string_to_subj_basis_generator_dict":   self.string_to_subj_basis_generator_dict,
+                        "token2num_vectors":                    self.token2num_vectors,
+                        "placeholder_strings":                  self.placeholder_strings,
+                        "subject_strings":                      self.subject_strings,
+                        "background_strings":                   self.background_strings,
+                        # Used to normalize attention features for calc_comp_fg_bg_preserve_loss() during training.
+                        "ca_q_bns":                             self.ca_q_bns,
+                        "ca_outfeat_lns":                       self.ca_outfeat_lns,
+                        "do_zero_shot":                         self.do_zero_shot,
+                     }
+        
+        if self.id2img_prompt_encoder_trainable:
+            saved_dict["id2img_prompt_encoder"] = self.id2ada_prompt_encoder.text_to_image_prompt_encoder.state_dict()
+
+        torch.save(saved_dict, ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
     def load(self, ckpt_paths, extend_prompt2token_proj_attention_multiplier=-1, load_old_embman_ckpt=False):
@@ -824,46 +830,25 @@ class EmbeddingManager(nn.Module):
                     # So only extend self.string_to_subj_basis_generator_dict[km] after loading the state_dict.
                     # This should happen only during training, not inference. 
                     # Therefore, whether noise_std is 0 or not doesn't really matter the inference result.
-                    breakpoint()
-                    if ckpt_subj_basis_generator.placeholder_is_bg or (not hasattr(ckpt_subj_basis_generator, "prompt2token_proj_attention_multiplier")) \
-                      or ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier == -1:
+                    if ckpt_subj_basis_generator.placeholder_is_bg:
+                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                    else:
+                        ckpt_prompt2token_proj_attention_multipliers = ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers
+                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
+                            ckpt_prompt2token_proj_attention_multipliers, -1, -1, -1, 
+                            noise_std=0)
+                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
-                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-                        if not ckpt_subj_basis_generator.placeholder_is_bg and extend_prompt2token_proj_attention_multiplier > 1:
-                            # -1, -1: extend all layers
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(-1, -1,
-                                                                                                            extend_prompt2token_proj_attention_multiplier,
-                                                                                                            noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
-
-                    # placeholder is fg, and ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier > 1,
-                    # and extend_prompt2token_proj_attention_multiplier is either unspecified, or is multiple of ckpt.
-                    elif extend_prompt2token_proj_attention_multiplier == -1 \
-                      or extend_prompt2token_proj_attention_multiplier % ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier == 0:
-                        # Extend the CLIPAttention layers in the subj_basis_generator, before loading the state_dict.
-                        # This means that during inference, we don't need to specify extend_prompt2token_proj_attention_multiplier.
-                        # If the ckpt has an extended prompt2token_proj, then the subj_basis_generator's prompt2token_proj will be extended 
-                        # before loading the state_dict.
-                        # NOTE: This could happen either during training or inference. Since state_dict will be loaded,
-                        # whether noise_std is 0 or not has no impact to the extended attention weights.
-                        # -1, -1: extend all layers
-                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(-1, -1,
-                                                                                                        ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier,
-                                                                                                        noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
-                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-                        if extend_prompt2token_proj_attention_multiplier > 0:
-                            second_ext_multiplier = extend_prompt2token_proj_attention_multiplier // ckpt_subj_basis_generator.prompt2token_proj_attention_multiplier
+                        if extend_prompt2token_proj_attention_multiplier > 1:
                             # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
                             # During training,  zs_prompt2token_proj_ext_attention_perturb_ratio == 0.1.
                             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio == 0.
                             # All CLIP encoder layers are 0-11. 
                             # 0, 6: extend the first 6 layers 0-5 (not including layer 6).
                             # 0, 3: extend the first 3 layers 0-2 (not including layer 3).
-                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(0, 3,
-                                                                                                            second_ext_multiplier,
-                                                                                                            noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
-                    # extend_prompt2token_proj_attention_multiplier is specified but inconsistent with ckpt, debug.
-                    else:
-                        breakpoint()
+                            self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
+                                None, -1, -1, extend_prompt2token_proj_attention_multiplier,
+                                noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
 
                     if ret is not None and len(ret.missing_keys) > 0:
                         print(f"Missing keys: {ret.missing_keys}")

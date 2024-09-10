@@ -33,7 +33,7 @@ class FaceID2AdaPrompt(nn.Module):
         self.adaface_ckpt_path              = kwargs.get('adaface_ckpt_path', None)
         self.subj_basis_generator           = None
         if self.adaface_ckpt_path is not None:
-            self.load_subj_basis_generator(self.adaface_ckpt_path)
+            self.load_adaface_ckpt(self.adaface_ckpt_path)
         # -1: use the default scale for the adaface encoder type.
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
@@ -349,7 +349,13 @@ class FaceID2AdaPrompt(nn.Module):
                                         id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                                         verbose=False)
 
-    def load_subj_basis_generator(self, adaface_ckpt_path):
+    def id2img_optimized_parameters(self):
+        raise NotImplementedError
+    
+    def load_id2img_prompt_encoder(self, id2img_prompt_encoder_dict):
+        raise NotImplementedError
+    
+    def load_adaface_ckpt(self, adaface_ckpt_path):
         ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
@@ -363,6 +369,9 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
         print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
+
+        if 'id2img_prompt_encoder' in ckpt and ckpt['id2img_prompt_encoder'] is not None:
+            self.load_id2img_prompt_encoder(ckpt['id2img_prompt_encoder'])
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
@@ -510,6 +519,13 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
             # [N, 16, 768]
             return prompt_embeds[:, 4:20]
 
+    def id2img_optimized_parameters(self):
+        return self.text_to_image_prompt_encoder.parameters()
+    
+    def load_id2img_prompt_encoder(self, id2img_prompt_encoder_dict):
+        self.text_to_image_prompt_encoder.load_state_dict(id2img_prompt_encoder_dict)
+        print(f'Arc2Face text-to-ada prompt encoder loaded.')
+
 # ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, pipe=None, base_model_path=None, *args, **kwargs):
@@ -595,6 +611,13 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             return global_id_embeds, global_id_embeds
         else:
             return global_id_embeds
+
+    def id2img_optimized_parameters(self):
+        return self.image_proj_model.parameters()
+    
+    def load_id2img_prompt_encoder(self, id2img_prompt_encoder_dict):
+        self.image_proj_model.load_state_dict(id2img_prompt_encoder_dict)
+        print(f'ConsistentID text-to-ada prompt encoder loaded.')
 
 def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None, *args, **kwargs):
     if adaface_encoder_type == 'arc2face':

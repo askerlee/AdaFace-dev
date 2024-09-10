@@ -623,7 +623,7 @@ if __name__ == "__main__":
 
         datadir_in_name = True
         if datadir_in_name:
-            first_data_folder = opt.data_roots[0] if len(opt.data_roots) > 0 else opt.mix_subj_data_roots[0]
+            first_data_folder = opt.data_roots[0] if opt.data_roots else opt.mix_subj_data_roots[0]
             basename = os.path.basename(os.path.normpath(first_data_folder))
             # If we do multi-subject training, we need to replace the * with "all".
             basename = basename.replace("*", "all")

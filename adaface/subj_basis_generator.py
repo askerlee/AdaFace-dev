@@ -548,7 +548,8 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # Otherwise, only freeze token and positional embeddings of the original CLIPTextModel.
             self.freeze_prompt2token_proj()
 
-            self.prompt2token_proj_attention_multiplier = -1
+            # These multipliers are relative to the original CLIPTextModel.
+            self.prompt2token_proj_attention_multipliers = [1] * 12
             self.initialize_hidden_state_layer_weights(learnable_hidden_state_weights_scheme, 'cpu')
             self.bg_proj_in = None
             self.pos_embs = self.pos_embs_ln = self.latent_queries = self.latent_queries_ln = None
@@ -721,11 +722,28 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         else:
             breakpoint()
 
-    def extend_prompt2token_proj_attention(self, begin_layer_idx=-1, end_layer_idx=-1, multiplier=2, noise_std=0.1):
-        if multiplier > 1:
-            num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(begin_layer_idx, end_layer_idx, multiplier, noise_std)
-            self.prompt2token_proj_attention_multiplier = multiplier
-            print(f"{num_extended_layers} layers in prompt2token_proj_attention are x{multiplier}")
+    def extend_prompt2token_proj_attention(self, prompt2token_proj_attention_multipliers=None, 
+                                           begin_layer_idx=-1, end_layer_idx=-1, multiplier=2, noise_std=0.1):
+        if prompt2token_proj_attention_multipliers is None and multiplier == 1:
+            return
+        elif prompt2token_proj_attention_multipliers is None:
+            if begin_layer_idx == -1:
+                begin_layer_idx = 0
+            if end_layer_idx == -1:
+                end_layer_idx = 11
+            
+            # prompt2token_proj_attention_multipliers are relative to the current prompt2token_proj.
+            prompt2token_proj_attention_multipliers = [1] * 12
+            for i in range(begin_layer_idx, end_layer_idx+1):
+                prompt2token_proj_attention_multipliers[i] = multiplier            
+
+        # Otherwise, use the given prompt2token_proj_attention_multipliers.
+        num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(prompt2token_proj_attention_multipliers, noise_std)
+        # Update prompt2token_proj_attention_multipliers (relative to the original CLIPTextModel).
+        for i in range(begin_layer_idx, end_layer_idx+1):
+            self.prompt2token_proj_attention_multipliers[i] *= multiplier
+
+        print(f"{num_extended_layers} layers in prompt2token_proj_attention are extended by {multiplier}x")
 
     def freeze_prompt2token_proj(self):
         # Only applicable to fg basis generator.
@@ -768,6 +786,8 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                 self.latent_queries = nn.Parameter(torch.randn(1, self.num_out_embs, self.output_dim))
         else:
             self.initialize_hidden_state_layer_weights('per-layer', 'cpu')
+            if not hasattr(self, 'prompt2token_proj_attention_multipliers'):
+                self.prompt2token_proj_attention_multipliers = [self.prompt2token_proj_attention_multiplier] * 12
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
