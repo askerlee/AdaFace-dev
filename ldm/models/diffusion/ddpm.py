@@ -2098,10 +2098,10 @@ class LatentDiffusion(DDPM):
         prefix = 'train' if self.training else 'val'
 
         if self.parameterization == "x0":
-            target = x_start
+            gt_target = x_start
         # default is "eps", i.e., the UNet predicts noise.
         elif self.parameterization == "eps":
-            target = noise
+            gt_target = noise
         else:
             raise NotImplementedError()
 
@@ -2131,7 +2131,7 @@ class LatentDiffusion(DDPM):
                         bg_pixel_weight = 0.1
                                     
                 loss_fg_bg_contrast, loss_recon = \
-                    self.calc_recon_and_complem_losses(model_output, target, extra_info,
+                    self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
                                                        all_subj_indices, all_bg_indices,
                                                        img_mask, fg_mask, batch_have_fg_mask,
                                                        bg_pixel_weight,
@@ -2143,6 +2143,7 @@ class LatentDiffusion(DDPM):
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
+                # use_unet_teacher_as_target implies num_denoising_steps >= 1.
                 if self.iter_flags['use_unet_teacher_as_target']:
                     # student_prompt_embs is the prompt embedding of the student model.
                     # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
@@ -2205,11 +2206,11 @@ class LatentDiffusion(DDPM):
                                                 unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
                         model_outputs.append(model_output2)
                 else:
-                    # Otherwise, use the original image as target. 
-                    # num_denoising_steps = 1, initialized in init_iteration_flags().
-                    # target == noise.
+                    # Otherwise, use the original image target. 
+                    # gt_target == added noise.
+                    # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
                     loss_start_step = 0
-                    targets         = [target]
+                    targets         = [gt_target]
                     model_outputs   = [model_output]
                     ts              = [t]
 
