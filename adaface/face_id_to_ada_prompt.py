@@ -32,8 +32,6 @@ class FaceID2AdaPrompt(nn.Module):
         self.subject_string                 = kwargs.get('subject_string', 'z')
         self.adaface_ckpt_path              = kwargs.get('adaface_ckpt_path', None)
         self.subj_basis_generator           = None
-        if self.adaface_ckpt_path is not None:
-            self.load_adaface_ckpt(self.adaface_ckpt_path)
         # -1: use the default scale for the adaface encoder type.
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
@@ -465,6 +463,9 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
 
+        if self.adaface_ckpt_path is not None:
+            self.load_adaface_ckpt(self.adaface_ckpt_path)
+
         print(f'Arc2Face text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
 
     # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
@@ -569,6 +570,9 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
+
+        if self.adaface_ckpt_path is not None:
+            self.load_adaface_ckpt(self.adaface_ckpt_path)
 
         print(f'ConsistentID text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
 
