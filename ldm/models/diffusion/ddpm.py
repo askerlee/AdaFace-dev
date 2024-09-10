@@ -564,7 +564,7 @@ class LatentDiffusion(DDPM):
             for param in self.model.parameters():
                 param.requires_grad = False
 
-        personalization_config.id2img_prompt_encoder_trainable = self.id2img_prompt_encoder_trainable
+        personalization_config.params.id2img_prompt_encoder_trainable = self.id2img_prompt_encoder_trainable
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
 
         self.generation_cache = []
