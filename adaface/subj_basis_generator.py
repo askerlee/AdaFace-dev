@@ -723,7 +723,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             breakpoint()
 
     def extend_prompt2token_proj_attention(self, prompt2token_proj_attention_multipliers=None, 
-                                           begin_layer_idx=-1, end_layer_idx=-1, multiplier=2, noise_std=0.1):
+                                           begin_layer_idx=-1, end_layer_idx=-1, multiplier=1, noise_std=0.1):
         if prompt2token_proj_attention_multipliers is None and multiplier == 1:
             return
         elif prompt2token_proj_attention_multipliers is None:

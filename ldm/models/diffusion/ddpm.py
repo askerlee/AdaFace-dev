@@ -107,7 +107,7 @@ class DDPM(pl.LightningModule):
                  p_gen_id2img_rand_id=0.4,
                  p_add_noise_to_real_id_embs=0.6,
                  max_num_denoising_steps=3,
-                 extend_prompt2token_proj_attention_multiplier=-1,
+                 extend_prompt2token_proj_attention_multiplier=1,
                  load_old_embman_ckpt=False,
                  ):
         
@@ -2146,7 +2146,7 @@ class LatentDiffusion(DDPM):
                 # use_unet_teacher_as_target implies num_denoising_steps >= 1.
                 # If self.id2img_prompt_encoder_trainable, we still denoise the images with the UNet teacher,
                 # to train the id2img prompt encoder, preventing it from degeneration.
-                if self.iter_flags['use_unet_teacher_as_target']: # or self.id2img_prompt_encoder_trainable:
+                if self.iter_flags['use_unet_teacher_as_target'] or self.id2img_prompt_encoder_trainable:
                     # student_prompt_embs is the prompt embedding of the student model.
                     # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
                     # So we only need to take the first one.
@@ -2167,11 +2167,12 @@ class LatentDiffusion(DDPM):
                     else:
                         breakpoint()
 
-                    #with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
-                    with torch.no_grad():
+                    with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
+                    #with torch.no_grad():
                         unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
                             self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
-                        
+                    
+                    '''
                     MAX_ACCUMU_BATCH_SIZE = 7
                     # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 
                     # When ND >= 2, HALF_BS = 2, max_num_loss_steps = 3.
@@ -2181,6 +2182,8 @@ class LatentDiffusion(DDPM):
                     # ...
                     max_num_loss_steps = MAX_ACCUMU_BATCH_SIZE // x_start.shape[0]
                     loss_start_step  = max(0, num_denoising_steps - max_num_loss_steps)
+                    '''
+                    loss_start_step = 0
 
                     # targets: replaced as the reconstructed x0 by the teacher UNet.
                     # If NS = num_denoising_steps > 1, then unet_teacher_noise_preds contain NS*half_batch unet_teacher predicted noises (of different ts).
@@ -2209,18 +2212,36 @@ class LatentDiffusion(DDPM):
                                                 emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
                                                 unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
                         model_outputs.append(model_output2)
+
+                    if self.id2img_prompt_encoder_trainable:
+                        # If use_unet_teacher_as_target == True at the same time, then probably num_denoising_steps > 1.
+                        model_outputs += unet_teacher_pred_x0s
+                        # Each of the unet_teacher_pred_x0s should aling with x_start.
+                        # So we repeat x_start for each of the unet_teacher_noise_preds.
+                        for i in range(len(unet_teacher_noise_preds)):
+                            targets.append(x_start)
+                        ts += ts
                 else:
+                    targets         = []
+                    model_outputs   = []
+                    ts              = []
+
+                # This branch includes the case of id2img_prompt_encoder_trainable.
+                if not self.iter_flags['use_unet_teacher_as_target']:
                     # Otherwise, use the original image target. 
                     # gt_target == added noise.
                     # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
                     loss_start_step = 0
-                    targets         = [gt_target]
-                    model_outputs   = [model_output]
-                    ts              = [t]
+                    targets.append(gt_target)
+                    model_outputs.append(model_output)
+                    ts.append(t)
 
                 loss_recons = []
-                for s in range(num_denoising_steps - loss_start_step):
-                    model_output, target = model_outputs[s], targets[s]
+                for s in range(len(model_outputs) - loss_start_step):
+                    try:
+                        model_output, target = model_outputs[s], targets[s]
+                    except:
+                        breakpoint()
 
                     if self.iter_flags['gen_id2img_rand_id'] or self.unet_teacher_type == 'unet_ensemble':
                         # If gen_id2img_rand_id, then always use_unet_teacher_as_target == True.                    

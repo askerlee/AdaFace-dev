@@ -220,7 +220,7 @@ def get_parser(**parser_kwargs):
                         help="Maximum number of denoising steps (default 3)")    
     parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
                         help="Probability of adding noise to real identity embeddings")
-    parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=-1,
+    parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=1,
                         help="Multiplier of the prompt2token projection attention")
     parser.add_argument("--p_unet_distill_iter", type=float, default=argparse.SUPPRESS,
                         help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")

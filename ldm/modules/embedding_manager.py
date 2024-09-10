@@ -723,7 +723,7 @@ class EmbeddingManager(nn.Module):
         torch.save(saved_dict, ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, ckpt_paths, extend_prompt2token_proj_attention_multiplier=-1, load_old_embman_ckpt=False):
+    def load(self, ckpt_paths, extend_prompt2token_proj_attention_multiplier=1, load_old_embman_ckpt=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
@@ -784,8 +784,6 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.proj_in = None
                         ckpt_subj_basis_generator.pos_embs = None
 
-                    # No extension or state_dict loading, instead, directly use the ckpt_subj_basis_generator.
-                    if extend_prompt2token_proj_attention_multiplier == -1:
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
                         # Never update token and positional embeddings of the original CLIPTextModel.
                         self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
@@ -813,8 +811,7 @@ class EmbeddingManager(nn.Module):
                     else:
                         ckpt_prompt2token_proj_attention_multipliers = ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers
                         self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
-                            ckpt_prompt2token_proj_attention_multipliers, -1, -1, -1, 
-                            noise_std=0)
+                            ckpt_prompt2token_proj_attention_multipliers, -1, -1, 1, noise_std=0)
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
                         if extend_prompt2token_proj_attention_multiplier > 1:
