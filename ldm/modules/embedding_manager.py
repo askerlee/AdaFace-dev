@@ -82,7 +82,6 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict = OrderedDict()
         
         self.string_to_subj_basis_generator_dict = nn.ModuleDict()
-        self.initial_embeddings                  = nn.ParameterDict() # These should not be optimized
         self.placeholder_to_emb_cache            = nn.ParameterDict() # These should not be optimized
         self.use_layerwise_embedding = use_layerwise_embedding
         self.num_unet_ca_layers = num_unet_ca_layers
@@ -186,28 +185,7 @@ class EmbeddingManager(nn.Module):
             # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
             placeholder_token = self.get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
-
-            num_vectors_per_subj_token = self.token2num_vectors.get(placeholder_string, 1)
-            initializer_string       = initializer_strings[placeholder_idx]
-            initializer_word_weights = list_initializer_word_weights[placeholder_idx]
-
-            # The background token may not have initializer words. So its corresponding
-            # init_word_embeddings, avg_init_word_embedding, init_word_weights are None.
-            try:
-                init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding = \
-                calc_init_word_embeddings(self.get_tokens_for_string, self.get_embeddings_for_tokens,
-                                          initializer_string, initializer_word_weights)
-            except:
-                breakpoint()
-
             self.string_to_token_dict[placeholder_string] = placeholder_token
-
-            if init_word_embeddings is not None:
-                # initial_embeddings won't be optimized. Just used to compute the regularization loss.
-                # Use nn.Parameter to put it on cuda. Not to use register_buffer(), since it's a dict.
-                self.initial_embeddings[placeholder_string] = nn.Parameter(init_word_embeddings, requires_grad=False)
-            else:
-                self.initial_embeddings[placeholder_string] = None
 
             if self.do_zero_shot:
                 # num_out_embs_per_layer: 16 if fg or 4 if bg. 
@@ -942,7 +920,7 @@ class EmbeddingManager(nn.Module):
 
         for key in self.placeholder_strings:
             optimized = self.static_subj_embs_dict[key]
-            coarse = self.initial_embeddings[key]
+            coarse = 0 #self.initial_embeddings[key]
             loss = loss + (optimized - coarse) @ (optimized - coarse).T / num_placeholders
 
         return loss
