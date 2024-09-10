@@ -2179,7 +2179,7 @@ class LatentDiffusion(DDPM):
                     # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
                     # NOTE: .detach() is necessary, as here unet_teacher_noise_preds is used as the target of the 
                     # student prediction, and we don't want the gradient to flow back to the teacher UNet.
-                    targets = unet_teacher_noise_preds.detach()
+                    targets = [ pred.detach() for pred in unet_teacher_noise_preds ]
 
                     # The outputs of the remaining denoising steps will be appended to model_outputs.
                     model_outputs = []
