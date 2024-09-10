@@ -20,6 +20,7 @@ class UNetTeacher(pl.LightningModule):
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
         assert num_denoising_steps <= 10
 
+        # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
         noises      = [ noise ]
         ts          = [ t ]
@@ -40,6 +41,7 @@ class UNetTeacher(pl.LightningModule):
                 
                 # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
                 pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
+                # The predicted x0 is used as the x_start for the next denoising step.
                 x_starts.append(pred_x0)
 
                 if i < num_denoising_steps - 1:

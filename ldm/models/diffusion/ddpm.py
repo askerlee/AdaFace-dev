@@ -2108,6 +2108,8 @@ class LatentDiffusion(DDPM):
         loss = 0
                                 
         if self.iter_flags['do_normal_recon']:
+            # If not do_unet_distill, then there's only 1 objective:
+            # **Objective 1**: Align the student predicted noise with the ground truth noise.
             if not self.iter_flags['do_unet_distill']:
                 if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
                     # bg loss is almost completely ignored. But giving it a little weight may help suppress 
@@ -2143,7 +2145,7 @@ class LatentDiffusion(DDPM):
             else:
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
 
-                # use_unet_teacher_as_target implies num_denoising_steps >= 1.
+                # num_denoising_steps > 1 implies use_unet_teacher_as_target.
                 # If self.id2img_prompt_encoder_trainable, we still denoise the images with the UNet teacher,
                 # to train the id2img prompt encoder, preventing it from degeneration.
                 if self.iter_flags['use_unet_teacher_as_target'] or self.id2img_prompt_encoder_trainable:
@@ -2168,34 +2170,19 @@ class LatentDiffusion(DDPM):
                         breakpoint()
 
                     with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
-                    #with torch.no_grad():
                         unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
                             self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
                     
-                    '''
-                    MAX_ACCUMU_BATCH_SIZE = 7
-                    # When ND == 1, HALF_BS = 4, max_num_loss_steps = 1, i.e., calc loss on all steps. 
-                    # When ND >= 2, HALF_BS = 2, max_num_loss_steps = 3.
-                    # Therefore, when ND <= 3, calc loss on all steps.
-                    # When ND == 4, skip the first step.
-                    # When ND == 5, skip the first two steps,
-                    # ...
-                    max_num_loss_steps = MAX_ACCUMU_BATCH_SIZE // x_start.shape[0]
-                    loss_start_step  = max(0, num_denoising_steps - max_num_loss_steps)
-                    '''
-                    loss_start_step = 0
-
+                    # **Objective 2**: Align student noise predictions with teacher noise predictions.
                     # targets: replaced as the reconstructed x0 by the teacher UNet.
-                    # If NS = num_denoising_steps > 1, then unet_teacher_noise_preds contain NS*half_batch unet_teacher predicted noises (of different ts).
-                    # targets: [HALF_BS, 4, 64, 64] * (num_denoising_steps - loss_start_step).
-                    # If we skip the first loss_start_step steps, then we remove the teacher output in these steps from
-                    # targets, so that they are not used in the loss computation.
-                    targets         = unet_teacher_noise_preds[loss_start_step:]
+                    # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND * half_batch unet_teacher predicted noises (of different ts).
+                    # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
+                    targets = unet_teacher_noise_preds
 
                     # The outputs of the remaining denoising steps will be appended to model_outputs.
                     model_outputs = []
 
-                    for s in range(loss_start_step, num_denoising_steps):
+                    for s in range(num_denoising_steps):
                         # Predict the noise of the half-batch with t2 (a set of earlier t).
                         # unet_teacher_pred_x0 is the first half-batch of the unet_teacher predicted images, 
                         # used to seed the second denoising step. But using it will cut off the gradient flow.
@@ -2213,14 +2200,15 @@ class LatentDiffusion(DDPM):
                                                 unet_has_grad=True, do_pixel_recon=False, cfg_info=cfg_info)
                         model_outputs.append(model_output2)
 
+                    # If id2img_prompt_encoder_trainable, then we also have
+                    # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
                     if self.id2img_prompt_encoder_trainable:
                         # If use_unet_teacher_as_target == True at the same time, then probably num_denoising_steps > 1.
-                        model_outputs += unet_teacher_pred_x0s
-                        # Each of the unet_teacher_pred_x0s should aling with x_start.
-                        # So we repeat x_start for each of the unet_teacher_noise_preds.
-                        for i in range(len(unet_teacher_noise_preds)):
-                            targets.append(x_start)
-                        ts += ts
+                        # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
+                        # added to the x_start during self.unet_teacher().
+                        model_outputs   += unet_teacher_noise_preds
+                        targets         += unet_teacher_noises
+                        ts              += ts
                 else:
                     targets         = []
                     model_outputs   = []
@@ -2231,13 +2219,13 @@ class LatentDiffusion(DDPM):
                     # Otherwise, use the original image target. 
                     # gt_target == added noise.
                     # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
-                    loss_start_step = 0
+                    # **Objective 4**: Align student noise predictions with ground truth noises.
                     targets.append(gt_target)
                     model_outputs.append(model_output)
                     ts.append(t)
 
                 loss_recons = []
-                for s in range(len(model_outputs) - loss_start_step):
+                for s in range(len(model_outputs)):
                     try:
                         model_output, target = model_outputs[s], targets[s]
                     except:
@@ -2275,7 +2263,7 @@ class LatentDiffusion(DDPM):
                                                              fg_pixel_weight=1,
                                                              bg_pixel_weight=bg_pixel_weight)
 
-                    print(f"Rank {self.trainer.global_rank} Step {s + loss_start_step}: {ts[s].tolist()}, {loss_recon.item():.5f}")
+                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}")
                     # For consistentID, if gen_id2img_rand_id, then the CLIP features are also randomly generated.
                     # Due to this issue, the loss of the first denoising iteration tends to be very high.
                     # So we reduce this loss by 10 times. In the following iterations, 
