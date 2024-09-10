@@ -2177,7 +2177,9 @@ class LatentDiffusion(DDPM):
                     # targets: replaced as the reconstructed x0 by the teacher UNet.
                     # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND * half_batch unet_teacher predicted noises (of different ts).
                     # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
-                    targets = unet_teacher_noise_preds
+                    # NOTE: .detach() is necessary, as here unet_teacher_noise_preds is used as the target of the 
+                    # student prediction, and we don't want the gradient to flow back to the teacher UNet.
+                    targets = unet_teacher_noise_preds.detach()
 
                     # The outputs of the remaining denoising steps will be appended to model_outputs.
                     model_outputs = []
@@ -2206,6 +2208,7 @@ class LatentDiffusion(DDPM):
                         # If use_unet_teacher_as_target == True at the same time, then probably num_denoising_steps > 1.
                         # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
                         # added to the x_start during self.unet_teacher().
+                        # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
                         model_outputs   += unet_teacher_noise_preds
                         targets         += unet_teacher_noises
                         ts              += ts
