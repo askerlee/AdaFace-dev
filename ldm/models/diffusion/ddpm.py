@@ -2276,7 +2276,8 @@ class LatentDiffusion(DDPM):
                         loss_recon *= 0.1
                     loss_recons.append(loss_recon)
 
-                # If num_denoising_steps > 1, each loss_recon is usually 0.001~0.005, so don't divide by num_denoising_steps.
+                # If num_denoising_steps > 1, most loss_recon are usually 0.001~0.005, but sometimes there are a few large loss_recon.
+                # In order not to dilute the large loss_recon, we don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
