@@ -810,6 +810,8 @@ class EmbeddingManager(nn.Module):
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                     else:
                         ckpt_prompt2token_proj_attention_multipliers = ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers
+                        # Fix old ckpt bug of having negative attention multipliers.
+                        ckpt_prompt2token_proj_attention_multipliers = [ m if m > 0 else 1 for m in ckpt_prompt2token_proj_attention_multipliers ]
                         self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
                             ckpt_prompt2token_proj_attention_multipliers, -1, -1, 1, noise_std=0)
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)

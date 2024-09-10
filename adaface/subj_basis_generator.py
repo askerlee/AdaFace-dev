@@ -724,14 +724,16 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
 
     def extend_prompt2token_proj_attention(self, prompt2token_proj_attention_multipliers=None, 
                                            begin_layer_idx=-1, end_layer_idx=-1, multiplier=1, noise_std=0.1):
-        if prompt2token_proj_attention_multipliers is None and multiplier == 1:
-            return
-        elif prompt2token_proj_attention_multipliers is None:
-            if begin_layer_idx == -1:
-                begin_layer_idx = 0
-            if end_layer_idx == -1:
-                end_layer_idx = 11
+        if begin_layer_idx == -1:
+            begin_layer_idx = 0
+        if end_layer_idx == -1:
+            end_layer_idx = 11
             
+        if prompt2token_proj_attention_multipliers is None and multiplier == 1:
+            print("prompt2token_proj_attention_multipliers are all 1. No extension is done.")
+            return
+        
+        elif prompt2token_proj_attention_multipliers is None:
             # prompt2token_proj_attention_multipliers are relative to the current prompt2token_proj.
             prompt2token_proj_attention_multipliers = [1] * 12
             for i in range(begin_layer_idx, end_layer_idx+1):
