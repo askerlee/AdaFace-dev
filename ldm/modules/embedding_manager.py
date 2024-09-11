@@ -72,8 +72,9 @@ class EmbeddingManager(nn.Module):
             # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
             # Therefore no perturbation during inference.
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
-            # A few args, like embedding_manager_ckpt, are used in ddpm.py, but ignored here.
-            **kwargs
+            adaface_ckpt_path=None,
+            extend_prompt2token_proj_attention_multiplier=1,
+            to_load_old_adaface_ckpt=False
     ):
         super().__init__()
 
@@ -252,6 +253,11 @@ class EmbeddingManager(nn.Module):
         # Add the search span by 1, just to be safe.
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
+
+        if adaface_ckpt_path is not None:
+            self.load(adaface_ckpt_path,
+                      extend_prompt2token_proj_attention_multiplier,
+                      to_load_old_adaface_ckpt)
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
                               subj_name_to_cls_delta_string, 
@@ -725,7 +731,7 @@ class EmbeddingManager(nn.Module):
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, adaface_ckpt_paths, extend_prompt2token_proj_attention_multiplier=1, load_old_adaface_ckpt=False):
+    def load(self, adaface_ckpt_paths, extend_prompt2token_proj_attention_multiplier=1, to_load_old_adaface_ckpt=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
@@ -765,7 +771,7 @@ class EmbeddingManager(nn.Module):
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     ret = None
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
-                    if load_old_adaface_ckpt:
+                    if to_load_old_adaface_ckpt:
                         print(f"Loading ckpt_subj_basis_generator {km}")
                     else:
                         print(f"Loading {repr(ckpt_subj_basis_generator)}")
@@ -775,7 +781,7 @@ class EmbeddingManager(nn.Module):
                     # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     ckpt_subj_basis_generator.face_proj_in = None
                     
-                    if load_old_adaface_ckpt:
+                    if to_load_old_adaface_ckpt:
                         # Delete lora2hira, latent_queries and layers, as lora2hira and layers belong to 
                         # old ckpts, and latent_queries has different shapes.
                         ckpt_subj_basis_generator.lora2hira = None

@@ -93,7 +93,7 @@ model:
         training_add_noise_prob:   { 'recon_iter':            0.6, 
                                      'unet_distill_iter':     0,
                                      'compos_distill_iter':   0.4 }
-        embedding_manager_ckpt:     null
+        adaface_ckpt_path:        null
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:

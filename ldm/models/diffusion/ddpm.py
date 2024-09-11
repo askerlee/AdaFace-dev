@@ -88,6 +88,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
+                 recon_delta_loss_boost=5,
                  wds_bg_recon_discount=0.05,
                  do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
@@ -106,9 +107,9 @@ class DDPM(pl.LightningModule):
                  unet_teacher_base_model_path=None,
                  p_gen_id2img_rand_id=0.4,
                  p_add_noise_to_real_id_embs=0.6,
+                 add_noise_to_real_id_embs_std_range=[0.3, 0.6],
                  max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=1,
-                 load_old_adaface_ckpt=False,
                  ):
         
         super().__init__()
@@ -135,6 +136,7 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
+        self.recon_delta_loss_boost                = recon_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
@@ -154,9 +156,9 @@ class DDPM(pl.LightningModule):
         
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
+        self.add_noise_to_real_id_embs_std_range    = add_noise_to_real_id_embs_std_range
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
-        self.load_old_adaface_ckpt                   = load_old_adaface_ckpt
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
 
@@ -648,12 +650,6 @@ class LatentDiffusion(DDPM):
             
     def instantiate_embedding_manager(self, config, text_embedder):
         model = instantiate_from_config(config, text_embedder=text_embedder)
-
-        if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
-            model.load(config.params.embedding_manager_ckpt,
-                       self.extend_prompt2token_proj_attention_multiplier,
-                       self.load_old_adaface_ckpt)
-
         return model
 
     def get_first_stage_encoding(self, encoder_posterior):
@@ -1216,10 +1212,13 @@ class LatentDiffusion(DDPM):
                     # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
                     # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
                     # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
-                    zs_id_embs = anneal_add_noise_to_embedding(zs_id_embs, 0, begin_noise_std_range=[0.02, 0.06], 
-                                                               end_noise_std_range=None, 
-                                                               add_noise_prob=1, noise_std_is_relative=True, 
-                                                               keep_norm=True)
+                    # Keep the first ID embedding as it is, and add noise to the rest.
+                    zs_id_embs[1:] = \
+                        anneal_add_noise_to_embedding(zs_id_embs[1:], training_percent=0, 
+                                                      begin_noise_std_range=self.add_noise_to_real_id_embs_std_range, 
+                                                      end_noise_std_range=None, 
+                                                      add_noise_prob=1, noise_std_is_relative=True, 
+                                                      keep_norm=True)
 
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
@@ -2228,6 +2227,7 @@ class LatentDiffusion(DDPM):
                     ts.append(t)
 
                 loss_recons = []
+                loss_recon_deltas = []
                 for s in range(len(model_outputs)):
                     try:
                         model_output, target = model_outputs[s], targets[s]
@@ -2239,6 +2239,7 @@ class LatentDiffusion(DDPM):
                         # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
                         # If unet_teacher_type == 'unet_ensemble', then also compute the recon loss on the whole image.
                         loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
+                        loss_recon_delta = torch.tensor(0, device=loss_recon.device)
                     else:
                         # use_unet_teacher_as_target could be True or False.
                         # If we use the original image (noise) as target, and still wish to keep the original background
@@ -2266,7 +2267,25 @@ class LatentDiffusion(DDPM):
                                                              fg_pixel_weight=1,
                                                              bg_pixel_weight=bg_pixel_weight)
 
-                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}")
+                        # The ID embedding of the first instance in the batch is intact,
+                        # and the remaining ID embeddings are added with noise.
+                        # So we can contrast the first instance with the remaining instances,
+                        # and highlight their differences caused by the noise.
+                        # If add_noise_to_real_id_embs, then use_unet_teacher_as_target == True.
+                        # Therefore, targets == unet_teacher_noise_preds.
+                        if self.iter_flags['add_noise_to_real_id_embs']:
+                            # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
+                            delta_output = model_output[1:] - model_output[:1]
+                            delta_target = target[1:] - target[:1]
+                            delta_img_mask = img_mask[1:]
+                            # No need to use fg_mask, as the delta at the background should be very small.
+                            loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
+                                                                       delta_img_mask, None, 
+                                                                       fg_pixel_weight=1, bg_pixel_weight=1)
+                        else:
+                            loss_recon_delta = torch.tensor(0, device=loss_recon.device)
+
+                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}, {loss_recon_delta.item():.5f}")
                     # For consistentID, if gen_id2img_rand_id, then the CLIP features are also randomly generated.
                     # Due to this issue, the loss of the first denoising iteration tends to be very high.
                     # So we reduce this loss by 10 times. In the following iterations, 
@@ -2275,6 +2294,7 @@ class LatentDiffusion(DDPM):
                     if self.iter_flags['gen_id2img_rand_id'] and self.unet_teacher_type == 'consistentID':
                         loss_recon *= 0.1
                     loss_recons.append(loss_recon)
+                    loss_recon_deltas.append(loss_recon_delta)
 
                 # If num_denoising_steps > 1, most loss_recon are usually 0.001~0.005, but sometimes there are a few large loss_recon.
                 # In order not to dilute the large loss_recon, we don't divide by num_denoising_steps.
@@ -2282,6 +2302,10 @@ class LatentDiffusion(DDPM):
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
                 loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
                 loss += loss_recon
+
+                loss_recon_delta = sum(loss_recon_deltas) / np.sqrt(num_denoising_steps)
+                loss_dict.update({f'{prefix}/loss_recon_delta': loss_recon_delta.mean().detach().item()})
+                loss += loss_recon_delta * self.recon_delta_loss_boost
 
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.

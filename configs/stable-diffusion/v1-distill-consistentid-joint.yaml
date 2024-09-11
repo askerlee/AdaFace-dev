@@ -37,12 +37,17 @@ model:
     # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
     # at the other 50%, we use the original image as the target.
     p_unet_distill_iter:              0.5
-    id2img_prompt_encoder_trainable:  True
+    # Even if setting id2img_prompt_encoder_trainable to True, 
+    # the performance is only slightly differ.
+    id2img_prompt_encoder_trainable:  False
     id2img_prompt_encoder_lr_ratio:   0.001
     # Never generate random IDs for consistentID distillation, as
     # consistentID relies on CLIP features of the input image, 
     # which are not available when the IDs are random and there are no actual input images.
     p_gen_id2img_rand_id:             0
+    p_add_noise_to_real_id_embs:      0.6
+    add_noise_to_real_id_embs_std_range: [0.03, 0.06]
+    recon_delta_loss_boost:          5
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5
@@ -101,8 +106,8 @@ model:
         training_add_noise_prob:   { 'recon_iter':            0.6, 
                                      'unet_distill_iter':     0,
                                      'compos_distill_iter':   0.4 }
-        embedding_manager_ckpt:             null
-        do_zero_shot:                       True
+        adaface_ckpt_path:                null
+        do_zero_shot:                     True
         id2ada_prompt_encoder_type:       'consistentID'
         # Load the ada components from these placeholders in the checkpoint.
 

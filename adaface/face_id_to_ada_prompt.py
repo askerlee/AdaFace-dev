@@ -355,7 +355,7 @@ class FaceID2AdaPrompt(nn.Module):
         id2img_prompt_encoder_learnable_modules = self.get_id2img_learnable_modules()
         for module, state_dict in zip(id2img_prompt_encoder_learnable_modules, id2img_learnable_modules_state_dict_list):
             module.load_state_dict(state_dict)
-        print(f'Loaded {len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules.')
+        print(f'{len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules loaded.')
     
     def load_adaface_ckpt(self, adaface_ckpt_path):
         ckpt = torch.load(adaface_ckpt_path, map_location='cpu')

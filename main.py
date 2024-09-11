@@ -173,7 +173,7 @@ def get_parser(**parser_kwargs):
         type=str, nargs="*", default=argparse.SUPPRESS,
         help="Path to the subject info file (only necessary if multiple subjects are used)")
 
-    parser.add_argument("--embedding_manager_ckpt", 
+    parser.add_argument("--adaface_ckpt_path", 
         type=str, 
         default="", 
         help="Initialize embedding manager from a checkpoint")
@@ -218,7 +218,7 @@ def get_parser(**parser_kwargs):
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--max_num_denoising_steps", type=int, default=3,
                         help="Maximum number of denoising steps (default 3)")    
-    parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=0.6,
+    parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=argparse.SUPPRESS,
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=1,
                         help="Multiplier of the prompt2token projection attention")
@@ -234,8 +234,10 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--load_old_adaface_ckpt", action="store_true", 
+    parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
+    parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
 
     parser.add_argument("--static_embedding_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -710,6 +712,7 @@ if __name__ == "__main__":
         config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
         config.data.params.train.params.load_meta_subj2person_type_cache_path = opt.load_meta_subj2person_type_cache_path
         config.data.params.train.params.save_meta_subj2person_type_cache_path = opt.save_meta_subj2person_type_cache_path
+        config.data.params.train.params.do_zero_shot             = opt.zeroshot
 
         # zero-shot settings.
         config.model.params.do_zero_shot = opt.zeroshot
@@ -717,11 +720,12 @@ if __name__ == "__main__":
             config.model.params.p_gen_id2img_rand_id    = opt.p_gen_id2img_rand_id
             
         config.model.params.max_num_denoising_steps     = opt.max_num_denoising_steps
-        config.model.params.p_add_noise_to_real_id_embs = opt.p_add_noise_to_real_id_embs
-        config.model.params.extend_prompt2token_proj_attention_multiplier = opt.extend_prompt2token_proj_attention_multiplier
+        if hasattr(opt, 'p_add_noise_to_real_id_embs'):
+            config.model.params.p_add_noise_to_real_id_embs = opt.p_add_noise_to_real_id_embs
 
-        config.model.params.personalization_config.params.do_zero_shot  = opt.zeroshot
-        config.data.params.train.params.do_zero_shot                    = opt.zeroshot
+        config.model.params.personalization_config.params.do_zero_shot      = opt.zeroshot
+        config.model.params.personalization_config.params.extend_prompt2token_proj_attention_multiplier   = opt.extend_prompt2token_proj_attention_multiplier
+        config.model.params.personalization_config.params.to_load_old_adaface_ckpt = opt.to_load_old_adaface_ckpt
 
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
@@ -780,9 +784,7 @@ if __name__ == "__main__":
             # If do_zero_shot, composition_regs_iter_gap changes from 3 to 6, i.e., 
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
-
-        config.model.params.load_old_adaface_ckpt = opt.load_old_adaface_ckpt
-
+        
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type
 
@@ -799,8 +801,9 @@ if __name__ == "__main__":
             config.model.base_lr = opt.lr
 
         # Personalization config
-        config.model.params.personalization_config.params.embedding_manager_ckpt        = opt.embedding_manager_ckpt
+        config.model.params.personalization_config.params.adaface_ckpt_path = opt.adaface_ckpt_path
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
+        config.model.params.personalization_config.params.to_load_id2img_learnable_modules = opt.to_load_id2img_learnable_modules
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 
