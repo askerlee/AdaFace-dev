@@ -35,6 +35,7 @@ class FaceID2AdaPrompt(nn.Module):
         # -1: use the default scale for the adaface encoder type.
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
+        self.to_load_id2img_learnable_modules  = kwargs.get('to_load_id2img_learnable_modules', True)
 
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
@@ -350,7 +351,7 @@ class FaceID2AdaPrompt(nn.Module):
     def get_id2img_learnable_modules(self):
         raise NotImplementedError
     
-    def load_id2img_prompt_encoder_learnable_modules(self, id2img_learnable_modules_state_dict_list):
+    def load_id2img_learnable_modules(self, id2img_learnable_modules_state_dict_list):
         id2img_prompt_encoder_learnable_modules = self.get_id2img_learnable_modules()
         for module, state_dict in zip(id2img_prompt_encoder_learnable_modules, id2img_learnable_modules_state_dict_list):
             module.load_state_dict(state_dict)
@@ -372,7 +373,10 @@ class FaceID2AdaPrompt(nn.Module):
         print(repr(self.subj_basis_generator))
 
         if 'id2img_prompt_encoder_learnable_modules' in ckpt:
-            self.load_id2img_prompt_encoder_learnable_modules(ckpt['id2img_prompt_encoder_learnable_modules'])
+            if self.to_load_id2img_learnable_modules:
+                self.load_id2img_learnable_modules(ckpt['id2img_prompt_encoder_learnable_modules'])
+            else:
+                print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 

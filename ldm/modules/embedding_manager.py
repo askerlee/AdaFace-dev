@@ -63,6 +63,7 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=True,
             id2ada_prompt_encoder_type='arc2face',
             id2img_prompt_encoder_trainable=False,
+            to_load_id2img_learnable_modules=True,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,
@@ -163,7 +164,8 @@ class EmbeddingManager(nn.Module):
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
             self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(id2ada_prompt_encoder_type)
-            self.id2img_prompt_encoder_trainable = id2img_prompt_encoder_trainable
+            self.id2img_prompt_encoder_trainable    = id2img_prompt_encoder_trainable
+            self.to_load_id2img_learnable_modules   = to_load_id2img_learnable_modules
 
             if self.zs_cls_delta_string is not None:
                 self.zs_cls_delta_tokens = self.get_tokens_for_string(zs_cls_delta_string)
@@ -835,6 +837,9 @@ class EmbeddingManager(nn.Module):
                     # Fix missing variables in the old ckpt.
                     self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
                     self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
+
+                if self.to_load_id2img_learnable_modules and "id2img_prompt_encoder_learnable_modules" in ckpt:
+                    self.id2ada_prompt_encoder.load_id2img_learnable_modules(ckpt["id2img_prompt_encoder_learnable_modules"])
 
                 if self.do_zero_shot and self.training:
                     # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 

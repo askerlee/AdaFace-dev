@@ -250,6 +250,8 @@ def parse_args():
     # If adaface_encoder_scales is not specified, the weights will be set to 1 for arc2face and 6 for consistentID.
     parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
                         help="Weights for the ID2Ada prompt encoders")
+    parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
@@ -353,7 +355,9 @@ def main(opt):
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
         # Currently embedding manager only supports one type of prompt encoder.
-        config.model.params.personalization_config.params.id2ada_prompt_encoder_type = opt.adaface_encoder_types[0]
+        config.model.params.personalization_config.params.id2ada_prompt_encoder_type       = opt.adaface_encoder_types[0]
+        config.model.params.personalization_config.params.to_load_id2img_learnable_modules = opt.to_load_id2img_learnable_modules
+
         opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
@@ -406,6 +410,7 @@ def main(opt):
 
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
                                           opt.adaface_ckpt_paths, opt.adaface_encoder_scales,
+                                          opt.to_load_id2img_learnable_modules,
                                           opt.subject_string, opt.ddim_steps,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,

@@ -22,7 +22,7 @@ sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
-                 adaface_ckpt_paths, adaface_encoder_scales=None,
+                 adaface_ckpt_paths, adaface_encoder_scales=None, to_load_id2img_learnable_modules=True,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
@@ -45,6 +45,7 @@ class AdaFaceWrapper(nn.Module):
             self.adaface_encoder_scales = adaface_encoder_scales
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
+        self.to_load_id2img_learnable_modules = to_load_id2img_learnable_modules
         self.subject_string = subject_string
 
         self.num_inference_steps = num_inference_steps
@@ -78,7 +79,8 @@ class AdaFaceWrapper(nn.Module):
             out_id_embs_cfg_scale = self.adaface_encoder_scales[i]
             id2ada_prompt_encoder = create_id2ada_prompt_encoder(adaface_encoder_type,
                                                                  adaface_ckpt_path, 
-                                                                 out_id_embs_cfg_scale=out_id_embs_cfg_scale)
+                                                                 out_id_embs_cfg_scale=out_id_embs_cfg_scale,
+                                                                 to_load_id2img_learnable_modules=self.to_load_id2img_learnable_modules)
             
             self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
         self.id2ada_prompt_encoders.to(self.device)
