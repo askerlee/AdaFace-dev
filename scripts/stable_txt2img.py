@@ -223,7 +223,7 @@ def parse_args():
                         help="Whether to use zero-shot learning")                    
     parser.add_argument("--return_prompt_embs_type", type=str, choices=["text", "id", "text_id"],
                         default="text", help="The type of the returned prompt embeddings from get_learned_conditioning()")
-    parser.add_argument("--load_old_embman_ckpt", action="store_true", 
+    parser.add_argument("--load_old_adaface_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image(s) for zero-shot learning. Each item could be a path to an image or a directory.")
@@ -361,7 +361,7 @@ def main(opt):
         opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
-            model.embedding_manager.load(opt.subj_model_path, load_old_embman_ckpt=opt.load_old_embman_ckpt)
+            model.embedding_manager.load(opt.subj_model_path, load_old_adaface_ckpt=opt.load_old_adaface_ckpt)
             model.embedding_manager.eval()
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder

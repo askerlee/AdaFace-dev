@@ -108,7 +108,7 @@ class DDPM(pl.LightningModule):
                  p_add_noise_to_real_id_embs=0.6,
                  max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=1,
-                 load_old_embman_ckpt=False,
+                 load_old_adaface_ckpt=False,
                  ):
         
         super().__init__()
@@ -156,7 +156,7 @@ class DDPM(pl.LightningModule):
         self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
-        self.load_old_embman_ckpt                   = load_old_embman_ckpt
+        self.load_old_adaface_ckpt                   = load_old_adaface_ckpt
         self.comp_init_fg_from_training_image_fresh_count  = 0
         self.comp_init_fg_from_training_image_reuse_count  = 0
 
@@ -652,7 +652,7 @@ class LatentDiffusion(DDPM):
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             model.load(config.params.embedding_manager_ckpt,
                        self.extend_prompt2token_proj_attention_multiplier,
-                       self.load_old_embman_ckpt)
+                       self.load_old_adaface_ckpt)
 
         return model
 

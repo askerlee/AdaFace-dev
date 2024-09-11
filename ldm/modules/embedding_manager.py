@@ -706,7 +706,7 @@ class EmbeddingManager(nn.Module):
         print(f"Set token2num_vectors: {self.token2num_vectors}")
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
-    def save(self, ckpt_path):
+    def save(self, adaface_ckpt_path):
         saved_dict = { "string_to_subj_basis_generator_dict":   self.string_to_subj_basis_generator_dict,
                         "token2num_vectors":                    self.token2num_vectors,
                         "placeholder_strings":                  self.placeholder_strings,
@@ -722,10 +722,10 @@ class EmbeddingManager(nn.Module):
             id2img_learnable_modules = self.id2ada_prompt_encoder.get_id2img_learnable_modules()
             saved_dict["id2img_prompt_encoder_learnable_modules"] = [ module.state_dict() for module in id2img_learnable_modules ]
 
-        torch.save(saved_dict, ckpt_path)
+        torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, ckpt_paths, extend_prompt2token_proj_attention_multiplier=1, load_old_embman_ckpt=False):
+    def load(self, adaface_ckpt_paths, extend_prompt2token_proj_attention_multiplier=1, load_old_adaface_ckpt=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
@@ -734,12 +734,12 @@ class EmbeddingManager(nn.Module):
         self.subject_strings                = []
         self.background_strings             = []
 
-        if isinstance(ckpt_paths, str):
-            ckpt_paths = [ckpt_paths]
+        if isinstance(adaface_ckpt_paths, str):
+            adaface_ckpt_paths = [adaface_ckpt_paths]
 
-        for ckpt_path in ckpt_paths:
-            ckpt_path_parts = ckpt_path.split(":")
-            ckpt_path = ckpt_path_parts[0]
+        for adaface_ckpt_path in adaface_ckpt_paths:
+            ckpt_path_parts = adaface_ckpt_path.split(":")
+            adaface_ckpt_path = ckpt_path_parts[0]
             if len(ckpt_path_parts) == 2:
                 placeholder_mapper = {}
                 for placeholder_mapping in ckpt_path_parts[1].split(","):
@@ -748,7 +748,7 @@ class EmbeddingManager(nn.Module):
             else:
                 placeholder_mapper = None
 
-            ckpt = torch.load(ckpt_path, map_location='cpu')
+            ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
 
             if "background_strings" in ckpt:
                 ckpt_background_strings = ckpt["background_strings"]
@@ -765,7 +765,7 @@ class EmbeddingManager(nn.Module):
                 for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                     ret = None
                     # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
-                    if load_old_embman_ckpt:
+                    if load_old_adaface_ckpt:
                         print(f"Loading ckpt_subj_basis_generator {km}")
                     else:
                         print(f"Loading {repr(ckpt_subj_basis_generator)}")
@@ -775,7 +775,7 @@ class EmbeddingManager(nn.Module):
                     # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     ckpt_subj_basis_generator.face_proj_in = None
                     
-                    if load_old_embman_ckpt:
+                    if load_old_adaface_ckpt:
                         # Delete lora2hira, latent_queries and layers, as lora2hira and layers belong to 
                         # old ckpts, and latent_queries has different shapes.
                         ckpt_subj_basis_generator.lora2hira = None
@@ -838,8 +838,11 @@ class EmbeddingManager(nn.Module):
                     self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
                     self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
 
-                if self.to_load_id2img_learnable_modules and "id2img_prompt_encoder_learnable_modules" in ckpt:
-                    self.id2ada_prompt_encoder.load_id2img_learnable_modules(ckpt["id2img_prompt_encoder_learnable_modules"])
+                if "id2img_prompt_encoder_learnable_modules" in ckpt:
+                    if self.to_load_id2img_learnable_modules:
+                        self.id2ada_prompt_encoder.load_id2img_learnable_modules(ckpt["id2img_prompt_encoder_learnable_modules"])
+                    else:
+                        print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
 
                 if self.do_zero_shot and self.training:
                     # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
@@ -847,7 +850,7 @@ class EmbeddingManager(nn.Module):
                     self.make_frozen_copy_of_subj_basis_generators()
 
             else:
-                print(f"Skipping loading subj_basis_generator from {ckpt_path}")
+                print(f"Skipping loading subj_basis_generator from {adaface_ckpt_path}")
 
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                 # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
@@ -862,10 +865,10 @@ class EmbeddingManager(nn.Module):
                     breakpoint()
                 if km2 in self.string_to_token_dict:
                     if km2 in self.background_strings:
-                        print(f"Duplicate key {km}->{km2} in {ckpt_path}. Ignored.")
+                        print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
                         continue
 
-                    raise ValueError(f"Duplicate key {km}->{km2} in {ckpt_path}")
+                    raise ValueError(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}")
 
                 # Merge the (possibly substituted) subject strings from the ckpt with 
                 # self.subject_strings and self.background_strings.
@@ -885,7 +888,7 @@ class EmbeddingManager(nn.Module):
                 if km in ckpt["token2num_vectors"]:
                     token2num_vectors[km2] = ckpt["token2num_vectors"][km]
 
-                print(f"Loaded {km}->{km2} from {ckpt_path}")
+                print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
             if "token2num_vectors" in ckpt and not self.skip_loading_token2num_vectors:
                 self.set_num_vectors_per_subj_token(token2num_vectors)

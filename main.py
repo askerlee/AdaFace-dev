@@ -234,7 +234,7 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--load_old_embman_ckpt", action="store_true", 
+    parser.add_argument("--load_old_adaface_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
 
     parser.add_argument("--static_embedding_reg_weight",
@@ -781,7 +781,7 @@ if __name__ == "__main__":
             # the frequency of composition_regs is halved.
             config.model.params.composition_regs_iter_gap *= 2
 
-        config.model.params.load_old_embman_ckpt = opt.load_old_embman_ckpt
+        config.model.params.load_old_adaface_ckpt = opt.load_old_adaface_ckpt
 
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type
