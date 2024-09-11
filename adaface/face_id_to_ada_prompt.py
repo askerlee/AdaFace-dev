@@ -40,7 +40,7 @@ class FaceID2AdaPrompt(nn.Module):
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
-        self.contrast_clip_embs             = False
+        self.do_contrast_clip_embs          = False
         # num_id_vecs as the output embeddings of the ID2ImgPrompt module, 
         # as well as the output embeddings of the subject basis generator.
         self.num_id_vecs                    = -1
@@ -55,13 +55,13 @@ class FaceID2AdaPrompt(nn.Module):
     def extract_init_id_embeds_from_images(self, image_objs, image_paths, fg_masks=None, 
                                            size=(512, 512), calc_avg=False, 
                                            skip_non_faces=True, 
-                                           return_clip_embs=None, contrast_clip_embs=None, 
+                                           return_clip_embs=None, do_contrast_clip_embs=None, 
                                            verbose=False):
-        # If return_clip_embs and contrast_clip_embs are not provided, then use the default values.
+        # If return_clip_embs and do_contrast_clip_embs are not provided, then use the default values.
         if return_clip_embs is None:
             return_clip_embs = self.use_clip_embs
-        if contrast_clip_embs is None:
-            contrast_clip_embs = self.contrast_clip_embs
+        if do_contrast_clip_embs is None:
+            do_contrast_clip_embs = self.do_contrast_clip_embs
 
         # clip_image_encoder should be already put on GPU. 
         # So its .device is the device of its parameters.
@@ -166,7 +166,7 @@ class FaceID2AdaPrompt(nn.Module):
                 image_fg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
                 # attn_mask: [BS, 1, 257]
                 image_fg_features = image_fg_dict.hidden_states[-2]
-                if contrast_clip_embs:
+                if do_contrast_clip_embs:
                     image_fg_features = image_fg_features - clip_neg_features
                 if image_fg_dict.attn_mask is not None:
                     image_fg_features = image_fg_features * image_fg_dict.attn_mask
@@ -177,7 +177,7 @@ class FaceID2AdaPrompt(nn.Module):
                 # meaningless in this case.
                 image_bg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
                 image_bg_features = image_bg_dict.hidden_states[-2]
-                if contrast_clip_embs:
+                if do_contrast_clip_embs:
                     image_bg_features = image_bg_features - clip_neg_features                
                 if image_bg_dict.attn_mask is not None:
                     image_bg_features = image_bg_features * image_bg_dict.attn_mask        
@@ -242,6 +242,7 @@ class FaceID2AdaPrompt(nn.Module):
         device = self.clip_image_encoder.device
 
         if init_id_embs is None:
+            # Input images are not provided. Generate random face embeddings.
             if image_paths is None and image_objs is None:
                 faceid_embeds_from_images = False
                 # Use random face embeddings as faceid_embeds. [BS, 512].
@@ -254,6 +255,7 @@ class FaceID2AdaPrompt(nn.Module):
                 clip_neg_features   = torch.randn(id_batch_size, 257, 1280).to(device=device, dtype=torch.float16) \
                                         if self.use_clip_embs else None
             else:
+                # Extract face ID embeddings and CLIP features from the images.
                 faceid_embeds_from_images = True
                 faceless_img_count, faceid_embeds, clip_fgbg_features, clip_neg_features \
                     = self.extract_init_id_embeds_from_images( \
@@ -306,7 +308,7 @@ class FaceID2AdaPrompt(nn.Module):
         # we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
         # So we need to repeat faceid_embeds.
         if faceid_embeds_from_images and avg_at_stage is not None:
-            faceid_embeds  = faceid_embeds.repeat(id_batch_size, 1)
+            faceid_embeds   = faceid_embeds.repeat(id_batch_size, 1)
             pos_prompt_embs = pos_prompt_embs.repeat(id_batch_size, 1, 1)
             if clip_fgbg_features is not None:
                 clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
@@ -462,7 +464,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         # Arc2Face pipeline specific behaviors.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
-        self.contrast_clip_embs             = False
+        self.do_contrast_clip_embs          = False
         self.num_id_vecs                    = 16
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
@@ -570,7 +572,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.num_id_vecs                    = 4
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
-        self.contrast_clip_embs             = False
+        self.do_contrast_clip_embs          = False
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False

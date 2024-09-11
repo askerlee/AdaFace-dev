@@ -2275,12 +2275,13 @@ class LatentDiffusion(DDPM):
                         # Therefore, targets == unet_teacher_noise_preds.
                         if self.iter_flags['add_noise_to_real_id_embs']:
                             # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
-                            delta_output = model_output[1:] - model_output[:1]
-                            delta_target = target[1:] - target[:1]
-                            delta_img_mask = img_mask[1:]
+                            delta_output    = model_output[1:] - model_output[:1]
+                            delta_target    = target[1:]       - target[:1]
+                            delta_img_mask  = img_mask[1:]
                             # No need to use fg_mask, as the delta at the background should be very small.
+                            # Since fg_mask is not used, bg_pixel_weight is set to 1.
                             loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                                       delta_img_mask, None, 
+                                                                       delta_img_mask, fg_mask=None, 
                                                                        fg_pixel_weight=1, bg_pixel_weight=1)
                         else:
                             loss_recon_delta = torch.tensor(0, device=loss_recon.device)
