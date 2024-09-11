@@ -88,7 +88,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_complementary_loss_weight=0.,
                  fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 recon_delta_loss_boost=5,
+                 recon_delta_loss_boost=2,
                  wds_bg_recon_discount=0.05,
                  do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
