@@ -53,11 +53,10 @@ if __name__ == "__main__":
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
     parser.add_argument("--prompt", type=str, default="portrait photo of a person in superman costume")
-    parser.add_argument("--use_teacher_neg", action="store_true")
     parser.add_argument("--use_core_only", action="store_true")
-    parser.add_argument("--noise", type=float, default=0)
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--seed", type=int, default=-1)
+    parser.add_argument("--noise_level", type=float, default=0.06)
 
     args = parser.parse_args()
     if args.seed > 0:
@@ -65,8 +64,10 @@ if __name__ == "__main__":
 
     if args.id2img_prompt_encoder_type == "arc2face":
         pipeline = create_arc2face_pipeline(args.base_model_path)
+        use_teacher_neg = False
     elif args.id2img_prompt_encoder_type == "consistentID":
         pipeline = create_consistentid_pipeline(args.base_model_path)
+        use_teacher_neg = True
 
     pipeline = pipeline.to('cuda', torch.float16)
 
@@ -105,28 +106,32 @@ if __name__ == "__main__":
     subject_name = "randface-" + str(torch.seed()) if args.randface else subject_name
     id_batch_size = args.out_image_count
 
-    input_max_length = 22
     text_encoder = pipeline.text_encoder
     orig_text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16).to("cuda") 
 
-    # Noise level is the *relative* std of the noise added to the face embeddings.
-    # A noise level of 0.08 could change gender, but 0.06 is usually safe.
-    for noise_level in (0,): # 0.03):
-        if args.randface:
-            init_id_embs = torch.randn(1, 512, device='cuda', dtype=torch.float16)
-            if args.id2img_prompt_encoder_type == "arc2face":
-                pre_clip_features = None
-            elif args.id2img_prompt_encoder_type == "consistentID":
-                # For ConsistentID, random clip features are much better than zero clip features.
-                rand_clip_fgbg_features = torch.randn(1, 514, 1280, device='cuda', dtype=torch.float16)
-                rand_clip_neg_features  = torch.randn(1, 257, 1280, device='cuda', dtype=torch.float16)
-                pre_clip_features = (rand_clip_fgbg_features, rand_clip_neg_features)
-            else:
-                breakpoint()
-        else:
-            init_id_embs = None
+    noise = torch.randn(args.out_image_count, 4, 64, 64, device='cuda', dtype=torch.float16)
+    if args.randface:
+        init_id_embs = torch.randn(1, 512, device='cuda', dtype=torch.float16)
+        if args.id2img_prompt_encoder_type == "arc2face":
             pre_clip_features = None
+        elif args.id2img_prompt_encoder_type == "consistentID":
+            # For ConsistentID, random clip features are much better than zero clip features.
+            rand_clip_fgbg_features = torch.randn(1, 514, 1280, device='cuda', dtype=torch.float16)
+            rand_clip_neg_features  = torch.randn(1, 257, 1280, device='cuda', dtype=torch.float16)
+            pre_clip_features = (rand_clip_fgbg_features, rand_clip_neg_features)
+        else:
+            breakpoint()
+    else:
+        init_id_embs = None
+        pre_clip_features = None
 
+    all_faceid_embeds = []
+    # noise_level is the *relative* std of the noise added to the face ID embeddings.
+    # For Arc2Face, a noise_level of 0.08 could change gender, but 0.06 is usually safe.
+    # For ConsistentID, the image prompt embeddings are extremely robust to noise,
+    # and the noise_level can be set to 0.5, only leading to a slight change in the result images.
+    # Seems ConsistentID mainly relies on CLIP features, instead of the face ID embeddings.
+    for noise_level in (args.noise_level, 0):
         # id_prompt_emb is in the image prompt space.
         # neg_id_prompt_emb is used in ConsistentID only.
         face_image_count, faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
@@ -140,7 +145,8 @@ if __name__ == "__main__":
                 return_core_id_embs_only=False,
                 avg_at_stage='id_emb',
                 verbose=True)
-
+        all_faceid_embeds.append(faceid_embeds)
+        
         pipeline.text_encoder = orig_text_encoder
 
         comp_prompt     = args.prompt 
@@ -156,7 +162,7 @@ if __name__ == "__main__":
         prompt_embeds_ = torch.cat([prompt_embeds_, id_prompt_emb], dim=1)
         M = id_prompt_emb.shape[1]
 
-        if (not args.use_teacher_neg) or neg_id_prompt_emb is None:
+        if (not use_teacher_neg) or neg_id_prompt_emb is None:
             # For arc2face, neg_id_prompt_emb is None. So we concatenate the last M negative prompt embeddings,
             # to make the negative prompt embeddings have the same length as the prompt embeddings.
             negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, negative_prompt_embeds_[:, -M:]], dim=1)
@@ -167,18 +173,16 @@ if __name__ == "__main__":
 
         if args.use_core_only:
             prompt_embeds_ = id_prompt_emb
-            if (not args.use_teacher_neg) or neg_id_prompt_emb is None:
+            if (not use_teacher_neg) or neg_id_prompt_emb is None:
                 negative_prompt_embeds_ = negative_prompt_embeds_[:, :M]
             else:
                 negative_prompt_embeds_ = neg_id_prompt_emb
 
-        noise = torch.randn(args.out_image_count, 4, 64, 64, device='cuda', dtype=torch.float16)
-        
-        for guidance_scale in [4]:
+        for guidance_scale in [6]:
             images = pipeline(latents=noise,
                               prompt_embeds=prompt_embeds_, 
                               negative_prompt_embeds=negative_prompt_embeds_, 
-                              num_inference_steps=40, 
+                              num_inference_steps=50, 
                               guidance_scale=guidance_scale, 
                               num_images_per_prompt=1).images
 

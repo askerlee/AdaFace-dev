@@ -46,6 +46,7 @@ class FaceID2AdaPrompt(nn.Module):
         self.num_id_vecs                    = -1
         self.id_img_prompt_max_length       = 77
         self.clip_embedding_dim             = 1024
+        self.name                           = None
 
     # image_objs: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
     # If image_objs is a list of tensors, then each tensor should be [3, Hi, Wi].
@@ -287,6 +288,10 @@ class FaceID2AdaPrompt(nn.Module):
         if noise_level > 0:
             # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
             faceid_embeds = add_noise_to_tensor(faceid_embeds, noise_level, noise_std_is_relative=True, keep_norm=True)
+            if self.name == 'consistentID':
+                clip_fgbg_features = add_noise_to_tensor(clip_fgbg_features, noise_level, noise_std_is_relative=True, keep_norm=True)
+                clip_neg_features  = add_noise_to_tensor(clip_neg_features,  noise_level, noise_std_is_relative=True, keep_norm=True)
+                #faceid_embeds.normal_()
 
         faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
@@ -298,7 +303,7 @@ class FaceID2AdaPrompt(nn.Module):
                                                     return_full_and_core_embs=True)
         
         if avg_at_stage == 'prompt_emb':
-            pos_prompt_embs      = pos_prompt_embs.mean(dim=0, keepdim=True)
+            pos_prompt_embs     = pos_prompt_embs.mean(dim=0, keepdim=True)
             pos_core_prompt_emb = pos_core_prompt_emb.mean(dim=0, keepdim=True)
 
         if return_core_id_embs_only:
@@ -468,12 +473,13 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         self.num_id_vecs                    = 16
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
+        self.name                           = 'arc2face'
 
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
         print(f'Arc2Face text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
-
+    
     # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
@@ -576,6 +582,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
+        self.name                           = 'consistentID'
 
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)

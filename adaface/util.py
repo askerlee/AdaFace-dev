@@ -12,12 +12,14 @@ import numpy as np
 
 # add_noise_to_tensor() adds a fixed amount of noise to the tensor.
 def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
-                        std_dim=-1, norm_dim=-1):
+                        std_dim=-1, norm_dim=-1, verbose=True):
+    orig_ts = ts
     if noise_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
         noise_std *= ts_std_mean
         # ts_std_mean: 50~80 for unnormalized images, noise_std: 2.5-4 for 0.05 noise.
-        #print(ts_std_mean, noise_std)
+        if verbose:
+            print(f"ts_std_mean: {ts_std_mean:.03f}, noise_std: {noise_std:.03f}")
 
     noise = torch.randn_like(ts) * noise_std
     if keep_norm:
@@ -27,6 +29,9 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
         ts = ts * orig_norm / (new_norm + 1e-8)
     else:
         ts = ts + noise
+    
+    if verbose:
+        print(f"Correlations between new and original tensors: {F.cosine_similarity(ts.flatten(), orig_ts.flatten(), dim=0).item():.03f}")
         
     return ts
 
