@@ -30,7 +30,12 @@ for layer_idx, layer in enumerate(layers):
     deduped_vs = [vs[i] for i in range(N) if not dups[i]]
     if len(deduped_vs) < N:
         deduped_v = torch.cat(deduped_vs, dim=0)
+        v_biases = layer.self_attn.v_proj.bias.chunk(N, dim=0)
+        # We don't check for duplicates in biases, because they only play a minor role.
+        deduped_v_biases = [v_biases[i] for i in range(N) if not dups[i]]
+        deduped_v_bias = torch.cat(deduped_v_biases, dim=0)
         layer.self_attn.v_proj.weight.data  = deduped_v
+        layer.self_attn.v_proj.bias.data    = deduped_v_bias
         layer.self_attn.v_proj.out_features = deduped_v.size(0)
         print(f"Layer {layer_idx} V deduplicated: {old_v_shape} -> {list(deduped_v.shape)}")
         num_deduped_chunks += 1
@@ -58,7 +63,12 @@ for layer_idx, layer in enumerate(layers):
     deduped_ks = [ks[i] for i in range(N) if not dups[i]]
     if len(deduped_ks) < N:
         deduped_k = torch.cat(deduped_ks, dim=0)
+        k_biases = layer.self_attn.k_proj.bias.chunk(N, dim=0)
+        # We don't check for duplicates in biases, because they only play a minor role.
+        deduped_k_biases = [k_biases[i] for i in range(N) if not dups[i]]
+        deduped_k_bias = torch.cat(deduped_k_biases, dim=0)
         layer.self_attn.k_proj.weight.data  = deduped_k
+        layer.self_attn.k_proj.bias.data    = deduped_k_bias
         layer.self_attn.k_proj.out_features = deduped_k.size(0)
         print(f"Layer {layer_idx} K deduplicated: {old_k_shape} -> {list(deduped_k.shape)}")
         num_deduped_chunks += 1
