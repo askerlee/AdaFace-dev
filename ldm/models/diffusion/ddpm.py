@@ -86,10 +86,8 @@ class DDPM(pl.LightningModule):
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 fg_wds_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  recon_delta_loss_boost=2,
-                 wds_bg_recon_discount=0.05,
                  do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
                  use_background_token=True,
@@ -106,8 +104,8 @@ class DDPM(pl.LightningModule):
                  unet_weights=None,
                  unet_teacher_base_model_path=None,
                  p_gen_id2img_rand_id=0.4,
-                 p_add_noise_to_real_id_embs=0.6,
-                 add_noise_to_real_id_embs_std_range=[0.3, 0.6],
+                 p_perturb_real_id_embs=0.6,
+                 perturb_real_id_embs_std_range=[0.03, 0.06],
                  max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=1,
                  ):
@@ -134,13 +132,11 @@ class DDPM(pl.LightningModule):
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
-        self.fg_wds_complementary_loss_weight       = fg_wds_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         self.recon_delta_loss_boost                = recon_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
-        self.wds_bg_recon_discount                  = wds_bg_recon_discount
         
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
@@ -155,8 +151,8 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_base_model_path           = unet_teacher_base_model_path
         
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
-        self.p_add_noise_to_real_id_embs            = p_add_noise_to_real_id_embs
-        self.add_noise_to_real_id_embs_std_range    = add_noise_to_real_id_embs_std_range
+        self.p_perturb_real_id_embs                 = p_perturb_real_id_embs
+        self.perturb_real_id_embs_std_range         = perturb_real_id_embs_std_range
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_init_fg_from_training_image_fresh_count  = 0
@@ -357,7 +353,7 @@ class DDPM(pl.LightningModule):
                             'do_unet_distill':              False,
                             'gen_id2img_rand_id':           False,
                             'id2img_prompt_embs':           None,
-                            'add_noise_to_real_id_embs':    False,
+                            'perturb_real_id_embs':    False,
                             'faceless_img_count':           0,
                             'use_unet_teacher_as_target':   False,
                             'num_denoising_steps':          1,
@@ -369,8 +365,6 @@ class DDPM(pl.LightningModule):
                             # 'is_teachable':             False,
                             'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
-                            'use_wds_comp':                 False,  
-                            'use_wds_cls_captions':         False,
                             'use_fp_trick':                 False,
                             'reuse_init_conds':             False,
                             'comp_init_fg_from_training_image': False,
@@ -883,6 +877,7 @@ class LatentDiffusion(DDPM):
         # NOTE: captions (batch['caption'] or batch['caption_bg'])
         # are only for image reconstruction iterations.
         x_start, _ = self.get_input(batch, self.first_stage_key)
+        noise = torch.randn_like(x_start)
         # Update the training_percent of embedding_manager.
         self.embedding_manager.training_percent = self.training_percent
 
@@ -893,8 +888,6 @@ class LatentDiffusion(DDPM):
             batch_have_fg_mask[:] = False
 
         self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
-
-        self.iter_flags['wds_comp_avail_ratio'] = batch['has_wds_comp'].sum() / batch['has_wds_comp'].shape[0]
 
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
@@ -934,60 +927,8 @@ class LatentDiffusion(DDPM):
                                                 and 'subj_prompt_single_fp' in batch \
                                                 and random.random() < p_use_fp_trick
 
-            # Only use_wds_comp iters if all instances have wds_comp image/prompt pairs.
-            # all instances have wds_comp <= all instances have fg_mask, i.e., fg_mask_avail_ratio = 1
-            if self.iter_flags['wds_comp_avail_ratio'] == 1:
-                if self.iter_flags['is_compos_iter']:
-                    # 20%  of compositional distillation iters will be initialized with wds_comp 
-                    # *background* images (subject not overlaid).
-                    # The comp prompts will be updated with wds_comp_extras that correspond to the wds_comp background images.
-                    p_use_wds_comp = 0.2
-                else:
-                    # 5% of recon iters will be initialized with wds_comp overlay images.
-                    # If we set p_use_wds_comp >= 0.1, then the subject embeddings will tend to
-                    # attend to and reconstruct the overlay background, leading to inferior results.
-                    p_use_wds_comp = 0.05
-            else:
-                p_use_wds_comp = 0
-            
-            self.iter_flags['use_wds_comp'] = random.random() < p_use_wds_comp
-
-            if self.iter_flags['use_wds_comp']:
-                # Replace the image/caption/mask with the wds_comp image/caption/mask.
-                # This block of code has to be before "captions = ..." below, 
-                # to avoid using wrong captions (some branches use batch['caption_bg']).
-                if self.iter_flags['is_compos_iter']:
-                    batch['image']      = batch['wds_image_bgonly'] # batch['wds_image']
-                    # In compositional distillation iterations, captions are not used, 
-                    # so it doesn't really matter which captions are used.
-                    batch['caption']    = batch['wds_caption']
-                    batch['caption_bg'] = batch['wds_caption_bg']
-                    self.iter_flags['use_wds_cls_captions'] = False
-                else:
-                    batch['image']  = batch['wds_image']
-                    # Use wds_cls_caption at decreasing probability over training.
-                    # From 0.9 to 0.1 over first 50% of the training, then keep at 0.1.
-                    # Using it more frequently may cause double subjects in the image.
-                    p_use_wds_cls_captions = anneal_value(self.training_percent, 0.5, (0.6, 0.1))
-                    self.iter_flags['use_wds_cls_captions'] = random.random() < p_use_wds_cls_captions
-                    if self.iter_flags['use_wds_cls_captions']:
-                        batch['caption']    = batch['wds_cls_caption']
-                        batch['caption_bg'] = batch['wds_cls_caption_bg']
-                    else:
-                        batch['caption']    = batch['wds_caption']
-                        batch['caption_bg'] = batch['wds_caption_bg']
-
-                batch['aug_mask']   = batch['wds_aug_mask']
-                captions            = batch['wds_cls_caption']
-                # first_stage_key: 'image'.
-                # get_input() uses image, aug_mask and fg_mask.
-                x_start, _ = self.get_input(batch, self.first_stage_key)
-
             # Slightly larger than 0.5, since comp_init_fg_from_training_image is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_fg_from_training_image percentage will be around 0.5.
-            # NOTE: If use_wds_comp, then to preserve the foreground, we always enable comp_init_fg_from_training_image.
-            # But in this case, the background areas will not be replaced with random noises.
-            # p_comp_init_fg_from_training_image = 0 if self.iter_flags['use_wds_comp'] else 1.0
             # p_comp_init_fg_from_training_image: 0.8 -> 1.0 over first 25% of the training, 
             # then keep at 1.0.
             # That is, mix_prompt_distill loss is only enabled at the first 25% of the training 
@@ -1013,10 +954,7 @@ class LatentDiffusion(DDPM):
                 p_use_background_token  = 0.5
             else:
                 # Recon iters.
-                if self.iter_flags['use_wds_comp']:
-                    # At 95% of the time, use background tokens in recon iters if use_wds_comp.
-                    p_use_background_token  = 0.95
-                elif self.iter_flags['do_unet_distill']:
+                if self.iter_flags['do_unet_distill']:
                     # If do_unet_distill, then disable the background token.
                     p_use_background_token  = 0
                 elif self.do_zero_shot:
@@ -1083,18 +1021,6 @@ class LatentDiffusion(DDPM):
             subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
             cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
             delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-
-            if self.iter_flags['use_wds_comp']:
-                # wds_comp_extras is a list of wds compositional extra substrings.
-                # Never include the class token in wds_comp_extras, i.e. don't use wds_cls_comp_extra.
-                # Because the 4-type prompts are for distillation, which don't use the class token.
-                wds_comp_extras     = batch["wds_comp_extra"]
-                # Replace the compositional extra substrings in the compositional prompts.
-                #print(delta_prompts)
-                subj_comp_prompts = replace_prompt_comp_extra(subj_comp_prompts, subj_single_prompts, wds_comp_extras)
-                cls_comp_prompts  = replace_prompt_comp_extra(cls_comp_prompts,  cls_single_prompts,  wds_comp_extras)
-                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-                #print(delta_prompts)
 
         else:
             delta_prompts = None
@@ -1182,11 +1108,11 @@ class LatentDiffusion(DDPM):
                                 
                 # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
                 # ID information.
-                p_add_noise_to_real_id_embs = self.p_add_noise_to_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
-                # p_add_noise_to_real_id_embs: default 0.6.
-                # If do_unet_distill, then prob of add_noise_to_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
-                self.iter_flags['add_noise_to_real_id_embs'] = random.random() < p_add_noise_to_real_id_embs
-                if self.iter_flags['add_noise_to_real_id_embs']:
+                p_perturb_real_id_embs = self.p_perturb_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
+                # p_perturb_real_id_embs: default 0.6.
+                # If do_unet_distill, then prob of perturb_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
+                self.iter_flags['perturb_real_id_embs'] = random.random() < p_perturb_real_id_embs
+                if self.iter_flags['perturb_real_id_embs']:
                     if not self.iter_flags['same_subject_in_batch']:
                         self.iter_flags['same_subject_in_batch'] = True
                         # Change the ID features of multiple subjects in the batch to the ID features of 
@@ -1198,13 +1124,13 @@ class LatentDiffusion(DDPM):
                         # the first subject's as well.
                         # Change the batch to have the (1 subject image) * BS strcture.
                         # NOTE: Use the same noise for different ID embeddings in the batch,
-                        # so that we can compute the variance at each pixel.
+                        # so that we can compute the delta loss between the generated images.
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                        x_start, batch_images_unnorm, img_mask, fg_mask, \
+                        x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
                         zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
-                                                      x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                      x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
                                                       zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs)
                         
@@ -1215,7 +1141,7 @@ class LatentDiffusion(DDPM):
                     # Keep the first ID embedding as it is, and add noise to the rest.
                     zs_id_embs[1:] = \
                         anneal_add_noise_to_embedding(zs_id_embs[1:], training_percent=0, 
-                                                      begin_noise_std_range=self.add_noise_to_real_id_embs_std_range, 
+                                                      begin_noise_std_range=self.perturb_real_id_embs_std_range, 
                                                       end_noise_std_range=None, 
                                                       add_noise_prob=1, noise_std_is_relative=True, 
                                                       keep_norm=True)
@@ -1269,7 +1195,7 @@ class LatentDiffusion(DDPM):
                 # Otherwise, use the unet recon as target with a probability of 0.5, and use the original image (noise) 
                 # as target with a probability of 0.5.
                 # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
-                if self.iter_flags['gen_id2img_rand_id'] or self.iter_flags['add_noise_to_real_id_embs'] \
+                if self.iter_flags['gen_id2img_rand_id'] or self.iter_flags['perturb_real_id_embs'] \
                   or self.iter_flags['faceless_img_count'] > 0:
                     self.iter_flags['use_unet_teacher_as_target'] = True
                 else:
@@ -1359,6 +1285,12 @@ class LatentDiffusion(DDPM):
                             cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
                         
                         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                        # We don't explicitly repeat noise here. 
+                        # If perturb_real_id_embs,     then the noise is already the same for all ID embeddings,
+                        # If not perturb_real_id_embs, then the noise should be different for different instances, 
+                        # and there's no need to repeat. 
+                        # But we need to use only the first HALF_BS noises to match x_start.
+                        noise = noise[:HALF_BS]
 
             # Do zero-shot training but not unet distillation.
             else:
@@ -1394,7 +1326,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['batch_have_fg_mask']       = cached_inits['batch_have_fg_mask']
             self.iter_flags['filtered_fg_mask']         = cached_inits['filtered_fg_mask']
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
-            self.iter_flags['use_wds_comp']             = cached_inits['use_wds_comp']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
             self.iter_flags['zs_clip_bg_features']      = cached_inits['zs_clip_bg_features']
             self.iter_flags['zs_clip_neg_features']     = cached_inits['zs_clip_neg_features']
@@ -1415,13 +1346,13 @@ class LatentDiffusion(DDPM):
 
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
 
-        loss = self(x_start, captions, **kwargs)
+        loss = self(x_start, captions, noise)
 
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x_start, captions, *args, **kwargs):
+    def forward(self, x_start, captions, noise):
         t = torch.randint(0, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
         ORIG_BS  = len(x_start)
 
@@ -1639,7 +1570,8 @@ class LatentDiffusion(DDPM):
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        return self.p_losses(x_start, cond, t, *args, **kwargs)
+        c_static_emb, c_in, extra_info = cond
+        return self.p_losses(x_start, t, noise, c_static_emb, c_in, extra_info)
 
     # apply_model() is called both during training and inference.
     def apply_model(self, x_noisy, t, cond, return_ids=False):
@@ -1733,22 +1665,18 @@ class LatentDiffusion(DDPM):
             if k in extra_info:
                 del extra_info[k]
 
-    # t: steps.
-    # cond: (c_static_emb, c_in, extra_info). c_in is the textual prompts. 
+    # t: timesteps.
+    # c_in is the textual prompts. 
     # extra_info: a dict that contains various fields. 
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, cond, t, noise=None):
-        # If noise is not None, then use the provided noise.
-        # Otherwise, generate noise randomly.
-        noise = default(noise, lambda: torch.randn_like(x_start))
-        #print(cond[1])
-
+    def p_losses(self, x_start, t, noise, c_static_emb, c_in, extra_info):
+        #print(c_in)
+        # Back up the original condition for future reference.
+        cond = (c_static_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
-
-        c_static_emb, c_in, extra_info = cond
 
         placeholder2indices2  = placeholder2indices   = extra_info['placeholder2indices']
         prompt_emb_mask2      = prompt_emb_mask       = extra_info['prompt_emb_mask']
@@ -1839,20 +1767,15 @@ class LatentDiffusion(DDPM):
                     # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
                     # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                     filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
-                    # If use_wds_comp, then don't fill up the background with gaussian noise 
-                    # by doing nothing to x_start.
-                    if not self.iter_flags['use_wds_comp']:
-                        # If do zero-shot, then don't add extra noise to the foreground.
-                        fg_noise_anneal_mean_range = (0.1, 0.4) if not self.do_zero_shot else (0.1, 0.4)
-                        x_start, fg_mask, filtered_fg_mask = \
-                            init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                                               self.training_percent,
-                                                               base_scale_range=(0.7, 1.0),
-                                                               fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
+                    # If do zero-shot, then don't add extra noise to the foreground.
+                    fg_noise_anneal_mean_range = (0.1, 0.4) if not self.do_zero_shot else (0.1, 0.4)
+                    x_start, fg_mask, filtered_fg_mask = \
+                        init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
+                                                            self.training_percent,
+                                                            base_scale_range=(0.7, 1.0),
+                                                            fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
 
-                    # Otherwise it's use_wds_comp, then x_start is kept intact (the noisy wds overlay images).
-
-                elif not self.iter_flags['use_wds_comp']:
+                else:
                     x_start.normal_()
 
             if not self.iter_flags['do_mix_prompt_distillation']:
@@ -2019,7 +1942,7 @@ class LatentDiffusion(DDPM):
                                          K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
                                          V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
           
-            # Update cond[0] to c_static_emb_vk.
+            # Update cond[0] to c_static_emb_vk, to prepare for future reference.
             # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
             # with compositional prompts in the 'do_comp_teacher_filter' branch.
             cond = (c_static_emb_vk, cond[1], extra_info)
@@ -2028,13 +1951,7 @@ class LatentDiffusion(DDPM):
         else:
             assert self.iter_flags['do_normal_recon']
             BLOCK_SIZE = x_start.shape[0]
-            if self.iter_flags['use_wds_comp']:
-                # Decrease t slightly to decrease noise amount and preserve more semantics.
-                # Do not add extra noise for use_wds_comp instances, since such instances are 
-                # kind of "Out-of-Domain" at the background, and are intrinsically difficult to denoise.
-                t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(0.8, 1.0),
-                                      keep_prob_range=(0.5, 0.3))
-            elif self.do_zero_shot:
+            if self.do_zero_shot:
                 # Increase t slightly by (1, 1.5) to increase noise amount and make the denoising more challenging,
                 # with smaller prob to keep the original t.
                 t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
@@ -2110,26 +2027,14 @@ class LatentDiffusion(DDPM):
             # If not do_unet_distill, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
             if not self.iter_flags['do_unet_distill']:
-                if not self.iter_flags['use_background_token'] and not self.iter_flags['use_wds_comp']:
+                if not self.iter_flags['use_background_token']:
                     # bg loss is almost completely ignored. But giving it a little weight may help suppress 
                     # subj embeddings' contribution to the background (serving as a contrast to the fg).
                     bg_pixel_weight = 0 #0.01
                 else:
-                    if self.iter_flags['use_wds_comp']:
-                        # fg_pixel_weight/bg_pixel_weight are scalars.
-                        # an instance of  use_wds_comp: instance_bg_weight is 0.05, instance_fg_weight is 1.
-                        # an instance not use_wds_comp: instance_bg_weight is 1,    instance_fg_weight is 1.
-                        # NOTE: We discount the bg weight of the use_wds_comp instances, as bg areas are supposed 
-                        # to be attended with wds comp extra embeddings. However, the attention may not be perfect,
-                        # and subject embeddings may be tempted to attend to the background, which will mix the 
-                        # background features into the subject embeddings, which hurt both authenticity and compositionality.
-                        ## NOTE: We discount the fg weight of the use_wds_comp instances, as they are less natural and
-                        ## may incur too high loss to the model (even in the fg areas).
-                        bg_pixel_weight = self.wds_bg_recon_discount
-                    else:
-                        # use_background_token == True and not self.iter_flags['use_wds_comp'].
-                        # bg loss is somewhat discounted.
-                        bg_pixel_weight = 0.1
+                    # use_background_token == True.
+                    # bg loss is somewhat discounted.
+                    bg_pixel_weight = 0.1
                                     
                 loss_fg_bg_contrast, loss_recon = \
                     self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
@@ -2271,17 +2176,20 @@ class LatentDiffusion(DDPM):
                         # and the remaining ID embeddings are added with noise.
                         # So we can contrast the first instance with the remaining instances,
                         # and highlight their differences caused by the noise.
-                        # If add_noise_to_real_id_embs, then use_unet_teacher_as_target == True.
+                        # If perturb_real_id_embs, then use_unet_teacher_as_target == True.
                         # Therefore, targets == unet_teacher_noise_preds.
-                        if self.iter_flags['add_noise_to_real_id_embs']:
+                        if self.iter_flags['perturb_real_id_embs']:
                             # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
+                            # NOTE: if perturb_real_id_embs, the noises for different instances are the same.
+                            # So we can contrast the first instance with the remaining instances.
                             delta_output    = model_output[1:] - model_output[:1]
                             delta_target    = target[1:]       - target[:1]
                             delta_img_mask  = img_mask[1:]
+                            delta_fg_mask   = fg_mask[1:]
                             # No need to use fg_mask, as the delta at the background should be very small.
                             # Since fg_mask is not used, bg_pixel_weight is set to 1.
                             loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                                       delta_img_mask, fg_mask=None, 
+                                                                       delta_img_mask, fg_mask=delta_fg_mask, 
                                                                        fg_pixel_weight=1, bg_pixel_weight=1)
                         else:
                             loss_recon_delta = torch.tensor(0, device=loss_recon.device)
@@ -2437,7 +2345,6 @@ class LatentDiffusion(DDPM):
                             'batch_have_fg_mask':     batch_have_fg_mask,
                             'filtered_fg_mask':       filtered_fg_mask,
                             'use_background_token':   self.iter_flags['use_background_token'],
-                            'use_wds_comp':           self.iter_flags['use_wds_comp'],
                             'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
                             # If not do_zero_shot, 'zs_clip_bg_features', 'zs_id_embs' and 'id2img_prompt_embs' 
                             # are all None.
@@ -2770,62 +2677,6 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_contrast += (loss_fg_bg_complementary * loss_fg_bg_complementary_scale + loss_subj_mb_suppress \
                                     + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
                                    * self.fg_bg_complementary_loss_weight
-
-        if self.iter_flags['use_wds_comp'] and self.fg_wds_complementary_loss_weight > 0:
-            #print(c_in)
-            # all_subj_indices and all_bg_indices are used, instead of *_1b.
-
-            # prompt_emb_mask: [2, 77, 1] -> [2, 77].
-            comp_extra_mask = extra_info['prompt_emb_mask'].squeeze(-1).clone()
-            subj_indices_ext = all_subj_indices
-
-            if self.iter_flags['use_wds_cls_captions']:
-                # use_wds_cls_captions: cls token follows the subject tokens, and 
-                # precedes wds extra tokens.
-                # So we extend the subject indices by 1, to include the cls embedding as part of 
-                # the subject embeddings.
-                subj_indices_ext = extend_indices_N_by_n_times(subj_indices_ext, n=1)
-
-            # Mask out subject embeddings.
-            comp_extra_mask[subj_indices_ext] = 0
-            # Mask out background embeddings as well, as we want to encourage the subject embeddings
-            # to be complementary to the wds embeddings, without considering the background embeddings.
-            if self.iter_flags['use_background_token']:
-                comp_extra_mask[all_bg_indices] = 0
-
-            wds_comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
-
-            # loss_subj_mb_suppress_wds is the same as above if an instance both use_wds_comp and use_background_token.
-            # Otherwise it's different. It's ok if the loss is double-counted sometimes.
-            # do_sqrt_norm=True: wds_comp_extra prompts are usually much longer, so we do sqrt norm to scale down 
-            # wds_comp_extra attn scores.
-            loss_fg_wds_complementary, loss_subj_mb_suppress_wds, loss_wds_mask_align, loss_fg_wds_mask_contrast = \
-                        self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
-                                                            subj_indices_ext,
-                                                            wds_comp_extra_indices,
-                                                            BLOCK_SIZE=BLOCK_SIZE,
-                                                            fg_grad_scale=0.1, 
-                                                            fg_mask=fg_mask,
-                                                            instance_mask=batch_have_fg_mask,
-                                                            do_sqrt_norm=True
-                                                            )
-
-            if loss_fg_wds_complementary > 0:
-                loss_dict.update({f'{prefix}/fg_wds_complem': loss_fg_wds_complementary.mean().detach().item()})
-            # If fg_mask is None, then loss_subj_mb_suppress_wds = loss_wds_mask_align = 0.
-            if loss_subj_mb_suppress_wds > 0:
-                loss_dict.update({f'{prefix}/subj_mb_suppress_wds': loss_subj_mb_suppress_wds.mean().detach().item()})
-            if loss_wds_mask_align > 0:
-                loss_dict.update({f'{prefix}/wds_mask_align': loss_wds_mask_align.mean().detach().item()})
-            if loss_fg_wds_mask_contrast > 0:
-                loss_dict.update({f'{prefix}/fg_wds_mask_contrast': loss_fg_wds_mask_contrast.mean().detach().item()})
-
-            fg_wds_comple_loss_scale    = 1
-            wds_mask_align_loss_scale   = 1
-            loss_fg_bg_contrast += (loss_fg_wds_complementary * fg_wds_comple_loss_scale \
-                                    + loss_wds_mask_align     * wds_mask_align_loss_scale \
-                                    + loss_subj_mb_suppress_wds + loss_fg_wds_mask_contrast) \
-                                   * self.fg_wds_complementary_loss_weight
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 

@@ -618,8 +618,7 @@ class EmbeddingManager(nn.Module):
     # Set ad-hoc data structures for computing placeholder embeddings and various losses.
     def set_prompt_adhoc_info(self, prompt_adhoc_info):
         self.placeholder2indices    = prompt_adhoc_info['placeholder2indices']
-        # There are image margins after the original image is scaled down, or 
-        # after using wds overlay images as input.
+        # There are image margins after the original image is scaled down.
         # When doing attentional pooling / average pooling of image features, 
         # the margin area contains no signal, so we use img_mask to mask it out. 
         # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].

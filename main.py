@@ -218,7 +218,7 @@ def get_parser(**parser_kwargs):
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--max_num_denoising_steps", type=int, default=3,
                         help="Maximum number of denoising steps (default 3)")    
-    parser.add_argument("--p_add_noise_to_real_id_embs", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--p_perturb_real_id_embs", type=float, default=argparse.SUPPRESS,
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=1,
                         help="Multiplier of the prompt2token projection attention")
@@ -271,12 +271,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--do_comp_teacher_filtering", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to filter the teacher's output using CLIP")
     
-    parser.add_argument("--wds_db_path", type=str, default=None,
-                        help="Path to the composition webdatabase .tar file")
-    parser.add_argument("--wds_background_string", 
-        type=str, default="w",
-        help="Background string which will be used in wds prompts to represent the background in wds training images.")
-    
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
                              "(The last element is the weight of the last layer, ...)")
@@ -316,14 +310,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
             if hasattr(opt, 'num_vectors_per_bg_token'):
                 for background_string in dataset.background_strings:
                     personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-
-        if opt.wds_db_path is not None:
-            # wds_background_strings share the same settings of the background string.
-            personalization_config_params.background_strings        += dataset.wds_background_strings
-            personalization_config_params.initializer_strings       += dataset.bg_initializer_strings
-
-            for wds_background_string in dataset.wds_background_strings:
-                personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
     else:
         # Only keep the first subject and background placeholder.
         personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
@@ -340,14 +326,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
 
             for background_string in dataset.background_strings[:1]:
                 personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-
-        if opt.wds_db_path is not None:
-            # wds_background_strings share the same settings of the background string.
-            personalization_config_params.background_strings        += dataset.wds_background_strings[:1]
-            personalization_config_params.initializer_strings       += dataset.bg_initializer_strings[:1]
-
-            for wds_background_string in dataset.wds_background_strings[:1]:
-                personalization_config_params.token2num_vectors[wds_background_string] = opt.num_vectors_per_bg_token
 
     # subjects_are_faces are always available in dataset. But if not do_zero_shot, the values may be wrong, 
     # but in this case, they are not used anyway.
@@ -694,11 +672,8 @@ if __name__ == "__main__":
         config.data.params.train.params.num_vectors_per_subj_token  = opt.num_vectors_per_subj_token
         config.data.params.train.params.num_vectors_per_bg_token    = opt.num_vectors_per_bg_token
 
-        config.data.params.train.params.wds_db_path                 = opt.wds_db_path
-
         if opt.background_string is not None:
             config.data.params.train.params.background_string       = opt.background_string
-            config.data.params.train.params.wds_background_string   = opt.wds_background_string
             config.data.params.train.params.bg_init_string          = opt.bg_init_string
 
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
@@ -720,8 +695,8 @@ if __name__ == "__main__":
             config.model.params.p_gen_id2img_rand_id    = opt.p_gen_id2img_rand_id
             
         config.model.params.max_num_denoising_steps     = opt.max_num_denoising_steps
-        if hasattr(opt, 'p_add_noise_to_real_id_embs'):
-            config.model.params.p_add_noise_to_real_id_embs = opt.p_add_noise_to_real_id_embs
+        if hasattr(opt, 'p_perturb_real_id_embs'):
+            config.model.params.p_perturb_real_id_embs = opt.p_perturb_real_id_embs
 
         config.model.params.personalization_config.params.do_zero_shot      = opt.zeroshot
         config.model.params.personalization_config.params.extend_prompt2token_proj_attention_multiplier   = opt.extend_prompt2token_proj_attention_multiplier
