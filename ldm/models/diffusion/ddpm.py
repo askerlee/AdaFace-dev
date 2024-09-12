@@ -19,8 +19,8 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
-                        replace_prompt_comp_extra, extend_indices_B_by_n_times, repeat_selected_instances, \
-                        halve_token_indices, double_token_indices, extend_indices_N_by_n_times, \
+                        extend_indices_B_by_n_times, repeat_selected_instances, \
+                        halve_token_indices, double_token_indices, \
                         probably_anneal_t, anneal_value, anneal_array, gen_cfg_scales_for_stu_tea, \
                         anneal_add_noise_to_embedding
 
@@ -1144,7 +1144,7 @@ class LatentDiffusion(DDPM):
                                                       begin_noise_std_range=self.perturb_real_id_embs_std_range, 
                                                       end_noise_std_range=None, 
                                                       add_noise_prob=1, noise_std_is_relative=True, 
-                                                      keep_norm=True)
+                                                      keep_norm=True, verbose=True)
 
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count

@@ -528,7 +528,8 @@ class EmbeddingManager(nn.Module):
                                                       self.training_begin_add_noise_std_range,
                                                       self.training_end_add_noise_std_range,
                                                       self.training_add_noise_prob[self.iter_type],
-                                                      noise_std_is_relative=True, keep_norm=False)
+                                                      noise_std_is_relative=True, keep_norm=False,
+                                                      verbose=False)
 
                 # Training with delta loss. Each subject only appears once in subj_static_embedding, 
                 # but twice in the prompts (subject single and subject comp), so we need to repeat it twice.

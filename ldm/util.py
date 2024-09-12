@@ -1974,10 +1974,14 @@ def normalized_sum(losses_list, norm_pow=0):
 
 # add_noise_to_tensor() adds a fixed amount of noise to the tensor.
 def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
-                        std_dim=-1, norm_dim=-1):
+                        std_dim=-1, norm_dim=-1, verbose=True):
+    orig_ts = ts
     if noise_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
         noise_std *= ts_std_mean
+        # ts_std_mean: 50~80 for unnormalized images, noise_std: 2.5-4 for 0.05 noise.
+        if verbose:
+            print(f"ts_std_mean: {ts_std_mean:.03f}, noise_std: {noise_std:.03f}")
 
     noise = torch.randn_like(ts) * noise_std
     if keep_norm:
@@ -1987,6 +1991,9 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
         ts = ts * orig_norm / (new_norm + 1e-8)
     else:
         ts = ts + noise
+    
+    if verbose:
+        print(f"Correlations between new and original tensors: {F.cosine_similarity(ts.flatten(), orig_ts.flatten(), dim=0).item():.03f}")
         
     return ts
 
@@ -1995,7 +2002,7 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
 # anneal_add_noise_to_embedding() adds noise of the amount randomly selected from the noise_std_range.
 def anneal_add_noise_to_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
                                   add_noise_prob, noise_std_is_relative=True, keep_norm=False,
-                                  std_dim=-1, norm_dim=-1):
+                                  std_dim=-1, norm_dim=-1, verbose=True):
     if random.random() > add_noise_prob:
         return embeddings
     
@@ -2007,7 +2014,8 @@ def anneal_add_noise_to_embedding(embeddings, training_percent, begin_noise_std_
         
     noise_std = np.random.uniform(noise_std_lb, noise_std_ub)
 
-    noised_embeddings = add_noise_to_tensor(embeddings, noise_std, noise_std_is_relative, keep_norm, std_dim, norm_dim)
+    noised_embeddings = add_noise_to_tensor(embeddings, noise_std, noise_std_is_relative, 
+                                            keep_norm, std_dim, norm_dim, verbose=verbose)
     return noised_embeddings
 
 # At scaled background, fill new x_start with random values (100% noise). 

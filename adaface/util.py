@@ -16,6 +16,7 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
     orig_ts = ts
     if noise_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
+
         noise_std *= ts_std_mean
         # ts_std_mean: 50~80 for unnormalized images, noise_std: 2.5-4 for 0.05 noise.
         if verbose:

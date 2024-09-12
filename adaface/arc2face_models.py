@@ -44,8 +44,13 @@ class CLIPAttentionMKV(nn.Module):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     # clip_attn_layer is usually self.
-    def extend_weights(self, clip_attn_layer, layer_idx, multiplier, noise_std=0.1, 
+    def extend_weights(self, clip_attn_layer, layer_idx, multiplier, noise_std=0.2, 
                        noise_std_is_relative=True, keep_norm=False, verbose=False):
+        ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
+        ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
+        ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
+        ORIG_K_SHAPE_D0 = ORIG_K_SHAPE[0]
+
         self.multiplier *= multiplier
 
         # q_proj and out_proj are the same as the original CLIPAttention.
@@ -68,23 +73,19 @@ class CLIPAttentionMKV(nn.Module):
         self.v_proj.out_features = self.v_proj.weight.shape[0]
 
         if noise_std > 0:
-            ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
-            ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
             # Adding noise to the extra copies of the weights (keep the first copy unchanged).
             self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
                 add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
-                                    noise_std, noise_std_is_relative, keep_norm)
+                                    noise_std, noise_std_is_relative, keep_norm, verbose=verbose)
             if verbose:
                 NEW_V_SHAPE     = list(self.v_proj.weight.shape)
                 NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
                 print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with {noise_std} noise")
 
-            ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
-            ORIG_K_SHAPE_D0 = ORIG_K_SHAPE[0]
             # Adding noise to the extra copies of the weights.
             self.k_proj.weight.data[ORIG_K_SHAPE_D0:] = \
                 add_noise_to_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
-                                    noise_std, noise_std_is_relative, keep_norm)
+                                    noise_std, noise_std_is_relative, keep_norm, verbose=verbose)
             if verbose:
                 NEW_K_SHAPE     = list(self.k_proj.weight.shape)
                 NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
