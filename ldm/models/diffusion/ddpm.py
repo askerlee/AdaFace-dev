@@ -87,7 +87,7 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 recon_delta_loss_boost=5,
+                 recon_delta_loss_boost=1,
                  do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
                  use_background_token=True,
@@ -353,7 +353,7 @@ class DDPM(pl.LightningModule):
                             'do_unet_distill':              False,
                             'gen_id2img_rand_id':           False,
                             'id2img_prompt_embs':           None,
-                            'perturb_real_id_embs':    False,
+                            'perturb_real_id_embs':         False,
                             'faceless_img_count':           0,
                             'use_unet_teacher_as_target':   False,
                             'num_denoising_steps':          1,
@@ -2176,7 +2176,7 @@ class LatentDiffusion(DDPM):
                         # and the remaining ID embeddings are added with noise.
                         # So we can contrast the first instance with the remaining instances,
                         # and highlight their differences caused by the noise.
-                        # If perturb_real_id_embs, then use_unet_teacher_as_target == True.
+                        # perturb_real_id_embs implies use_unet_teacher_as_target and (not gen_id2img_rand_id).
                         # Therefore, targets == unet_teacher_noise_preds.
                         if self.iter_flags['perturb_real_id_embs']:
                             # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
@@ -2185,9 +2185,12 @@ class LatentDiffusion(DDPM):
                             delta_output    = model_output[1:] - model_output[:1]
                             delta_target    = target[1:]       - target[:1]
                             delta_img_mask  = img_mask[1:]
+                            # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
+                            # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
+                            # equivalent to setting delta_fg_mask = None.
+                            # If we want to ignore noisy signals in the background due to randomness, 
+                            # we can set bg_pixel_weight = 0.1.
                             delta_fg_mask   = fg_mask[1:]
-                            # No need to use fg_mask, as the delta at the background should be very small.
-                            # Since fg_mask is not used, bg_pixel_weight is set to 1.
                             loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
                                                                        delta_img_mask, fg_mask=delta_fg_mask, 
                                                                        fg_pixel_weight=1, bg_pixel_weight=1)
