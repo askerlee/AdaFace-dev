@@ -2,7 +2,8 @@ import torch
 import sys
 # "logs/VGGface2_HQ_masks2024-09-11T00-11-41_zero3-ada/checkpoints/embeddings_gs-21000.pt"
 ckpt = torch.load(sys.argv[1])
-layers = ckpt['string_to_subj_basis_generator_dict']['z'].prompt2token_proj.text_model.encoder.layers
+subj_basis_generator = ckpt['string_to_subj_basis_generator_dict']['z']
+layers = subj_basis_generator.prompt2token_proj.text_model.encoder.layers
 num_deduped_chunks = 0
 N = 4
 
@@ -17,6 +18,7 @@ for layer_idx, layer in enumerate(layers):
     old_v_shape = list(layer.self_attn.v_proj.weight.shape)
     vs = layer.self_attn.v_proj.weight.chunk(N, dim=0)
     dups = [False] * N
+
     for i in range(N):
         for j in range(i+1, N):
             if (vs[i] == vs[j]).all():
@@ -32,10 +34,12 @@ for layer_idx, layer in enumerate(layers):
         layer.self_attn.v_proj.out_features = deduped_v.size(0)
         print(f"Layer {layer_idx} V deduplicated: {old_v_shape} -> {list(deduped_v.shape)}")
         num_deduped_chunks += 1
+        v_dedup_ratio = len(deduped_vs) / N
     else:
         print(f"Layer {layer_idx} V is different: {old_v_shape}")
+        v_dedup_ratio = 1
 
-    calc_and_print_stats(torch.tensor(v_diff_stds), "V diff stds")
+    calc_and_print_stats(torch.tensor(v_diff_stds),       "V diff stds")
     calc_and_print_stats(torch.tensor(v_diff_std_ratios), "V diff std ratios")
 
     k_diff_stds = []
@@ -58,12 +62,27 @@ for layer_idx, layer in enumerate(layers):
         layer.self_attn.k_proj.out_features = deduped_k.size(0)
         print(f"Layer {layer_idx} K deduplicated: {old_k_shape} -> {list(deduped_k.shape)}")
         num_deduped_chunks += 1
+        k_dedup_ratio = len(deduped_ks) / N
     else:
         print(f"Layer {layer_idx} K is different: {old_k_shape}")
+        k_dedup_ratio = 1
 
     calc_and_print_stats(torch.tensor(k_diff_stds), "K diff stds")
     calc_and_print_stats(torch.tensor(k_diff_std_ratios), "K diff std ratios")
 
+    if v_dedup_ratio < 1 and k_dedup_ratio < 1:
+        print(f"Layer {layer_idx} v dedup ratio: {v_dedup_ratio:.2f}, k dedup ratio: {k_dedup_ratio:.2f}")
+        if v_dedup_ratio != k_dedup_ratio:
+            print(f"Warning: deduplication ratios differ")
+        else:
+            orig_layer_multiplier = subj_basis_generator.prompt2token_proj_attention_multipliers[layer_idx]
+            if int(orig_layer_multiplier * v_dedup_ratio) != orig_layer_multiplier * v_dedup_ratio:
+                print(f"Warning: deduplication ratio is not a multiple of original layer multiplier")
+            else:
+                new_layer_multiplier = int(orig_layer_multiplier * v_dedup_ratio)
+                print(f"Layer {layer_idx} multiplier: {orig_layer_multiplier} -> {new_layer_multiplier}")
+                subj_basis_generator.prompt2token_proj_attention_multipliers[layer_idx] = new_layer_multiplier
+                
 if num_deduped_chunks == 0:
     print("No deduplication was performed")
     sys.exit(0)
