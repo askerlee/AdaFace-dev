@@ -47,7 +47,7 @@ model:
     p_gen_id2img_rand_id:             0
     p_perturb_real_id_embs:           0.6
     perturb_real_id_embs_std_range:   [0.03, 0.06]
-    recon_delta_loss_boost:           2
+    recon_delta_loss_boost:           5
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5
