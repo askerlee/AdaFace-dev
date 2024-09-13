@@ -227,6 +227,10 @@ def get_parser(**parser_kwargs):
                         help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")
     parser.add_argument("--unet_teacher_type", type=str, default=argparse.SUPPRESS,
                         choices=["arc2face", "unet_ensemble", "consistentID"], help="Type of the UNet teacher")
+    parser.add_argument("--unet_teacher_uses_cfg", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether the UNet teacher (as well as the student) uses the classifier-free guidance")    
+    parser.add_argument("--unet_teacher_cfg_scale", type=float, default=argparse.SUPPRESS,
+                        help="Scale of the classifier-free guidance")
     # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
                         default=['models/ensemble/sd15-unet', 
@@ -714,8 +718,12 @@ if __name__ == "__main__":
             if hasattr(opt, 'p_unet_distill_iter'):
                 config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
             if hasattr(opt, 'unet_teacher_type'):
-                config.model.params.unet_teacher_type            = opt.unet_teacher_type
-            
+                config.model.params.unet_teacher_type = opt.unet_teacher_type
+
+            config.model.params.unet_teacher_uses_cfg        = opt.unet_teacher_uses_cfg
+            if hasattr(opt, 'unet_teacher_cfg_scale'):
+                config.model.params.unet_teacher_cfg_scale   = opt.unet_teacher_cfg_scale
+
             config.model.params.unet_teacher_base_model_path = opt.actual_resume
             config.model.params.extra_unet_paths             = opt.extra_unet_paths
             # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.

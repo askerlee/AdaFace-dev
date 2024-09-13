@@ -2076,13 +2076,6 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
     return x_start, fg_mask, filtered_fg_mask
 
-def gen_cfg_scales_for_stu_tea(tea_scale, stu_scale, num_teachers, device):
-    cfg_scales_for_teacher   = torch.ones(num_teachers) * tea_scale
-    cfg_scales_for_student   = torch.ones(num_teachers) * stu_scale
-    cfg_scales_for_clip_loss = torch.cat([cfg_scales_for_student, cfg_scales_for_teacher], dim=0)
-    cfg_scales_for_clip_loss = cfg_scales_for_clip_loss.to(device)
-    return cfg_scales_for_clip_loss
-
 # prob_mat: [1, 64, 64].
 def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
     # diagonal_delta: [64, 64].

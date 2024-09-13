@@ -14,11 +14,26 @@ from adaface.arc2face_models import CLIPTextModelWrapper
 class UNetTeacher(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
+        self.name = None
         # self.unet will be initialized in the child class.
         self.unet = None
+        self.uses_cfg  = kwargs.get("uses_cfg", False)
+        self.cfg_scale = kwargs.get("cfg_scale", 1.5)
+        if self.uses_cfg:
+            print(f"Using CFG with scale {self.cfg_scale}.")
+        else:
+            print(f"Not using CFG.")
 
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
         assert num_denoising_steps <= 10
+        if self.uses_cfg:
+            if teacher_context.shape[0] != x_start.shape[0] * 2:
+                breakpoint()
+            pos_context, neg_context = teacher_context.chunk(2, dim=0)
+        else:
+            if teacher_context.shape[0] != x_start.shape[0]:
+                breakpoint()
+            pos_context = teacher_context
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -34,9 +49,14 @@ class UNetTeacher(pl.LightningModule):
                 # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
                 x_noisy = ddpm_model.q_sample(x_start, t, noise)
                                 
-                # If do_arc2face_distill, then teacher_context is [BS=6, 21, 768].
-                noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=teacher_context,
+                # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
+                noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=pos_context,
                                        return_dict=False)[0]
+                if self.uses_cfg:
+                    neg_noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=neg_context,
+                                               return_dict=False)[0]
+                    noise_pred = noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
+
                 noise_preds.append(noise_pred)
                 
                 # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
@@ -95,7 +115,8 @@ def create_arc2face_pipeline(base_model_path, dtype=torch.float16):
 
 class Arc2FaceTeacher(UNetTeacher):
     def __init__(self, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
+        self.name = "arc2face"
         self.unet = UNet2DConditionModel.from_pretrained(
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
@@ -104,9 +125,30 @@ class Arc2FaceTeacher(UNetTeacher):
 class UNetEnsembleTeacher(UNetTeacher):
     # unet_weights are not model weights, but scalar weights for individual unets.
     def __init__(self, unet, extra_unet_paths, unet_weights, device, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
+        self.name = "unet_ensemble"
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
 
+class ConsistentIDTeacher(UNetTeacher):
+    def __init__(self, base_model_path, **kwargs):
+        super().__init__(**kwargs)
+        self.name = "consistentID"
+        ### Load base model
+        # In contrast to Arc2FaceTeacher or UNetEnsembleTeacher, ConsistentIDPipeline is not a torch.nn.Module.
+        # We couldn't initialize the ConsistentIDPipeline to CPU first and wait it to be automatically moved to GPU.
+        # Instead, we have to initialize it to GPU directly.
+        pipe = create_consistentid_pipeline(base_model_path)
+        # Release VAE to save memory. UNet and text_encoder is still needed for denoising 
+        # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
+        pipe.release_components(["vae"])
+        self.pipe = pipe
+        # Compatible with the UNetTeacher interface.
+        self.unet = pipe.unet
+
+    def to(self, device, torch_dtype):
+        self.pipe.to(device, torch_dtype)
+        return self
+    
 def create_consistentid_pipeline(base_model_path, dtype=torch.float16):
     pipe = ConsistentIDPipeline.from_single_file(
         base_model_path, 
@@ -132,30 +174,21 @@ def create_consistentid_pipeline(base_model_path, dtype=torch.float16):
 
     return pipe
 
-class ConsistentIDTeacher(UNetTeacher):
-    def __init__(self, base_model_path, **kwargs):
-        super().__init__()
-        ### Load base model
-        # In contrast to Arc2FaceTeacher or UNetEnsembleTeacher, ConsistentIDPipeline is not a torch.nn.Module.
-        # We couldn't initialize the ConsistentIDPipeline to CPU first and wait it to be automatically moved to GPU.
-        # Instead, we have to initialize it to GPU directly.
-        pipe = create_consistentid_pipeline(base_model_path)
-        # Release VAE to save memory. UNet and text_encoder is still needed for denoising 
-        # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
-        pipe.release_components(["vae"])
-        self.pipe = pipe
-        # Compatible with the UNetTeacher interface.
-        self.unet = pipe.unet
-
-    def to(self, device, torch_dtype):
-        self.pipe.to(device, torch_dtype)
-        return self
-    
-    # Only used for inference/distillation, so no_grad() is used.
-    @torch.no_grad()
-    def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
-        # teacher_context: [BS, 81, 768]
-        # teacher_context = torch.cat([student_prompt_embs, global_id_embeds], dim=1)     
-        results = super().forward(ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps)
-        return results
+def create_unet_teacher(teacher_type, base_model_path, device, **kwargs):
+    if teacher_type == "arc2face":
+        return Arc2FaceTeacher(**kwargs)
+    elif teacher_type == "unet_ensemble":
+        # unet, extra_unet_paths and unet_weights are passed in kwargs.
+        # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
+        # arc2face embeddings.
+        # The first (optional) ctor param of UNetEnsembleTeacher is an instantiated unet, 
+        # in our case, the ddpm unet. Ideally we should reuse it to save GPU RAM.
+        # However, since the __call__ method of the ddpm unet takes different formats of params, 
+        # for simplicity, we still use the diffusers unet.
+        # unet_teacher is put on CPU first, then moved to GPU when DDPM is moved to GPU.
+        return UNetEnsembleTeacher(device=device, **kwargs)
+    elif teacher_type == "consistentID":
+        return ConsistentIDTeacher(base_model_path, **kwargs)
+    else:
+        raise NotImplementedError(f"Teacher type {teacher_type} not implemented.")
     
