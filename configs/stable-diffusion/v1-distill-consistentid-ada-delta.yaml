@@ -67,7 +67,7 @@ model:
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight: 5e-5
 
-    optimizer_type: AdamW8bit           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
+    optimizer_type: Prodigy           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
       betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        
@@ -83,7 +83,7 @@ model:
     prodigy_config:
       betas:    [0.985, 0.993]  # Faster to converge than zs_betas.
       zs_betas: [0.9,  0.999]   # Slower to converge than betas.
-      d_coef:           2
+      d_coef:           5
       warm_up_steps:    500
       # 1 cycle after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
@@ -186,4 +186,4 @@ lightning:
     limit_val_batches: 0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
-    accumulate_grad_batches: 2
+    accumulate_grad_batches: 3

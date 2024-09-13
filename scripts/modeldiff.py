@@ -1,5 +1,5 @@
 import torch
-from diffusers import UNet2DConditionModel
+import argparse
 
 def find_top_k_most_different_parameter(model1, model2, topk=100):
     name2diff = {}
@@ -21,6 +21,10 @@ def find_top_k_most_different_parameter(model1, model2, topk=100):
         name, diff = name2diff[i]
         print(f"{name}: {diff:.3f}")
 
+
+'''
+from diffusers import UNet2DConditionModel
+
 arc2face = UNet2DConditionModel.from_pretrained(
     'models/arc2face', subfolder="arc2face", torch_dtype=torch.float32
 )
@@ -30,3 +34,19 @@ unet = UNet2DConditionModel.from_pretrained(
 )
 
 find_top_k_most_different_parameter(arc2face, unet)
+'''
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--ckpt1", type=str, required=True, help="Path to the first  model checkpoint")
+parser.add_argument("--ckpt2", type=str, required=True, help="Path to the second model checkpoint")
+parser.add_argument("--is_ada", action="store_true", help="Whether the checkpoint is of an AdaFace model")
+args = parser.parse_args()
+
+model1 = torch.load(args.ckpt1)
+model2 = torch.load(args.ckpt2)
+if args.is_ada:
+    model1 = model1['string_to_subj_basis_generator_dict']['z'].prompt2token_proj.text_model
+    model2 = model2['string_to_subj_basis_generator_dict']['z'].prompt2token_proj.text_model
+    
+find_top_k_most_different_parameter(model1, model2)
+

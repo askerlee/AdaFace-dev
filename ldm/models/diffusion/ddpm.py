@@ -459,7 +459,7 @@ class LatentDiffusion(DDPM):
                  num_timesteps_cond=None,
                  cond_stage_key="image",
                  cond_stage_trainable=True,
-                 embedding_manager_trainable=False,
+                 embedding_manager_trainable=True,
                  concat_mode=True,
                  cond_stage_forward=None,
                  conditioning_key='crossattn',
@@ -3757,7 +3757,6 @@ class LatentDiffusion(DDPM):
             # Use Prodigy. Remove 'lr' from the parameter groups, since Prodigy doesn't use it.
             prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
             prodigy_params = sum(prodigy_params, [])
-            prodigy_params = opt_params_with_lrs
 
             if self.do_zero_shot:
                 # [0.9, 0.999]. Converge more slowly.
@@ -3771,7 +3770,7 @@ class LatentDiffusion(DDPM):
             opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
                                  betas=betas,   # default: [0.985, 0.993]
                                  d_coef=self.prodigy_config.d_coef, # default: 5
-                                 safeguard_warmup= self.prodigy_config.scheduler_cycles > 1, 
+                                 safeguard_warmup = self.prodigy_config.scheduler_cycles > 1, 
                                  use_bias_correction=True)
 
             total_cycle_steps  = self.trainer.max_steps - self.prodigy_config.warm_up_steps
