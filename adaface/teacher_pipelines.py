@@ -34,7 +34,7 @@ class UNetTeacher(pl.LightningModule):
             pos_context, neg_context = teacher_context.chunk(2, dim=0)
             # Randomly sample a cfg_scale from cfg_scale_range.
             self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
-            print(f"Teacher uses CFG scale {self.cfg_scale:.1f}.")
+            print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
         else:
             if teacher_context.shape[0] != x_start.shape[0]:
                 breakpoint()
