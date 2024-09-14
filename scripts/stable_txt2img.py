@@ -222,7 +222,7 @@ def parse_args():
     parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use zero-shot learning")                    
     parser.add_argument("--return_prompt_embs_type", type=str, choices=["text", "id", "text_id"],
-                        default="text", help="The type of the returned prompt embeddings from get_learned_conditioning()")
+                        default="text", help="The type of the returned prompt embeddings from get_text_conditioning()")
     parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")       
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
@@ -575,12 +575,12 @@ def main(opt):
             opt.return_prompt_embs_type = "text"
         if opt.scale != 1.0:
             try:
-                uc = model.get_learned_conditioning(batch_size * [opt.neg_prompt], 
-                                                    subj_id2img_prompt_embs = None,
-                                                    zs_clip_bg_features=None,
-                                                    return_prompt_embs_type = opt.return_prompt_embs_type,
-                                                    num_id_vecs = opt.num_vectors_per_subj_token,
-                                                    embman_iter_type = 'empty')
+                uc = model.get_text_conditioning(batch_size * [opt.neg_prompt], 
+                                                 subj_id2img_prompt_embs = None,
+                                                 zs_clip_bg_features=None,
+                                                 return_prompt_embs_type = opt.return_prompt_embs_type,
+                                                 num_id_vecs = opt.num_vectors_per_subj_token,
+                                                 text_conditioning_iter_type = 'negative')
             except:
                 breakpoint()
         else:
@@ -620,10 +620,10 @@ def main(opt):
                         prompts = prompts2
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
-                        c = model.get_learned_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
-                                                           zs_clip_bg_features = None,
-                                                           return_prompt_embs_type = opt.return_prompt_embs_type,
-                                                           num_id_vecs = opt.num_vectors_per_subj_token)
+                        c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
+                                                        zs_clip_bg_features = None,
+                                                        return_prompt_embs_type = opt.return_prompt_embs_type,
+                                                        num_id_vecs = opt.num_vectors_per_subj_token)
                         if opt.debug:
                             c[2]['debug_attn'] = True
 

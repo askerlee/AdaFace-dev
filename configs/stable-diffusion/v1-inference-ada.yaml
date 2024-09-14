@@ -4,7 +4,6 @@ model:
   params:
     linear_start: 0.00085
     linear_end: 0.0120
-    num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
     # first_stage_key: used as batch[key] in DDPM.get_input()
@@ -12,8 +11,6 @@ model:
     cond_stage_key: "txt"
     image_size: 64
     channels: 4
-    # cond_stage_trainable = False disables the training data loading in LatentDiffusion.forward().
-    cond_stage_trainable: false   
     embedding_manager_trainable: false
     conditioning_key: crossattn
     monitor: train/loss
@@ -26,10 +23,6 @@ model:
       params:
         subject_strings:     ["z"]
         background_strings:  ["y"]
-        # The number of initializer words is probably different from that used in fine-tuning.
-        # But it doesn't matter, as EmbeddingManager.load() will completely replace self.string_to_static_embedder_dict,
-        # including the wrongly initialized LoraEmbedding object(s).
-        initializer_strings: [ "person", "unknown" ]
         token2num_vectors:   {'z': 16, 'y': 4}
         use_layerwise_embedding: True
 

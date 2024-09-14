@@ -96,6 +96,7 @@ class DDPM(pl.LightningModule):
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
                  do_zero_shot=True,
+                 num_id_vecs=16,
                  p_unet_distill_iter=0,
                  unet_teacher_type=None,
                  unet_teacher_uses_cfg=False,
@@ -107,7 +108,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_base_model_path=None,
                  p_gen_id2img_rand_id=0.4,
                  p_perturb_real_id_embs=0.6,
-                 perturb_real_id_embs_std_range=[0.03, 0.06],
+                 perturb_real_id_embs_std_range=[0.5, 1.5],
                  max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=1,
                  ):
@@ -126,7 +127,10 @@ class DDPM(pl.LightningModule):
         self.use_layerwise_embedding = use_layerwise_embedding
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
         self.do_zero_shot                = do_zero_shot
-
+        # num_id_vecs is first set to the default value of 16, 
+        # and will be updated later after the embedding manager is instantiated.
+        self.num_id_vecs                 = num_id_vecs
+        
         self.static_embedding_reg_weight = static_embedding_reg_weight
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
@@ -165,10 +169,8 @@ class DDPM(pl.LightningModule):
         self.cached_inits = {}
 
         # No matter wheter the scheme is layerwise or not,
-        # as long as prompt_emb_delta_reg_weight >= 0, do static comp delta reg.
-        # If self.prompt_emb_delta_reg_weight == 0, we still do_static_prompt_delta_reg to monitor this loss, 
-        # but this loss won't be involved in the optimization.
-        self.do_static_prompt_delta_reg = (self.prompt_emb_delta_reg_weight >= 0)
+        # as long as prompt_emb_delta_reg_weight > 0, do static comp delta reg.
+        self.do_static_prompt_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
         
         self.init_iteration_flags()
 
@@ -461,9 +463,7 @@ class LatentDiffusion(DDPM):
                  first_stage_config,
                  cond_stage_config,
                  personalization_config,
-                 num_timesteps_cond=None,
                  cond_stage_key="image",
-                 cond_stage_trainable=True,
                  embedding_manager_trainable=True,
                  concat_mode=True,
                  cond_stage_forward=None,
@@ -472,9 +472,7 @@ class LatentDiffusion(DDPM):
                  scale_by_std=False,
                  *args, **kwargs):
 
-        self.num_timesteps_cond = default(num_timesteps_cond, 1)
         self.scale_by_std = scale_by_std
-        assert self.num_timesteps_cond <= kwargs['timesteps']
         # for backwards compatibility after implementation of DiffusionWrapper
 
         # cond_stage_config is a dict:
@@ -487,7 +485,6 @@ class LatentDiffusion(DDPM):
         # conditioning_key: crossattn
         super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
         self.concat_mode = concat_mode
-        self.cond_stage_trainable = cond_stage_trainable
         self.cond_stage_key = cond_stage_key
         self.embedding_manager_trainable = embedding_manager_trainable
 
@@ -556,16 +553,12 @@ class LatentDiffusion(DDPM):
 
         personalization_config.params.id2img_prompt_encoder_trainable = self.id2img_prompt_encoder_trainable
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        self.num_id_vecs = self.embedding_manager.id2ada_prompt_encoder.num_id_vecs
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
         self.cache_start_iter = 0
         self.num_cached_generations = 0
-
-    def make_cond_schedule(self, ):
-        self.cond_ids = torch.full(size=(self.num_timesteps,), fill_value=self.num_timesteps - 1, dtype=torch.long)
-        ids = torch.round(torch.linspace(0, self.num_timesteps - 1, self.num_timesteps_cond)).long()
-        self.cond_ids[:self.num_timesteps_cond] = ids
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
@@ -577,7 +570,7 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(device)
             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
             # uncond_context[0]: [16, 77, 768], as there are 16 cross-attn layers.
-            self.uncond_context = self.get_learned_conditioning([""], embman_iter_type='empty')
+            self.uncond_context = self.get_text_conditioning([""], text_conditioning_iter_type='negative')
 
         # only for very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
@@ -599,11 +592,6 @@ class LatentDiffusion(DDPM):
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
         super().register_schedule(given_betas, beta_schedule, timesteps, linear_start, linear_end, cosine_s)
 
-        # num_timesteps_cond: 1
-        self.shorten_cond_schedule = self.num_timesteps_cond > 1
-        if self.shorten_cond_schedule:
-            self.make_cond_schedule()
-
     # We never train the VAE. So disable the training of the VAE.
     def instantiate_first_stage(self, config):
         model = instantiate_from_config(config)
@@ -613,29 +601,11 @@ class LatentDiffusion(DDPM):
             param.requires_grad = False
 
     def instantiate_cond_stage(self, config):
-        # cond_stage_trainable = True
-        if not self.cond_stage_trainable:
-            if config == "__is_first_stage__":
-                print("Using first stage also as cond stage.")
-                self.cond_stage_model = self.first_stage_model
-            elif config == "__is_unconditional__":
-                print(f"Training {self.__class__.__name__} as an unconditional model.")
-                self.cond_stage_model = None
-                # self.be_unconditional = True
-            else:
-                model = instantiate_from_config(config)
-                self.cond_stage_model = model.eval()
-                # We never train the CLIP text encoder. So disable the training of the CLIP text encoder.
-                self.cond_stage_model.train = disabled_train
-                for param in self.cond_stage_model.parameters():
-                    param.requires_grad = False
-        else:
-            assert config != '__is_first_stage__'
-            assert config != '__is_unconditional__'
-            model = instantiate_from_config(config)
-            # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-            self.cond_stage_model = model
-            
+        assert config != '__is_first_stage__'
+        assert config != '__is_unconditional__'
+        # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
+        self.cond_stage_model = instantiate_from_config(config)
+        
     def instantiate_embedding_manager(self, config, text_embedder):
         model = instantiate_from_config(config, text_embedder=text_embedder)
         return model
@@ -649,7 +619,7 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError(f"encoder_posterior of type '{type(encoder_posterior)}' not yet implemented")
         return self.scale_factor * z
 
-    # Number of calls to get_learned_conditioning() during training:
+    # Number of calls to get_text_conditioning() during training:
     # If do_mix_prompt_distillation, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
     # If do_normal_recon with delta loss, then 2 calls (one on delta prompts, one on subject single prompts). 
     # NOTE: the delta prompts consumes extram RAM.
@@ -660,10 +630,10 @@ class LatentDiffusion(DDPM):
     # 'id': the input subj_id2img_prompt_embs, generated by an ID2ImgPrompt module.
     # 'text_id': concatenate the text embeddings with the ID2ImgPrompt embeddings.
     # 'id' or 'text_id' are used when we want to evaluate the original ID2ImgPrompt module.
-    def get_learned_conditioning(self, cond_in, subj_id2img_prompt_embs=None, zs_clip_bg_features=None, 
-                                 randomize_clip_weights=False, 
-                                 return_prompt_embs_type='text', 
-                                 num_id_vecs=16, embman_iter_type=None):
+    def get_text_conditioning(self, cond_in, subj_id2img_prompt_embs=None, zs_clip_bg_features=None, 
+                              randomize_clip_weights=False, 
+                              return_prompt_embs_type='text', 
+                              text_conditioning_iter_type=None):
         # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
         # each prompt in c is encoded as [1, 77, 768].
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -671,42 +641,45 @@ class LatentDiffusion(DDPM):
         if randomize_clip_weights:
             self.cond_stage_model.sample_last_layers_skip_weights()
 
-        # If do_zero_shot, but the prompt is empty (uncond prompt), then zs_clip_bg_features is None.
+        # If do_zero_shot, but the prompt is "" (negative prompt), then zs_clip_bg_features is None.
         # We don't update subj_id2img_prompt_embs / zs_clip_bg_features in this case.
         if subj_id2img_prompt_embs is not None or zs_clip_bg_features is not None:
             self.embedding_manager.set_zs_image_prompts_and_features(subj_id2img_prompt_embs, zs_clip_bg_features)
             
-        if embman_iter_type is None:
+        if text_conditioning_iter_type is None:
             if self.iter_flags['is_compos_iter']:
-                embman_iter_type = 'compos_distill_iter'
+                text_conditioning_iter_type = 'compos_distill_iter'
             else:
                 # Even if return_prompt_embs_type == 'id' or 'text_id', we still
                 # generate the conventional text embeddings.
-                # Therefore, embman_iter_type is set to 'recon_iter'.
-                embman_iter_type = 'recon_iter'
+                # Therefore, text_conditioning_iter_type is set to 'recon_iter'.
+                text_conditioning_iter_type = 'recon_iter'
         # Update the iteration type of the embedding manager, according to the arguments passed in.
-        self.embedding_manager.set_curr_iter_type(embman_iter_type)
+        self.embedding_manager.set_curr_iter_type(text_conditioning_iter_type)
 
         # static_prompt_embedding: [128, 77, 768]
         static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+        # return_prompt_embs_type: ['text', 'id', 'text_id']. Default: 'text', i.e., 
+        # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         if return_prompt_embs_type in ['id', 'text_id']:
-            # if embman_iter_type == 'empty', the current prompt is negative prompt.
-            # So subj_id2img_prompt_embs is actually the negative ID prompt embeddings
-            # (only applicable to ConsistentID).
-            if embman_iter_type == 'empty' and subj_id2img_prompt_embs is None:
+            # if text_conditioning_iter_type == 'negative', the current prompt is negative prompt.
+            # So subj_id2img_prompt_embs serves as the negative ID prompt embeddings (only applicable to ConsistentID).
+            # NOTE: These are not really negative ID embeddings, and is just to make the prompt to have the correct length.
+            if text_conditioning_iter_type == 'negative' and subj_id2img_prompt_embs is None:
                 if return_prompt_embs_type == 'id':
                     # If subj_id2img_prompt_embs is used as standalone negative embeddings,
                     # then we take the beginning N embeddings of static_prompt_embedding.
-                    subj_id2img_prompt_embs = static_prompt_embedding[:, :num_id_vecs, :]
+                    subj_id2img_prompt_embs = static_prompt_embedding[:, :self.num_id_vecs, :]
                 else:
                     # If subj_id2img_prompt_embs is to be postpended to the negative embeddings,
                     # then we take the ending N embeddings of static_prompt_embedding,
                     # to avoid two BOS tokens appearing in the same prompt.
-                    subj_id2img_prompt_embs = static_prompt_embedding[:, -num_id_vecs:, :]
-                # Since subj_id2img_prompt_embs is taken as part of static_prompt_embedding,
+                    subj_id2img_prompt_embs = static_prompt_embedding[:, -self.num_id_vecs:, :]
+                # Since subj_id2img_prompt_embs is taken from a part of static_prompt_embedding,
                 # we don't need to repeat it.
+
             elif subj_id2img_prompt_embs is not None:
-                assert subj_id2img_prompt_embs.shape[1] == num_id_vecs
+                assert subj_id2img_prompt_embs.shape[1] == self.num_id_vecs
                 # subj_id2img_prompt_embs is the embedding generated by the ID2ImgPrompt module. 
                 # NOTE: It's not the inverse embeddings. return_prompt_embs_type is enabled only 
                 # when we wish to evaluate the original ID2ImgPrompt module.
@@ -908,7 +881,7 @@ class LatentDiffusion(DDPM):
         # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
         # or traditional TI.        
         # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
-        if self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
+        if self.do_zero_shot or self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
             # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
             # when doing compositional mix regularization on humans/animals.
             # For objects (broad_class != 1), even if use_fp_trick = True, 
@@ -1334,18 +1307,18 @@ class LatentDiffusion(DDPM):
             self.iter_flags['id2img_prompt_embs']       = cached_inits['id2img_prompt_embs']
             self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
 
-        # In get_learned_conditioning(), embman_iter_type will be set again.
+        # In get_text_conditioning(), text_conditioning_iter_type will be set again.
         # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
-        # whose behavior depends on the correct embman_iter_type.
+        # whose behavior depends on the correct text_conditioning_iter_type.
         if self.iter_flags['is_compos_iter']:
-            embman_iter_type = 'compos_distill_iter'
+            text_conditioning_iter_type = 'compos_distill_iter'
         elif self.iter_flags['use_unet_teacher_as_target']:
-            embman_iter_type = 'unet_distill_iter'
+            text_conditioning_iter_type = 'unet_distill_iter'
         else:
-            embman_iter_type = 'recon_iter'
-        # As a special case, 'id2img_only_iter' is only set in get_learned_conditioning(), instead of here.
+            text_conditioning_iter_type = 'recon_iter'
+        # As a special case, 'id2img_only_iter' is only set in get_text_conditioning(), instead of here.
 
-        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, embman_iter_type)
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, text_conditioning_iter_type)
 
         loss = self(x_start, captions, noise)
 
@@ -1361,213 +1334,204 @@ class LatentDiffusion(DDPM):
         # This is in case there are skips of iterations of global_step 
         # (shouldn't happen but just in case).
 
-        if self.model.conditioning_key is not None:
-            assert captions is not None
-            # get_learned_conditioning(): convert captions to a [16*B, 77, 768] tensor.
-            if self.cond_stage_trainable:
-                # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
-                # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
-                # When use_unet_teacher_as_target and distilling on ConsistentID, we still
-                # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
-                if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation'] \
-                  or self.iter_flags['use_unet_teacher_as_target']:
-                    # reuse_init_conds, discard the prompts offered in shared_step().
-                    if self.iter_flags['reuse_init_conds']:
-                        # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                        delta_prompts = self.cached_inits[self.batch_1st_subject_name]['delta_prompts']
-                        # cached_inits will be used in p_losses(), 
-                        # so don't delete cached_init[self.batch_1st_subject_name] to False yet.
-                    else:
-                        # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                        delta_prompts = self.iter_flags['delta_prompts']
+        assert captions is not None
+        # get_text_conditioning(): convert captions to a [16*B, 77, 768] tensor.
+        # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
+        # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
+        # When use_unet_teacher_as_target and distilling on ConsistentID, we still
+        # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
+        if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation'] \
+            or self.iter_flags['use_unet_teacher_as_target']:
+            # reuse_init_conds, discard the prompts offered in shared_step().
+            if self.iter_flags['reuse_init_conds']:
+                # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
+                delta_prompts = self.cached_inits[self.batch_1st_subject_name]['delta_prompts']
+                # cached_inits will be used in p_losses(), 
+                # so don't delete cached_init[self.batch_1st_subject_name] to False yet.
+            else:
+                # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
+                delta_prompts = self.iter_flags['delta_prompts']
 
-                    subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
-                    #if self.iter_flags['use_background_token']:
-                    #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-                    
-                    # Recon iters don't do_ada_prompt_delta_reg.
-                    if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:                        
-                        # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
-                        BLOCK_SIZE  = 1
-                        # Only keep the first half of batched prompts to save RAM.
-                        subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                            subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
-                            cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
-                    else:
-                        # Otherwise, do_static_prompt_delta_reg but not do_ada_prompt_delta_reg.
-                        # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
-                        # 12 prompts will be fed into get_learned_conditioning().
-                        BLOCK_SIZE = ORIG_BS
-                                                
-                    # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
-                    # of the 4 types of prompts, to compute static delta loss. 
-                    # But now there are 12 prompts (4 * ORIG_BS = 12), as the batch is not halved.
-                    delta_prompts = subj_single_prompts + subj_comp_prompts \
-                                    + cls_single_prompts + cls_comp_prompts
-                    #print(delta_prompts)
-                    # breakpoint()
-                    # c_static_emb: the static embeddings for static delta loss.
-                    # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_CA_LAYERS,
-                    # whose layer dimension (N_CA_LAYERS) is tucked into the batch dimension. 
-                    # delta_prompts: the concatenation of
-                    # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
-                    # extra_info: a dict that contains extra info.
-                    c_static_emb, _, extra_info = \
-                        self.get_learned_conditioning(delta_prompts, 
-                                                      self.iter_flags['id2img_prompt_embs'],
-                                                      self.iter_flags['zs_clip_bg_features'],
-                                                      randomize_clip_weights=True)
-
-                    subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
-                        c_static_emb.chunk(4)
-
-                    # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
-                    # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
-                    # Only keep the first half (for single prompts), as the second half is the same 
-                    # (for comp prompts, differs at the batch index, but the token index is identical).
-                    # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
-                    # the placeholder token doesn't appear in the class prompts. 
-                    # Now we take the first half of placeholder_indices_fg, so that 
-                    # they only account for the subject single prompt, but they are also 
-                    # applicable to the other 3 types of prompts as they are all aligned 
-                    # at the beginning part of the prompts.
-                    # halve_token_indices() can take either a tuple or a dict of tuples.
-
-                    placeholder2indices_2b = extra_info['placeholder2indices']
-                    placeholder2indices_1b = {}
-                    for k in placeholder2indices_2b:
-                        placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
-                        if placeholder2indices_1b[k] is None:
-                            continue
-
-                    # The subject is represented with a multi-embedding token. The corresponding tokens
-                    # in the class prompts are "class , , ,", 
-                    # therefore the embeddings of "," need to be patched.
-                    # BUG: if the batch size of a mix batch > 4, then the ph_indices_1b_N
-                    # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
-                    # treat the indices as if they are always in the same instance.
-                    # len(ph_indices_1b_N): embedding number of the subject token.
-                    cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb,
-                                                                              placeholder2indices_1b)
-                    cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,
-                                                                              placeholder2indices_1b)
-                    
-                    extra_info['placeholder2indices_1b'] = placeholder2indices_1b
-                    extra_info['placeholder2indices_2b'] = placeholder2indices_2b
-
-                    # These embeddings are patched. So combine them back into c_static_emb.
-                    c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
-                                              cls_single_emb, cls_comp_emb], dim=0)
-                    
-                    # [64, 77, 768] => [16, 4, 77, 768].
-                    extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_CA_LAYERS, 
-                                                                         *c_static_emb.shape[1:])
-                    # if do_ada_prompt_delta_reg, then do_mix_prompt_distillation 
-                    # may be True or False, depending whether mix reg is enabled.
-                    if self.iter_flags['do_mix_prompt_distillation']:
-                        # c_in2 = delta_prompts is used to generate ada embeddings.
-                        # c_in2: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
-                        # The cls_single_prompts/cls_comp_prompts within c_in2 will only be used to 
-                        # generate ordinary prompt embeddings, i.e., 
-                        # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
-                        # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
-                        # are manually mixed into their embeddings.
-                        c_in2 = delta_prompts
-                        extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
-                        # The prompts are either (subj single, subj comp, cls single, cls comp) or
-                        # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
-                        # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
-                        extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b'] 
-
-                    # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
-                    # This branch is reached only if prompt mixing is not enabled.
-                    # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
-                    # Kept for clarity. 
-                    elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
-                        # Do ada prompt delta loss in this iteration. 
-                        extra_info['iter_type'] = 'do_ada_prompt_delta_reg'
-                        # c_in2 consists of four types of prompts: 
-                        # subj_single, subj_comp, cls_single, cls_comp.
-                        c_in2                   = delta_prompts
-                        # The prompts are either (subj single, subj comp, cls single, cls comp) or
-                        # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
-                        # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
-                        extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
-                    else:
-                        # do_normal_recon. The original scheme. 
-                        extra_info['iter_type'] = 'normal_recon'
-                        c_in2                   = captions
-                        # Use the original "captions" prompts and embeddings.
-                        # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
-                        # it holds in all other cases.
-                        if not self.iter_flags['unet_distill_uses_comp_prompt']:
-                            assert captions == subj_single_prompts
-                        else:
-                            assert captions == subj_comp_prompts
-                        # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
-                        # So in this case, subj_single_emb == subj_comp_emb.
-                        c_static_emb = subj_single_emb
-                        # The blocks as input to get_learned_conditioning() are not halved. 
-                        # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                        extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
-                        extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                             *c_static_emb.shape[1:])
-                                                
-                        # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
-                        # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
-                        # to do the replacement.
-                        # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
-                                            
-                        ##### End of normal_recon with static delta loss iters. #####
-
-                    extra_info['cls_single_prompts'] = cls_single_prompts
-                    extra_info['cls_single_emb']     = cls_single_emb
-                    extra_info['cls_comp_prompts']   = cls_comp_prompts
-                    extra_info['cls_comp_emb']       = cls_comp_emb
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
+            #if self.iter_flags['use_background_token']:
+            #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+            
+            # Recon iters don't do_ada_prompt_delta_reg.
+            if self.iter_flags['do_mix_prompt_distillation'] or self.iter_flags['do_ada_prompt_delta_reg']:                        
+                # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
+                BLOCK_SIZE  = 1
+                # Only keep the first half of batched prompts to save RAM.
+                subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
+                    subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
+                    cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
+            else:
+                # Otherwise, do_static_prompt_delta_reg but not do_ada_prompt_delta_reg.
+                # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
+                # 12 prompts will be fed into get_text_conditioning().
+                BLOCK_SIZE = ORIG_BS
                                         
-                    # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
-                    # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
-                    # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
-                    # than those actually used in this iter.)
-                    # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
-                    extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
-                                                        cls_single_prompts,  cls_comp_prompts)
+            # If not do_ada_prompt_delta_reg, we still compute the static embeddings 
+            # of the 4 types of prompts, to compute static delta loss. 
+            # But now there are 12 prompts (4 * ORIG_BS = 12), as the batch is not halved.
+            delta_prompts = subj_single_prompts + subj_comp_prompts \
+                            + cls_single_prompts + cls_comp_prompts
+            #print(delta_prompts)
+            # breakpoint()
+            # c_static_emb: the static embeddings for static delta loss.
+            # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_CA_LAYERS,
+            # whose layer dimension (N_CA_LAYERS) is tucked into the batch dimension. 
+            # delta_prompts: the concatenation of
+            # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
+            # extra_info: a dict that contains extra info.
+            c_static_emb, _, extra_info = \
+                self.get_text_conditioning(delta_prompts, 
+                                           self.iter_flags['id2img_prompt_embs'],
+                                           self.iter_flags['zs_clip_bg_features'],
+                                           randomize_clip_weights=True)
 
-                    # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
-                    # cls_single_prompts, cls_comp_prompts. 
-                    # c_static_emb: [64, 77, 768]                    
-                    cond = (c_static_emb, c_in2, extra_info)
+            subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
+                c_static_emb.chunk(4)
+
+            # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
+            # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
+            # Only keep the first half (for single prompts), as the second half is the same 
+            # (for comp prompts, differs at the batch index, but the token index is identical).
+            # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
+            # the placeholder token doesn't appear in the class prompts. 
+            # Now we take the first half of placeholder_indices_fg, so that 
+            # they only account for the subject single prompt, but they are also 
+            # applicable to the other 3 types of prompts as they are all aligned 
+            # at the beginning part of the prompts.
+            # halve_token_indices() can take either a tuple or a dict of tuples.
+
+            placeholder2indices_2b = extra_info['placeholder2indices']
+            placeholder2indices_1b = {}
+            for k in placeholder2indices_2b:
+                placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
+                if placeholder2indices_1b[k] is None:
+                    continue
+
+            # The subject is represented with a multi-embedding token. The corresponding tokens
+            # in the class prompts are "class , , ,", 
+            # therefore the embeddings of "," need to be patched.
+            # BUG: if the batch size of a mix batch > 4, then the ph_indices_1b_N
+            # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
+            # treat the indices as if they are always in the same instance.
+            # len(ph_indices_1b_N): embedding number of the subject token.
+            cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb,
+                                                                        placeholder2indices_1b)
+            cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,
+                                                                        placeholder2indices_1b)
+            
+            extra_info['placeholder2indices_1b'] = placeholder2indices_1b
+            extra_info['placeholder2indices_2b'] = placeholder2indices_2b
+
+            # These embeddings are patched. So combine them back into c_static_emb.
+            c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
+                                        cls_single_emb, cls_comp_emb], dim=0)
+            
+            # [64, 77, 768] => [16, 4, 77, 768].
+            extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_CA_LAYERS, 
+                                                                    *c_static_emb.shape[1:])
+            # if do_ada_prompt_delta_reg, then do_mix_prompt_distillation 
+            # may be True or False, depending whether mix reg is enabled.
+            if self.iter_flags['do_mix_prompt_distillation']:
+                # c_in2 = delta_prompts is used to generate ada embeddings.
+                # c_in2: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
+                # The cls_single_prompts/cls_comp_prompts within c_in2 will only be used to 
+                # generate ordinary prompt embeddings, i.e., 
+                # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
+                # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
+                # are manually mixed into their embeddings.
+                c_in2 = delta_prompts
+                extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
+                # The prompts are either (subj single, subj comp, cls single, cls comp) or
+                # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
+                # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
+                extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b'] 
+
+            # This iter is a simple ada prompt delta loss iter, without prompt mixing loss. 
+            # This branch is reached only if prompt mixing is not enabled.
+            # "and not self.iter_flags['do_mix_prompt_distillation']" is redundant, because it's at an "elif" branch.
+            # Kept for clarity. 
+            elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
+                # Do ada prompt delta loss in this iteration. 
+                extra_info['iter_type'] = 'do_ada_prompt_delta_reg'
+                # c_in2 consists of four types of prompts: 
+                # subj_single, subj_comp, cls_single, cls_comp.
+                c_in2                   = delta_prompts
+                # The prompts are either (subj single, subj comp, cls single, cls comp) or
+                # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
+                # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
+                extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
+            else:
+                # do_normal_recon. The original scheme. 
+                extra_info['iter_type'] = 'normal_recon'
+                c_in2                   = captions
+                # Use the original "captions" prompts and embeddings.
+                # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
+                # it holds in all other cases.
+                if not self.iter_flags['unet_distill_uses_comp_prompt']:
+                    assert captions == subj_single_prompts
                 else:
-                    # Not (self.iter_flags['do_static_prompt_delta_reg'] or 'do_mix_prompt_distillation').
-                    # That is, non-compositional iter, or recon iter without static delta loss. 
-                    # Keep the tuple cond unchanged. prompts: subject single.
-                    # This branch is only reached when do_static_prompt_delta_reg = False.
-                    # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
-                    # it's called by self.validation_step().
-                    assert self.iter_flags['do_normal_recon']
-
-                    c_static_emb, c_in, extra_info0 = \
-                        self.get_learned_conditioning(captions, 
-                                                      self.iter_flags['id2img_prompt_embs'],
-                                                      self.iter_flags['zs_clip_bg_features'],                                                      
-                                                      randomize_clip_weights=True)
-                    
-                    extra_info = extra_info0
-                    extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
-                    extra_info['c_static_emb_1b']        = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                                *c_static_emb.shape[1:])
+                    assert captions == subj_comp_prompts
+                # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
+                # So in this case, subj_single_emb == subj_comp_emb.
+                c_static_emb = subj_single_emb
+                # The blocks as input to get_text_conditioning() are not halved. 
+                # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
+                extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
+                extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
+                                                                        *c_static_emb.shape[1:])
                                         
-                    extra_info['iter_type'] = 'normal_recon'
+                # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
+                # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
+                # to do the replacement.
+                # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
+                                    
+                ##### End of normal_recon with static delta loss iters. #####
 
-                    cond = (c_static_emb, c_in, extra_info)
-                    ##### End of normal_recon without static delta loss iters. #####
+            extra_info['cls_single_prompts'] = cls_single_prompts
+            extra_info['cls_single_emb']     = cls_single_emb
+            extra_info['cls_comp_prompts']   = cls_comp_prompts
+            extra_info['cls_comp_emb']       = cls_comp_emb
+                                
+            # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
+            # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
+            # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
+            # than those actually used in this iter.)
+            # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
+            extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
+                                                cls_single_prompts,  cls_comp_prompts)
 
-            # shorten_cond_schedule: False. Skipped.
-            if self.shorten_cond_schedule:  # TODO: drop this option
-                tc = self.cond_ids[t].to(self.device)
-                # q_sample() is only called during training. 
-                # q_sample() calls apply_model(), which estimates the latent code of the image.
-                cond = self.q_sample(x_start=captions, t=tc, noise=torch.randn_like(captions.float()))
+            # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
+            # cls_single_prompts, cls_comp_prompts. 
+            # c_static_emb: [64, 77, 768]                    
+            cond = (c_static_emb, c_in2, extra_info)
+        else:
+            # Not (self.iter_flags['do_static_prompt_delta_reg'] or 'do_mix_prompt_distillation').
+            # That is, non-compositional iter, or recon iter without static delta loss. 
+            # Keep the tuple cond unchanged. prompts: subject single.
+            # This branch is only reached when do_static_prompt_delta_reg = False.
+            # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
+            # it's called by self.validation_step().
+            assert self.iter_flags['do_normal_recon']
+
+            c_static_emb, c_in, extra_info0 = \
+                self.get_text_conditioning(captions, 
+                                           self.iter_flags['id2img_prompt_embs'],
+                                           self.iter_flags['zs_clip_bg_features'],                                                      
+                                           randomize_clip_weights=True)
+            
+            extra_info = extra_info0
+            extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
+            extra_info['c_static_emb_1b']        = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
+                                                                        *c_static_emb.shape[1:])
+                                
+            extra_info['iter_type'] = 'normal_recon'
+
+            cond = (c_static_emb, c_in, extra_info)
+            ##### End of normal_recon without static delta loss iters. #####
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
@@ -1594,7 +1558,7 @@ class LatentDiffusion(DDPM):
         else:
             return x_recon
 
-    # emb_man_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
+    # text_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
     # Sometimes the prompts changed after generating the static embeddings, 
     # so in such cases we need to manually specify these data structures. 
     # If they are not provided (None),
@@ -1604,12 +1568,10 @@ class LatentDiffusion(DDPM):
     # This is not used for the iter_type 'do_normal_recon'.
     # unet_has_grad: when returning do_pixel_recon (e.g. to select the better instance by smaller clip loss), 
     # to speed up, no BP is done on these instances, so unet_has_grad=False.
-    def guided_denoise(self, x_start, noise, t, cond, 
-                       emb_man_prompt_adhoc_info,
-                       unet_has_grad=True, do_pixel_recon=False, 
-                       cfg_scale=-1):
+    def guided_denoise(self, x_start, noise, t, cond, text_prompt_adhoc_info, 
+                       unet_has_grad=True, do_pixel_recon=False, cfg_scale=-1):
         
-        self.embedding_manager.set_prompt_adhoc_info(emb_man_prompt_adhoc_info)
+        self.embedding_manager.set_prompt_adhoc_info(text_prompt_adhoc_info)
 
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
 
@@ -1622,7 +1584,7 @@ class LatentDiffusion(DDPM):
 
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
-        if cfg_scale > 0:
+        if cfg_scale > 1:
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
                 x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
@@ -1638,12 +1600,12 @@ class LatentDiffusion(DDPM):
                 model_output_uncond = self.apply_model(x_noisy, t, uncond_context)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
-            pred_noise = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
+            noise_pred = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
         else:
-            pred_noise = model_output
+            noise_pred = model_output
 
         if do_pixel_recon:
-            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=pred_noise)
+            x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=noise_pred)
         else:
             x_recon = None
         
@@ -1840,7 +1802,7 @@ class LatentDiffusion(DDPM):
                         chunk_list(c_in, 4)
                     # We change the prompts to be twin structure: (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
                     # Since subj comp and subj single have the same placeholder_indices,
-                    # We don't need to update placeholder2indices of emb_man_prompt_adhoc_info.
+                    # We don't need to update placeholder2indices of text_prompt_adhoc_info.
                     c_in2 = subj_comp_prompts * self.num_candidate_teachers + cls_comp_prompts * self.num_candidate_teachers
                     # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
@@ -1954,8 +1916,7 @@ class LatentDiffusion(DDPM):
                 # This branch includes non-zero-shot training iterations.
                 t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
                                       keep_prob_range=(0.4, 0.2))
-
-            # No need to update masks.
+            # No need to update masks in recon iters.
 
         extra_info['capture_distill_attn'] = not self.iter_flags['do_comp_teacher_filter']
 
@@ -1972,26 +1933,26 @@ class LatentDiffusion(DDPM):
         # Do not consider mask on compositional distillation iterations, 
         # as in such iters, the original pixels (out of the fg_mask) do not matter and 
         # can freely compose any contents.
-        emb_man_prompt_adhoc_info = { 'placeholder2indices':    placeholder2indices2,
-                                      # In compositional iterations, img_mask is always None.
-                                      # No need to consider whether do_comp_teacher_filter or not.
-                                      'img_mask':         extra_info['img_mask'],
-                                      'prompt_emb_mask':  prompt_emb_mask2 }
+        text_prompt_adhoc_info = { 'placeholder2indices':    placeholder2indices2,
+                                   # In compositional iterations, img_mask is always None.
+                                   # No need to consider whether do_comp_teacher_filter or not.
+                                   'img_mask':         extra_info['img_mask'],
+                                   'prompt_emb_mask':  prompt_emb_mask2 }
         
         # cfg_scale: classifier-free guidance scale.
-        # By default, 'capture_distill_attn' = False in a generated context, 
-        # including uncond_context generation. So we don't need to set it explicitly.
+        # By default, 'capture_distill_attn' = False in a generated text context, 
+        # including uncond_context generation. So we don't need to set it in self.uncond_context explicitly.
         if not self.iter_flags['use_unet_teacher_as_target']:
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
-                                    emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
+                                    text_prompt_adhoc_info=text_prompt_adhoc_info,
                                     unet_has_grad=not self.iter_flags['do_comp_teacher_filter'], 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
                                     do_pixel_recon=self.iter_flags['calc_clip_loss'],
                                     cfg_scale=cfg_scale)
-        # If use_unet_teacher_as_target, later we will call guided_denoise() multiple times
-        # to get the multi-step denoising results.
+        # Otherwise, use_unet_teacher_as_target == True, 
+        # later we will call guided_denoise() multiple times to get the multi-step denoising results.
 
         extra_info['capture_distill_attn'] = False
 
@@ -2090,13 +2051,13 @@ class LatentDiffusion(DDPM):
                         t2      = ts[s]
 
                         # Here pred_x0 is used as x_start.
-                        # emb_man_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
+                        # text_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
                         # and the 'image_mask' is also for a half-batch.
                         # NOTE: unet_teacher_cfg_scale is used for the CFG scale, to keep consistent
                         # with the teacher UNet's unet_teacher_cfg_scale.
                         model_output2, x_recon2 = \
                             self.guided_denoise(pred_x0, noise2, t2, cond, 
-                                                emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
+                                                text_prompt_adhoc_info=text_prompt_adhoc_info,
                                                 unet_has_grad=True, do_pixel_recon=False, 
                                                 cfg_scale=self.unet_teacher_cfg_scale)
                         model_outputs.append(model_output2)
@@ -2283,9 +2244,9 @@ class LatentDiffusion(DDPM):
                     # so we can still use the old placeholder2indices_2b.
                     # Otherwise, we need to update placeholder2indices_2b to correspond to the selected
                     # best candidate block.
-                    emb_man_prompt_adhoc_info = { 'placeholder2indices':  extra_info['placeholder2indices_2b'],
-                                                  'img_mask':             None,
-                                                  'prompt_emb_mask':      extra_info['prompt_emb_mask'] }
+                    text_prompt_adhoc_info = { 'placeholder2indices':  extra_info['placeholder2indices_2b'],
+                                               'img_mask':             None,
+                                               'prompt_emb_mask':      extra_info['prompt_emb_mask'] }
 
                     # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
                     # on mix reg and ada embeddings is generated for the delta loss. 
@@ -2299,7 +2260,7 @@ class LatentDiffusion(DDPM):
                     # student prompts are subject prompts.  
                     model_output, x_recon = \
                         self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
-                                            emb_man_prompt_adhoc_info=emb_man_prompt_adhoc_info,
+                                            text_prompt_adhoc_info=text_prompt_adhoc_info,
                                             unet_has_grad=True, 
                                             do_pixel_recon=True, cfg_scale=cfg_scale)
 

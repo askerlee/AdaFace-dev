@@ -300,7 +300,6 @@ def nondefault_trainer_args(opt):
 def set_placeholders_info(personalization_config_params, opt, dataset):
     if not opt.zeroshot:
         personalization_config_params.subject_strings                    = dataset.subject_strings
-        personalization_config_params.initializer_strings                = dataset.cls_delta_strings
         personalization_config_params.subj_name_to_cls_delta_string      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.token2num_vectors                  = dict()
         if hasattr(opt, 'num_vectors_per_subj_token'):
@@ -310,7 +309,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         if opt.background_string is not None:
             config.model.params.use_background_token = True
             personalization_config_params.background_strings             = dataset.background_strings
-            personalization_config_params.initializer_strings           += dataset.bg_initializer_strings
 
             if hasattr(opt, 'num_vectors_per_bg_token'):
                 for background_string in dataset.background_strings:
@@ -318,7 +316,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
     else:
         # Only keep the first subject and background placeholder.
         personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
-        personalization_config_params.initializer_strings                   = ["person"]
         personalization_config_params.subj_name_to_cls_delta_string         = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.token2num_vectors         = dict()
         for subject_string in dataset.subject_strings[:1]:
@@ -327,7 +324,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         if opt.background_string is not None:
             config.model.params.use_background_token = True
             personalization_config_params.background_strings              = dataset.background_strings[:1]
-            personalization_config_params.initializer_strings            += dataset.bg_initializer_strings[:1]
 
             for background_string in dataset.background_strings[:1]:
                 personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
