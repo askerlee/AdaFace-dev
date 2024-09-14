@@ -53,8 +53,10 @@ class UNetTeacher(pl.LightningModule):
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=pos_context,
                                        return_dict=False)[0]
                 if self.uses_cfg:
-                    neg_noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=neg_context,
-                                               return_dict=False)[0]
+                    # Usually we don't need to compute gradients w.r.t. the negative context.
+                    with torch.no_grad():
+                        neg_noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=neg_context,
+                                                return_dict=False)[0]
                     noise_pred = noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
 
                 noise_preds.append(noise_pred)
