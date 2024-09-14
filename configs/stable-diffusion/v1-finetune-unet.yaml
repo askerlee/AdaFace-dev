@@ -8,17 +8,12 @@ model:
     beta_schedule: linear
     linear_start: 0.00085
     linear_end: 0.0120
-    num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
     first_stage_key: image
     cond_stage_key: caption
     image_size: 64
     channels: 4
-    # If we want to enable the embedding manager during training, then we set cond_stage_trainable = True.
-    # It's checked within ddpm.instantiate_cond_stage(). The model sets requires_grad=False 
-    # for all params of cond_stage (CLIP encoder) after seeing unfreeze_unet = False.
-    cond_stage_trainable: true
     # Since we don't want to train the embedding manager, we set embedding_manager_trainable = False.
     embedding_manager_trainable: false
     conditioning_key: crossattn
@@ -91,7 +86,6 @@ model:
       params:
         subject_strings:          ['z']
         background_strings:       ['y']
-        initializer_strings:      ["person", "unknown"]
         subj_name_to_cls_delta_string: { 'z': "person", 'rand_id_to_img_prompt': 'person' }
         token2num_vectors:         {'z': 16, 'y': 4}
         use_layerwise_embedding: True

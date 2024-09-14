@@ -8,17 +8,12 @@ model:
     beta_schedule: linear
     linear_start: 0.00085
     linear_end: 0.0120
-    num_timesteps_cond: 1
     log_every_t: 200
     timesteps: 1000
     first_stage_key: image
     cond_stage_key: caption
     image_size: 64
     channels: 4
-    # If we want to enable the embedding manager during training, then we set cond_stage_trainable = True.
-    # It's checked within ddpm.instantiate_cond_stage(). The model sets requires_grad=False 
-    # for all params of cond_stage (CLIP encoder) after seeing unfreeze_unet = False.
-    cond_stage_trainable: true
     # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
     embedding_manager_trainable: True
     conditioning_key: crossattn
@@ -33,8 +28,8 @@ model:
     composition_regs_iter_gap:        -1
     do_zero_shot:                     True
     unet_teacher_type:                'consistentID'
-    unet_teacher_uses_cfg:            False
-    unet_teacher_cfg_scale:           1.5
+    unet_teacher_uses_cfg:            True
+    unet_teacher_cfg_scale:           3
     # The percentage of unet_distill_iter among do_normal_recon iters.
     # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
     # at the other 50%, we use the original image as the target.
@@ -48,16 +43,15 @@ model:
     # which are not available when the IDs are random and there are no actual input images.
     p_gen_id2img_rand_id:             0
     p_perturb_real_id_embs:           0.6
-    # The default perturb_real_id_embs_std_range of [0.03, 0.06] is for arc2face.
-    # ConsistentID image embeddings are very robust to perturbations, so we set
-    # a huge std range of [1, 2].
-    perturb_real_id_embs_std_range:   [1, 2]
+    # ConsistentID image embeddings are quite robust to perturbations, so we set
+    # a large std range of [0.5, 1.5].
+    perturb_real_id_embs_std_range:   [0.5, 1.5]
     recon_delta_loss_boost:           1
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
     # Disabled under zero-shot setting.
     static_embedding_reg_weight:      0 #2e-5
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
-    prompt_emb_delta_reg_weight:      2e-4
+    prompt_emb_delta_reg_weight:      1e-4
     # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
     mix_prompt_distill_weight:        1e-4
     # Apply BN/LN on cross-attn Q and out features for loss computation.
@@ -69,7 +63,7 @@ model:
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight: 5e-5
 
-    optimizer_type: Prodigy           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
+    optimizer_type: AdamW           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
       betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        
@@ -84,7 +78,7 @@ model:
 
     prodigy_config:
       betas:    [0.985, 0.993]  # Faster to converge than zs_betas.
-      zs_betas: [0.9,  0.999]   # Slower to converge than betas.
+      zs_betas: [0.9,   0.999]   # Slower to converge than betas.
       d_coef:           5
       warm_up_steps:    500
       # 1 cycle after the warm_up_steps.
@@ -99,7 +93,6 @@ model:
       params:
         subject_strings:          ['z']
         background_strings:       ['y']
-        initializer_strings:      ["person", "unknown"]
         subj_name_to_cls_delta_string: { 'z': "person", 'rand_id_to_img_prompt': 'person' }
         token2num_vectors:         {'z': 4, 'y': 4}
         use_layerwise_embedding: True

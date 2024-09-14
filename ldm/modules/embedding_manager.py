@@ -45,7 +45,6 @@ class EmbeddingManager(nn.Module):
             subject_strings,
             # If background_strings are specified, they are part of the list placeholder_strings.
             background_strings=None,
-            initializer_strings=None,
             subj_name_to_cls_delta_string=None,
             # token2num_vectors: how many vectors in each layer are allocated to model 
             # the subject (represented as the subject token) and the background. 
@@ -138,9 +137,6 @@ class EmbeddingManager(nn.Module):
         self.subj_idx_to_cls_delta_token_weights  = {}
         self.placeholder_token_to_idx       = {}
 
-        assert initializer_strings is not None, "initializer_strings must be specified"
-        list_initializer_word_weights  = [ None ] * len(self.placeholder_strings)
-
         if self.do_zero_shot:
             # No matter whether using layerwise embeddings, the basis vecs of either static or ada embedders are always layerwise_lora_rank,
             # as the basis vecs are shared across all CA layers.
@@ -224,7 +220,6 @@ class EmbeddingManager(nn.Module):
             self.current_subj_name_to_cls_delta_tokens = {}
             self.cls_delta_strings = None
 
-        self.img_mask = None
         self.loss_call_count = 0
         self.training_percent = 0
         self.emb_global_scales_dict = None
@@ -598,11 +593,11 @@ class EmbeddingManager(nn.Module):
     # tokenized_text: [B, N] = [2/4, 77].
     # If 'validation' is present in the config file,
     # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
-    # -> .get_learned_conditioning() -> .cond_stage_model.encode()
+    # -> .get_text_conditioning() -> .cond_stage_model.encode()
     # -> EmbeddingManager.forward() -> here.
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
-    # .get_learned_conditioning() -> ... -> here.
+    # .get_text_conditioning() -> ... -> here.
     # Such prompt_emb_mask won't be used in calc_prompt_emb_delta_loss() and won't be cleared.
     # prompt_emb_mask: [B, N, 1], where N=77 is the prompt length after padding.
     def update_prompt_masks(self, tokenized_text, tokenized_text_repeated=False):
@@ -613,22 +608,16 @@ class EmbeddingManager(nn.Module):
 
     def clear_prompt_adhoc_info(self):
         self.placeholder2indices    = {}
-        self.img_mask               = None
         self.prompt_emb_mask        = None
 
     # Set ad-hoc data structures for computing placeholder embeddings and various losses.
     def set_prompt_adhoc_info(self, prompt_adhoc_info):
         self.placeholder2indices    = prompt_adhoc_info['placeholder2indices']
-        # There are image margins after the original image is scaled down.
-        # When doing attentional pooling / average pooling of image features, 
-        # the margin area contains no signal, so we use img_mask to mask it out. 
-        # Each image has its own img_mask, so img_mask has a shape of [B, 1, H, W].
-        self.img_mask               = prompt_adhoc_info['img_mask']
         self.prompt_emb_mask        = prompt_adhoc_info['prompt_emb_mask']
     
     # During training, set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.
-    def set_curr_batch_subject_names(self, subj_names, embman_iter_type):
+    def set_curr_batch_subject_names(self, subj_names, text_conditioning_iter_type):
         self.curr_batch_subj_names = subj_names
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         self.current_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
@@ -649,12 +638,12 @@ class EmbeddingManager(nn.Module):
         else:
             self.cls_delta_strings = None
 
-        self.set_curr_iter_type(embman_iter_type)
+        self.set_curr_iter_type(text_conditioning_iter_type)
         if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
             print(f"{self.rank} subjects: {self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
 
-    def set_curr_iter_type(self, embman_iter_type):
-        self.iter_type = embman_iter_type
+    def set_curr_iter_type(self, text_conditioning_iter_type):
+        self.iter_type = text_conditioning_iter_type
         # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
         if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
             self.cls_delta_strings = self.cls_delta_strings[:1]
