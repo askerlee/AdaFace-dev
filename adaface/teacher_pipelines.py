@@ -17,24 +17,29 @@ class UNetTeacher(pl.LightningModule):
         self.name = None
         # self.unet will be initialized in the child class.
         self.unet = None
-        self.uses_cfg        = kwargs.get("uses_cfg", False)
+        self.p_uses_cfg        = kwargs.get("p_uses_cfg", 0)
         # self.cfg_scale will be randomly sampled from cfg_scale_range.
         self.cfg_scale_range = kwargs.get("cfg_scale_range", [2, 4])
         self.cfg_scale       = 1
-        if self.uses_cfg:
-            print(f"Using CFG with scale range {self.cfg_scale_range}.")
+        if self.p_uses_cfg > 0:
+            print(f"Using CFG with probability {self.p_uses_cfg} and scale range {self.cfg_scale_range}.")
         else:
-            print(f"Not using CFG.")
+            print(f"Never using CFG.")
 
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
         assert num_denoising_steps <= 10
-        if self.uses_cfg:
+        if self.p_uses_cfg > 0:
             if teacher_context.shape[0] != x_start.shape[0] * 2:
                 breakpoint()
             pos_context, neg_context = teacher_context.chunk(2, dim=0)
-            # Randomly sample a cfg_scale from cfg_scale_range.
-            self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
-            print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
+            self.uses_cfg = np.random.rand() < self.p_uses_cfg
+            if self.uses_cfg:
+                # Randomly sample a cfg_scale from cfg_scale_range.
+                self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
+                print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
+            else:
+                self.cfg_scale = 1
+                print("Teacher does not use CFG.")
         else:
             if teacher_context.shape[0] != x_start.shape[0]:
                 breakpoint()
@@ -61,7 +66,7 @@ class UNetTeacher(pl.LightningModule):
                 # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=pos_context,
                                        return_dict=False)[0]
-                if self.uses_cfg and self.cfg_scale > 1:
+                if self.uses_cfg:
                     # Usually we don't need to compute gradients w.r.t. the negative context.
                     with torch.no_grad():
                         neg_noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=neg_context,

@@ -145,7 +145,7 @@ class EmbeddingManager(nn.Module):
             # num_vectors_each_subj_bg_pair: the number of vectors per (subj, bg) placeholder pair.
             # It's implied that all subj placeholders have the same number of vectors,
             # and all bg placeholders have the same number of vectors.
-            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0], 16)
+            self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0])
             if len(self.background_strings) > 0:
                 self.num_vectors_each_bg = self.token2num_vectors.get(self.background_strings[0], 4)
             else:
@@ -322,7 +322,6 @@ class EmbeddingManager(nn.Module):
         # The keys of static_subj_embs_dict are the placeholder strings.
         static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
                         self.get_static_embedding(tokenized_text, embedded_text.clone(), 
-                                                  self.zs_image_prompt_dict,
                                                   B, N, self.num_unet_ca_layers)
         # Cache the static embeddings to be used in ada embedding computation and
         # embedding orthogonal loss later.
@@ -338,8 +337,7 @@ class EmbeddingManager(nn.Module):
         return static_embeded_text
     
     # N: length of sequence (including padding).
-    def get_static_embedding(self, tokenized_text, embedded_text, zs_image_prompt_dict, 
-                             BS, N, num_unet_ca_layers):
+    def get_static_embedding(self, tokenized_text, embedded_text, BS, N, num_unet_ca_layers):
         
         # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
         # at that time.
@@ -420,12 +418,12 @@ class EmbeddingManager(nn.Module):
             # subj_static_embedding: [16, K, 768].
             if self.do_zero_shot:
                 if placeholder_is_bg:
-                    zs_clip_features = zs_image_prompt_dict['bg']
-                    id2img_prompt_embs = None
+                    id2img_prompt_embs  = None
+                    zs_clip_features    = self.zs_image_prompt_dict['bg']
                 else:
                     # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
-                    id2img_prompt_embs = zs_image_prompt_dict['subj'] if self.curr_subj_is_face else None
-                    zs_clip_features = None
+                    id2img_prompt_embs  = self.zs_image_prompt_dict['subj'] if self.curr_subj_is_face else None
+                    zs_clip_features    = None
 
                 subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
                     

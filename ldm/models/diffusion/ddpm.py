@@ -98,8 +98,8 @@ class DDPM(pl.LightningModule):
                  num_id_vecs=16,
                  p_unet_distill_iter=0,
                  unet_teacher_type=None,
-                 unet_teacher_uses_cfg=False,
-                 unet_teacher_cfg_scale_range=[2, 4],
+                 p_unet_teacher_uses_cfg=0,
+                 unet_teacher_cfg_scale_range=[1.5, 3],
                  id2img_prompt_encoder_trainable=False,
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_paths=None,
@@ -149,7 +149,7 @@ class DDPM(pl.LightningModule):
         self.p_unet_distill_iter                    = p_unet_distill_iter if (do_zero_shot and self.training) \
                                                         else 0
         self.unet_teacher_type                      = unet_teacher_type
-        self.unet_teacher_uses_cfg                  = unet_teacher_uses_cfg
+        self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
@@ -514,7 +514,7 @@ class LatentDiffusion(DDPM):
                                                     device='cpu',
                                                     extra_unet_paths=self.extra_unet_paths,
                                                     unet_weights=self.unet_weights,
-                                                    uses_cfg=self.unet_teacher_uses_cfg,
+                                                    p_uses_cfg=self.p_unet_teacher_uses_cfg,
                                                     cfg_scale_range=self.unet_teacher_cfg_scale_range)
         else:
             self.unet_teacher = None
@@ -1281,8 +1281,14 @@ class LatentDiffusion(DDPM):
         self.iter_flags['delta_prompts']            = delta_prompts
         self.iter_flags['zs_clip_neg_features']     = zs_clip_neg_features
         self.iter_flags['zs_id_embs']               = zs_id_embs
-        self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
+
+        self.iter_flags['id2img_pos_prompt_embs']   = id2img_prompt_embs
         self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
+        if self.unet_teacher_type == 'consistentID':
+            # [BS, 4, 512] * 2 => [BS, 8, 512]
+            id2img_prompt_embs = torch.cat([id2img_prompt_embs, id2img_neg_prompt_embs], dim=1)
+        self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
+
         self.iter_flags['image_unnorm']             = batch_images_unnorm
         if zs_clip_fgbg_features is not None:
             self.iter_flags['zs_clip_bg_features']  = zs_clip_fgbg_features.chunk(2, dim=1)[1]
@@ -2004,18 +2010,18 @@ class LatentDiffusion(DDPM):
                     # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
                     student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
                     if self.unet_teacher_type == 'arc2face':
-                        teacher_context = self.iter_flags['id2img_prompt_embs']
+                        teacher_context = self.iter_flags['id2img_pos_prompt_embs']
                     elif self.unet_teacher_type == 'unet_ensemble':
                         teacher_context = student_prompt_embs
                     elif self.unet_teacher_type == 'consistentID':
-                        global_id_embeds = self.iter_flags['id2img_prompt_embs']
+                        global_id_embeds = self.iter_flags['id2img_pos_prompt_embs']
                         # global_id_embeds: [BS, 4, 768]
                         # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
                         cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
                         cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
                         # teacher_context: [BS, 81, 768]
                         teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
-                        if self.unet_teacher_uses_cfg:
+                        if self.p_unet_teacher_uses_cfg:
                             global_neg_id_embs = self.iter_flags['id2img_neg_prompt_embs']
                             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
                             # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
@@ -2056,7 +2062,7 @@ class LatentDiffusion(DDPM):
                         # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
                         # ** DO make sure unet_teacher() was called before guided_denoise() below. **
                         # We need to make the student's CFG scale consistent with the teacher UNet's.
-                        # If not self.unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
+                        # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
                         # and the cfg_scale is not used in guided_denoise().
                         model_output2, x_recon2 = \
                             self.guided_denoise(pred_x0, noise2, t2, cond, 

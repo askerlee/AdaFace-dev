@@ -158,7 +158,7 @@ class FaceID2AdaPrompt(nn.Module):
                 fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=device, dtype=torch.float16)
 
             with torch.no_grad():
-                # neg_pixel_values: [1, 3, 224, 224]
+                # neg_pixel_values: [1, 3, 224, 224]. clip_neg_features is invariant to the actual image.
                 neg_pixel_values = torch.zeros_like(image_pixel_values[:1])
                 clip_neg_features = self.clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
                 clip_neg_features = clip_neg_features.repeat(image_pixel_values.shape[0], 1, 1)
@@ -290,7 +290,8 @@ class FaceID2AdaPrompt(nn.Module):
             faceid_embeds = perturb_tensor(faceid_embeds, perturb_std, perturb_std_is_relative=True, keep_norm=True)
             if self.name == 'consistentID':
                 clip_fgbg_features = perturb_tensor(clip_fgbg_features, perturb_std, perturb_std_is_relative=True, keep_norm=True)
-                clip_neg_features  = perturb_tensor(clip_neg_features,  perturb_std, perturb_std_is_relative=True, keep_norm=True)
+                # Don't perturb clip_neg_features, as it's a constant tensor.
+                # clip_neg_features  = perturb_tensor(clip_neg_features,  perturb_std, perturb_std_is_relative=True, keep_norm=True)
                 #faceid_embeds.normal_()
 
         faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
@@ -465,7 +466,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
 
         if self.out_id_embs_cfg_scale == -1:
-            self.out_id_embs_cfg_scale      = 1
+            self.out_id_embs_cfg_scale = 1
         # Arc2Face pipeline specific behaviors.
         self.gen_neg_img_prompt             = False
         self.use_clip_embs                  = False
@@ -575,7 +576,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         if self.out_id_embs_cfg_scale == -1:
             self.out_id_embs_cfg_scale      = 6
         # ConsistentIDPipeline specific behaviors.
-        self.num_id_vecs                    = 4
+        self.num_id_vecs                    = 8
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
         self.do_contrast_clip_embs          = False
