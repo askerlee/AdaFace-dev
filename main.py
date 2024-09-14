@@ -229,8 +229,8 @@ def get_parser(**parser_kwargs):
                         choices=["arc2face", "unet_ensemble", "consistentID"], help="Type of the UNet teacher")
     parser.add_argument("--unet_teacher_uses_cfg", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether the UNet teacher (as well as the student) uses the classifier-free guidance")    
-    parser.add_argument("--unet_teacher_cfg_scale", type=float, default=argparse.SUPPRESS,
-                        help="Scale of the classifier-free guidance")
+    parser.add_argument("--unet_teacher_cfg_scale_range", type=float, nargs=2, default=argparse.SUPPRESS,
+                        help="Range of the scale of the classifier-free guidance")
     # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
                         default=['models/ensemble/sd15-unet', 
@@ -717,8 +717,8 @@ if __name__ == "__main__":
                 config.model.params.unet_teacher_type = opt.unet_teacher_type
 
             config.model.params.unet_teacher_uses_cfg        = opt.unet_teacher_uses_cfg
-            if hasattr(opt, 'unet_teacher_cfg_scale'):
-                config.model.params.unet_teacher_cfg_scale   = opt.unet_teacher_cfg_scale
+            if hasattr(opt, 'unet_teacher_cfg_scale_range'):
+                config.model.params.unet_teacher_cfg_scale_range   = opt.unet_teacher_cfg_scale_range
 
             config.model.params.unet_teacher_base_model_path = opt.actual_resume
             config.model.params.extra_unet_paths             = opt.extra_unet_paths

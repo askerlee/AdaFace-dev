@@ -17,10 +17,12 @@ class UNetTeacher(pl.LightningModule):
         self.name = None
         # self.unet will be initialized in the child class.
         self.unet = None
-        self.uses_cfg  = kwargs.get("uses_cfg", False)
-        self.cfg_scale = kwargs.get("cfg_scale", 1.5)
+        self.uses_cfg        = kwargs.get("uses_cfg", False)
+        # self.cfg_scale will be randomly sampled from cfg_scale_range.
+        self.cfg_scale_range = kwargs.get("cfg_scale_range", [2, 4])
+        self.cfg_scale       = 1
         if self.uses_cfg:
-            print(f"Using CFG with scale {self.cfg_scale}.")
+            print(f"Using CFG with scale range {self.cfg_scale_range}.")
         else:
             print(f"Not using CFG.")
 
@@ -30,10 +32,17 @@ class UNetTeacher(pl.LightningModule):
             if teacher_context.shape[0] != x_start.shape[0] * 2:
                 breakpoint()
             pos_context, neg_context = teacher_context.chunk(2, dim=0)
+            # Randomly sample a cfg_scale from cfg_scale_range.
+            self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
+            print(f"Teacher uses CFG scale {self.cfg_scale:.1f}.")
         else:
             if teacher_context.shape[0] != x_start.shape[0]:
                 breakpoint()
             pos_context = teacher_context
+            # Disable CFG. self.cfg_scale will be accessed by the student. 
+            # So we need to make sure it is always set correctly, 
+            # in case someday we want to switch from CFG to non-CFG during runtime.
+            self.cfg_scale = 1
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -52,7 +61,7 @@ class UNetTeacher(pl.LightningModule):
                 # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
                 noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=pos_context,
                                        return_dict=False)[0]
-                if self.uses_cfg:
+                if self.uses_cfg and self.cfg_scale > 1:
                     # Usually we don't need to compute gradients w.r.t. the negative context.
                     with torch.no_grad():
                         neg_noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=neg_context,

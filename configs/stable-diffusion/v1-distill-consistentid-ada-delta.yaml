@@ -29,7 +29,7 @@ model:
     do_zero_shot:                     True
     unet_teacher_type:                'consistentID'
     unet_teacher_uses_cfg:            True
-    unet_teacher_cfg_scale_range:           [2, 4]
+    unet_teacher_cfg_scale_range:     [2, 4]
     # The percentage of unet_distill_iter among do_normal_recon iters.
     # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
     # at the other 50%, we use the original image as the target.

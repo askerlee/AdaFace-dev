@@ -100,7 +100,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_iter=0,
                  unet_teacher_type=None,
                  unet_teacher_uses_cfg=False,
-                 unet_teacher_cfg_scale=1.5,
+                 unet_teacher_cfg_scale_range=[2, 4],
                  id2img_prompt_encoder_trainable=False,
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_paths=None,
@@ -151,7 +151,7 @@ class DDPM(pl.LightningModule):
                                                         else 0
         self.unet_teacher_type                      = unet_teacher_type
         self.unet_teacher_uses_cfg                  = unet_teacher_uses_cfg
-        self.unet_teacher_cfg_scale                 = unet_teacher_cfg_scale
+        self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
         self.extra_unet_paths                       = extra_unet_paths
@@ -516,7 +516,7 @@ class LatentDiffusion(DDPM):
                                                     extra_unet_paths=self.extra_unet_paths,
                                                     unet_weights=self.unet_weights,
                                                     uses_cfg=self.unet_teacher_uses_cfg,
-                                                    cfg_scale=self.unet_teacher_cfg_scale)
+                                                    cfg_scale_range=self.unet_teacher_cfg_scale_range)
         else:
             self.unet_teacher = None
 
@@ -1899,6 +1899,7 @@ class LatentDiffusion(DDPM):
         else:
             assert self.iter_flags['do_normal_recon']
             BLOCK_SIZE = x_start.shape[0]
+            # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
             cfg_scale = -1
 
             if self.do_zero_shot:
@@ -2053,13 +2054,16 @@ class LatentDiffusion(DDPM):
                         # Here pred_x0 is used as x_start.
                         # text_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
                         # and the 'image_mask' is also for a half-batch.
-                        # NOTE: unet_teacher_cfg_scale is used for the CFG scale, to keep consistent
-                        # with the teacher UNet's unet_teacher_cfg_scale.
+                        # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
+                        # ** DO make sure unet_teacher() was called before guided_denoise() below. **
+                        # We need to make the student's CFG scale consistent with the teacher UNet's.
+                        # If not self.unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
+                        # and the cfg_scale is not used in guided_denoise().
                         model_output2, x_recon2 = \
                             self.guided_denoise(pred_x0, noise2, t2, cond, 
                                                 text_prompt_adhoc_info=text_prompt_adhoc_info,
                                                 unet_has_grad=True, do_pixel_recon=False, 
-                                                cfg_scale=self.unet_teacher_cfg_scale)
+                                                cfg_scale=self.unet_teacher.cfg_scale)
                         model_outputs.append(model_output2)
 
                     # If id2img_prompt_encoder_trainable, then we also have
