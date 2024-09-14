@@ -62,7 +62,7 @@ class EmbeddingManager(nn.Module):
             do_zero_shot=True,
             id2ada_prompt_encoder_type='arc2face',
             id2img_prompt_encoder_trainable=False,
-            to_load_id2img_learnable_modules=True,
+            to_load_id2img_learnable_modules=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             zs_cls_delta_string='person',
             zs_cls_delta_token_weights=None,

@@ -241,7 +241,7 @@ def get_parser(**parser_kwargs):
                         help="Weights for the teacher UNet models")
     parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
-    parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
 
     parser.add_argument("--static_embedding_reg_weight",
