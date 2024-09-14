@@ -16,7 +16,6 @@ model:
     channels: 4
     # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
     embedding_manager_trainable: True
-    conditioning_key: crossattn
     monitor: train/loss
     scale_factor: 0.18215
     unfreeze_unet: False

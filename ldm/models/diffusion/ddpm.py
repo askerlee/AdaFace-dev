@@ -72,7 +72,6 @@ class DDPM(pl.LightningModule):
                  unfreeze_unet=False,
                  unet_lr=0.,
                  v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
-                 conditioning_key=None,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='Prodigy',
                  grad_clip=0.5,
@@ -173,7 +172,7 @@ class DDPM(pl.LightningModule):
         
         self.init_iteration_flags()
 
-        self.model = DiffusionWrapper(unet_config, conditioning_key)
+        self.model = DiffusionWrapper(unet_config)
 
         count_params(self.model, verbose=True)
 
@@ -455,7 +454,7 @@ class DDPM(pl.LightningModule):
         return loss
 
 # LatentDiffusion inherits from DDPM. So:
-# LatentDiffusion.model = DiffusionWrapper(unet_config, conditioning_key, use_layerwise_embedding)
+# LatentDiffusion.model = DiffusionWrapper(unet_config)
 class LatentDiffusion(DDPM):
     """main class"""
     def __init__(self,
@@ -466,7 +465,6 @@ class LatentDiffusion(DDPM):
                  embedding_manager_trainable=True,
                  concat_mode=True,
                  cond_stage_forward=None,
-                 conditioning_key='crossattn',
                  scale_factor=1.0,
                  scale_by_std=False,
                  *args, **kwargs):
@@ -481,8 +479,7 @@ class LatentDiffusion(DDPM):
         # ckpt_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
         ckpt_path = kwargs.pop("ckpt_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
-        # conditioning_key: crossattn
-        super().__init__(conditioning_key=conditioning_key, *args, **kwargs)
+        super().__init__(*args, **kwargs)
         self.concat_mode = concat_mode
         self.cond_stage_key = cond_stage_key
         self.embedding_manager_trainable = embedding_manager_trainable
@@ -756,34 +753,28 @@ class LatentDiffusion(DDPM):
         encoder_posterior = self.encode_first_stage(x, mask_dict)
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
-        # conditioning_key: 'crossattn'.
-        if self.model.conditioning_key is not None:
-            if cond_key is None:
-                # cond_stage_key: 'caption'.
-                cond_key = self.cond_stage_key
-            # first_stage_key: 'image'.
-            if cond_key != self.first_stage_key:
-                if cond_key in ['caption', 'coordinates_bbox']:
-                    # batch.keys(): 'image', 'caption'.
-                    # batch['caption']: 
-                    # ['an illustration of a dirty z', 'an illustration of the cool z']
-                    xc = batch[cond_key]
-                elif cond_key == 'class_label':
-                    xc = batch
-                else:
-                    xc = super().get_input(batch, cond_key).to(self.device)
+        if cond_key is None:
+            # cond_stage_key: 'caption'.
+            cond_key = self.cond_stage_key
+        # first_stage_key: 'image'.
+        if cond_key != self.first_stage_key:
+            if cond_key in ['caption', 'coordinates_bbox']:
+                # batch.keys(): 'image', 'caption'.
+                # batch['caption']: 
+                # ['an illustration of a dirty z', 'an illustration of the cool z']
+                xc = batch[cond_key]
+            elif cond_key == 'class_label':
+                xc = batch
             else:
-                xc = x
-
-            c = xc
-            #if bs is not None:
-            #    c = c[:bs]
-            #if bs is not None and c.shape[0] != bs:
-            #    breakpoint()
-
+                xc = super().get_input(batch, cond_key).to(self.device)
         else:
-            c = None
-            xc = None
+            xc = x
+
+        c = xc
+        #if bs is not None:
+        #    c = c[:bs]
+        #if bs is not None and c.shape[0] != bs:
+        #    breakpoint()
 
         out = [z, c]
         if return_first_stage_outputs:
@@ -1545,18 +1536,9 @@ class LatentDiffusion(DDPM):
 
     # apply_model() is called both during training and inference.
     def apply_model(self, x_noisy, t, cond, return_ids=False):
-        if isinstance(cond, dict):
-            # hybrid case, cond is exptected to be a dict
-            pass
-        else:
-            if not isinstance(cond, list):
-                cond = [cond]
-            key = 'c_concat' if self.model.conditioning_key == 'concat' else 'c_crossattn'
-            cond = {key: cond}
-
         # self.model: DiffusionWrapper -> 
         # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
-        x_recon = self.model(x_noisy, t, **cond)
+        x_recon = self.model(x_noisy, t, cond)
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
@@ -3838,24 +3820,14 @@ class LatentDiffusion(DDPM):
                 print(f"Saved {unet_save_path}")
 
 class DiffusionWrapper(pl.LightningModule): 
-    def __init__(self, diff_model_config, conditioning_key):
+    def __init__(self, diff_model_config):
         super().__init__()
         # diffusion_model: UNetModel
         self.diffusion_model = instantiate_from_config(diff_model_config)
-        self.conditioning_key = conditioning_key
-        assert self.conditioning_key in ['crossattn']
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
-    def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
-        if self.conditioning_key == 'crossattn':
-            if isinstance(c_crossattn[0], tuple):
-                c_static_emb, c_in, extra_info = c_crossattn[0]
-            else:
-                c_static_emb    = c_crossattn[0]
-                c_in            = None
-                extra_info      = None
-            out = self.diffusion_model(x, t, context=c_static_emb, context_in=c_in, extra_info=extra_info)
-        else:
-            raise NotImplementedError()
+    def forward(self, x, t, cond):
+        c_static_emb, c_in, extra_info = cond
+        out = self.diffusion_model(x, t, context=c_static_emb, context_in=c_in, extra_info=extra_info)
 
         return out
