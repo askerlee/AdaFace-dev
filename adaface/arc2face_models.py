@@ -9,7 +9,7 @@ from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 _make_causal_mask = AttentionMaskConverter._make_causal_mask
 _expand_mask = AttentionMaskConverter._expand_mask
 
-from .util import add_noise_to_tensor
+from .util import perturb_tensor
 
 # Extend CLIPAttention by using multiple k_proj and v_proj in each head.
 # To avoid too much increase of computation, we don't extend q_proj.
@@ -44,8 +44,8 @@ class CLIPAttentionMKV(nn.Module):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
     # clip_attn_layer is usually self.
-    def extend_weights(self, clip_attn_layer, layer_idx, multiplier, noise_std=0.2, 
-                       noise_std_is_relative=True, keep_norm=False, verbose=False):
+    def extend_weights(self, clip_attn_layer, layer_idx, multiplier, perturb_std=0.2, 
+                       perturb_std_is_relative=True, keep_norm=False, verbose=False):
         ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
         ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
         ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
@@ -72,24 +72,24 @@ class CLIPAttentionMKV(nn.Module):
         self.k_proj.out_features = self.k_proj.weight.shape[0]
         self.v_proj.out_features = self.v_proj.weight.shape[0]
 
-        if noise_std > 0:
+        if perturb_std > 0:
             # Adding noise to the extra copies of the weights (keep the first copy unchanged).
             self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
-                add_noise_to_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
-                                    noise_std, noise_std_is_relative, keep_norm, verbose=verbose)
+                perturb_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
+                                    perturb_std, perturb_std_is_relative, keep_norm, verbose=verbose)
             if verbose:
                 NEW_V_SHAPE     = list(self.v_proj.weight.shape)
                 NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
-                print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with {noise_std} noise")
+                print(f"Layer {layer_idx}: {NOISED_V_SHAPE} in {NEW_V_SHAPE} of v_proj is added with {perturb_std} noise")
 
             # Adding noise to the extra copies of the weights.
             self.k_proj.weight.data[ORIG_K_SHAPE_D0:] = \
-                add_noise_to_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
-                                    noise_std, noise_std_is_relative, keep_norm, verbose=verbose)
+                perturb_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
+                                    perturb_std, perturb_std_is_relative, keep_norm, verbose=verbose)
             if verbose:
                 NEW_K_SHAPE     = list(self.k_proj.weight.shape)
                 NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
-                print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with {noise_std} noise")
+                print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with {perturb_std} noise")
 
     def forward(
         self,
@@ -289,7 +289,7 @@ class CLIPTextModelWrapper(CLIPTextModel):
     # Applied to layers [begin_layer_idx, end_layer_idx) in the encoder.
     # The layer indexed by end_layer_idx is not included.
     # If both layer indices are -1, then apply to all layers (0-11).
-    def extend_clip_attention_MKV_multiplier(self, prompt2token_proj_attention_multipliers, noise_std=0.1):
+    def extend_clip_attention_MKV_multiplier(self, prompt2token_proj_attention_multipliers, perturb_std=0.1):
         num_extended_layers = 0
 
         for layer_idx, layer in enumerate(self.text_model.encoder.layers):
@@ -303,7 +303,7 @@ class CLIPTextModelWrapper(CLIPTextModel):
             if not isinstance(old_attn_layer, CLIPAttentionMKV):
                 layer.self_attn = CLIPAttentionMKV(old_attn_layer.config, 1)
             # Extends the v_proj and k_proj weights in the self_attn layer.
-            layer.self_attn.extend_weights(old_attn_layer, layer_idx, multiplier, noise_std, verbose=True)
+            layer.self_attn.extend_weights(old_attn_layer, layer_idx, multiplier, perturb_std, verbose=True)
             num_extended_layers += 1
     
         return num_extended_layers

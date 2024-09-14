@@ -123,13 +123,13 @@ for i, image in enumerate(images):
     grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
 prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{args.noise}.png")
+grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-perturb{args.noise}.png")
 if os.path.exists(grid_filepath):
     grid_count = 2
-    grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+    grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-perturb{args.noise}-{grid_count}.jpg')
     while os.path.exists(grid_filepath):
         grid_count += 1
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{args.noise}-{grid_count}.jpg')
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-perturb{args.noise}-{grid_count}.jpg')
 
 grid_image.save(grid_filepath)
 print(f"Saved to {grid_filepath}")

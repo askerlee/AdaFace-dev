@@ -723,7 +723,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             breakpoint()
 
     def extend_prompt2token_proj_attention(self, prompt2token_proj_attention_multipliers=None, 
-                                           begin_layer_idx=-1, end_layer_idx=-1, multiplier=1, noise_std=0.1):
+                                           begin_layer_idx=-1, end_layer_idx=-1, multiplier=1, perturb_std=0.1):
         if begin_layer_idx == -1:
             begin_layer_idx = 0
         if end_layer_idx == -1:
@@ -740,7 +740,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                 prompt2token_proj_attention_multipliers[i] = multiplier            
 
         # Otherwise, use the given prompt2token_proj_attention_multipliers.
-        num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(prompt2token_proj_attention_multipliers, noise_std)
+        num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(prompt2token_proj_attention_multipliers, perturb_std)
         # Update prompt2token_proj_attention_multipliers (relative to the original CLIPTextModel).
         for i in range(begin_layer_idx, end_layer_idx+1):
             self.prompt2token_proj_attention_multipliers[i] *= prompt2token_proj_attention_multipliers[i]

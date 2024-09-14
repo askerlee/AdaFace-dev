@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument("--out_folder", type=str, required=True, help="Path to the folder saving output images")
     parser.add_argument("--out_count_per_input_image", type=int, default=1,  help="Number of output images to generate per input image")
     parser.add_argument("--copy_masks", action="store_true", help="Copy the mask images to the output folder")
-    parser.add_argument("--noise", dest='noise_level', type=float, default=0)
+    parser.add_argument("--noise", dest='perturb_std', type=float, default=0)
     parser.add_argument("--scale", dest='guidance_scale', type=float, default=4, 
                         help="Guidance scale for the diffusion model")
     parser.add_argument("--ref_img_strength", type=float, default=0.8,
@@ -162,7 +162,7 @@ if __name__ == "__main__":
         with torch.no_grad():
             adaface_subj_embs, teacher_neg_id_prompt_embs = \
                 adaface.prepare_adaface_embeddings(image_paths, None, False, 
-                                                   noise_level=args.noise_level, 
+                                                   perturb_std=args.perturb_std, 
                                                    update_text_encoder=True)
 
         # Replace the first occurrence of "in_folder" with "out_folder" in the path of the subject_folder.
@@ -189,7 +189,7 @@ if __name__ == "__main__":
         num_out_images = len(in_images) * args.out_count_per_input_image
 
         with torch.no_grad():
-            # args.noise_level: the *relative* std of the noise added to the face embeddings.
+            # args.perturb_std: the *relative* std of the noise added to the face embeddings.
             # A noise level of 0.08 could change gender, but 0.06 is usually safe.
             # The returned adaface_subj_embs are already incorporated in the text encoder, and not used explicitly.
             # NOTE: We assume out_count_per_input_image == 1, so that the output images are of the same number as the input images.

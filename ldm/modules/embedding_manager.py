@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import extract_first_index_in_each_instance, \
-                     anneal_add_noise_to_embedding, \
+                     anneal_perturb_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
                      scan_cls_delta_strings, calc_init_word_embeddings
                      
@@ -56,9 +56,9 @@ class EmbeddingManager(nn.Module):
             num_unet_ca_layers=16,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
-            training_begin_add_noise_std_range=None,
-            training_end_add_noise_std_range=None,
-            training_add_noise_prob=None,
+            training_begin_perturb_std_range=None,
+            training_end_perturb_std_range=None,
+            training_perturb_prob=None,
             do_zero_shot=True,
             id2ada_prompt_encoder_type='arc2face',
             id2img_prompt_encoder_trainable=False,
@@ -103,9 +103,9 @@ class EmbeddingManager(nn.Module):
         self.placeholder_strings    = list(subject_strings) + self.background_strings
         self.subject_string_dict    = { s: True for s in self.subject_strings }
 
-        self.set_training_add_noise_specs(training_begin_add_noise_std_range, 
-                                          training_end_add_noise_std_range,
-                                          training_add_noise_prob)
+        self.set_training_perturb_specs(training_begin_perturb_std_range, 
+                                        training_end_perturb_std_range,
+                                        training_perturb_prob)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.ca_layer_idx2layer_idx = { v: k for k, v in layer_idx2ca_layer_idx.items() }
@@ -513,18 +513,18 @@ class EmbeddingManager(nn.Module):
                 # During inference, BS = 1, subj_static_embedding_k: [16, 768]
                 subj_static_embedding_k = subj_static_embedding[:, k]
                 
-                if self.training and self.training_begin_add_noise_std_range is not None:
-                    # The std of subj_static_embedding is around 0.07, times training_end_add_noise_std_range
+                if self.training and self.training_begin_perturb_std_range is not None:
+                    # The std of subj_static_embedding is around 0.07, times training_end_perturb_std_range
                     # (0.02 ~ 0.04) is very small. Therefore, it won't hurt the subject identity encoded
                     # in the embeddings.
                     subj_static_embedding_k = \
-                        anneal_add_noise_to_embedding(subj_static_embedding_k, 
-                                                      self.training_percent,
-                                                      self.training_begin_add_noise_std_range,
-                                                      self.training_end_add_noise_std_range,
-                                                      self.training_add_noise_prob[self.iter_type],
-                                                      noise_std_is_relative=True, keep_norm=False,
-                                                      verbose=False)
+                        anneal_perturb_embedding(subj_static_embedding_k, 
+                                                 self.training_percent,
+                                                 self.training_begin_perturb_std_range,
+                                                 self.training_end_perturb_std_range,
+                                                 self.training_perturb_prob[self.iter_type],
+                                                 perturb_std_is_relative=True, keep_norm=False,
+                                                 verbose=False)
 
                 # Training with delta loss. Each subject only appears once in subj_static_embedding, 
                 # but twice in the prompts (subject single and subject comp), so we need to repeat it twice.
@@ -673,17 +673,18 @@ class EmbeddingManager(nn.Module):
         
         self.placeholder2indices[placeholder_string] = placeholder_indices
 
-    def set_training_add_noise_specs(self, training_begin_add_noise_std_range, 
-                                     training_end_add_noise_std_range,
-                                     training_add_noise_prob):
-        self.training_begin_add_noise_std_range = training_begin_add_noise_std_range
-        self.training_end_add_noise_std_range   = training_end_add_noise_std_range
-        self.training_add_noise_prob      = training_add_noise_prob
-        if training_begin_add_noise_std_range is None and training_end_add_noise_std_range is None:
-            print(f"Disable training_add_noise")
+    def set_training_perturb_specs(self, training_begin_perturb_std_range, 
+                                   training_end_perturb_std_range,
+                                   training_perturb_prob):
+        self.training_begin_perturb_std_range = training_begin_perturb_std_range
+        self.training_end_perturb_std_range   = training_end_perturb_std_range
+        self.training_perturb_prob            = training_perturb_prob
+
+        if training_begin_perturb_std_range is None and training_end_perturb_std_range is None:
+            print(f"Disable training perturbance")
         else:
-            print(f"training add_noise std range: {training_begin_add_noise_std_range}-{training_end_add_noise_std_range}"
-                  f", with prob = {training_add_noise_prob}")
+            print(f"training perturbance std range: {training_begin_perturb_std_range}-{training_end_perturb_std_range}"
+                  f", with prob = {training_perturb_prob}")
 
     def set_zs_image_prompts_and_features(self, id2img_prompt_embs, zs_clip_bg_features):
         # id2img_prompt_embs: [1, 16, 768] or [1, 4, 768].
@@ -802,7 +803,7 @@ class EmbeddingManager(nn.Module):
                     # ckpt_subj_basis_generator.prompt2token_proj hasn't been extended. 
                     # So only extend self.string_to_subj_basis_generator_dict[km] after loading the state_dict.
                     # This should happen only during training, not inference. 
-                    # Therefore, whether noise_std is 0 or not doesn't really matter the inference result.
+                    # Therefore, whether perturb_std is 0 or not doesn't really matter the inference result.
                     if ckpt_subj_basis_generator.placeholder_is_bg:
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                     else:
@@ -810,7 +811,7 @@ class EmbeddingManager(nn.Module):
                         # Fix old ckpt bug of having negative attention multipliers.
                         ckpt_prompt2token_proj_attention_multipliers = [ m if m > 0 else 1 for m in ckpt_prompt2token_proj_attention_multipliers ]
                         self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
-                            ckpt_prompt2token_proj_attention_multipliers, -1, -1, 1, noise_std=0)
+                            ckpt_prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
                         if extend_prompt2token_proj_attention_multiplier > 1:
@@ -822,7 +823,7 @@ class EmbeddingManager(nn.Module):
                             # 0, 3: extend the first 3 layers 0-2 (not including layer 3).
                             self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
                                 None, -1, -1, extend_prompt2token_proj_attention_multiplier,
-                                noise_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
+                                perturb_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
 
                     if ret is not None and len(ret.missing_keys) > 0:
                         print(f"Missing keys: {ret.missing_keys}")

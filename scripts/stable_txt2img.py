@@ -392,7 +392,7 @@ def main(opt):
                     image_paths=ref_image_paths,
                     image_objs=ref_images,
                     id_batch_size=1,
-                    noise_level=0,
+                    perturb_std=0,
                     return_core_id_embs_only=True,
                     avg_at_stage='id_emb',
                     verbose=True)
@@ -420,7 +420,7 @@ def main(opt):
                 # If id2ada_prompt_encoder_type == "consistentID", teacher_neg_id_prompt_embs will be used for CFG.
                 adaface_subj_embs, teacher_neg_id_prompt_embs = \
                     pipeline.prepare_adaface_embeddings(ref_image_paths, None, False, 
-                                                        noise_level=0, 
+                                                        perturb_std=0, 
                                                         update_text_encoder=True)
                 
             elif opt.method == "pulid":

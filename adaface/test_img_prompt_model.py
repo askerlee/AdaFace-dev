@@ -7,7 +7,7 @@ from transformers import CLIPTextModel
 import numpy as np
 
 def save_images(images, subject_name, id2img_prompt_encoder_type,
-                prompt, noise_level, save_dir = "samples-ada"):
+                prompt, perturb_std, save_dir = "samples-ada"):
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
     grid_image = Image.new('RGB', (512 * 2, 512 * 2))
@@ -18,18 +18,18 @@ def save_images(images, subject_name, id2img_prompt_encoder_type,
     prompt_sig = prompt.replace(" ", "_").replace(",", "_")
     grid_filepath = os.path.join(save_dir, 
                 "-".join([subject_name, id2img_prompt_encoder_type, 
-                          prompt_sig, f"noise{noise_level:.02f}.png"]))
+                          prompt_sig, f"perturb{perturb_std:.02f}.png"]))
     
     if os.path.exists(grid_filepath):
         grid_count = 2
         grid_filepath = os.path.join(save_dir, 
                         "-".join([ subject_name, id2img_prompt_encoder_type, 
-                                   prompt_sig, f"noise{noise_level:.02f}", str(grid_count) ]) + ".png")
+                                   prompt_sig, f"perturb{perturb_std:.02f}", str(grid_count) ]) + ".png")
         while os.path.exists(grid_filepath):
             grid_count += 1
             grid_filepath = os.path.join(save_dir, 
                         "-".join([ subject_name, id2img_prompt_encoder_type, 
-                                   prompt_sig, f"noise{noise_level:.02f}", str(grid_count) ]) + ".png")
+                                   prompt_sig, f"perturb{perturb_std:.02f}", str(grid_count) ]) + ".png")
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_core_only", action="store_true")
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--seed", type=int, default=-1)
-    parser.add_argument("--noise_level", type=float, default=0.06)
+    parser.add_argument("--perturb_std", type=float, default=1)
 
     args = parser.parse_args()
     if args.seed > 0:
@@ -126,12 +126,12 @@ if __name__ == "__main__":
         pre_clip_features = None
 
     all_faceid_embeds = []
-    # noise_level is the *relative* std of the noise added to the face ID embeddings.
-    # For Arc2Face, a noise_level of 0.08 could change gender, but 0.06 is usually safe.
+    # perturb_std is the *relative* std of the noise added to the face ID embeddings.
+    # For Arc2Face, a perturb_std of 0.08 could change gender, but 0.06 is usually safe.
     # For ConsistentID, the image prompt embeddings are extremely robust to noise,
-    # and the noise_level can be set to 0.5, only leading to a slight change in the result images.
+    # and the perturb_std can be set to 0.5, only leading to a slight change in the result images.
     # Seems ConsistentID mainly relies on CLIP features, instead of the face ID embeddings.
-    for noise_level in (args.noise_level, 0):
+    for perturb_std in (args.perturb_std, 0):
         # id_prompt_emb is in the image prompt space.
         # neg_id_prompt_emb is used in ConsistentID only.
         face_image_count, faceid_embeds, id_prompt_emb, neg_id_prompt_emb \
@@ -141,7 +141,7 @@ if __name__ == "__main__":
                 image_paths=image_paths,
                 image_objs=None,
                 id_batch_size=id_batch_size,
-                noise_level=noise_level,
+                perturb_std=perturb_std,
                 return_core_id_embs_only=False,
                 avg_at_stage='id_emb',
                 verbose=True)
@@ -187,4 +187,4 @@ if __name__ == "__main__":
                               num_images_per_prompt=1).images
 
             save_images(images, subject_name, args.id2img_prompt_encoder_type, 
-                        f"guide{guidance_scale}", noise_level)
+                        f"guide{guidance_scale}", perturb_std)

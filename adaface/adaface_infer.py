@@ -5,7 +5,7 @@ from PIL import Image
 import numpy as np
 import os, argparse, glob, re
 
-def save_images(images, num_images_per_row, subject_name, prompt, noise_level, save_dir = "samples-ada"):
+def save_images(images, num_images_per_row, subject_name, prompt, perturb_std, save_dir = "samples-ada"):
     if num_images_per_row > len(images):
         num_images_per_row = len(images)
         
@@ -19,13 +19,13 @@ def save_images(images, num_images_per_row, subject_name, prompt, noise_level, s
         grid_image.paste(image, (512 * (i % num_images_per_row), 512 * (i // num_images_per_row)))
 
     prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level:.02f}.png")
+    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-perturb{perturb_std:.02f}.png")
     if os.path.exists(grid_filepath):
         grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.png')
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-perturb{perturb_std:.02f}-{grid_count}.png')
         while os.path.exists(grid_filepath):
             grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.png')
+            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-perturb{perturb_std:.02f}-{grid_count}.png')
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
@@ -63,7 +63,7 @@ def parse_args():
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4,  help="Number of images to generate")
     parser.add_argument("--prompt", type=str, default="a woman z in superman costume")
-    parser.add_argument("--noise", dest='noise_level', type=float, default=0)
+    parser.add_argument("--noise", dest='perturb_std', type=float, default=0)
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--scale", dest='guidance_scale', type=float, default=4, 
                         help="Guidance scale for the diffusion model")
@@ -144,12 +144,12 @@ if __name__ == "__main__":
 
     init_id_embs = rand_init_id_embs if args.randface else None
     noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
-    # args.noise_level: the *relative* std of the noise added to the face embeddings.
+    # args.perturb_std: the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths, init_id_embs, args.randface, 
-                                           noise_level=args.noise_level, update_text_encoder=True)    
+                                           perturb_std=args.perturb_std, update_text_encoder=True)    
     teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if args.use_teacher_neg else None
     images = adaface(noise, args.prompt, None, teacher_neg_id_prompt_embs, args.guidance_scale, args.out_image_count, verbose=True)
-    save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.noise_level)
+    save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.perturb_std)

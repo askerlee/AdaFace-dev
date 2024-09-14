@@ -21,8 +21,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
                         extend_indices_B_by_n_times, repeat_selected_instances, \
                         halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_value, anneal_array, \
-                        anneal_add_noise_to_embedding
+                        probably_anneal_t, anneal_value, anneal_array, anneal_perturb_embedding
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -1102,16 +1101,16 @@ class LatentDiffusion(DDPM):
                                                       zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs)
                         
                     # Add noise to the zero-shot ID embeddings with probability 0.6.
-                    # noise_std_is_relative=True: The noise_std is relative to the std of the last dim (512) of zs_id_embs.
+                    # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
                     # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
                     # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
                     # Keep the first ID embedding as it is, and add noise to the rest.
                     zs_id_embs[1:] = \
-                        anneal_add_noise_to_embedding(zs_id_embs[1:], training_percent=0, 
-                                                      begin_noise_std_range=self.perturb_real_id_embs_std_range, 
-                                                      end_noise_std_range=None, 
-                                                      add_noise_prob=1, noise_std_is_relative=True, 
-                                                      keep_norm=True, verbose=True)
+                        anneal_perturb_embedding(zs_id_embs[1:], training_percent=0, 
+                                                 begin_noise_std_range=self.perturb_real_id_embs_std_range, 
+                                                 end_noise_std_range=None, 
+                                                 perturb_prob=1, perturb_std_is_relative=True, 
+                                                 keep_norm=True, verbose=True)
 
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count

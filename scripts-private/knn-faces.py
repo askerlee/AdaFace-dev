@@ -32,7 +32,7 @@ num_subjects = len(os.listdir(base_folder))
 resumed_subj_folder = None 
 resumed = True
 
-for noise_std in [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]:
+for perturb_std in [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]:
     subj_embs = []
     face_proj_embs = []
     subj_folders = []
@@ -44,7 +44,7 @@ for noise_std in [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]:
         id_emb = F.normalize(id_emb, p=2, dim=1)
         subj_folders.append(subj_folder)
         # Add noise to the embeddings
-        noisy_emb = id_emb + noise_std * torch.randn_like(id_emb)
+        noisy_emb = id_emb + perturb_std * torch.randn_like(id_emb)
         subj_embs.append(noisy_emb)
         with torch.no_grad():
             face_proj_emb = face_proj_in(noisy_emb)
@@ -61,7 +61,7 @@ for noise_std in [0.00, 0.01, 0.02, 0.03, 0.04, 0.05]:
     face_proj_embs = torch.cat(face_proj_embs, dim=0)
     mean_face_proj_emb = face_proj_embs.mean(dim=0, keepdim=True)
 
-    if noise_std == 0:
+    if perturb_std == 0:
         # Saved mean_face_proj_emb: [16, 768].
         torch.save(mean_face_proj_emb.squeeze(0), "models/ip-adapter/mean_face_proj_emb.pt")
         print("mean_face_proj_emb is saved to models/ip-adapter/mean_face_proj_emb.pt")

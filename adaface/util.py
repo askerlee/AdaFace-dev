@@ -10,19 +10,19 @@ from typing import Optional, Tuple
 from transformers.utils import ModelOutput
 import numpy as np
 
-# add_noise_to_tensor() adds a fixed amount of noise to the tensor.
-def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
+# perturb_tensor() adds a fixed amount of noise to the tensor.
+def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=False,
                         std_dim=-1, norm_dim=-1, verbose=True):
     orig_ts = ts
-    if noise_std_is_relative:
+    if perturb_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
 
-        noise_std *= ts_std_mean
-        # ts_std_mean: 50~80 for unnormalized images, noise_std: 2.5-4 for 0.05 noise.
+        perturb_std *= ts_std_mean
+        # ts_std_mean: 50~80 for unnormalized images, perturb_std: 2.5-4 for 0.05 noise.
         if verbose:
-            print(f"ts_std_mean: {ts_std_mean:.03f}, noise_std: {noise_std:.03f}")
+            print(f"ts_std_mean: {ts_std_mean:.03f}, perturb_std: {perturb_std:.03f}")
 
-    noise = torch.randn_like(ts) * noise_std
+    noise = torch.randn_like(ts) * perturb_std
     if keep_norm:
         orig_norm = ts.norm(dim=norm_dim, keepdim=True)
         ts = ts + noise
@@ -36,9 +36,9 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
         
     return ts
 
-def add_noise_to_np_array(np_array, noise_std, noise_std_is_relative=True, std_dim=-1):
+def perturb_np_array(np_array, perturb_std, perturb_std_is_relative=True, std_dim=-1):
     ts = torch.from_numpy(np_array).to(dtype=torch.float32)
-    ts = add_noise_to_tensor(ts, noise_std, noise_std_is_relative, std_dim=std_dim)
+    ts = perturb_tensor(ts, perturb_std, perturb_std_is_relative, std_dim=std_dim)
     return ts.numpy().astype(np_array.dtype)
 
 def calc_stats(emb_name, embeddings, mean_dim=0):

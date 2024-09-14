@@ -1972,18 +1972,18 @@ def normalized_sum(losses_list, norm_pow=0):
         breakpoint()
     return normalized_loss_sum
 
-# add_noise_to_tensor() adds a fixed amount of noise to the tensor.
-def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=False,
+# perturb_tensor() adds a fixed amount of noise to the tensor.
+def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=False,
                         std_dim=-1, norm_dim=-1, verbose=True):
     orig_ts = ts
-    if noise_std_is_relative:
+    if perturb_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
-        noise_std *= ts_std_mean
-        # ts_std_mean: 50~80 for unnormalized images, noise_std: 2.5-4 for 0.05 noise.
+        perturb_std *= ts_std_mean
+        # ts_std_mean: 50~80 for unnormalized images, perturb_std: 2.5-4 for 0.05 noise.
         if verbose:
-            print(f"ts_std_mean: {ts_std_mean:.03f}, noise_std: {noise_std:.03f}")
+            print(f"ts_std_mean: {ts_std_mean:.03f}, perturb_std: {perturb_std:.03f}")
 
-    noise = torch.randn_like(ts) * noise_std
+    noise = torch.randn_like(ts) * perturb_std
     if keep_norm:
         orig_norm = ts.norm(dim=norm_dim, keepdim=True)
         ts = ts + noise
@@ -1999,11 +1999,11 @@ def add_noise_to_tensor(ts, noise_std, noise_std_is_relative=True, keep_norm=Fal
 
 # embeddings: [N, 768]. 
 # noise_std_range: the noise std / embeddings std falls within this range.
-# anneal_add_noise_to_embedding() adds noise of the amount randomly selected from the noise_std_range.
-def anneal_add_noise_to_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
-                                  add_noise_prob, noise_std_is_relative=True, keep_norm=False,
+# anneal_perturb_embedding() adds noise of the amount randomly selected from the noise_std_range.
+def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
+                                  perturb_prob, perturb_std_is_relative=True, keep_norm=False,
                                   std_dim=-1, norm_dim=-1, verbose=True):
-    if random.random() > add_noise_prob:
+    if random.random() > perturb_prob:
         return embeddings
     
     if end_noise_std_range is not None:
@@ -2012,9 +2012,9 @@ def anneal_add_noise_to_embedding(embeddings, training_percent, begin_noise_std_
     else:
         noise_std_lb, noise_std_ub = begin_noise_std_range
         
-    noise_std = np.random.uniform(noise_std_lb, noise_std_ub)
+    perturb_std = np.random.uniform(noise_std_lb, noise_std_ub)
 
-    noised_embeddings = add_noise_to_tensor(embeddings, noise_std, noise_std_is_relative, 
+    noised_embeddings = perturb_tensor(embeddings, perturb_std, perturb_std_is_relative, 
                                             keep_norm, std_dim, norm_dim, verbose=verbose)
     return noised_embeddings
 

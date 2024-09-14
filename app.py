@@ -62,7 +62,7 @@ def update_out_gallery(images):
     return gr.update(height=800)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, noise_std_to_input,
+def generate_image(image_paths, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
 
@@ -74,7 +74,7 @@ def generate_image(image_paths, guidance_scale, noise_std_to_input,
 
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
-                                           noise_level=noise_std_to_input, update_text_encoder=True)
+                                           perturb_std=perturb_std, update_text_encoder=True)
     
     if adaface_subj_embs is None:
         raise gr.Error(f"Failed to detect any faces! Please try with other images")
@@ -180,7 +180,7 @@ with gr.Blocks(css=css) as demo:
                 value=6.0,
             )
 
-            noise_std_to_input = gr.Slider(
+            perturb_std = gr.Slider(
                 label="Std of noise added to input (may help stablize face embeddings)",
                 minimum=0.0,
                 maximum=0.05,
@@ -219,7 +219,7 @@ with gr.Blocks(css=css) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, noise_std_to_input, num_images, 
+            inputs=[img_files, guidance_scale, perturb_std, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         ).then(

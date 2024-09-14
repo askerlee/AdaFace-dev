@@ -3,7 +3,7 @@ from diffusers import StableDiffusion3Pipeline
 import os, argparse
 from PIL import Image
 
-def save_images(images, subject_name, prompt, noise_level=0, save_dir = "samples-ada"):
+def save_images(images, subject_name, prompt, perturb_std=0, save_dir = "samples-ada"):
     
     os.makedirs(save_dir, exist_ok=True)
     # Save 4 images as a grid image in save_dir
@@ -13,13 +13,13 @@ def save_images(images, subject_name, prompt, noise_level=0, save_dir = "samples
         grid_image.paste(image, (512 * (i % 2), 512 * (i // 2)))
 
     prompt_sig = prompt.replace(" ", "_").replace(",", "_")
-    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-noise{noise_level:.02f}.png")
+    grid_filepath = os.path.join(save_dir, f"{subject_name}-{prompt_sig}-perturb{perturb_std:.02f}.png")
     if os.path.exists(grid_filepath):
         grid_count = 2
-        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
+        grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-perturb{perturb_std:.02f}-{grid_count}.jpg')
         while os.path.exists(grid_filepath):
             grid_count += 1
-            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-noise{noise_level:.02f}-{grid_count}.jpg')
+            grid_filepath = os.path.join(save_dir, f'{subject_name}-{prompt_sig}-perturb{perturb_std:.02f}-{grid_count}.jpg')
 
     grid_image.save(grid_filepath)
     print(f"Saved to {grid_filepath}")
