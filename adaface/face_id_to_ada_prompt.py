@@ -39,6 +39,7 @@ class FaceID2AdaPrompt(nn.Module):
 
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
+        self.combine_pos_neg_id_emb_for_ada = False
         self.use_clip_embs                  = False
         self.do_contrast_clip_embs          = False
         # num_id_vecs as the output embeddings of the ID2ImgPrompt module, 
@@ -399,7 +400,7 @@ class FaceID2AdaPrompt(nn.Module):
         # NOTE: Since return_core_id_embs_only is True, id_prompt_embs is only the 16 core ID embeddings.
         # arc2face prompt template: "photo of a id person"
         # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
-        face_image_count, faceid_embeds, id_prompt_embs, teacher_neg_id_prompt_embs \
+        face_image_count, faceid_embeds, id_prompt_embs, neg_id_prompt_embs \
             = self.get_img_prompt_embs(\
                 init_id_embs=None if gen_rand_face else face_id_embs,
                 pre_clip_features=None,
@@ -414,6 +415,9 @@ class FaceID2AdaPrompt(nn.Module):
         if face_image_count == 0:
             return None, None
         
+        if self.combine_pos_neg_id_emb_for_ada:
+            id_prompt_embs = torch.cat([id_prompt_embs, neg_id_prompt_embs], dim=1)
+            
         # adaface_subj_embs: [16/4, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
         # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
@@ -425,10 +429,10 @@ class FaceID2AdaPrompt(nn.Module):
                                       adaface_prompt_embs_inf_type='full_half_pad')
         # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
         adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
-        if teacher_neg_id_prompt_embs is not None:
-            # teacher_neg_id_prompt_embs: [1, 4, 768] -> [4, 768]
-            teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs.squeeze(0)
-        return adaface_subj_embs, teacher_neg_id_prompt_embs
+        if neg_id_prompt_embs is not None:
+            # neg_id_prompt_embs: [1, 4, 768] -> [4, 768]
+            neg_id_prompt_embs = neg_id_prompt_embs.squeeze(0)
+        return adaface_subj_embs, neg_id_prompt_embs
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, *args, **kwargs):
@@ -578,6 +582,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         # ConsistentIDPipeline specific behaviors.
         self.num_id_vecs                    = 8
         self.gen_neg_img_prompt             = True
+        self.combine_pos_neg_id_emb_for_ada = True
         self.use_clip_embs                  = True
         self.do_contrast_clip_embs          = False
         self.clip_embedding_dim             = 1280
