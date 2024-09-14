@@ -175,7 +175,7 @@ with gr.Blocks(css=css) as demo:
             guidance_scale = gr.Slider(
                 label="Guidance scale",
                 minimum=1.0,
-                maximum=0.0,
+                maximum=10.0,
                 step=1.0,
                 value=6.0,
             )
