@@ -350,9 +350,11 @@ class CrossAttention(nn.Module):
             return out
 
 class ImgPrompt2TextPrompt(nn.Module):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, placeholder_is_bg, *args, **kwargs):
         super().__init__()
-        self.initialize_text_components(*args, **kwargs)
+        if not placeholder_is_bg:
+            self.initialize_text_components(*args, **kwargs)
+
         # prompt2token_proj: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
         # prompt2token_proj is with the same architecture as the original arc2face text encoder, 
         # but retrained to do inverse mapping.
@@ -366,21 +368,22 @@ class ImgPrompt2TextPrompt(nn.Module):
                                    num_static_img_suffix_embs=0, img_prompt_dim=768, dtype=torch.float32):
         self.N_ID = num_id_vecs
         self.num_static_img_suffix_embs = num_static_img_suffix_embs
-        if self.num_static_img_suffix_embs > 0:
-            # We always take the first num_static_img_suffix_embs embeddings out of static_img_suffix_embs.
-            # So it's OK that static_img_suffix_embs is larger than required number num_static_img_suffix_embs.
-            if hasattr(self, 'static_img_suffix_embs') and self.static_img_suffix_embs is not None \
-              and self.static_img_suffix_embs.shape[1] >= self.num_static_img_suffix_embs:
-                print(f"Warning: static_img_suffix_embs already initialized to be {self.static_img_suffix_embs.shape[1]} vecs. Skip initialization.")
-            else:
+        # We always take the first num_static_img_suffix_embs embeddings out of static_img_suffix_embs.
+        # So it's OK that static_img_suffix_embs is larger than required number num_static_img_suffix_embs.
+        # This holds even if num_static_img_suffix_embs is 0.
+        if hasattr(self, 'static_img_suffix_embs') and self.static_img_suffix_embs is not None \
+            and self.static_img_suffix_embs.shape[1] >= self.num_static_img_suffix_embs:
+            print(f"WARN: static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs ({self.num_static_img_suffix_embs} required). Skip initialization.")
+        else:
+            if self.num_static_img_suffix_embs > 0:
                 # Either static_img_suffix_embs is not initialized, 
                 # or it's initialized but has fewer than num_static_img_suffix_embs embeddings (this situation should be very rare, 
                 # so we don't consider to reuse and extend a shorter static_img_suffix_embs).
                 # So we reinitialize it.
                 self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.num_static_img_suffix_embs, img_prompt_dim))
-        else:
-            # If static_img_suffix_embs had been initialized, then it will be set to None, i.e., erased from the SubjBasisGenerator instance.
-            self.static_img_suffix_embs = None
+            else:
+                # If static_img_suffix_embs had been initialized, then it will be set to None, i.e., erased from the SubjBasisGenerator instance.
+                self.static_img_suffix_embs = None
 
         self.dtype = dtype
         self.max_prompt_length = max_prompt_length
@@ -523,7 +526,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         # number of cross-attention heads of the bg prompt translator. 
         # Taken as a half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
-        num_bg_translator_heads=6,                      
+        num_bg_encoder_heads=6,                      
         # number of subject input identity vectors (only when the subject is not face), 
         # or number of background input identity vectors (no matter the subject is face or not).
         # 257: 257 CLIP tokens. 
@@ -541,7 +544,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         bg_prompt_translator_has_to_out_proj: bool = False,         # Whether the prompt_trans_layers have a to_out projection.
     ):
             
-        super().__init__(max_prompt_length=77, num_id_vecs=num_out_embs_per_layer, 
+        super().__init__(placeholder_is_bg=placeholder_is_bg, max_prompt_length=77, num_id_vecs=num_out_embs_per_layer, 
                          num_static_img_suffix_embs=num_static_img_suffix_embs, img_prompt_dim=output_dim)
         self.num_out_embs_per_layer = num_out_embs_per_layer
 
@@ -581,8 +584,6 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         else:
             # For background placeholders, face and object embeddings are not used as they are foreground.
             self.obj_proj_in  = None
-            self.prompt2token_proj = None
-            print("Bg prompt2token_proj is set to None.")
 
             self.bg_proj_in = nn.Sequential(
                 nn.Linear(bg_image_embedding_dim, output_dim, bias=False),
@@ -601,9 +602,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # prompt_translator maps the clip image features (of the background) to the prompt embedding space.
             # It is only used during training when placeholder_is_bg is True.
             # prompt_translator has a to_v projection with skip connection, and doesn't have a to_out projection.
-            # dim=768, num_bg_translator_heads=6.
+            # dim=768, num_bg_encoder_heads=6.
             self.prompt_translator = \
-                CrossAttention(input_dim=output_dim, num_heads=num_bg_translator_heads, p_dropout=0.05,
+                CrossAttention(input_dim=output_dim, num_heads=num_bg_encoder_heads, p_dropout=0.05,
                                 identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
                                 q_aware_to_v=False,  v_has_skip=v_has_skip,
                                 num_q=0, # When not q_aware_to_v, num_q is not referenced.
@@ -805,19 +806,20 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.num_out_embs = -1
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'num_id_vecs'):
             self.num_nonface_in_id_vecs = self.num_out_embs_per_layer
-        if not hasattr(self, 'tokenizer'):
-            self.initialize_text_components(max_prompt_length=77, num_id_vecs=self.num_out_embs_per_layer, 
-                                            num_static_img_suffix_embs=self.num_static_img_suffix_embs, img_prompt_dim=self.output_dim)
 
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:
                 self.pos_embs = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, self.output_dim))
             if not hasattr(self, 'latent_queries') or self.latent_queries is None:        
                 self.latent_queries = nn.Parameter(torch.randn(1, self.num_out_embs, self.output_dim))
+            # Background encoder doesn't require initializing text components.
         else:
             self.initialize_hidden_state_layer_weights('per-layer', 'cpu')
             if not hasattr(self, 'prompt2token_proj_attention_multipliers'):
                 self.prompt2token_proj_attention_multipliers = [self.prompt2token_proj_attention_multiplier] * 12
+            self.initialize_text_components(max_prompt_length=77, num_id_vecs=self.num_out_embs_per_layer, 
+                                            num_static_img_suffix_embs=self.num_static_img_suffix_embs, 
+                                            img_prompt_dim=self.output_dim)
 
     def __repr__(self):
         type_sig = 'subj' if not self.placeholder_is_bg else 'bg'
