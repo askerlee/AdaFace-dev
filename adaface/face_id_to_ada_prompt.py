@@ -39,9 +39,9 @@ class FaceID2AdaPrompt(nn.Module):
 
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
-        self.combine_pos_neg_id_emb_for_ada = kwargs.get('combine_pos_neg_id_emb_for_ada', False)
-        if self.combine_pos_neg_id_emb_for_ada:
-            print(f'Adaface uses both pos and neg ID image embeddings as input.')
+        self.num_static_img_suffix_embs       = kwargs.get('num_static_img_suffix_embs', 0)
+        if self.num_static_img_suffix_embs > 0:
+            print(f'Adaface uses {self.num_static_img_suffix_embs} fixed image embeddings as input.')
         else:
             print(f'Adaface uses only pos ID image embeddings as input.')
 
@@ -383,7 +383,8 @@ class FaceID2AdaPrompt(nn.Module):
         # But we don't do layerwise embeddings here, so we set it to 1.
         self.subj_basis_generator.num_out_layers = 1
         self.subj_basis_generator.num_out_embs_per_layer = self.num_id_vecs
-        self.subj_basis_generator.N_ID = self.num_id_vecs
+        self.subj_basis_generator.N_ID                   = self.num_id_vecs
+        self.subj_basis_generator.num_static_img_suffix_embs = self.num_static_img_suffix_embs
         self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
         print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
@@ -421,10 +422,7 @@ class FaceID2AdaPrompt(nn.Module):
         
         if face_image_count == 0:
             return None, None
-        
-        if self.combine_pos_neg_id_emb_for_ada:
-            id_prompt_embs = torch.cat([id_prompt_embs, neg_id_prompt_embs], dim=1)
-            
+
         # adaface_subj_embs: [16/4, 768]. 
         # adaface_prompt_embs: [1, 77, 768] (not used).
         # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
@@ -480,9 +478,9 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
             self.out_id_embs_cfg_scale = 1
         # Arc2Face pipeline specific behaviors.
         self.gen_neg_img_prompt             = False
-        # Never combine pos and neg ID embeddings for Adaface, 
-        # even if combine_pos_neg_id_emb_for_ada is passed for initialization.
-        self.combine_pos_neg_id_emb_for_ada = False
+        # Never use extra static img suffix embeddings for Adaface, 
+        # even if num_static_img_suffix_embs > 0 is passed for initialization.
+        self.num_static_img_suffix_embs     = 0
         self.use_clip_embs                  = False
         self.do_contrast_clip_embs          = False
         self.num_id_vecs                    = 16
@@ -588,9 +586,11 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             self.image_proj_model.half()
 
         if self.out_id_embs_cfg_scale == -1:
-            self.out_id_embs_cfg_scale      = 6
+            self.out_id_embs_cfg_scale = 6
         # ConsistentIDPipeline specific behaviors.
-        self.num_id_vecs                    = 4 if not self.combine_pos_neg_id_emb_for_ada else 8
+        # ConsistentID_ID2AdaPrompt.num_id_vecs doesn't include num_static_img_suffix_embs.
+        # But the underlying subj_basis_generator.num_id_vecs does include num_static_img_suffix_embs.
+        self.num_id_vecs                    = 4
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
         self.do_contrast_clip_embs          = False

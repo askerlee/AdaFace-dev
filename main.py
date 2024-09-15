@@ -231,6 +231,8 @@ def get_parser(**parser_kwargs):
                         help="The probability that the UNet teacher (as well as the student) uses the classifier-free guidance")    
     parser.add_argument("--unet_teacher_cfg_scale_range", type=float, nargs=2, default=argparse.SUPPRESS,
                         help="Range of the scale of the classifier-free guidance")
+    parser.add_argument("--num_static_img_suffix_embs", type=int, default=0,
+                        help="Number of extra static learnable image embeddings appended to input ID embeddings")    
     # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
                         default=['models/ensemble/sd15-unet', 
@@ -701,8 +703,8 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.do_zero_shot      = opt.zeroshot
         config.model.params.personalization_config.params.extend_prompt2token_proj_attention_multiplier   = opt.extend_prompt2token_proj_attention_multiplier
-        config.model.params.personalization_config.params.to_load_old_adaface_ckpt = opt.to_load_old_adaface_ckpt
-
+        config.model.params.personalization_config.params.to_load_old_adaface_ckpt  = opt.to_load_old_adaface_ckpt
+        config.model.params.personalization_config.params.num_static_img_suffix_embs = opt.num_static_img_suffix_embs
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 

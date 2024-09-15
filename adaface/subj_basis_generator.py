@@ -362,8 +362,15 @@ class ImgPrompt2TextPrompt(nn.Module):
     # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
     # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
     # ckpts which were not subclassed from ImgPrompt2TextPrompt.
-    def initialize_text_components(self, max_prompt_length=77, num_id_vecs=16, dtype=torch.float32):
+    def initialize_text_components(self, max_prompt_length=77, num_id_vecs=16, 
+                                   num_static_img_suffix_embs=0, img_prompt_dim=768, dtype=torch.float32):
         self.N_ID = num_id_vecs
+        self.num_static_img_suffix_embs = num_static_img_suffix_embs
+        if self.num_static_img_suffix_embs > 0:
+            self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.num_static_img_suffix_embs, img_prompt_dim))
+        else:
+            self.static_img_suffix_embs = None
+
         self.dtype = dtype
         self.max_prompt_length = max_prompt_length
         self.tokenizer       = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
@@ -381,6 +388,7 @@ class ImgPrompt2TextPrompt(nn.Module):
         # deepcopy() in embedding_manager.py:make_frozen_copy_of_subj_basis_generators() will fail.
         self.pad_embeddings = clip_text_embeddings(pad_tokens)[0].detach()
 
+    # image prompt space -> text prompt space.
     # return_emb_types: a list of strings, each string is among 
     # ['full', 'core', 'full_pad', 'full_half_pad'].
     def inverse_img_prompt_embs(self, face_prompt_embs, list_extra_words,
@@ -438,6 +446,9 @@ class ImgPrompt2TextPrompt(nn.Module):
         # token 4: first ", " in the template prompt.
         # Replace embeddings of 16 or 4 placeholder ", " with face_prompt_embs.
         token_embs[:, 4:ID_END] = face_prompt_embs
+        if self.num_static_img_suffix_embs > 0:
+            # Put the static image suffix embeddings at the end of the token embeddings.
+            token_embs[:, -self.num_static_img_suffix_embs:] = self.static_img_suffix_embs[:, :self.num_static_img_suffix_embs]
 
         # This call does the ordinary CLIP text encoding pass.
         prompt_embeds = self.prompt2token_proj(
@@ -513,17 +524,20 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         output_dim=768,                             # CLIP text embedding input dimension.
         placeholder_is_bg: bool = False,            # Whether the placeholder is for the image background tokens.
         prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
+        num_static_img_suffix_embs: int = 0,        # Number of extra static learnable image embeddings appended to input ID embeddings.
         zs_extra_words_scale: float = 0.5,          # Scale for extra words in the prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',   # none, per-layer.
         bg_prompt_translator_has_to_out_proj: bool = False,         # Whether the prompt_trans_layers have a to_out projection.
     ):
-        super().__init__(max_prompt_length=77, num_id_vecs=num_out_embs_per_layer)
+            
+        super().__init__(max_prompt_length=77, num_id_vecs=num_out_embs_per_layer, 
+                         num_static_img_suffix_embs=num_static_img_suffix_embs, img_prompt_dim=output_dim)
+        self.num_out_embs_per_layer = num_out_embs_per_layer
 
         self.placeholder_is_bg      = placeholder_is_bg
         self.num_out_layers         = num_out_layers
-        self.num_out_embs_per_layer = num_out_embs_per_layer
         # subj: 64, bg: 32.
-        self.num_out_embs           = num_out_layers * num_out_embs_per_layer
+        self.num_out_embs           = num_out_layers * self.num_out_embs_per_layer
         self.output_dim             = output_dim
         # num_nonface_in_id_vecs should be the number of core ID embs, 16.
         # However, in such case, pos_embs is not used. So it doesn't matter if it's wrongly set.
@@ -585,7 +599,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                                 identity_to_out=identity_to_out,
                                 out_has_skip=out_has_skip)
             
-            self.output_scale           = output_dim ** -0.5
+            self.output_scale = output_dim ** -0.5
             
             ''' 
             prompt_translator: CLIPEncoder
@@ -648,6 +662,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                     # adaface_prompt_embs_inf_type: default is 'full_half_pad', slightly different from training.
                     return_emb_types = [adaface_prompt_embs_inf_type, 'core']
 
+                # faceid2img_prompt_embs -> core_id_embs: image prompt space -> text prompt space.
                 with torch.set_grad_enabled(self.training and self.prompt2token_proj_grad_scale != 0):
                     # If list_extra_words is not None, then core_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                     # and (at most) two extra words in adaface_prompt_embs, without BOS and EOS.
@@ -689,19 +704,20 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                 id_embs_out = self.prompt_translator(latent_queries, id_embs)
             # [BS, 64, 768] -> [BS, 16, 4, 768]
             id_embs_out = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
-            adaface_subj_embs = id_embs_out * self.output_scale    # * 0.036
+            adaface_out_embs = id_embs_out * self.output_scale    # * 0.036
         else:
-            # adaface_subj_embs: [BS, 16, 768] -> [BS, 1, 16, 768] -> [BS, 16, 16, 768]
-            adaface_subj_embs = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
-        
-        # If out_id_embs_cfg_scale < 1, adaface_subj_embs is a mix of adaface_subj_embs and pad_embeddings.
+            # adaface_out_embs: [BS, 16, 768] -> [BS, 1, 16, 768] -> [BS, 16, 16, 768]
+            # For unknown reasons, no need to scale adaface_out_embs if it's subject embeddings.
+            adaface_out_embs = core_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
+
+        # If out_id_embs_cfg_scale < 1, adaface_out_embs is a mix of adaface_out_embs and pad_embeddings.
         if out_id_embs_cfg_scale != 1:
             # pad_embeddings: [77, 768] -> [16, 768] -> [1, 1, 16, 768].
-            pad_embeddings = self.pad_embeddings[4:4+self.num_out_embs_per_layer].unsqueeze(0).unsqueeze(0).to(adaface_subj_embs.device)
-            adaface_subj_embs =   adaface_subj_embs * out_id_embs_cfg_scale \
+            pad_embeddings = self.pad_embeddings[4:4+self.num_out_embs_per_layer].unsqueeze(0).unsqueeze(0).to(adaface_out_embs.device)
+            adaface_out_embs =   adaface_out_embs * out_id_embs_cfg_scale \
                                 + pad_embeddings    * (1 - out_id_embs_cfg_scale)
         
-        return adaface_subj_embs, adaface_prompt_embs
+        return adaface_out_embs, adaface_prompt_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
         if learnable_hidden_state_weights_scheme == 'none':
@@ -777,9 +793,10 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         if not hasattr(self, 'num_out_embs'):
             self.num_out_embs = -1
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'num_id_vecs'):
-            self.num_nonface_in_id_vecs = self.num_id_vecs
+            self.num_nonface_in_id_vecs = self.num_out_embs_per_layer
         if not hasattr(self, 'tokenizer'):
-            self.initialize_text_components(max_prompt_length=77, num_id_vecs=self.num_out_embs_per_layer)
+            self.initialize_text_components(max_prompt_length=77, num_id_vecs=self.num_out_embs_per_layer, 
+                                            num_static_img_suffix_embs=self.num_static_img_suffix_embs, img_prompt_dim=self.output_dim)
 
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:

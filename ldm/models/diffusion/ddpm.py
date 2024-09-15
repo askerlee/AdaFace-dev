@@ -1275,12 +1275,6 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['id2img_pos_prompt_embs']   = id2img_prompt_embs
         self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
-        if self.embedding_manager.id2ada_prompt_encoder.combine_pos_neg_id_emb_for_ada:
-            # For consistentID: [BS, 4, 512] * 2 => [BS, 8, 512]
-            # It extends the input to ada_prompt_encoder to include both positive and negative image prompts, and form an 8-token prompt.
-            # Note the concatenation is done on dim 1, i.e., consecutive 8 embeddings, so that we can treat them as 
-            # a group of 8 tokens, and process them in the same way by the embedding manager.
-            id2img_prompt_embs = torch.cat([id2img_prompt_embs, id2img_neg_prompt_embs], dim=1)
         self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
 
         self.iter_flags['image_unnorm']             = batch_images_unnorm

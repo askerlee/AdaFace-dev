@@ -73,7 +73,8 @@ class EmbeddingManager(nn.Module):
             zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
             adaface_ckpt_path=None,
             extend_prompt2token_proj_attention_multiplier=1,
-            to_load_old_adaface_ckpt=False
+            to_load_old_adaface_ckpt=False,
+            num_static_img_suffix_embs=0,
     ):
         super().__init__()
 
@@ -199,6 +200,7 @@ class EmbeddingManager(nn.Module):
                                                           placeholder_is_bg = placeholder_is_bg,
                                                           prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
                                                           bg_prompt_translator_has_to_out_proj=False,
+                                                          num_static_img_suffix_embs = num_static_img_suffix_embs,
                                                           zs_extra_words_scale = self.zs_extra_words_scale)
 
                 self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
