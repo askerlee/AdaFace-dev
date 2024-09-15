@@ -808,7 +808,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.num_out_embs = -1
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'num_id_vecs'):
             self.num_nonface_in_id_vecs = self.num_out_embs_per_layer
-
+        if not hasattr(self, 'dtype'):
+            self.dtype = torch.float32
+            
         if self.placeholder_is_bg:
             if not hasattr(self, 'pos_embs') or self.pos_embs is None:
                 self.pos_embs = nn.Parameter(torch.zeros(1, self.num_nonface_in_id_vecs, self.output_dim))
