@@ -161,7 +161,8 @@ class EmbeddingManager(nn.Module):
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
             else:
                 self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
-            self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(id2ada_prompt_encoder_type)
+            self.id2ada_prompt_encoder = \
+                create_id2ada_prompt_encoder(id2ada_prompt_encoder_type, num_static_img_suffix_embs=num_static_img_suffix_embs)
             self.id2img_prompt_encoder_trainable    = id2img_prompt_encoder_trainable
             self.to_load_id2img_learnable_modules   = to_load_id2img_learnable_modules
 
@@ -775,7 +776,10 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.num_static_img_suffix_embs = 0
                         ckpt_subj_basis_generator.static_img_suffix_embs = None
 
-                    curr_num_static_img_suffix_embs = self.string_to_subj_basis_generator_dict[km].num_static_img_suffix_embs
+                    if ckpt_subj_basis_generator.placeholder_is_bg:
+                        curr_num_static_img_suffix_embs = 0
+                    else:
+                        curr_num_static_img_suffix_embs = self.string_to_subj_basis_generator_dict[km].num_static_img_suffix_embs
 
                     if to_load_old_adaface_ckpt:
                         # Delete lora2hira, latent_queries and layers, as lora2hira and layers belong to 

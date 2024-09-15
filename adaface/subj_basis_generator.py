@@ -350,7 +350,7 @@ class CrossAttention(nn.Module):
             return out
 
 class ImgPrompt2TextPrompt(nn.Module):
-    def __init__(self, placeholder_is_bg, *args, **kwargs):
+    def __init__(self, placeholder_is_bg, dtype=torch.float32, *args, **kwargs):
         super().__init__()
         if not placeholder_is_bg:
             self.initialize_text_components(*args, **kwargs)
@@ -360,12 +360,13 @@ class ImgPrompt2TextPrompt(nn.Module):
         # but retrained to do inverse mapping.
         # To be initialized in the subclass.
         self.prompt2token_proj = None
+        self.dtype = dtype
 
     # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
     # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
     # ckpts which were not subclassed from ImgPrompt2TextPrompt.
     def initialize_text_components(self, max_prompt_length=77, num_id_vecs=16, 
-                                   num_static_img_suffix_embs=0, img_prompt_dim=768, dtype=torch.float32):
+                                   num_static_img_suffix_embs=0, img_prompt_dim=768):
         self.N_ID = num_id_vecs
         self.num_static_img_suffix_embs = num_static_img_suffix_embs
         # We always take the first num_static_img_suffix_embs embeddings out of static_img_suffix_embs.
@@ -385,7 +386,6 @@ class ImgPrompt2TextPrompt(nn.Module):
                 # If static_img_suffix_embs had been initialized, then it will be set to None, i.e., erased from the SubjBasisGenerator instance.
                 self.static_img_suffix_embs = None
 
-        self.dtype = dtype
         self.max_prompt_length = max_prompt_length
         self.tokenizer       = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
@@ -459,10 +459,10 @@ class ImgPrompt2TextPrompt(nn.Module):
         token_embs = self.prompt2token_proj(input_ids=input_ids, return_token_embs=True)
         # token 4: first ", " in the template prompt.
         # Replace embeddings of 16 or 4 placeholder ", " with face_prompt_embs.
-        token_embs[:, 4:ID_END] = face_prompt_embs
+        token_embs[:, 4:ID_END-self.num_static_img_suffix_embs] = face_prompt_embs
         if self.num_static_img_suffix_embs > 0:
-            # Put the static image suffix embeddings at the end of the token embeddings.
-            token_embs[:, -self.num_static_img_suffix_embs:] = self.static_img_suffix_embs[:, :self.num_static_img_suffix_embs]
+            # Put the static image suffix embeddings right after face_prompt_embs.
+            token_embs[:, ID_END-self.num_static_img_suffix_embs:ID_END] = self.static_img_suffix_embs[:, :self.num_static_img_suffix_embs]
 
         # This call does the ordinary CLIP text encoding pass.
         prompt_embeds = self.prompt2token_proj(
@@ -543,11 +543,13 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         learnable_hidden_state_weights_scheme: str = 'per-layer',   # none, per-layer.
         bg_prompt_translator_has_to_out_proj: bool = False,         # Whether the prompt_trans_layers have a to_out projection.
     ):
-            
+
         super().__init__(placeholder_is_bg=placeholder_is_bg, max_prompt_length=77, num_id_vecs=num_out_embs_per_layer, 
                          num_static_img_suffix_embs=num_static_img_suffix_embs, img_prompt_dim=output_dim)
-        self.num_out_embs_per_layer = num_out_embs_per_layer
 
+        # num_out_embs_per_layer has been added with num_static_img_suffix_embs in embedding_manager.py. 
+        # So no need to add it here.
+        self.num_out_embs_per_layer = num_out_embs_per_layer
         self.placeholder_is_bg      = placeholder_is_bg
         self.num_out_layers         = num_out_layers
         # subj: 64, bg: 32.
@@ -648,7 +650,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # If bg, then faceid2img_prompt_embs is set to None, but clip_features is not None.
             BS = clip_features.shape[0]
             clip_features = clip_features.to(self.dtype)
-
+            
         adaface_prompt_embs = None
 
         # No need to use raw_id_embs if placeholder_is_bg.

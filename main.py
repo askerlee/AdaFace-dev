@@ -321,7 +321,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.subj_name_to_cls_delta_string         = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
         personalization_config_params.token2num_vectors         = dict()
         for subject_string in dataset.subject_strings[:1]:
-            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
 
         if opt.background_string is not None:
             config.model.params.use_background_token = True
@@ -672,7 +672,7 @@ if __name__ == "__main__":
         # broad_class
         config.data.params.train.params.broad_class                 = opt.broad_class
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
-        config.data.params.train.params.num_vectors_per_subj_token  = opt.num_vectors_per_subj_token
+        config.data.params.train.params.num_vectors_per_subj_token  = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
         config.data.params.train.params.num_vectors_per_bg_token    = opt.num_vectors_per_bg_token
 
         if opt.background_string is not None:

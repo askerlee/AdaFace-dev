@@ -39,7 +39,7 @@ class FaceID2AdaPrompt(nn.Module):
 
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
-        self.num_static_img_suffix_embs       = kwargs.get('num_static_img_suffix_embs', 0)
+        self.num_static_img_suffix_embs     = kwargs.get('num_static_img_suffix_embs', 0)
         if self.num_static_img_suffix_embs > 0:
             print(f'Adaface uses {self.num_static_img_suffix_embs} fixed image embeddings as input.')
         else:
@@ -594,7 +594,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         # ConsistentIDPipeline specific behaviors.
         # ConsistentID_ID2AdaPrompt.num_id_vecs doesn't include num_static_img_suffix_embs.
         # But the underlying subj_basis_generator.num_id_vecs does include num_static_img_suffix_embs.
-        self.num_id_vecs                    = 4
+        self.num_id_vecs                    = 4 + self.num_static_img_suffix_embs
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
         self.do_contrast_clip_embs          = False
