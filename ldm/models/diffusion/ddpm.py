@@ -1275,8 +1275,11 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['id2img_pos_prompt_embs']   = id2img_prompt_embs
         self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
-        if self.unet_teacher_type == 'consistentID':
-            # [BS, 4, 512] * 2 => [BS, 8, 512]
+        if self.embedding_manager.id2ada_prompt_encoder.combine_pos_neg_id_emb_for_ada:
+            # For consistentID: [BS, 4, 512] * 2 => [BS, 8, 512]
+            # It extends the input to ada_prompt_encoder to include both positive and negative image prompts, and form an 8-token prompt.
+            # Note the concatenation is done on dim 1, i.e., consecutive 8 embeddings, so that we can treat them as 
+            # a group of 8 tokens, and process them in the same way by the embedding manager.
             id2img_prompt_embs = torch.cat([id2img_prompt_embs, id2img_neg_prompt_embs], dim=1)
         self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
 
@@ -2010,6 +2013,9 @@ class LatentDiffusion(DDPM):
                             cls_neg_prompt_embs = self.uncond_context[0][[0]].repeat(teacher_context.shape[0], 1, 1)
                             # teacher_neg_context: [BS, 81, 768]
                             teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
+                            # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                            # This is kind of arbitrary (we can also concate them on dim 1), 
+                            # since we always chunk(2) on the same dimension to restore the two parts.
                             teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
                     else:
                         breakpoint()
