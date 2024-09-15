@@ -2,6 +2,7 @@ import sys
 sys.path.append('./')
 
 from adaface.adaface_wrapper import AdaFaceWrapper
+from adaface.util import str2bool
 import torch
 import numpy as np
 import random
@@ -24,6 +25,8 @@ parser.add_argument('--extra_unet_paths', type=str, nargs="*", default=['models/
                     help="Extra paths to the checkpoints of the UNet models")
 parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
                     help="Weights for the UNet models")
+parser.add_argument("--combine_pos_neg_id_emb_for_ada", type=str2bool, nargs="?", const=True, default=False,
+                    help="Combine positive and negative ID embeddings for AdaFace")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
@@ -38,6 +41,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_mod
                          adaface_ckpt_paths=args.adaface_ckpt_paths, 
                          adaface_encoder_scales=args.adaface_encoder_scales,
                          extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights,
+                         combine_pos_neg_id_emb_for_ada=args.combine_pos_neg_id_emb_for_ada,
                          device=device)
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:

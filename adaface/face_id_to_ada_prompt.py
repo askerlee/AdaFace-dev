@@ -40,6 +40,11 @@ class FaceID2AdaPrompt(nn.Module):
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
         self.combine_pos_neg_id_emb_for_ada = kwargs.get('combine_pos_neg_id_emb_for_ada', False)
+        if self.combine_pos_neg_id_emb_for_ada:
+            print(f'Adaface uses both pos and neg ID image embeddings as input.')
+        else:
+            print(f'Adaface uses only pos ID image embeddings as input.')
+
         self.use_clip_embs                  = False
         self.do_contrast_clip_embs          = False
         # num_id_vecs as the output embeddings of the ID2ImgPrompt module, 
