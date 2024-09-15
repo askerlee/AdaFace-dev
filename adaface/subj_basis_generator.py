@@ -367,8 +367,19 @@ class ImgPrompt2TextPrompt(nn.Module):
         self.N_ID = num_id_vecs
         self.num_static_img_suffix_embs = num_static_img_suffix_embs
         if self.num_static_img_suffix_embs > 0:
-            self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.num_static_img_suffix_embs, img_prompt_dim))
+            # We always take the first num_static_img_suffix_embs embeddings out of static_img_suffix_embs.
+            # So it's OK that static_img_suffix_embs is larger than required number num_static_img_suffix_embs.
+            if hasattr(self, 'static_img_suffix_embs') and self.static_img_suffix_embs is not None \
+              and self.static_img_suffix_embs.shape[1] >= self.num_static_img_suffix_embs:
+                print(f"Warning: static_img_suffix_embs already initialized to be {self.static_img_suffix_embs.shape[1]} vecs. Skip initialization.")
+            else:
+                # Either static_img_suffix_embs is not initialized, 
+                # or it's initialized but has fewer than num_static_img_suffix_embs embeddings (this situation should be very rare, 
+                # so we don't consider to reuse and extend a shorter static_img_suffix_embs).
+                # So we reinitialize it.
+                self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.num_static_img_suffix_embs, img_prompt_dim))
         else:
+            # If static_img_suffix_embs had been initialized, then it will be set to None, i.e., erased from the SubjBasisGenerator instance.
             self.static_img_suffix_embs = None
 
         self.dtype = dtype

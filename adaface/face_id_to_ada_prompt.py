@@ -384,6 +384,10 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator.num_out_layers = 1
         self.subj_basis_generator.num_out_embs_per_layer = self.num_id_vecs
         self.subj_basis_generator.N_ID                   = self.num_id_vecs
+        # Since we directly use the subject basis generator object from the ckpt,
+        # fixing the number of static image suffix embeddings is much simpler.
+        # Otherwise if we want to load the subject basis generator from its state_dict, 
+        # things are more complicated, see embedding manager's load().
         self.subj_basis_generator.num_static_img_suffix_embs = self.num_static_img_suffix_embs
         self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
         print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")

@@ -770,7 +770,13 @@ class EmbeddingManager(nn.Module):
                     # Then replace it with the one in ckpt.
                     # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
                     ckpt_subj_basis_generator.face_proj_in = None
-                    
+                    # If old ckpts don't have num_static_img_suffix_embs, set it to 0.
+                    if not hasattr(ckpt_subj_basis_generator, "num_static_img_suffix_embs"):
+                        ckpt_subj_basis_generator.num_static_img_suffix_embs = 0
+                        ckpt_subj_basis_generator.static_img_suffix_embs = None
+
+                    curr_num_static_img_suffix_embs = self.string_to_subj_basis_generator_dict[km].num_static_img_suffix_embs
+
                     if to_load_old_adaface_ckpt:
                         # Delete lora2hira, latent_queries and layers, as lora2hira and layers belong to 
                         # old ckpts, and latent_queries has different shapes.
@@ -781,9 +787,12 @@ class EmbeddingManager(nn.Module):
                         ckpt_subj_basis_generator.obj_proj_in = None
                         ckpt_subj_basis_generator.proj_in = None
                         ckpt_subj_basis_generator.pos_embs = None
+                        ckpt_subj_basis_generator.num_static_img_suffix_embs = curr_num_static_img_suffix_embs
 
                         self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                        # Never update token and positional embeddings of the original CLIPTextModel.
+                        # If curr_num_static_img_suffix_embs is different with num_static_img_suffix_embs in the ckpt,
+                        # ckpt_subj_basis_generator.static_img_suffix_embs will be adjusted to the correct size 
+                        # in patch_old_subj_basis_generator_ckpt().
                         self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
                         self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
                         continue
@@ -812,6 +821,17 @@ class EmbeddingManager(nn.Module):
                         ckpt_prompt2token_proj_attention_multipliers = [ m if m > 0 else 1 for m in ckpt_prompt2token_proj_attention_multipliers ]
                         self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
                             ckpt_prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)
+                        # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
+                        if curr_num_static_img_suffix_embs != ckpt_subj_basis_generator.num_static_img_suffix_embs:
+                            if curr_num_static_img_suffix_embs == 0 or curr_num_static_img_suffix_embs > ckpt_subj_basis_generator.num_static_img_suffix_embs:
+                                # The current model has more static_img_suffix_embs than the old ckpt, or has no static_img_suffix_embs.
+                                # So we skip loading the static_img_suffix_embs from the ckpt.
+                                ckpt_subj_basis_generator.static_img_suffix_embs = None
+                            else:
+                                # The old ckpt has more static_img_suffix_embs than the current model.
+                                # So we need to remove the extra static_img_suffix_embs from the ckpt before loading.
+                                ckpt_subj_basis_generator.static_img_suffix_embs = ckpt_subj_basis_generator.static_img_suffix_embs[:, :curr_num_static_img_suffix_embs]
+
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
                         # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
                         if extend_prompt2token_proj_attention_multiplier > 1:
