@@ -254,6 +254,8 @@ def parse_args():
                         help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
+    parser.add_argument("--combine_pos_neg_id_emb_for_ada", type=str2bool, nargs="?", const=True, default=False,
+                        help="Combine positive and negative ID embeddings for AdaFace")
     # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
@@ -411,9 +413,10 @@ def main(opt):
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
                                           opt.adaface_ckpt_paths, opt.adaface_encoder_scales,
                                           opt.to_load_id2img_learnable_modules,
-                                          opt.subject_string, opt.ddim_steps,
+                                          opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
-                                          unet_weights=opt.unet_weights, negative_prompt=opt.neg_prompt,
+                                          unet_weights=opt.unet_weights, 
+                                          combine_pos_neg_id_emb_for_ada=opt.combine_pos_neg_id_emb_for_ada,
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
                 # If id2ada_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.

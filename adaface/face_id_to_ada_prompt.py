@@ -35,11 +35,11 @@ class FaceID2AdaPrompt(nn.Module):
         # -1: use the default scale for the adaface encoder type.
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
-        self.to_load_id2img_learnable_modules  = kwargs.get('to_load_id2img_learnable_modules', True)
+        self.to_load_id2img_learnable_modules = kwargs.get('to_load_id2img_learnable_modules', True)
 
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
-        self.combine_pos_neg_id_emb_for_ada = False
+        self.combine_pos_neg_id_emb_for_ada = kwargs.get('combine_pos_neg_id_emb_for_ada', False)
         self.use_clip_embs                  = False
         self.do_contrast_clip_embs          = False
         # num_id_vecs as the output embeddings of the ID2ImgPrompt module, 
@@ -377,6 +377,8 @@ class FaceID2AdaPrompt(nn.Module):
         # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
         # But we don't do layerwise embeddings here, so we set it to 1.
         self.subj_basis_generator.num_out_layers = 1
+        self.subj_basis_generator.num_out_embs_per_layer = self.num_id_vecs
+        self.subj_basis_generator.N_ID = self.num_id_vecs
         self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
         print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
         print(repr(self.subj_basis_generator))
@@ -473,6 +475,9 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
             self.out_id_embs_cfg_scale = 1
         # Arc2Face pipeline specific behaviors.
         self.gen_neg_img_prompt             = False
+        # Never combine pos and neg ID embeddings for Adaface, 
+        # even if combine_pos_neg_id_emb_for_ada is passed for initialization.
+        self.combine_pos_neg_id_emb_for_ada = False
         self.use_clip_embs                  = False
         self.do_contrast_clip_embs          = False
         self.num_id_vecs                    = 16
@@ -580,9 +585,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         if self.out_id_embs_cfg_scale == -1:
             self.out_id_embs_cfg_scale      = 6
         # ConsistentIDPipeline specific behaviors.
-        self.num_id_vecs                    = 8
+        self.num_id_vecs                    = 4 if not self.combine_pos_neg_id_emb_for_ada else 8
         self.gen_neg_img_prompt             = True
-        self.combine_pos_neg_id_emb_for_ada = True
         self.use_clip_embs                  = True
         self.do_contrast_clip_embs          = False
         self.clip_embedding_dim             = 1280

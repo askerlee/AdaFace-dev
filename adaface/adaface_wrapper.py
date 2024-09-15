@@ -26,6 +26,7 @@ class AdaFaceWrapper(nn.Module):
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, extra_unet_paths=None, unet_weights=None,
+                 combine_pos_neg_id_emb_for_ada=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "img2img", "text2img3", "flux", or None. 
@@ -45,6 +46,7 @@ class AdaFaceWrapper(nn.Module):
             self.adaface_encoder_scales = adaface_encoder_scales
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
+        self.combine_pos_neg_id_emb_for_ada   = combine_pos_neg_id_emb_for_ada
         self.to_load_id2img_learnable_modules = to_load_id2img_learnable_modules
         self.subject_string = subject_string
 
@@ -80,6 +82,7 @@ class AdaFaceWrapper(nn.Module):
             id2ada_prompt_encoder = create_id2ada_prompt_encoder(adaface_encoder_type,
                                                                  adaface_ckpt_path, 
                                                                  out_id_embs_cfg_scale=out_id_embs_cfg_scale,
+                                                                 combine_pos_neg_id_emb_for_ada=self.combine_pos_neg_id_emb_for_ada,
                                                                  to_load_id2img_learnable_modules=self.to_load_id2img_learnable_modules)
             
             self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
