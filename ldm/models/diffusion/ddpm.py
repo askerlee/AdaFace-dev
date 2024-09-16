@@ -2137,13 +2137,6 @@ class LatentDiffusion(DDPM):
                             loss_recon_delta = torch.tensor(0, device=loss_recon.device)
 
                     print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}, {loss_recon_delta.item():.5f}")
-                    # For consistentID, if gen_id2img_rand_id, then the CLIP features are also randomly generated.
-                    # Due to this issue, the loss of the first denoising iteration tends to be very high.
-                    # So we reduce this loss by 10 times. In the following iterations, 
-                    # the loss will be very small, since the UNet is not influenced so much by CLIP features,
-                    # but more relies on the partially-denoised latent features.
-                    if self.iter_flags['gen_id2img_rand_id'] and self.unet_teacher_type == 'consistentID':
-                        loss_recon *= 0.1
                     loss_recons.append(loss_recon)
                     loss_recon_deltas.append(loss_recon_delta)
 
