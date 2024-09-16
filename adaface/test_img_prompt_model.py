@@ -117,8 +117,7 @@ if __name__ == "__main__":
         elif args.id2img_prompt_encoder_type == "consistentID":
             # For ConsistentID, random clip features are much better than zero clip features.
             rand_clip_fgbg_features = torch.randn(1, 514, 1280, device='cuda', dtype=torch.float16)
-            rand_clip_neg_features  = torch.randn(1, 257, 1280, device='cuda', dtype=torch.float16)
-            pre_clip_features = (rand_clip_fgbg_features, rand_clip_neg_features)
+            pre_clip_features       = rand_clip_fgbg_features
         else:
             breakpoint()
     else:

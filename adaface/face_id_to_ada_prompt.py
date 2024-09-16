@@ -40,6 +40,7 @@ class FaceID2AdaPrompt(nn.Module):
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
         self.num_static_img_suffix_embs     = kwargs.get('num_static_img_suffix_embs', 0)
+        self.clip_neg_features              = None
         if self.num_static_img_suffix_embs > 0:
             print(f'Adaface uses {self.num_static_img_suffix_embs} fixed image embeddings as input.')
         else:
@@ -54,6 +55,17 @@ class FaceID2AdaPrompt(nn.Module):
         self.clip_embedding_dim             = 1024
         self.name                           = None
 
+    @torch.no_grad()
+    def get_clip_neg_features(self, BS):
+        if self.clip_neg_features is None:
+            # neg_pixel_values: [1, 3, 224, 224]. clip_neg_features is invariant to the actual image.
+            neg_pixel_values = torch.zeros([1, 3, 224, 224], device=self.clip_image_encoder.device, dtype=self.dtype)
+            # Precompute CLIP negative features for the negative image prompt.
+            self.clip_neg_features = self.clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
+        
+        clip_neg_features = self.clip_neg_features.repeat(BS, 1, 1)
+        return clip_neg_features
+    
     # image_objs: a list of np array / tensor / Image objects of different sizes [Hi, Wi].
     # If image_objs is a list of tensors, then each tensor should be [3, Hi, Wi].
     # If image_objs is None, then image_paths should be provided, 
@@ -163,12 +175,9 @@ class FaceID2AdaPrompt(nn.Module):
                 # fg_mask2: [BS, 224, 224]. 
                 fg_masks2 = torch.ones_like(image_pixel_values[:, 0, :, :], device=device, dtype=torch.float16)
 
-            with torch.no_grad():
-                # neg_pixel_values: [1, 3, 224, 224]. clip_neg_features is invariant to the actual image.
-                neg_pixel_values = torch.zeros_like(image_pixel_values[:1])
-                clip_neg_features = self.clip_image_encoder(neg_pixel_values, attn_mask=None, output_hidden_states=True).hidden_states[-2]
-                clip_neg_features = clip_neg_features.repeat(image_pixel_values.shape[0], 1, 1)
+            clip_neg_features = self.get_clip_neg_features(BS=image_pixel_values.shape[0])
 
+            with torch.no_grad():
                 # image_fg_features: [BS, 257, 1280]. 257: 16*16 (patch_embeds) + 1 (class_embeds).
                 image_fg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
                 # attn_mask: [BS, 1, 257]
@@ -227,7 +236,7 @@ class FaceID2AdaPrompt(nn.Module):
             # Don't do average of all_id_embs.
             id_embs = all_id_embs
                     
-        return faceless_img_count, id_embs, clip_fgbg_features, clip_neg_features
+        return faceless_img_count, id_embs, clip_fgbg_features
 
     # This function should be implemented in derived classes.
     # We don't plan to fine-tune the ID2ImgPrompt module. So disable the gradient computation.
@@ -247,6 +256,7 @@ class FaceID2AdaPrompt(nn.Module):
                             id2img_prompt_encoder_trainable=False, verbose=False):
         face_image_count = 0
         device = self.clip_image_encoder.device
+        clip_neg_features = self.get_clip_neg_features(BS=id_batch_size)
 
         if init_id_embs is None:
             # Input images are not provided. Generate random face embeddings.
@@ -259,12 +269,10 @@ class FaceID2AdaPrompt(nn.Module):
                 # Experiments show that using random clip features yields much better images than using zeros.
                 clip_fgbg_features  = torch.randn(id_batch_size, 514, 1280).to(device=device, dtype=torch.float16) \
                                         if self.use_clip_embs else None
-                clip_neg_features   = torch.randn(id_batch_size, 257, 1280).to(device=device, dtype=torch.float16) \
-                                        if self.use_clip_embs else None
             else:
                 # Extract face ID embeddings and CLIP features from the images.
                 faceid_embeds_from_images = True
-                faceless_img_count, faceid_embeds, clip_fgbg_features, clip_neg_features \
+                faceless_img_count, faceid_embeds, clip_fgbg_features \
                     = self.extract_init_id_embeds_from_images( \
                         image_objs, image_paths=image_paths, size=(512, 512), 
                         calc_avg=(avg_at_stage == 'id_emb'), 
@@ -280,25 +288,20 @@ class FaceID2AdaPrompt(nn.Module):
             # Use the provided init_id_embs as faceid_embeds.
             faceid_embeds = init_id_embs
             if pre_clip_features is not None:
-                clip_fgbg_features, clip_neg_features = pre_clip_features
+                clip_fgbg_features = pre_clip_features
             else:
-                clip_fgbg_features, clip_neg_features = None, None
+                clip_fgbg_features = None
 
             if init_id_embs.shape[0] == 1:
                 faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
                 if clip_fgbg_features is not None:
                     clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
-                if clip_neg_features is not None:
-                    clip_neg_features  = clip_neg_features.repeat(id_batch_size, 1, 1)
 
         if perturb_std > 0:
             # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
             faceid_embeds = perturb_tensor(faceid_embeds, perturb_std, perturb_std_is_relative=True, keep_norm=True)
             if self.name == 'consistentID':
                 clip_fgbg_features = perturb_tensor(clip_fgbg_features, perturb_std, perturb_std_is_relative=True, keep_norm=True)
-                # Don't perturb clip_neg_features, as it's a constant tensor.
-                # clip_neg_features  = perturb_tensor(clip_neg_features,  perturb_std, perturb_std_is_relative=True, keep_norm=True)
-                #faceid_embeds.normal_()
 
         faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 

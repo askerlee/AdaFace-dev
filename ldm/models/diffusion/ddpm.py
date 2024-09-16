@@ -5,8 +5,8 @@ import torch.nn.functional as F
 import os
 import numpy as np
 import pytorch_lightning as pl
-from torch.optim.lr_scheduler import LambdaLR, ConstantLR, \
-                                     PolynomialLR, CosineAnnealingWarmRestarts, CyclicLR
+from torch.optim.lr_scheduler import LambdaLR, ConstantLR, PolynomialLR, \
+                                     CosineAnnealingWarmRestarts, CyclicLR
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
@@ -19,8 +19,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
-                        extend_indices_B_by_n_times, repeat_selected_instances, \
-                        halve_token_indices, double_token_indices, \
+                        extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
                         probably_anneal_t, anneal_value, anneal_array, anneal_perturb_embedding
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
@@ -36,12 +35,6 @@ import random
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 import sys
-import cv2
-from PIL import Image
-
-__conditioning_keys__ = {'concat': 'c_concat',
-                         'crossattn': 'c_crossattn',
-                         'adm': 'y'}
 
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
@@ -1057,7 +1050,9 @@ class LatentDiffusion(DDPM):
                 # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
                 # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
                 # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
-                faceless_img_count, zs_id_embs, zs_clip_fgbg_features, zs_clip_neg_features = \
+                # ** We no longer cache and provide zs_clip_neg_features later, as it is constant and
+                # is cached in the FaceID2AdaPrompt object.
+                faceless_img_count, zs_id_embs, zs_clip_fgbg_features = \
                     self.embedding_manager.id2ada_prompt_encoder.extract_init_id_embeds_from_images(\
                         images, image_paths, fg_mask.squeeze(1), skip_non_faces=False, 
                         calc_avg=use_subj_avg_embedding)
@@ -1084,11 +1079,11 @@ class LatentDiffusion(DDPM):
                         # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
                         x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs = \
+                        zs_clip_fgbg_features, zs_id_embs = \
                             repeat_selected_instances(slice(0, 1), BS, 
                                                       x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      zs_clip_fgbg_features, zs_clip_neg_features, zs_id_embs)
+                                                      zs_clip_fgbg_features, zs_id_embs)
                         
                     # Add noise to the zero-shot ID embeddings with probability 0.6.
                     # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
@@ -1105,7 +1100,7 @@ class LatentDiffusion(DDPM):
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
 
-                pre_clip_features = (zs_clip_fgbg_features, zs_clip_neg_features)
+                pre_clip_features = zs_clip_fgbg_features
                 # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
                 # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
                 # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -1118,7 +1113,7 @@ class LatentDiffusion(DDPM):
                 id2img_neg_prompt_embs = results[3]
 
             # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
-            # Therefore, zs_clip_fgbg_features, zs_clip_neg_features are not available.
+            # Therefore, zs_clip_fgbg_features are not available.
             # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
             else:
                 # zs_id_embs: [4, 512]. id2img_prompt_embs: [4, 21, 768]
@@ -1133,7 +1128,6 @@ class LatentDiffusion(DDPM):
                 id2img_neg_prompt_embs = results[3]                
                 # For ConsistentID, random clip features are much better than zero clip features.
                 zs_clip_fgbg_features   = torch.randn((BS, 514, 1280), device=x_start.device)
-                zs_clip_neg_features    = torch.randn((BS, 257, 1280), device=x_start.device)
                 # On random IDs, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None
@@ -1234,12 +1228,12 @@ class LatentDiffusion(DDPM):
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
-                        captions, zs_clip_fgbg_features, zs_clip_neg_features, \
+                        captions, zs_clip_fgbg_features, \
                         zs_id_embs, id2img_prompt_embs, id2img_neg_prompt_embs = \
                             repeat_selected_instances(slice(0, HALF_BS), 1, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
-                                                      captions, zs_clip_fgbg_features, zs_clip_neg_features,
+                                                      captions, zs_clip_fgbg_features,
                                                       zs_id_embs, id2img_prompt_embs, id2img_neg_prompt_embs)
 
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
@@ -1260,7 +1254,7 @@ class LatentDiffusion(DDPM):
 
         # Not do_zero_shot.
         else:
-            zs_clip_fgbg_features, zs_clip_neg_features = None, None
+            zs_clip_fgbg_features = None, None
             zs_id_embs              = None
             id2img_prompt_embs      = None
             id2img_neg_prompt_embs  = None
@@ -1270,7 +1264,6 @@ class LatentDiffusion(DDPM):
         self.iter_flags['fg_mask']                  = fg_mask
         self.iter_flags['batch_have_fg_mask']       = batch_have_fg_mask
         self.iter_flags['delta_prompts']            = delta_prompts
-        self.iter_flags['zs_clip_neg_features']     = zs_clip_neg_features
         self.iter_flags['zs_id_embs']               = zs_id_embs
 
         self.iter_flags['id2img_pos_prompt_embs']   = id2img_prompt_embs
@@ -1295,7 +1288,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
             self.iter_flags['zs_clip_bg_features']      = cached_inits['zs_clip_bg_features']
-            self.iter_flags['zs_clip_neg_features']     = cached_inits['zs_clip_neg_features']
             self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
             self.iter_flags['id2img_prompt_embs']       = cached_inits['id2img_prompt_embs']
             self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
@@ -2296,7 +2288,6 @@ class LatentDiffusion(DDPM):
                             # as they are only applicable to recon iters. 
                             # We reuse init conds only in compositional iters.
                             'zs_clip_bg_features':    self.iter_flags['zs_clip_bg_features'],
-                            'zs_clip_neg_features':   self.iter_flags['zs_clip_neg_features'],
                             'zs_id_embs':             self.iter_flags['zs_id_embs'],
                             'id2img_prompt_embs':     self.iter_flags['id2img_prompt_embs'],
                             'image_unnorm':           self.iter_flags['image_unnorm'],
