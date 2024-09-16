@@ -84,8 +84,9 @@ class AdaFaceWrapper(nn.Module):
                                                                  out_id_embs_cfg_scale=out_id_embs_cfg_scale,
                                                                  num_static_img_suffix_embs=self.num_static_img_suffix_embs,
                                                                  to_load_id2img_learnable_modules=self.to_load_id2img_learnable_modules)
-            
+            id2ada_prompt_encoder.eval()
             self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
+
         self.id2ada_prompt_encoders.to(self.device)
         print(f"adaface_encoder_scales: {self.adaface_encoder_scales}")
 
