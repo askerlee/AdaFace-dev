@@ -2107,13 +2107,13 @@ class LatentDiffusion(DDPM):
                         # So we can contrast the first instance with the remaining instances.
                         delta_output    = model_output[1:] - model_output[:1]
                         delta_target    = target[1:]       - target[:1]
-                        delta_img_mask  = img_mask[1:]
+                        delta_img_mask  = img_mask[1:] if img_mask is not None else None
                         # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
                         # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
                         # equivalent to setting delta_fg_mask = None.
                         # If we want to ignore noisy signals in the background due to randomness, 
                         # we can set bg_pixel_weight = 0.1.
-                        delta_fg_mask   = fg_mask[1:]
+                        delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
                         loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
                                                                     delta_img_mask, fg_mask=delta_fg_mask, 
                                                                     fg_pixel_weight=1, bg_pixel_weight=1)
