@@ -571,7 +571,8 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings) or [1, 16, 768] (without paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
             # Use an attention dropout of 0.2 to increase robustness.
-            clip_dropout_config     = CLIPTextConfig(attention_dropout=0.2)
+            clip_dropout_config     = CLIPTextConfig.from_pretrained('openai/clip-vit-large-patch14', 
+                                                                     attention_dropout=0.2, dropout=0.2)
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14',
                                                                            config=clip_dropout_config)
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
