@@ -1215,7 +1215,7 @@ class LatentDiffusion(DDPM):
                         # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
                         if random.random() < p_unet_distill_uses_comp_prompt:
                             captions = batch[SUBJ_PROMPT_COMP]
-                            print(captions)
+                            #print(captions)
                             self.iter_flags['unet_distill_uses_comp_prompt'] = True
 
                     if num_denoising_steps > 1:

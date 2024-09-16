@@ -40,7 +40,7 @@ model:
     # Never generate random IDs for consistentID distillation, as
     # consistentID relies on CLIP features of the input image, 
     # which are not available when the IDs are random and there are no actual input images.
-    p_gen_id2img_rand_id:             0
+    p_gen_id2img_rand_id:             0.4
     p_perturb_real_id_embs:           0.6
     # ConsistentID image embeddings are quite robust to perturbations, so we set
     # a large std range of [0.5, 1.5].
