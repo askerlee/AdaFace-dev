@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPTokenizer, CLIPTextModel
+from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextConfig
 
 from torch import einsum
 from adaface.util import gen_gradient_scaler
@@ -570,7 +570,10 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # it is the inverse projection that maps from faceid2img_prompt_embs to adaface_prompt_embs.
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings) or [1, 16, 768] (without paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
-            self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
+            # Use an attention dropout of 0.2 to increase robustness.
+            clip_dropout_config     = CLIPTextConfig(attention_dropout=0.2)
+            self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14',
+                                                                           config=clip_dropout_config)
             self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
             self.prompt2token_proj_grad_scaler = gen_gradient_scaler(prompt2token_proj_grad_scale)
             print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            

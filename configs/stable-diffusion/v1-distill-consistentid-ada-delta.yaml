@@ -37,10 +37,7 @@ model:
     # the performance is only slightly differ.
     id2img_prompt_encoder_trainable:  False
     id2img_prompt_encoder_lr_ratio:   0.001
-    # Never generate random IDs for consistentID distillation, as
-    # consistentID relies on CLIP features of the input image, 
-    # which are not available when the IDs are random and there are no actual input images.
-    p_gen_id2img_rand_id:             0.4
+    p_gen_id2img_rand_id:             0.3
     p_perturb_face_id_embs:           0.6
     # ConsistentID image embeddings are quite robust to perturbations, so we set
     # a large std range of [0.5, 1.5].

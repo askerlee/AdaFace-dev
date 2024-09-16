@@ -542,6 +542,10 @@ class LatentDiffusion(DDPM):
 
         personalization_config.params.id2img_prompt_encoder_trainable = self.id2img_prompt_encoder_trainable
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        if self.embedding_manager_trainable:
+            # embedding_manager contains subj_basis_generator, which is based on extended CLIP image encoder,
+            # which has attention dropout. Therefore setting embedding_manager.train() is necessary.
+            self.embedding_manager.train()
         self.num_id_vecs = self.embedding_manager.id2ada_prompt_encoder.num_id_vecs
 
         self.generation_cache = []
