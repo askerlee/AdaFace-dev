@@ -98,8 +98,8 @@ class DDPM(pl.LightningModule):
                  unet_weights=None,
                  unet_teacher_base_model_path=None,
                  p_gen_id2img_rand_id=0.4,
-                 p_perturb_real_id_embs=0.6,
-                 perturb_real_id_embs_std_range=[0.5, 1.5],
+                 p_perturb_face_id_embs=0.6,
+                 perturb_face_id_embs_std_range=[0.5, 1.5],
                  max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=1,
                  ):
@@ -150,8 +150,8 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_base_model_path           = unet_teacher_base_model_path
         
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
-        self.p_perturb_real_id_embs                 = p_perturb_real_id_embs
-        self.perturb_real_id_embs_std_range         = perturb_real_id_embs_std_range
+        self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
+        self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_init_fg_from_training_image_fresh_count  = 0
@@ -351,7 +351,7 @@ class DDPM(pl.LightningModule):
                             'gen_id2img_rand_id':           False,
                             'id2img_prompt_embs':           None,
                             'id2img_neg_prompt_embs':       None,
-                            'perturb_real_id_embs':         False,
+                            'perturb_face_id_embs':         False,
                             'faceless_img_count':           0,
                             'use_unet_teacher_as_target':   False,
                             'num_denoising_steps':          1,
@@ -1079,11 +1079,11 @@ class LatentDiffusion(DDPM):
                             
             # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
             # ID information.
-            p_perturb_real_id_embs = self.p_perturb_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
-            # p_perturb_real_id_embs: default 0.6.
-            # If do_unet_distill, then prob of perturb_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
-            self.iter_flags['perturb_real_id_embs'] = random.random() < p_perturb_real_id_embs
-            if self.iter_flags['perturb_real_id_embs']:
+            p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
+            # p_perturb_face_id_embs: default 0.6.
+            # If do_unet_distill, then prob of perturb_face_id_embs: (1 - 0.4) * 0.6 = 0.36.
+            self.iter_flags['perturb_face_id_embs'] = random.random() < p_perturb_face_id_embs
+            if self.iter_flags['perturb_face_id_embs']:
                 if not self.iter_flags['same_subject_in_batch']:
                     self.iter_flags['same_subject_in_batch'] = True
                     # Change the ID features of multiple subjects in the batch to the ID features of 
@@ -1112,7 +1112,7 @@ class LatentDiffusion(DDPM):
                 # Keep the first ID embedding as it is, and add noise to the rest.
                 zs_id_embs[1:] = \
                     anneal_perturb_embedding(zs_id_embs[1:], training_percent=0, 
-                                             begin_noise_std_range=self.perturb_real_id_embs_std_range, 
+                                             begin_noise_std_range=self.perturb_face_id_embs_std_range, 
                                              end_noise_std_range=None, 
                                              perturb_prob=1, perturb_std_is_relative=True, 
                                              keep_norm=True, verbose=True)
@@ -1141,7 +1141,7 @@ class LatentDiffusion(DDPM):
                 # Otherwise, use the unet recon as target with a probability of 0.5, and use the original image (noise) 
                 # as target with a probability of 0.5.
                 # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
-                if self.iter_flags['gen_id2img_rand_id'] or self.iter_flags['perturb_real_id_embs'] \
+                if self.iter_flags['gen_id2img_rand_id'] or self.iter_flags['perturb_face_id_embs'] \
                   or self.iter_flags['faceless_img_count'] > 0:
                     self.iter_flags['use_unet_teacher_as_target'] = True
                 else:
@@ -1233,8 +1233,8 @@ class LatentDiffusion(DDPM):
                         
                         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
                         # We don't explicitly repeat noise here. 
-                        # If perturb_real_id_embs,     then the noise is already the same for all ID embeddings,
-                        # If not perturb_real_id_embs, then the noise should be different for different instances, 
+                        # If perturb_face_id_embs,     then the noise is already the same for all ID embeddings,
+                        # If not perturb_face_id_embs, then the noise should be different for different instances, 
                         # and there's no need to repeat. 
                         # But we need to use only the first HALF_BS noises to match x_start.
                         noise = noise[:HALF_BS]
@@ -2099,11 +2099,11 @@ class LatentDiffusion(DDPM):
                     # and the remaining ID embeddings are added with noise.
                     # So we can contrast the first instance with the remaining instances,
                     # and highlight their differences caused by the noise.
-                    # perturb_real_id_embs implies use_unet_teacher_as_target and (not gen_id2img_rand_id).
+                    # perturb_face_id_embs implies use_unet_teacher_as_target and (not gen_id2img_rand_id).
                     # Therefore, targets == unet_teacher_noise_preds.
-                    if self.iter_flags['perturb_real_id_embs']:
+                    if self.iter_flags['perturb_face_id_embs']:
                         # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
-                        # NOTE: if perturb_real_id_embs, the noises for different instances are the same.
+                        # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
                         # So we can contrast the first instance with the remaining instances.
                         delta_output    = model_output[1:] - model_output[:1]
                         delta_target    = target[1:]       - target[:1]

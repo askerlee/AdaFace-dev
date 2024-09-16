@@ -219,7 +219,7 @@ def get_parser(**parser_kwargs):
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--max_num_denoising_steps", type=int, default=3,
                         help="Maximum number of denoising steps (default 3)")    
-    parser.add_argument("--p_perturb_real_id_embs", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--p_perturb_face_id_embs", type=float, default=argparse.SUPPRESS,
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=1,
                         help="Multiplier of the prompt2token projection attention")
@@ -698,8 +698,8 @@ if __name__ == "__main__":
             config.model.params.p_gen_id2img_rand_id    = opt.p_gen_id2img_rand_id
             
         config.model.params.max_num_denoising_steps     = opt.max_num_denoising_steps
-        if hasattr(opt, 'p_perturb_real_id_embs'):
-            config.model.params.p_perturb_real_id_embs = opt.p_perturb_real_id_embs
+        if hasattr(opt, 'p_perturb_face_id_embs'):
+            config.model.params.p_perturb_face_id_embs = opt.p_perturb_face_id_embs
 
         config.model.params.personalization_config.params.do_zero_shot      = opt.zeroshot
         config.model.params.personalization_config.params.extend_prompt2token_proj_attention_multiplier   = opt.extend_prompt2token_proj_attention_multiplier
