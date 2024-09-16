@@ -1027,10 +1027,39 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             image_paths = batch["image_path"]
 
+
+            # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
+            # Therefore, zs_clip_fgbg_features are not available.
+            # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
+            if self.iter_flags['gen_id2img_rand_id']:
+                # zs_id_embs: [4, 512]. id2img_prompt_embs: [4, 21, 768]
+                results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
+                                images.shape[0], init_id_embs=None, pre_clip_features=None,
+                                # Random ID embeddings have no ground truth images, but the objective
+                                # is to align with the unet teacher output. Therefore, we are still
+                                # able to train the id2img prompt encoder, if it's enabled.
+                                id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
+                zs_id_embs, id2img_prompt_embs = results[1], results[2]
+                # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
+                id2img_neg_prompt_embs = results[3]                
+                # For ConsistentID, random clip features are much better than zero clip features.
+                zs_clip_fgbg_features   = torch.randn((BS, 514, 1280), device=x_start.device)
+                # On random IDs, we don't need to consider img_mask and fg_mask.
+                img_mask = None
+                fg_mask  = None
+                batch_have_fg_mask[:] = False
+                # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start 
+                # with id2img_prompt_embs.
+                x_start = torch.randn_like(x_start)
+                self.iter_flags['faceless_img_count'] = 0
+                # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
+                self.iter_flags['same_subject_in_batch'] = False
+
+            # Not gen_id2img_rand_id. The recon/distillation is on real ID embeddings.
             # 'gen_id2img_rand_id' is only True in do_normal_recon iters.
             # So if not do_normal_recon, then this branch is always executed.
             #    If     do_normal_recon, then this branch is executed at 50% of the time.
-            if not self.iter_flags['gen_id2img_rand_id']:
+            else:
                 # When possible, don't always use the average embedding of the same subject in the batch.
                 # Otherwise, the model may memorize the subject embedding and tend to generate subjects
                 # who look like the subjects in the training data.
@@ -1056,88 +1085,60 @@ class LatentDiffusion(DDPM):
                     self.embedding_manager.id2ada_prompt_encoder.extract_init_id_embeds_from_images(\
                         images, image_paths, fg_mask.squeeze(1), skip_non_faces=False, 
                         calc_avg=use_subj_avg_embedding)
-                                
-                # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
-                # ID information.
-                p_perturb_real_id_embs = self.p_perturb_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
-                # p_perturb_real_id_embs: default 0.6.
-                # If do_unet_distill, then prob of perturb_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
-                self.iter_flags['perturb_real_id_embs'] = random.random() < p_perturb_real_id_embs
-                if self.iter_flags['perturb_real_id_embs']:
-                    if not self.iter_flags['same_subject_in_batch']:
-                        self.iter_flags['same_subject_in_batch'] = True
-                        # Change the ID features of multiple subjects in the batch to the ID features of 
-                        # the first subject, before adding noise to the ID features.
-                        # Doing so is similar to contrastive learning: the embeddings in a batch are similar
-                        # (the first subject embedding + randn noise), but the generated images are quite different.
-                        # Therefore, the model may learn to distinguish the tiny differences in the embeddings.
-                        # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
-                        # the first subject's as well.
-                        # Change the batch to have the (1 subject image) * BS strcture.
-                        # NOTE: Use the same noise for different ID embeddings in the batch,
-                        # so that we can compute the delta loss between the generated images.
-                        # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                        x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
-                        batch_have_fg_mask, self.batch_subject_names, \
-                        zs_clip_fgbg_features, zs_id_embs = \
-                            repeat_selected_instances(slice(0, 1), BS, 
-                                                      x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
-                                                      batch_have_fg_mask, self.batch_subject_names, 
-                                                      zs_clip_fgbg_features, zs_id_embs)
-                        
-                    # Add noise to the zero-shot ID embeddings with probability 0.6.
-                    # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
-                    # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
-                    # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
-                    # Keep the first ID embedding as it is, and add noise to the rest.
-                    zs_id_embs[1:] = \
-                        anneal_perturb_embedding(zs_id_embs[1:], training_percent=0, 
-                                                 begin_noise_std_range=self.perturb_real_id_embs_std_range, 
-                                                 end_noise_std_range=None, 
-                                                 perturb_prob=1, perturb_std_is_relative=True, 
-                                                 keep_norm=True, verbose=True)
 
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
+                            
+            # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
+            # ID information.
+            p_perturb_real_id_embs = self.p_perturb_real_id_embs if self.iter_flags['do_unet_distill'] else 0                
+            # p_perturb_real_id_embs: default 0.6.
+            # If do_unet_distill, then prob of perturb_real_id_embs: (1 - 0.4) * 0.6 = 0.36.
+            self.iter_flags['perturb_real_id_embs'] = random.random() < p_perturb_real_id_embs
+            if self.iter_flags['perturb_real_id_embs']:
+                if not self.iter_flags['same_subject_in_batch']:
+                    self.iter_flags['same_subject_in_batch'] = True
+                    # Change the ID features of multiple subjects in the batch to the ID features of 
+                    # the first subject, before adding noise to the ID features.
+                    # Doing so is similar to contrastive learning: the embeddings in a batch are similar
+                    # (the first subject embedding + randn noise), but the generated images are quite different.
+                    # Therefore, the model may learn to distinguish the tiny differences in the embeddings.
+                    # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
+                    # the first subject's as well.
+                    # Change the batch to have the (1 subject image) * BS strcture.
+                    # NOTE: Use the same noise for different ID embeddings in the batch,
+                    # so that we can compute the delta loss between the generated images.
+                    # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+                    x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
+                    batch_have_fg_mask, self.batch_subject_names, \
+                    zs_clip_fgbg_features, zs_id_embs = \
+                        repeat_selected_instances(slice(0, 1), BS, 
+                                                    x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
+                                                    batch_have_fg_mask, self.batch_subject_names, 
+                                                    zs_clip_fgbg_features, zs_id_embs)
+                    
+                # Add noise to the zero-shot ID embeddings with probability 0.6.
+                # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
+                # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
+                # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
+                # Keep the first ID embedding as it is, and add noise to the rest.
+                zs_id_embs[1:] = \
+                    anneal_perturb_embedding(zs_id_embs[1:], training_percent=0, 
+                                                begin_noise_std_range=self.perturb_real_id_embs_std_range, 
+                                                end_noise_std_range=None, 
+                                                perturb_prob=1, perturb_std_is_relative=True, 
+                                                keep_norm=True, verbose=True)
 
-                pre_clip_features = zs_clip_fgbg_features
                 # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
                 # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
                 # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
                 results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
                             images.shape[0], init_id_embs=zs_id_embs, 
-                            pre_clip_features=pre_clip_features, 
+                            pre_clip_features=zs_clip_fgbg_features, 
                             id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
                 id2img_prompt_embs = results[2]
                 # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
                 id2img_neg_prompt_embs = results[3]
-
-            # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
-            # Therefore, zs_clip_fgbg_features are not available.
-            # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
-            else:
-                # zs_id_embs: [4, 512]. id2img_prompt_embs: [4, 21, 768]
-                results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
-                                images.shape[0], init_id_embs=None, pre_clip_features=None,
-                                # Random ID embeddings have no ground truth images, but the objective
-                                # is to align with the unet teacher output. Therefore, we are still
-                                # able to train the id2img prompt encoder, if it's enabled.
-                                id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
-                zs_id_embs, id2img_prompt_embs = results[1], results[2]
-                # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
-                id2img_neg_prompt_embs = results[3]                
-                # For ConsistentID, random clip features are much better than zero clip features.
-                zs_clip_fgbg_features   = torch.randn((BS, 514, 1280), device=x_start.device)
-                # On random IDs, we don't need to consider img_mask and fg_mask.
-                img_mask = None
-                fg_mask  = None
-                batch_have_fg_mask[:] = False
-                # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start 
-                # with id2img_prompt_embs.
-                x_start = torch.randn_like(x_start)
-                self.iter_flags['faceless_img_count'] = 0
-                # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
-                self.iter_flags['same_subject_in_batch'] = False
 
             # During training, zs_id_embs, id2img_prompt_embs are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
@@ -2078,63 +2079,56 @@ class LatentDiffusion(DDPM):
                     except:
                         breakpoint()
 
-                    if self.iter_flags['gen_id2img_rand_id'] or self.unet_teacher_type == 'unet_ensemble':
-                        # If gen_id2img_rand_id, then always use_unet_teacher_as_target == True.                    
-                        # Compute the recon loss on the whole image, as we don't have fg_mask or img_mask.
-                        # If unet_teacher_type == 'unet_ensemble', then also compute the recon loss on the whole image.
-                        loss_recon = self.get_loss(model_output, target.to(model_output.dtype), mean=True)
-                        loss_recon_delta = torch.tensor(0, device=loss_recon.device)
+                    # use_unet_teacher_as_target could be True or False.
+                    # If we use the original image (noise) as target, and still wish to keep the original background
+                    # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
+                    # Therefore, bg_pixel_weight = 0.1.
+                    if not self.iter_flags['use_unet_teacher_as_target']:
+                        bg_pixel_weight = 0.1
+                    # If we use comp_prompt as condition, then the background is compositional, and 
+                    # we want to do recon on the whole image. But considering background is not perfect, 
+                    # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
+                    elif self.iter_flags['unet_distill_uses_comp_prompt']:
+                        bg_pixel_weight = 0.5
+                    elif self.unet_teacher_type == 'arc2face':
+                        bg_pixel_weight = 0
+                    elif self.unet_teacher_type == 'consistentID':
+                        # If without negative prompt embeddings, consistentID will generate
+                        # totally blank backgrounds. So we don't learn from its backgrounds.
+                        bg_pixel_weight = 0
                     else:
-                        # use_unet_teacher_as_target could be True or False.
-                        # If we use the original image (noise) as target, and still wish to keep the original background
-                        # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
-                        # Therefore, bg_pixel_weight = 0.1.
-                        if not self.iter_flags['use_unet_teacher_as_target']:
-                            bg_pixel_weight = 0.1
-                        # If we use comp_prompt as condition, then the background is compositional, and 
-                        # we want to do recon on the whole image. But considering background is not perfect, 
-                        # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
-                        elif self.iter_flags['unet_distill_uses_comp_prompt']:
-                            bg_pixel_weight = 0.5
-                        elif self.unet_teacher_type == 'arc2face':
-                            bg_pixel_weight = 0
-                        elif self.unet_teacher_type == 'consistentID':
-                            # If without negative prompt embeddings, consistentID will generate
-                            # totally blank backgrounds. So we don't learn from its backgrounds.
-                            bg_pixel_weight = 0
-                        else:
-                            breakpoint()
+                        breakpoint()
 
-                        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-                        loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                                             img_mask, fg_mask, 
-                                                             fg_pixel_weight=1,
-                                                             bg_pixel_weight=bg_pixel_weight)
+                    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+                    loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                                            img_mask, fg_mask, 
+                                                            fg_pixel_weight=1,
+                                                            bg_pixel_weight=bg_pixel_weight)
 
-                        # The ID embedding of the first instance in the batch is intact,
-                        # and the remaining ID embeddings are added with noise.
-                        # So we can contrast the first instance with the remaining instances,
-                        # and highlight their differences caused by the noise.
-                        # perturb_real_id_embs implies use_unet_teacher_as_target and (not gen_id2img_rand_id).
-                        # Therefore, targets == unet_teacher_noise_preds.
-                        if self.iter_flags['perturb_real_id_embs']:
-                            # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
-                            # NOTE: if perturb_real_id_embs, the noises for different instances are the same.
-                            # So we can contrast the first instance with the remaining instances.
-                            delta_output    = model_output[1:] - model_output[:1]
-                            delta_target    = target[1:]       - target[:1]
-                            delta_img_mask  = img_mask[1:]
-                            # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
-                            # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
-                            # equivalent to setting delta_fg_mask = None.
-                            # If we want to ignore noisy signals in the background due to randomness, 
-                            # we can set bg_pixel_weight = 0.1.
-                            delta_fg_mask   = fg_mask[1:]
-                            loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                                       delta_img_mask, fg_mask=delta_fg_mask, 
-                                                                       fg_pixel_weight=1, bg_pixel_weight=1)
-                        else:
-                            loss_recon_delta = torch.tensor(0, device=loss_recon.device)
+                    # The ID embedding of the first instance in the batch is intact,
+                    # and the remaining ID embeddings are added with noise.
+                    # So we can contrast the first instance with the remaining instances,
+                    # and highlight their differences caused by the noise.
+                    # perturb_real_id_embs implies use_unet_teacher_as_target and (not gen_id2img_rand_id).
+                    # Therefore, targets == unet_teacher_noise_preds.
+                    if self.iter_flags['perturb_real_id_embs']:
+                        # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
+                        # NOTE: if perturb_real_id_embs, the noises for different instances are the same.
+                        # So we can contrast the first instance with the remaining instances.
+                        delta_output    = model_output[1:] - model_output[:1]
+                        delta_target    = target[1:]       - target[:1]
+                        delta_img_mask  = img_mask[1:]
+                        # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
+                        # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
+                        # equivalent to setting delta_fg_mask = None.
+                        # If we want to ignore noisy signals in the background due to randomness, 
+                        # we can set bg_pixel_weight = 0.1.
+                        delta_fg_mask   = fg_mask[1:]
+                        loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
+                                                                    delta_img_mask, fg_mask=delta_fg_mask, 
+                                                                    fg_pixel_weight=1, bg_pixel_weight=1)
+                    else:
+                        loss_recon_delta = torch.tensor(0, device=loss_recon.device)
 
                     print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}, {loss_recon_delta.item():.5f}")
                     loss_recons.append(loss_recon)
