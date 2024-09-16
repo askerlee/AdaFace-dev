@@ -1027,29 +1027,17 @@ class LatentDiffusion(DDPM):
             images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
             image_paths = batch["image_path"]
 
-
             # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
             # Therefore, zs_clip_fgbg_features are not available.
             # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
             if self.iter_flags['gen_id2img_rand_id']:
-                # zs_id_embs: [4, 512]. id2img_prompt_embs: [4, 21, 768]
-                results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
-                                images.shape[0], init_id_embs=None, pre_clip_features=None,
-                                # Random ID embeddings have no ground truth images, but the objective
-                                # is to align with the unet teacher output. Therefore, we are still
-                                # able to train the id2img prompt encoder, if it's enabled.
-                                id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
-                zs_id_embs, id2img_prompt_embs = results[1], results[2]
-                # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
-                id2img_neg_prompt_embs = results[3]                
-                # For ConsistentID, random clip features are much better than zero clip features.
-                zs_clip_fgbg_features   = torch.randn((BS, 514, 1280), device=x_start.device)
+                zs_id_embs              = torch.randn(BS, 512, device=x_start.device)
+                zs_clip_fgbg_features   = torch.randn(BS, 514, 1280, device=x_start.device)
                 # On random IDs, we don't need to consider img_mask and fg_mask.
                 img_mask = None
                 fg_mask  = None
                 batch_have_fg_mask[:] = False
-                # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start 
-                # with id2img_prompt_embs.
+                # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start.
                 x_start = torch.randn_like(x_start)
                 self.iter_flags['faceless_img_count'] = 0
                 # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
@@ -1124,26 +1112,28 @@ class LatentDiffusion(DDPM):
                 # Keep the first ID embedding as it is, and add noise to the rest.
                 zs_id_embs[1:] = \
                     anneal_perturb_embedding(zs_id_embs[1:], training_percent=0, 
-                                                begin_noise_std_range=self.perturb_real_id_embs_std_range, 
-                                                end_noise_std_range=None, 
-                                                perturb_prob=1, perturb_std_is_relative=True, 
-                                                keep_norm=True, verbose=True)
+                                             begin_noise_std_range=self.perturb_real_id_embs_std_range, 
+                                             end_noise_std_range=None, 
+                                             perturb_prob=1, perturb_std_is_relative=True, 
+                                             keep_norm=True, verbose=True)
 
-                # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
-                # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
-                # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
-                results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
-                            images.shape[0], init_id_embs=zs_id_embs, 
-                            pre_clip_features=zs_clip_fgbg_features, 
-                            id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
-                id2img_prompt_embs = results[2]
-                # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
-                id2img_neg_prompt_embs = results[3]
+            # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
+            # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
+            # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
+            results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
+                        images.shape[0], init_id_embs=zs_id_embs, 
+                        pre_clip_features=zs_clip_fgbg_features, 
+                        id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
+                        
+            # id2img_prompt_embs, id2img_neg_prompt_embs: [4, 21, 768]
+            # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
+            id2img_prompt_embs, id2img_neg_prompt_embs = results[2], results[3]
 
             # During training, zs_id_embs, id2img_prompt_embs are float16, but x_start is float32.
             zs_id_embs = zs_id_embs.to(x_start.dtype)
             id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
-            id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype) if id2img_neg_prompt_embs is not None else None
+            if id2img_neg_prompt_embs is not None:
+                id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
 
             if self.iter_flags['do_unet_distill']:
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
