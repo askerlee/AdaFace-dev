@@ -1081,6 +1081,22 @@ class LatentDiffusion(DDPM):
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
                             
+            # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
+            # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
+            # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
+            results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
+                        images.shape[0], init_id_embs=zs_id_embs, 
+                        pre_clip_features=zs_clip_fgbg_features, 
+                        id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
+                        
+            # id2img_prompt_embs, id2img_neg_prompt_embs: [4, 21, 768]
+            # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
+            id2img_prompt_embs, id2img_neg_prompt_embs = results[2], results[3]
+            # During training, id2img_prompt_embs is float16, but x_start is float32.
+            id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
+            if id2img_neg_prompt_embs is not None:
+                id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
+
             # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
             # ID information.
             p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
@@ -1098,46 +1114,34 @@ class LatentDiffusion(DDPM):
                     # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
                     # the first subject's as well.
                     # Change the batch to have the (1 subject image) * BS strcture.
-                    # NOTE: Use the same noise for different ID embeddings in the batch,
+                    # NOTE: Use the same noise for differently-perturbed ID embeddings in the batch,
                     # so that we can compute the delta loss between the generated images.
                     # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+                    # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
+                    # We don't repeat id2img_neg_prompt_embs, as it's constant and identical for different instances.
                     x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
                     batch_have_fg_mask, self.batch_subject_names, \
-                    zs_clip_fgbg_features, zs_id_embs = \
+                    id2img_prompt_embs, zs_clip_fgbg_features = \
                         repeat_selected_instances(slice(0, 1), BS, 
-                                                    x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
-                                                    batch_have_fg_mask, self.batch_subject_names, 
-                                                    zs_clip_fgbg_features, zs_id_embs)
+                                                  x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
+                                                  batch_have_fg_mask, self.batch_subject_names, 
+                                                  id2img_prompt_embs, zs_clip_fgbg_features)
                     
-                # Add noise to the zero-shot ID embeddings with probability 0.6.
+                # ** Add noise to the zero-shot ID image prompt embeddings with probability 0.6. **
+                # ** Note the noise is added to the image prompt embeddings instead of the initial face ID embeddings. **
+                # Because for ConsistentID, both the ID embeddings and the CLIP features are used to generate the image prompt embeddings.
+                # Each embedding has different roles in depicting the facial features.
+                # If we perturb both, we cannot guarantee their consistency and the perturbed faces may be quite distorted.
                 # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
                 # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
                 # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
                 # Keep the first ID embedding as it is, and add noise to the rest.
-                zs_id_embs[1:] = \
-                    anneal_perturb_embedding(zs_id_embs[1:], training_percent=0, 
+                id2img_prompt_embs[1:] = \
+                    anneal_perturb_embedding(id2img_prompt_embs[1:], training_percent=0, 
                                              begin_noise_std_range=self.perturb_face_id_embs_std_range, 
                                              end_noise_std_range=None, 
                                              perturb_prob=1, perturb_std_is_relative=True, 
                                              keep_norm=True, verbose=True)
-
-            # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
-            # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
-            # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
-            results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
-                        images.shape[0], init_id_embs=zs_id_embs, 
-                        pre_clip_features=zs_clip_fgbg_features, 
-                        id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
-                        
-            # id2img_prompt_embs, id2img_neg_prompt_embs: [4, 21, 768]
-            # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
-            id2img_prompt_embs, id2img_neg_prompt_embs = results[2], results[3]
-
-            # During training, zs_id_embs, id2img_prompt_embs are float16, but x_start is float32.
-            zs_id_embs = zs_id_embs.to(x_start.dtype)
-            id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
-            if id2img_neg_prompt_embs is not None:
-                id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
 
             if self.iter_flags['do_unet_distill']:
                 # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
@@ -1221,15 +1225,16 @@ class LatentDiffusion(DDPM):
                         ## HALF_BS = max(2, HALF_BS)
 
                         # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
+                        # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
                         x_start, batch_images_unnorm, img_mask, fg_mask, \
                         batch_have_fg_mask, self.batch_subject_names, \
                         captions, zs_clip_fgbg_features, \
-                        zs_id_embs, id2img_prompt_embs, id2img_neg_prompt_embs = \
+                        id2img_prompt_embs, id2img_neg_prompt_embs = \
                             repeat_selected_instances(slice(0, HALF_BS), 1, 
                                                       x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                       batch_have_fg_mask, self.batch_subject_names, 
                                                       captions, zs_clip_fgbg_features,
-                                                      zs_id_embs, id2img_prompt_embs, id2img_neg_prompt_embs)
+                                                      id2img_prompt_embs, id2img_neg_prompt_embs)
 
                         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                             subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
@@ -1249,8 +1254,7 @@ class LatentDiffusion(DDPM):
 
         # Not do_zero_shot.
         else:
-            zs_clip_fgbg_features = None, None
-            zs_id_embs              = None
+            zs_clip_fgbg_features   = None
             id2img_prompt_embs      = None
             id2img_neg_prompt_embs  = None
 
@@ -1259,13 +1263,10 @@ class LatentDiffusion(DDPM):
         self.iter_flags['fg_mask']                  = fg_mask
         self.iter_flags['batch_have_fg_mask']       = batch_have_fg_mask
         self.iter_flags['delta_prompts']            = delta_prompts
-        self.iter_flags['zs_id_embs']               = zs_id_embs
+        self.iter_flags['image_unnorm']             = batch_images_unnorm
 
-        self.iter_flags['id2img_pos_prompt_embs']   = id2img_prompt_embs
         self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
         self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
-
-        self.iter_flags['image_unnorm']             = batch_images_unnorm
         if zs_clip_fgbg_features is not None:
             self.iter_flags['zs_clip_bg_features']  = zs_clip_fgbg_features.chunk(2, dim=1)[1]
         else:
@@ -1283,7 +1284,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['use_background_token']     = cached_inits['use_background_token']
             self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
             self.iter_flags['zs_clip_bg_features']      = cached_inits['zs_clip_bg_features']
-            self.iter_flags['zs_id_embs']               = cached_inits['zs_id_embs']
             self.iter_flags['id2img_prompt_embs']       = cached_inits['id2img_prompt_embs']
             self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
 
@@ -1976,11 +1976,11 @@ class LatentDiffusion(DDPM):
                     # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
                     student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
                     if self.unet_teacher_type == 'arc2face':
-                        teacher_context = self.iter_flags['id2img_pos_prompt_embs']
+                        teacher_context = self.iter_flags['id2img_prompt_embs']
                     elif self.unet_teacher_type == 'unet_ensemble':
                         teacher_context = student_prompt_embs
                     elif self.unet_teacher_type == 'consistentID':
-                        global_id_embeds = self.iter_flags['id2img_pos_prompt_embs']
+                        global_id_embeds = self.iter_flags['id2img_prompt_embs']
                         # global_id_embeds: [BS, 4, 768]
                         # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
                         cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
@@ -2263,13 +2263,11 @@ class LatentDiffusion(DDPM):
                             'filtered_fg_mask':       filtered_fg_mask,
                             'use_background_token':   self.iter_flags['use_background_token'],
                             'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                            # If not do_zero_shot, 'zs_clip_bg_features', 'zs_id_embs' and 'id2img_prompt_embs' 
-                            # are all None.
+                            # If not do_zero_shot, 'zs_clip_bg_features' and 'id2img_prompt_embs' are None.
                             # We don't need to cache other flags, such as do_unet_distill,
                             # as they are only applicable to recon iters. 
                             # We reuse init conds only in compositional iters.
                             'zs_clip_bg_features':    self.iter_flags['zs_clip_bg_features'],
-                            'zs_id_embs':             self.iter_flags['zs_id_embs'],
                             'id2img_prompt_embs':     self.iter_flags['id2img_prompt_embs'],
                             'image_unnorm':           self.iter_flags['image_unnorm'],
                         }

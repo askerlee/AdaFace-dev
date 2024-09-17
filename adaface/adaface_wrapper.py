@@ -285,6 +285,7 @@ class AdaFaceWrapper(nn.Module):
         return prompt
 
     def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
+                                   perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                    perturb_std=0, update_text_encoder=True):
         all_adaface_subj_embs = []
         all_teacher_neg_id_prompt_embs = []
@@ -293,6 +294,7 @@ class AdaFaceWrapper(nn.Module):
                 id2ada_prompt_encoder.generate_adaface_embeddings(\
                     image_paths, face_id_embs=face_id_embs, 
                     gen_rand_face=gen_rand_face, 
+                    perturb_at_stage=perturb_at_stage,
                     perturb_std=perturb_std)
             
             # adaface_subj_embs: [16, 768] or [4, 768].
@@ -418,8 +420,9 @@ class AdaFaceWrapper(nn.Module):
                                    num_images_per_prompt=1,
                                    generator=generator).images
         else:
-            # noise: [BS, 4, 64, 64]
-            # When the pipeline is text2img, strength is ignored.
+            # When the pipeline is text2img, noise: [BS, 4, 64, 64], and strength is ignored.
+            # When the pipeline is img2img,  noise is an initiali image of [BS, 3, 512, 512],
+            # whose pixels are normalized to [0, 1].
             images = self.pipeline(image=noise,
                                    prompt_embeds=prompt_embeds_, 
                                    negative_prompt_embeds=negative_prompt_embeds_, 

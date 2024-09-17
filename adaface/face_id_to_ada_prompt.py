@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from transformers import CLIPTokenizer, CLIPImageProcessor
 from .arc2face_models import CLIPTextModelWrapper
-from .subj_basis_generator import SubjBasisGenerator
 from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline 
 from .util import perturb_tensor, pad_image_obj_to_square, \
                   calc_stats, patch_clip_image_encoder_with_mask, CLIPVisionModelWithMask
@@ -250,9 +249,11 @@ class FaceID2AdaPrompt(nn.Module):
     # Otherwise, if image_paths/image_objs are provided, extract face embeddings from the images.
     # Otherwise, we generate random face embeddings [id_batch_size, 512].
     def get_img_prompt_embs(self, init_id_embs, pre_clip_features, image_paths, image_objs,
-                            id_batch_size, perturb_std=0.0, 
+                            id_batch_size, 
                             skip_non_faces=True, return_core_id_embs_only=True,
-                            avg_at_stage=None,  # id_emb, prompt_emb, or None.
+                            avg_at_stage=None,     # id_emb, img_prompt_emb, or None.
+                            perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
+                            perturb_std=0.0, 
                             id2img_prompt_encoder_trainable=False, verbose=False):
         face_image_count = 0
         device = self.clip_image_encoder.device
@@ -297,7 +298,7 @@ class FaceID2AdaPrompt(nn.Module):
                 if clip_fgbg_features is not None:
                     clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
 
-        if perturb_std > 0:
+        if perturb_at_stage == 'id_emb' and perturb_std > 0:
             # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
             faceid_embeds = perturb_tensor(faceid_embeds, perturb_std, perturb_std_is_relative=True, keep_norm=True)
             if self.name == 'consistentID':
@@ -312,9 +313,17 @@ class FaceID2AdaPrompt(nn.Module):
                                                     called_for_neg_img_prompt=False,
                                                     return_full_and_core_embs=True)
         
-        if avg_at_stage == 'prompt_emb':
+        if avg_at_stage == 'img_prompt_emb':
             pos_prompt_embs     = pos_prompt_embs.mean(dim=0, keepdim=True)
             pos_core_prompt_emb = pos_core_prompt_emb.mean(dim=0, keepdim=True)
+
+        if perturb_at_stage == 'img_prompt_emb' and perturb_std > 0:
+            # NOTE: for simplicity, pos_prompt_embs and pos_core_prompt_emb are perturbed independently.
+            # This could cause inconsistency between pos_prompt_embs and pos_core_prompt_emb.
+            # But in practice, unless we use both pos_prompt_embs and pos_core_prompt_emb
+            # this is not an issue. But we rarely use pos_prompt_embs and pos_core_prompt_emb together.
+            pos_prompt_embs     = perturb_tensor(pos_prompt_embs,     perturb_std, perturb_std_is_relative=True, keep_norm=True)
+            pos_core_prompt_emb = perturb_tensor(pos_core_prompt_emb, perturb_std, perturb_std_is_relative=True, keep_norm=True)
 
         if return_core_id_embs_only:
             pos_prompt_embs = pos_core_prompt_emb
@@ -327,10 +336,9 @@ class FaceID2AdaPrompt(nn.Module):
             pos_prompt_embs = pos_prompt_embs.repeat(id_batch_size, 1, 1)
             if clip_fgbg_features is not None:
                 clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
-            if clip_neg_features is not None:
-                clip_neg_features  = clip_neg_features.repeat(id_batch_size, 1, 1)
-            
+
         if self.gen_neg_img_prompt:
+            # Never perturb the negative prompt embeddings.
             with torch.set_grad_enabled(id2img_prompt_encoder_trainable):
                 neg_prompt_embs, neg_core_prompt_emb = \
                     self.map_init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
@@ -404,6 +412,7 @@ class FaceID2AdaPrompt(nn.Module):
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
+                                    perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                     perturb_std=0, id2img_prompt_encoder_trainable=False):
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
         # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
@@ -422,7 +431,9 @@ class FaceID2AdaPrompt(nn.Module):
                 # image_folder is passed only for logging purpose. 
                 # image_paths contains the paths of the images.
                 image_paths=image_paths, image_objs=None,
-                id_batch_size=1, perturb_std=perturb_std, 
+                id_batch_size=1, 
+                perturb_at_stage=perturb_at_stage,
+                perturb_std=perturb_std, 
                 return_core_id_embs_only=True, avg_at_stage='id_emb',
                 id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                 verbose=True)

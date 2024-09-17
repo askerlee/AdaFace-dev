@@ -1,10 +1,11 @@
 import torch
 from PIL import Image
 import os, argparse, glob
+import numpy as np
 from .face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from .teacher_pipelines import create_arc2face_pipeline, create_consistentid_pipeline
 from transformers import CLIPTextModel
-import numpy as np
+from diffusers import StableDiffusionImg2ImgPipeline
 
 def save_images(images, subject_name, id2img_prompt_encoder_type,
                 prompt, perturb_std, save_dir = "samples-ada"):
@@ -52,6 +53,7 @@ if __name__ == "__main__":
     parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
+    parser.add_argument("--init_img", type=str, default=None)
     parser.add_argument("--prompt", type=str, default="portrait photo of a person in superman costume")
     parser.add_argument("--use_core_only", action="store_true")
     parser.add_argument("--randface", action="store_true")
@@ -124,7 +126,6 @@ if __name__ == "__main__":
         init_id_embs = None
         pre_clip_features = None
 
-    all_faceid_embeds = []
     # perturb_std is the *relative* std of the noise added to the face ID embeddings.
     # For Arc2Face, a perturb_std of 0.08 could change gender, but 0.06 is usually safe.
     # For ConsistentID, the image prompt embeddings are extremely robust to noise,
@@ -140,11 +141,11 @@ if __name__ == "__main__":
                 image_paths=image_paths,
                 image_objs=None,
                 id_batch_size=id_batch_size,
+                perturb_at_stage='img_prompt_emb',
                 perturb_std=perturb_std,
                 return_core_id_embs_only=False,
                 avg_at_stage='id_emb',
                 verbose=True)
-        all_faceid_embeds.append(faceid_embeds)
         
         pipeline.text_encoder = orig_text_encoder
 

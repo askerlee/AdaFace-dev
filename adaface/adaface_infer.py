@@ -149,6 +149,7 @@ if __name__ == "__main__":
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths, init_id_embs, args.randface, 
+                                           perturb_at_stage='img_prompt_emb',
                                            perturb_std=args.perturb_std, update_text_encoder=True)    
     teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if args.use_teacher_neg else None
     images = adaface(noise, args.prompt, None, teacher_neg_id_prompt_embs, args.guidance_scale, args.out_image_count, verbose=True)

@@ -78,6 +78,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
 
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
+                                           perturb_at_stage='img_prompt_emb',
                                            perturb_std=perturb_std, update_text_encoder=True)
     
     if adaface_subj_embs is None:
