@@ -316,6 +316,9 @@ class FaceID2AdaPrompt(nn.Module):
         if avg_at_stage == 'img_prompt_emb':
             pos_prompt_embs     = pos_prompt_embs.mean(dim=0, keepdim=True)
             pos_core_prompt_emb = pos_core_prompt_emb.mean(dim=0, keepdim=True)
+            faceid_embeds       = faceid_embeds.mean(dim=0, keepdim=True)
+            if clip_fgbg_features is not None:
+                clip_fgbg_features = clip_fgbg_features.mean(dim=0, keepdim=True)
 
         if perturb_at_stage == 'img_prompt_emb' and perturb_std > 0:
             # NOTE: for simplicity, pos_prompt_embs and pos_core_prompt_emb are perturbed independently.
@@ -411,9 +414,25 @@ class FaceID2AdaPrompt(nn.Module):
                 print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
 
     # image_paths: a list of image paths. image_folder: the parent folder name.
+    # avg_at_stage: 'id_emb', 'img_prompt_emb', 'ada_prompt_emb', or None.
+    # avg_at_stage == ada_prompt_emb usually produces the worst results.
+    # id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
+                                    avg_at_stage='id_emb', # id_emb, img_prompt_emb, ada_prompt_emb, or None.
                                     perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                     perturb_std=0, id2img_prompt_encoder_trainable=False):
+        if avg_at_stage != 'ada_prompt_emb' and avg_at_stage != None and avg_at_stage.lower() != 'none':
+            img_prompt_avg_at_stage = avg_at_stage
+            id_batch_size = 1
+        else:
+            img_prompt_avg_at_stage = None
+            if face_id_embs is not None:
+                id_batch_size = face_id_embs.shape[0]
+            elif image_paths is not None:
+                id_batch_size = len(image_paths)
+            else:
+                id_batch_size = 1
+            
         # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
         # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
         # Otherwise, face_id_embs is used.
@@ -431,30 +450,42 @@ class FaceID2AdaPrompt(nn.Module):
                 # image_folder is passed only for logging purpose. 
                 # image_paths contains the paths of the images.
                 image_paths=image_paths, image_objs=None,
-                id_batch_size=1, 
+                id_batch_size=id_batch_size, 
                 perturb_at_stage=perturb_at_stage,
                 perturb_std=perturb_std, 
-                return_core_id_embs_only=True, avg_at_stage='id_emb',
+                return_core_id_embs_only=True, 
+                avg_at_stage=img_prompt_avg_at_stage,
                 id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                 verbose=True)
         
         if face_image_count == 0:
             return None, None
 
-        # adaface_subj_embs: [16/4, 768]. 
-        # adaface_prompt_embs: [1, 77, 768] (not used).
-        # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
-        # adaface_prompt_embs, which is not used.
-        adaface_subj_embs, adaface_prompt_embs = \
-            self.subj_basis_generator(id_prompt_embs, None, None, 
-                                      out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
-                                      is_face=True, is_training=False,
-                                      adaface_prompt_embs_inf_type='full_half_pad')
-        # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
-        adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
+        if avg_at_stage == 'ada_prompt_emb':
+            all_id_prompt_embs = [ id_prompt_embs[[i]] for i in range(id_prompt_embs.shape[0]) ]
+        else:
+            all_id_prompt_embs = [ id_prompt_embs ]
+
+        all_adaface_subj_embs = []
+
+        for id_prompt_embs in all_id_prompt_embs:            
+            # adaface_subj_embs: [16/4, 768]. 
+            # adaface_prompt_embs: [1, 77, 768] (not used).
+            # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
+            # adaface_prompt_embs, which is not used.
+            adaface_subj_embs, adaface_prompt_embs = \
+                self.subj_basis_generator(id_prompt_embs, None, None, 
+                                          out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
+                                          is_face=True, is_training=False,
+                                          adaface_prompt_embs_inf_type='full_half_pad')
+            # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
+            adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
+            all_adaface_subj_embs.append(adaface_subj_embs)
+
+        adaface_subj_embs = torch.stack(all_adaface_subj_embs, dim=0).mean(dim=0)
         if neg_id_prompt_embs is not None:
-            # neg_id_prompt_embs: [1, 4, 768] -> [4, 768]
-            neg_id_prompt_embs = neg_id_prompt_embs.squeeze(0)
+            neg_id_prompt_embs = neg_id_prompt_embs.mean(dim=0)
+
         return adaface_subj_embs, neg_id_prompt_embs
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):

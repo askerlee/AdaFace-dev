@@ -66,7 +66,7 @@ def update_out_gallery(images):
     return gr.update(height=800)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, perturb_std,
+def generate_image(image_paths, guidance_scale, avg_at_stage, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
 
@@ -78,6 +78,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
 
     adaface_subj_embs, teacher_neg_id_prompt_embs = \
         adaface.prepare_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
+                                           avg_at_stage=avg_at_stage,
                                            perturb_at_stage='img_prompt_emb',
                                            perturb_std=perturb_std, update_text_encoder=True)
     
@@ -87,7 +88,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     # Sometimes the pipeline is on CPU, although we've put it on CUDA (due to some offloading mechanism).
     # Therefore we set the generator to the correct device.
     generator = torch.Generator(device=device).manual_seed(seed)
-    print(f"Manual seed: {seed}")
+    print(f"Manual seed: {seed}. avg_at_stage: {avg_at_stage}. perturb_std: {perturb_std}")
     # Generate two images each time for the user to select from.
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
@@ -185,6 +186,13 @@ with gr.Blocks(css=css) as demo:
                 value=6.0,
             )
 
+            avg_at_stage = gr.Dropdown(label="Average at stage",
+                                       choices=["id_emb", "img_prompt_emb", "ada_prompt_emb"],
+                                       value="id_emb",
+                                       allow_custom_value=False,
+                                       visible=False,
+                                      )
+            
             perturb_std = gr.Slider(
                 label="Std of noise added to input (may help stablize face embeddings)",
                 minimum=0.0,
@@ -224,7 +232,7 @@ with gr.Blocks(css=css) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, perturb_std, num_images, 
+            inputs=[img_files, guidance_scale, avg_at_stage, perturb_std, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         ).then(
