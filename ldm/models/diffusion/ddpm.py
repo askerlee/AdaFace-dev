@@ -1032,8 +1032,11 @@ class LatentDiffusion(DDPM):
             image_paths = batch["image_path"]
 
             # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
-            # Therefore, zs_clip_fgbg_features are not available.
+            # Therefore, zs_clip_fgbg_features are not available and are randomly generated as well.
             # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
+            # NOTE: the faces generated with gen_id2img_rand_id are usually atypical outliers,
+            # so adding a small proportion of them to the training data may help increase the authenticity on
+            # atypical faces, but adding too much of them may harm the performance on typical faces.
             if self.iter_flags['gen_id2img_rand_id']:
                 zs_id_embs              = torch.randn(BS, 512, device=x_start.device)
                 zs_clip_fgbg_features   = torch.randn(BS, 514, 1280, device=x_start.device)

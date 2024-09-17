@@ -37,7 +37,8 @@ model:
     # the performance is only slightly differ.
     id2img_prompt_encoder_trainable:  False
     id2img_prompt_encoder_lr_ratio:   0.001
-    p_gen_id2img_rand_id:             0.3
+    p_gen_id2img_rand_id:             0.2
+    # perturb_face_id_embs implies computing the delta recon loss loss_recon_delta.
     p_perturb_face_id_embs:           0.6
     # ConsistentID image embeddings are quite robust to perturbations, so we set
     # a large std range of [0.5, 1.5].
