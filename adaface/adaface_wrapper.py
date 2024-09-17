@@ -284,8 +284,11 @@ class AdaFaceWrapper(nn.Module):
 
         return prompt
 
+    # avg_at_stage: 'id_emb', 'img_prompt_emb', 'ada_prompt_emb', or None.
+    # avg_at_stage == ada_prompt_emb usually produces the worst results.
+    # id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
     def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
-                                   avg_at_stage='ada_prompt_emb', # id_emb, img_prompt_emb, ada_prompt_emb, or None.
+                                   avg_at_stage='id_emb', # id_emb, img_prompt_emb, ada_prompt_emb, or None.
                                    perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                    perturb_std=0, update_text_encoder=True):
         all_adaface_subj_embs = []
