@@ -63,9 +63,13 @@ model:
     optimizer_type: AdamW           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
-      # 0.998 corresponds to a half life of 346. 0.999 corresponds to a half life of 693.
-      # Due to high variances of diffusion training, we set the beta2 to 0.998.
-      betas:    [0.9,  0.998]  
+      # Half life:
+      # 0.995  0.996  0.997  0.998  0.999
+      # 138    172    231    346    693
+      # To trade off between the high variances of diffusion training and slow iterations 
+      # (because accumulate_grad_batches = 6), we set beta2 to 0.997, 
+      # whose half life 231 is roughly the gap (250 iterations) between two checkpoints.
+      betas:    [0.9,  0.997]  
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
