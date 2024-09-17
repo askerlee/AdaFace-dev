@@ -1,5 +1,5 @@
 model:
-  base_lr: 1e-05
+  base_lr: 2e-06
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
@@ -63,7 +63,9 @@ model:
     optimizer_type: AdamW           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
     adam_config:
-      betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        
+      # 0.998 corresponds to a half life of 346. 0.999 corresponds to a half life of 693.
+      # Due to high variances of diffusion training, we set the beta2 to 0.998.
+      betas:    [0.9,  0.998]  
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
