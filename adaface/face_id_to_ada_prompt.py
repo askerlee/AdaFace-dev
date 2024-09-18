@@ -702,8 +702,8 @@ def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None, *
         # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
         # Only the consistentID modules and bise_net are used.
         id2ada_prompt_encoder = ConsistentID_ID2AdaPrompt(
-                                        base_model_path="models/ensemble/sd15-dste8-vae.safetensors",
-                                        adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
+                                    base_model_path="models/ensemble/sd15-dste8-vae.safetensors",
+                                    adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
     else:
         breakpoint()
     

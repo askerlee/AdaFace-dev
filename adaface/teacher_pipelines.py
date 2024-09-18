@@ -146,7 +146,7 @@ class UNetEnsembleTeacher(UNetTeacher):
         self.unet = UNetEnsemble(unet, extra_unet_paths, unet_weights, device)
 
 class ConsistentIDTeacher(UNetTeacher):
-    def __init__(self, base_model_path, **kwargs):
+    def __init__(self, base_model_path="models/ensemble/sd15-dste8-vae.safetensors", **kwargs):
         super().__init__(**kwargs)
         self.name = "consistentID"
         ### Load base model
@@ -190,7 +190,7 @@ def create_consistentid_pipeline(base_model_path, dtype=torch.float16):
 
     return pipe
 
-def create_unet_teacher(teacher_type, base_model_path, device, **kwargs):
+def create_unet_teacher(teacher_type, device, **kwargs):
     if teacher_type == "arc2face":
         return Arc2FaceTeacher(**kwargs)
     elif teacher_type == "unet_ensemble":
@@ -204,7 +204,7 @@ def create_unet_teacher(teacher_type, base_model_path, device, **kwargs):
         # unet_teacher is put on CPU first, then moved to GPU when DDPM is moved to GPU.
         return UNetEnsembleTeacher(device=device, **kwargs)
     elif teacher_type == "consistentID":
-        return ConsistentIDTeacher(base_model_path, **kwargs)
+        return ConsistentIDTeacher(**kwargs)
     else:
         raise NotImplementedError(f"Teacher type {teacher_type} not implemented.")
     

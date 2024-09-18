@@ -32,7 +32,7 @@ model:
     # The percentage of unet_distill_iter among do_normal_recon iters.
     # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
     # at the other 50%, we use the original image as the target.
-    p_unet_distill_iter:              0.5
+    p_unet_distill_iter:              0.7
     # Even if setting id2img_prompt_encoder_trainable to True, 
     # the performance is only slightly differ.
     id2img_prompt_encoder_trainable:  False
@@ -103,7 +103,7 @@ model:
         training_end_perturb_std_range:    [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively
         training_perturb_prob:   { 'recon_iter':            0.6, 
-                                   'unet_distill_iter':     0,
+                                   'unet_distill_iter':     0.4,
                                    'compos_distill_iter':   0.4 }
         adaface_ckpt_path:                null
         do_zero_shot:                     True
@@ -184,4 +184,4 @@ lightning:
     limit_val_batches: 0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
-    accumulate_grad_batches: 6
+    accumulate_grad_batches: 4

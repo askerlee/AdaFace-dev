@@ -723,7 +723,6 @@ if __name__ == "__main__":
             if hasattr(opt, 'unet_teacher_cfg_scale_range'):
                 config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
 
-            config.model.params.unet_teacher_base_model_path = opt.actual_resume
             config.model.params.extra_unet_paths             = opt.extra_unet_paths
             # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights                 = opt.unet_weights

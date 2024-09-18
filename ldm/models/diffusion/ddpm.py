@@ -96,7 +96,6 @@ class DDPM(pl.LightningModule):
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_paths=None,
                  unet_weights=None,
-                 unet_teacher_base_model_path=None,
                  p_gen_id2img_rand_id=0.4,
                  p_perturb_face_id_embs=0.6,
                  perturb_face_id_embs_std_range=[0.5, 1.5],
@@ -147,7 +146,6 @@ class DDPM(pl.LightningModule):
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
         self.extra_unet_paths                       = extra_unet_paths
         self.unet_weights                           = unet_weights
-        self.unet_teacher_base_model_path           = unet_teacher_base_model_path
         
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
@@ -353,7 +351,6 @@ class DDPM(pl.LightningModule):
                             'id2img_neg_prompt_embs':       None,
                             'perturb_face_id_embs':         False,
                             'faceless_img_count':           0,
-                            'use_unet_teacher_as_target':   False,
                             'num_denoising_steps':          1,
                             'is_compos_iter':               False,
                             'do_mix_prompt_distillation':   False,
@@ -500,7 +497,7 @@ class LatentDiffusion(DDPM):
         
         if self.p_unet_distill_iter > 0 and self.unet_teacher_type is not None:
             # device, extra_unet_paths and unet_weights are only used for unet_teacher_type == 'unet_ensemble'.
-            self.unet_teacher = create_unet_teacher(self.unet_teacher_type, self.unet_teacher_base_model_path,
+            self.unet_teacher = create_unet_teacher(self.unet_teacher_type, 
                                                     device='cpu',
                                                     extra_unet_paths=self.extra_unet_paths,
                                                     unet_weights=self.unet_weights,
@@ -642,6 +639,8 @@ class LatentDiffusion(DDPM):
         if text_conditioning_iter_type is None:
             if self.iter_flags['is_compos_iter']:
                 text_conditioning_iter_type = 'compos_distill_iter'
+            elif self.iter_flags['do_unet_distill']:
+                text_conditioning_iter_type = 'unet_distill_iter'
             else:
                 # Even if return_prompt_embs_type == 'id' or 'text_id', we still
                 # generate the conventional text embeddings.
@@ -1083,6 +1082,9 @@ class LatentDiffusion(DDPM):
 
                 # faceless_img_count: number of images in the batch in which no faces are detected.
                 self.iter_flags['faceless_img_count'] = faceless_img_count
+                # If there are faceless input images in the batch, we have to use the unet recon as target.
+                if faceless_img_count > 0:
+                    self.iter_flags['do_unet_distill'] = True
                             
             # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
             # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
@@ -1104,7 +1106,7 @@ class LatentDiffusion(DDPM):
             # ID information.
             p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
             # p_perturb_face_id_embs: default 0.6.
-            # If do_unet_distill, then prob of perturb_face_id_embs: (1 - 0.4) * 0.6 = 0.36.
+            # The overall prob of perturb_face_id_embs: (1 - 0.4) * 0.6 = 0.36.
             self.iter_flags['perturb_face_id_embs'] = random.random() < p_perturb_face_id_embs
             if self.iter_flags['perturb_face_id_embs']:
                 if not self.iter_flags['same_subject_in_batch']:
@@ -1147,113 +1149,77 @@ class LatentDiffusion(DDPM):
                                              keep_norm=True, verbose=True)
 
             if self.iter_flags['do_unet_distill']:
-                # If we generate random ID embeddings, or if we add noise to the real ID embeddings,
-                # or if there are faceless input images in the batch, we have to use the unet recon as target.
-                # Otherwise, use the unet recon as target with a probability of 0.5, and use the original image (noise) 
-                # as target with a probability of 0.5.
-                # Prob of this branch is 1 - (1 - 0.4) * 0.4 = 0.76.
-                if self.iter_flags['gen_id2img_rand_id'] or self.iter_flags['perturb_face_id_embs'] \
-                  or self.iter_flags['faceless_img_count'] > 0:
-                    self.iter_flags['use_unet_teacher_as_target'] = True
-                else:
-                    if self.unet_teacher_type == 'arc2face':
-                        # Prob of this branch is (1 - 0.4) * 0.5 = 0.3 (ignoring the cases when faceless_img_count > 0, which are rare).
-                        # For arc2face distillation, still with a probability of 0.5, we use the original image as target.
-                        # Because arc2face output may contain artifacts and is not be better than the original image, 
-                        # and since we have access to the original image, we can use it as target to reduce the 
-                        # artifacts in the arc2face output.
-                        # Therefore, overall, the probability of using the original image as target is 0.5 * 0.24 = 0.12.
-                        # The probability of using the unet recon as target is 0.88.
-                        p_use_unet_teacher_as_target = 0.5
-                        self.iter_flags['use_unet_teacher_as_target'] = random.random() < p_use_unet_teacher_as_target
-                    # UNet ensemble always uses the unet teacher as target.
-                    elif self.unet_teacher_type == 'unet_ensemble':
-                        self.iter_flags['use_unet_teacher_as_target'] = True
-                    # consistentID: always uses the unet teacher as target when do_unet_distill.
-                    # But because p_unet_distill_iter == 0.5 implies that do_unet_distill is only True at 50% of the time,
-                    # and the other 50% of the time, we still do_normal_recon, so the overall probability 
-                    # of using the consistentID unet teacher as target is 0.5.
+                # Gradually increase the chance of taking 5 or 7 denoising steps.
+                p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
+                                                        final_percent=0.5,
+                                                        begin_array=[0.4, 0.3, 0.2, 0.1], 
+                                                        end_array  =[0.4, 0.3, 0.2, 0.1],
+                                                    )
+                cand_num_denoising_steps = [1, 2, 3, 5, 7]
+                # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
+                cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
+                                                if si <= self.max_num_denoising_steps ]
+                p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
+                p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
+
+                # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
+                num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+                self.iter_flags['num_denoising_steps'] = num_denoising_steps
+
+                if self.unet_teacher_type in ['unet_ensemble', 'consistentID']:
+                    if self.unet_teacher_type == 'unet_ensemble':
+                        # The overall probability of using the compositional prompts to distill is
+                        # p_do_unet_distill * p_unet_distill_uses_comp_prompt = 0.5 * 0.5 = 0.25.
+                        p_unet_distill_uses_comp_prompt = 0.5
                     elif self.unet_teacher_type == 'consistentID':
-                        self.iter_flags['use_unet_teacher_as_target'] = True
+                        # The overall probability of using the compositional prompts to distill is 
+                        # p_do_unet_distill * p_unet_distill_uses_comp_prompt = 0.7 * 0.2 = 0.14.
+                        p_unet_distill_uses_comp_prompt = 0.2
                     else:
                         breakpoint()
 
-                if self.iter_flags['use_unet_teacher_as_target']:
-                    # Gradually increase the chance of taking 5 or 7 denoising steps.
-                    p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
-                                                         final_percent=0.5,
-                                                         begin_array=[0.4, 0.3, 0.2, 0.1], 
-                                                         end_array  =[0.4, 0.3, 0.2, 0.1],
-                                                        )
-                    cand_num_denoising_steps = [1, 2, 3, 5, 7]
-                    # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
-                    cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
-                                                 if si <= self.max_num_denoising_steps ]
-                    p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
-                    p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
+                    # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+                    if random.random() < p_unet_distill_uses_comp_prompt:
+                        captions = batch[SUBJ_PROMPT_COMP]
+                        #print(captions)
+                        self.iter_flags['unet_distill_uses_comp_prompt'] = True
 
-                    # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
-                    num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
-                    self.iter_flags['num_denoising_steps'] = num_denoising_steps
+                if num_denoising_steps > 1:
+                    # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
+                    # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
+                    # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
+                    # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
+                    HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
+                    # Setting the minimal batch size to be 2 requires skipping 3 steps if num_denoising_steps == 6.
+                    # Seems doing so will introduce too much artifact. Therefore it's DISABLED.
+                    ## The batch size when doing multi-step denoising is at least 2. 
+                    ## But naively doing so when num_denoising_steps >= 3 may cause OOM.
+                    ## In that case, we need to discard the first few steps from loss computation.
+                    ## HALF_BS = max(2, HALF_BS)
 
-                    if self.unet_teacher_type in ['unet_ensemble', 'consistentID']:
-                        if self.unet_teacher_type == 'unet_ensemble':
-                            # The overall probability of using the compositional prompts to distill is
-                            # p_use_unet_teacher_as_target * p_unet_distill_uses_comp_prompt = 0.5 * 0.5 = 0.25.
-                            p_unet_distill_uses_comp_prompt = 0.5
-                        elif self.unet_teacher_type == 'consistentID':
-                            # The overall probability of using the compositional prompts to distill is 
-                            # p_use_unet_teacher_as_target * p_unet_distill_uses_comp_prompt = 0.5 * 0.2 = 0.1.
-                            p_unet_distill_uses_comp_prompt = 0.2
-                        else:
-                            breakpoint()
+                    # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
+                    # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
+                    x_start, batch_images_unnorm, img_mask, fg_mask, \
+                    batch_have_fg_mask, self.batch_subject_names, \
+                    captions, zs_clip_fgbg_features, \
+                    id2img_prompt_embs, id2img_neg_prompt_embs = \
+                        repeat_selected_instances(slice(0, HALF_BS), 1, 
+                                                    x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                    batch_have_fg_mask, self.batch_subject_names, 
+                                                    captions, zs_clip_fgbg_features,
+                                                    id2img_prompt_embs, id2img_neg_prompt_embs)
 
-                        # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
-                        if random.random() < p_unet_distill_uses_comp_prompt:
-                            captions = batch[SUBJ_PROMPT_COMP]
-                            #print(captions)
-                            self.iter_flags['unet_distill_uses_comp_prompt'] = True
-
-                    if num_denoising_steps > 1:
-                        # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
-                        # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
-                        # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
-                        # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
-                        HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
-                        # Setting the minimal batch size to be 2 requires skipping 3 steps if num_denoising_steps == 6.
-                        # Seems doing so will introduce too much artifact. Therefore it's DISABLED.
-                        ## The batch size when doing multi-step denoising is at least 2. 
-                        ## But naively doing so when num_denoising_steps >= 3 may cause OOM.
-                        ## In that case, we need to discard the first few steps from loss computation.
-                        ## HALF_BS = max(2, HALF_BS)
-
-                        # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
-                        # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
-                        x_start, batch_images_unnorm, img_mask, fg_mask, \
-                        batch_have_fg_mask, self.batch_subject_names, \
-                        captions, zs_clip_fgbg_features, \
-                        id2img_prompt_embs, id2img_neg_prompt_embs = \
-                            repeat_selected_instances(slice(0, HALF_BS), 1, 
-                                                      x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                                      batch_have_fg_mask, self.batch_subject_names, 
-                                                      captions, zs_clip_fgbg_features,
-                                                      id2img_prompt_embs, id2img_neg_prompt_embs)
-
-                        subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                            subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
-                            cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
-                        
-                        delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-                        # We don't explicitly repeat noise here. 
-                        # If perturb_face_id_embs,     then the noise is already the same for all ID embeddings,
-                        # If not perturb_face_id_embs, then the noise should be different for different instances, 
-                        # and there's no need to repeat. 
-                        # But we need to use only the first HALF_BS noises to match x_start.
-                        noise = noise[:HALF_BS]
-
-            # Do zero-shot training but not unet distillation.
-            else:
-                self.iter_flags['use_unet_teacher_as_target'] = False
+                    subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
+                        subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
+                        cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
+                    
+                    delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                    # We don't explicitly repeat noise here. 
+                    # If perturb_face_id_embs,     then the noise is already the same for all ID embeddings,
+                    # If not perturb_face_id_embs, then the noise should be different for different instances, 
+                    # and there's no need to repeat. 
+                    # But we need to use only the first HALF_BS noises to match x_start.
+                    noise = noise[:HALF_BS]
 
         # Not do_zero_shot.
         else:
@@ -1295,13 +1261,14 @@ class LatentDiffusion(DDPM):
         # whose behavior depends on the correct text_conditioning_iter_type.
         if self.iter_flags['is_compos_iter']:
             text_conditioning_iter_type = 'compos_distill_iter'
-        elif self.iter_flags['use_unet_teacher_as_target']:
+        elif self.iter_flags['do_unet_distill']:
             text_conditioning_iter_type = 'unet_distill_iter'
         else:
             text_conditioning_iter_type = 'recon_iter'
         # As a special case, 'id2img_only_iter' is only set in get_text_conditioning(), instead of here.
 
-        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names, text_conditioning_iter_type)
+        self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
+        self.embedding_manager.set_curr_iter_type(text_conditioning_iter_type)
 
         loss = self(x_start, captions, noise)
 
@@ -1321,10 +1288,10 @@ class LatentDiffusion(DDPM):
         # get_text_conditioning(): convert captions to a [16*B, 77, 768] tensor.
         # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
         # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
-        # When use_unet_teacher_as_target and distilling on ConsistentID, we still
+        # When do_unet_distill and distilling on ConsistentID, we still
         # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
         if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_mix_prompt_distillation'] \
-            or self.iter_flags['use_unet_teacher_as_target']:
+          or self.iter_flags['do_unet_distill']:
             # reuse_init_conds, discard the prompts offered in shared_step().
             if self.iter_flags['reuse_init_conds']:
                 # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
@@ -1917,7 +1884,7 @@ class LatentDiffusion(DDPM):
         # cfg_scale: classifier-free guidance scale.
         # By default, 'capture_distill_attn' = False in a generated text context, 
         # including uncond_context generation. So we don't need to set it in self.uncond_context explicitly.
-        if not self.iter_flags['use_unet_teacher_as_target']:
+        if not self.iter_flags['do_unet_distill']:
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
@@ -1926,7 +1893,7 @@ class LatentDiffusion(DDPM):
                                     # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
                                     do_pixel_recon=self.iter_flags['calc_clip_loss'],
                                     cfg_scale=cfg_scale)
-        # Otherwise, use_unet_teacher_as_target == True, 
+        # Otherwise, do_unet_distill == True, 
         # later we will call guided_denoise() multiple times to get the multi-step denoising results.
 
         extra_info['capture_distill_attn'] = False
@@ -1968,98 +1935,93 @@ class LatentDiffusion(DDPM):
                     print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {loss_recon.item():.5f}")
             # do_unet_distill
             else:
-                # num_denoising_steps > 1 implies use_unet_teacher_as_target.
+                # num_denoising_steps > 1 implies do_unet_distill.
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
                 # If self.id2img_prompt_encoder_trainable, we still denoise the images with the UNet teacher,
                 # to train the id2img prompt encoder, preventing it from degeneration.
-                if self.iter_flags['use_unet_teacher_as_target'] or self.id2img_prompt_encoder_trainable:
-                    # student_prompt_embs is the prompt embedding of the student model.
-                    # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
-                    # So we only need to take the first one.
-                    # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
-                    student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
-                    if self.unet_teacher_type == 'arc2face':
-                        teacher_context = self.iter_flags['id2img_prompt_embs']
-                    elif self.unet_teacher_type == 'unet_ensemble':
-                        teacher_context = student_prompt_embs
-                    elif self.unet_teacher_type == 'consistentID':
-                        global_id_embeds = self.iter_flags['id2img_prompt_embs']
-                        # global_id_embeds: [BS, 4, 768]
-                        # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
-                        cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
-                        cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
-                        # teacher_context: [BS, 81, 768]
-                        teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
-                        if self.p_unet_teacher_uses_cfg:
-                            global_neg_id_embs = self.iter_flags['id2img_neg_prompt_embs']
-                            # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-                            # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
-                            cls_neg_prompt_embs = self.uncond_context[0][[0]].repeat(teacher_context.shape[0], 1, 1)
-                            # teacher_neg_context: [BS, 81, 768]
-                            teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
-                            # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
-                            # This is kind of arbitrary (we can also concate them on dim 1), 
-                            # since we always chunk(2) on the same dimension to restore the two parts.
-                            teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
-                    else:
-                        breakpoint()
-
-                    with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
-                        unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
-                            self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
-                    
-                    # **Objective 2**: Align student noise predictions with teacher noise predictions.
-                    # targets: replaced as the reconstructed x0 by the teacher UNet.
-                    # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND * half_batch unet_teacher predicted noises (of different ts).
-                    # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
-                    # NOTE: .detach() is necessary, as here unet_teacher_noise_preds is used as the target of the 
-                    # student prediction, and we don't want the gradient to flow back to the teacher UNet.
-                    targets = [ pred.detach() for pred in unet_teacher_noise_preds ]
-
-                    # The outputs of the remaining denoising steps will be appended to model_outputs.
-                    model_outputs = []
-
-                    for s in range(num_denoising_steps):
-                        # Predict the noise of the half-batch with t2 (a set of earlier t).
-                        # unet_teacher_pred_x0 is the first half-batch of the unet_teacher predicted images, 
-                        # used to seed the second denoising step. But using it will cut off the gradient flow.
-                        pred_x0 = unet_teacher_pred_x0s[s-1].to(x_start.dtype)
-                        # noise2, t2 are the s-th half-batch of noise/t used to by unet_teacher.
-                        noise2  = unet_teacher_noises[s].to(x_start.dtype)
-                        t2      = ts[s]
-
-                        # Here pred_x0 is used as x_start.
-                        # text_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
-                        # and the 'image_mask' is also for a half-batch.
-                        # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
-                        # ** DO make sure unet_teacher() was called before guided_denoise() below. **
-                        # We need to make the student's CFG scale consistent with the teacher UNet's.
-                        # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
-                        # and the cfg_scale is not used in guided_denoise().
-                        model_output2, x_recon2 = \
-                            self.guided_denoise(pred_x0, noise2, t2, cond, 
-                                                text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                                unet_has_grad=True, do_pixel_recon=False, 
-                                                cfg_scale=self.unet_teacher.cfg_scale)
-                        model_outputs.append(model_output2)
-
-                    # If id2img_prompt_encoder_trainable, then we also have
-                    # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
-                    if self.id2img_prompt_encoder_trainable:
-                        # If use_unet_teacher_as_target == True at the same time, then probably num_denoising_steps > 1.
-                        # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
-                        # added to the x_start during self.unet_teacher().
-                        # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
-                        model_outputs   += unet_teacher_noise_preds
-                        targets         += unet_teacher_noises
-                        ts              += ts
+                # student_prompt_embs is the prompt embedding of the student model.
+                # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
+                # So we only need to take the first one.
+                # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
+                student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                if self.unet_teacher_type == 'arc2face':
+                    teacher_context = self.iter_flags['id2img_prompt_embs']
+                elif self.unet_teacher_type == 'unet_ensemble':
+                    teacher_context = student_prompt_embs
+                elif self.unet_teacher_type == 'consistentID':
+                    global_id_embeds = self.iter_flags['id2img_prompt_embs']
+                    # global_id_embeds: [BS, 4, 768]
+                    # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
+                    cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
+                    cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                    # teacher_context: [BS, 81, 768]
+                    teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
+                    if self.p_unet_teacher_uses_cfg:
+                        global_neg_id_embs = self.iter_flags['id2img_neg_prompt_embs']
+                        # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                        # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
+                        cls_neg_prompt_embs = self.uncond_context[0][[0]].repeat(teacher_context.shape[0], 1, 1)
+                        # teacher_neg_context: [BS, 81, 768]
+                        teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
+                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                        # This is kind of arbitrary (we can also concate them on dim 1), 
+                        # since we always chunk(2) on the same dimension to restore the two parts.
+                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
                 else:
-                    targets         = []
-                    model_outputs   = []
-                    ts              = []
+                    breakpoint()
+
+                with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
+                    unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
+                        self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
+                
+                # **Objective 2**: Align student noise predictions with teacher noise predictions.
+                # targets: replaced as the reconstructed x0 by the teacher UNet.
+                # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND * half_batch unet_teacher predicted noises (of different ts).
+                # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
+                # NOTE: .detach() is necessary, as here unet_teacher_noise_preds is used as the target of the 
+                # student prediction, and we don't want the gradient to flow back to the teacher UNet.
+                targets = [ pred.detach() for pred in unet_teacher_noise_preds ]
+
+                # The outputs of the remaining denoising steps will be appended to model_outputs.
+                model_outputs = []
+
+                for s in range(num_denoising_steps):
+                    # Predict the noise of the half-batch with t2 (a set of earlier t).
+                    # unet_teacher_pred_x0 is the first half-batch of the unet_teacher predicted images, 
+                    # used to seed the second denoising step. But using it will cut off the gradient flow.
+                    pred_x0 = unet_teacher_pred_x0s[s-1].to(x_start.dtype)
+                    # noise2, t2 are the s-th half-batch of noise/t used to by unet_teacher.
+                    noise2  = unet_teacher_noises[s].to(x_start.dtype)
+                    t2      = ts[s]
+
+                    # Here pred_x0 is used as x_start.
+                    # text_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
+                    # and the 'image_mask' is also for a half-batch.
+                    # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
+                    # ** DO make sure unet_teacher() was called before guided_denoise() below. **
+                    # We need to make the student's CFG scale consistent with the teacher UNet's.
+                    # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
+                    # and the cfg_scale is not used in guided_denoise().
+                    model_output2, x_recon2 = \
+                        self.guided_denoise(pred_x0, noise2, t2, cond, 
+                                            text_prompt_adhoc_info=text_prompt_adhoc_info,
+                                            unet_has_grad=True, do_pixel_recon=False, 
+                                            cfg_scale=self.unet_teacher.cfg_scale)
+                    model_outputs.append(model_output2)
+
+                # If id2img_prompt_encoder_trainable, then we also have
+                # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
+                if self.id2img_prompt_encoder_trainable:
+                    # If do_unet_distill == True at the same time, then probably num_denoising_steps > 1.
+                    # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
+                    # added to the x_start during self.unet_teacher().
+                    # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
+                    model_outputs   += unet_teacher_noise_preds
+                    targets         += unet_teacher_noises
+                    ts              += ts
 
                 # This branch includes the case of id2img_prompt_encoder_trainable.
-                if not self.iter_flags['use_unet_teacher_as_target']:
+                if not self.iter_flags['do_unet_distill']:
                     # Otherwise, use the original image target. 
                     # gt_target == added noise.
                     # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
@@ -2076,11 +2038,10 @@ class LatentDiffusion(DDPM):
                     except:
                         breakpoint()
 
-                    # use_unet_teacher_as_target could be True or False.
                     # If we use the original image (noise) as target, and still wish to keep the original background
                     # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
                     # Therefore, bg_pixel_weight = 0.1.
-                    if not self.iter_flags['use_unet_teacher_as_target']:
+                    if not self.iter_flags['do_unet_distill']:
                         bg_pixel_weight = 0.1
                     # If we use comp_prompt as condition, then the background is compositional, and 
                     # we want to do recon on the whole image. But considering background is not perfect, 
@@ -2106,7 +2067,7 @@ class LatentDiffusion(DDPM):
                     # and the remaining ID embeddings are added with noise.
                     # So we can contrast the first instance with the remaining instances,
                     # and highlight their differences caused by the noise.
-                    # perturb_face_id_embs implies use_unet_teacher_as_target and (not gen_id2img_rand_id).
+                    # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
                     # Therefore, targets == unet_teacher_noise_preds.
                     if self.iter_flags['perturb_face_id_embs']:
                         # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
@@ -2340,7 +2301,7 @@ class LatentDiffusion(DDPM):
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
-          and ( (self.iter_flags['do_normal_recon'] and not self.iter_flags['use_unet_teacher_as_target']) \
+          and ( (self.iter_flags['do_normal_recon'] and not self.iter_flags['do_unet_distill']) \
                or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']) ):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 

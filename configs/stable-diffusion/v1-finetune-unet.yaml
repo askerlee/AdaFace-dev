@@ -92,7 +92,7 @@ model:
         training_end_perturb_std_range:    [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively
         training_perturb_prob:   { 'recon_iter':            0.6, 
-                                   'unet_distill_iter':     0,
+                                   'unet_distill_iter':     0.4,
                                    'compos_distill_iter':   0.4 }
         adaface_ckpt_path:        null
         # Load the ada components from these placeholders in the checkpoint.

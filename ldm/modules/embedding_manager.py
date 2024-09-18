@@ -214,10 +214,11 @@ class EmbeddingManager(nn.Module):
         self.layer_idx = -1
         self.static_subj_embs_dict = {}   
         self.clear_prompt_adhoc_info()
-        # 'recon_iter', 'compos_distill_iter', 'empty'.
+        # 'recon_iter', 'unet_distill_iter', 'compos_distill_iter', 'empty'.
         self.iter_type = None       
         if self.do_zero_shot:
-            self.set_curr_batch_subject_names(["zs_default"], 'recon_iter')
+            self.set_curr_batch_subject_names(["zs_default"])
+            self.set_curr_iter_type('recon_iter')
         else:
             self.curr_batch_subj_names = []
             self.current_subj_name_to_cls_delta_tokens = {}
@@ -432,12 +433,19 @@ class EmbeddingManager(nn.Module):
                     
                 # zs_clip_features: [BS, 257, 1280]
                 # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
+                # NOTE: Static image suffix embeddings are used to adjust the student model to 
+                # match the pecularities of the teacher model.
+                # If it's a recon_iter, the student model doesn't need to be adjusted, 
+                # so we don't append the static image suffix embeddings.
+                enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
                 adaface_subj_embs, placeholder_adaface_prompt_embs = \
                         subj_basis_generator(id2img_prompt_embs,
                                              zs_clip_features, None, 
                                              out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
                                              is_training=self.training,
-                                             adaface_prompt_embs_inf_type='full_half_pad')
+                                             adaface_prompt_embs_inf_type='full_half_pad',
+                                             enable_static_img_suffix_embs=enable_static_img_suffix_embs)
+                
                 # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
                 # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
                 # But adaface_subj_embs is generated from the subject-single instance only.
@@ -639,9 +647,7 @@ class EmbeddingManager(nn.Module):
         else:
             self.cls_delta_strings = None
 
-        self.set_curr_iter_type(text_conditioning_iter_type)
-        if True: #cls_delta_strings is not None and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
-            print(f"{self.rank} subjects: {self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
+        print(f"{self.rank} subjects: {self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
 
     def set_curr_iter_type(self, text_conditioning_iter_type):
         self.iter_type = text_conditioning_iter_type
