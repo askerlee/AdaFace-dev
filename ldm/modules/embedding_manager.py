@@ -626,7 +626,7 @@ class EmbeddingManager(nn.Module):
     
     # During training, set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.
-    def set_curr_batch_subject_names(self, subj_names, text_conditioning_iter_type):
+    def set_curr_batch_subject_names(self, subj_names):
         self.curr_batch_subj_names = subj_names
         # During inference, as self.curr_batch_subj_names is not set, the three dicts are empty.
         self.current_subj_name_to_cls_delta_tokens = { subj_name: self.subj_name_to_cls_delta_tokens[subj_name] \
