@@ -1914,7 +1914,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_normal_recon']:
             # If not do_unet_distill, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
-            if not self.iter_flags['do_unet_distill']:
+            if not self.iter_flags['do_unet_distill'] and not self.id2img_prompt_encoder_trainable:
                 if not self.iter_flags['use_background_token']:
                     # bg loss is almost completely ignored. But giving it a little weight may help suppress 
                     # subj embeddings' contribution to the background (serving as a contrast to the fg).
@@ -1930,10 +1930,11 @@ class LatentDiffusion(DDPM):
                                                        img_mask, fg_mask, batch_have_fg_mask,
                                                        bg_pixel_weight,
                                                        x_start.shape[0], loss_dict, prefix)
-                loss += loss_fg_bg_contrast + loss_recon
-                if True:
-                    print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {loss_recon.item():.5f}")
-            # do_unet_distill
+                loss += loss_fg_bg_contrast
+                loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
+                loss += loss_recon
+                print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {loss_recon.item():.5f}")
+            # do_unet_distill or id2img_prompt_encoder_trainable.
             else:
                 # num_denoising_steps > 1 implies do_unet_distill.
                 num_denoising_steps = self.iter_flags['num_denoising_steps']
@@ -2012,26 +2013,25 @@ class LatentDiffusion(DDPM):
                 # If id2img_prompt_encoder_trainable, then we also have
                 # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
                 if self.id2img_prompt_encoder_trainable:
-                    # If do_unet_distill == True at the same time, then probably num_denoising_steps > 1.
-                    # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
-                    # added to the x_start during self.unet_teacher().
-                    # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
-                    model_outputs   += unet_teacher_noise_preds
-                    targets         += unet_teacher_noises
-                    ts              += ts
-
-                # This branch includes the case of id2img_prompt_encoder_trainable.
-                if not self.iter_flags['do_unet_distill']:
-                    # Otherwise, use the original image target. 
-                    # gt_target == added noise.
-                    # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
-                    # **Objective 4**: Align student noise predictions with ground truth noises.
-                    targets.append(gt_target)
-                    model_outputs.append(model_output)
-                    ts.append(t)
+                    if self.iter_flags['do_unet_distill']:
+                        # If do_unet_distill == True at the same time, then probably num_denoising_steps > 1.
+                        # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
+                        # added to the x_start during self.unet_teacher().
+                        # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
+                        model_outputs   += unet_teacher_noise_preds
+                        targets         += unet_teacher_noises
+                        ts              += ts
+                    else:
+                        # Otherwise, use the original image target. 
+                        # gt_target == added noise.
+                        # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
+                        # **Objective 4**: Align student noise predictions with ground truth noises.
+                        targets.append(gt_target)
+                        model_outputs.append(model_output)
+                        ts.append(t)
 
                 loss_recons = []
-                loss_recon_deltas = []
+                loss_distill_deltas = []
                 for s in range(len(model_outputs)):
                     try:
                         model_output, target = model_outputs[s], targets[s]
@@ -2082,26 +2082,30 @@ class LatentDiffusion(DDPM):
                         # If we want to ignore noisy signals in the background due to randomness, 
                         # we can set bg_pixel_weight = 0.1.
                         delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
-                        loss_recon_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                                    delta_img_mask, fg_mask=delta_fg_mask, 
-                                                                    fg_pixel_weight=1, bg_pixel_weight=1)
+                        loss_distill_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
+                                                                     delta_img_mask, fg_mask=delta_fg_mask, 
+                                                                     fg_pixel_weight=1, bg_pixel_weight=1)
                     else:
-                        loss_recon_delta = torch.tensor(0, device=loss_recon.device)
+                        loss_distill_delta = torch.tensor(0, device=loss_recon.device)
 
-                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}, {loss_recon_delta.item():.5f}")
+                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}, {loss_distill_delta.item():.5f}")
                     loss_recons.append(loss_recon)
-                    loss_recon_deltas.append(loss_recon_delta)
+                    loss_distill_deltas.append(loss_distill_delta)
 
                 # If num_denoising_steps > 1, most loss_recon are usually 0.001~0.005, but sometimes there are a few large loss_recon.
                 # In order not to dilute the large loss_recon, we don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
-                loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
                 loss += loss_recon
+                if not self.iter_flags['do_unet_distill']:
+                    loss_dict.update({f'{prefix}/loss_recon':   loss_recon.mean().detach().item()})
+                else:
+                    loss_dict.update({f'{prefix}/loss_distill': loss_recon.mean().detach().item()})
 
-                loss_recon_delta = sum(loss_recon_deltas) / np.sqrt(num_denoising_steps)
-                loss_dict.update({f'{prefix}/loss_recon_delta': loss_recon_delta.mean().detach().item()})
-                loss += loss_recon_delta * self.recon_delta_loss_boost
+                if self.iter_flags['perturb_face_id_embs']:
+                    loss_distill_delta = sum(loss_distill_deltas) / np.sqrt(num_denoising_steps)
+                    loss_dict.update({f'{prefix}/loss_distill_delta': loss_distill_delta.mean().detach().item()})
+                    loss += loss_distill_delta * self.recon_delta_loss_boost
 
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
