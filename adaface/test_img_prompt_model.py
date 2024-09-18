@@ -3,7 +3,8 @@ from PIL import Image
 import os, argparse, glob
 import numpy as np
 from .face_id_to_ada_prompt import create_id2ada_prompt_encoder
-from .teacher_pipelines import create_arc2face_pipeline, create_consistentid_pipeline
+from .util            import create_consistentid_pipeline
+from .arc2face_models import create_arc2face_pipeline
 from transformers import CLIPTextModel
 from diffusers import StableDiffusionImg2ImgPipeline
 

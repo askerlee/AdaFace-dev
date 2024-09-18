@@ -500,6 +500,7 @@ class LatentDiffusion(DDPM):
             # device, extra_unet_paths and unet_weights are only used for unet_teacher_type == 'unet_ensemble'.
             self.unet_teacher = create_unet_teacher(self.unet_teacher_type, 
                                                     device='cpu',
+                                                    unets=None,
                                                     extra_unet_paths=self.extra_unet_paths,
                                                     unet_weights=self.unet_weights,
                                                     p_uses_cfg=self.p_unet_teacher_uses_cfg,

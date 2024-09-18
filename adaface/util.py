@@ -10,6 +10,11 @@ from typing import Optional, Tuple
 from transformers.utils import ModelOutput
 import numpy as np
 import argparse
+from ConsistentID.lib.pipeline_ConsistentID import ConsistentIDPipeline
+from diffusers import (
+    UNet2DConditionModel,
+    DDIMScheduler,
+)
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -148,11 +153,21 @@ def pad_image_obj_to_square(image_obj, new_size=-1):
 
 class UNetEnsemble(nn.Module):
     # The first unet is the unet already loaded in a pipeline.
-    def __init__(self, unet, extra_unet_paths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
+    def __init__(self, unets, unet_types, extra_unet_paths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
         super().__init__()
 
         self.unets = nn.ModuleList()
-        if unet is not None:
+        if unets is not None:
+            self.unets += unets
+
+        for unet_type in unet_types:
+            if unet_type == "arc2face":
+                from adaface.arc2face_models import create_arc2face_pipeline
+                unet = create_arc2face_pipeline(unet_only=True)
+            elif unet_type == "consistentID":
+                unet = create_consistentid_pipeline(unet_only=True)
+            else:
+                breakpoint()
             self.unets.append(unet)
 
         for unet_path in extra_unet_paths:
@@ -193,6 +208,38 @@ class UNetEnsemble(nn.Module):
         else:
             return UNet2DConditionOutput(sample=sample)
 
+def create_consistentid_pipeline(base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
+                                 dtype=torch.float16, unet_only=False):
+    pipe = ConsistentIDPipeline.from_single_file(
+        base_model_path, 
+        torch_dtype=dtype, 
+    )
+    # consistentID specific modules are still in fp32. Will be converted to fp16 
+    # later with .to(device, torch_dtype) by the caller.
+    pipe.load_ConsistentID_model(
+        consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
+        bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
+    )
+    # We load the pipeline first, then use the unet in the pipeline.
+    # Since the pipeline initialization will load LoRA into the unet, 
+    # now we have the unet with LoRA loaded.
+    if unet_only:
+        # We release text_encoder and VAE to save memory.
+        pipe.release_components(["text_encoder", "vae"])        
+        return pipe.unet
+    
+    noise_scheduler = DDIMScheduler(
+        num_train_timesteps=1000,
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        clip_sample=False,
+        set_alpha_to_one=False,
+        steps_offset=1,
+    )        
+    pipe.scheduler = noise_scheduler
+
+    return pipe
 
 @dataclass
 class BaseModelOutputWithPooling2(ModelOutput):

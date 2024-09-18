@@ -5,11 +5,46 @@ from transformers.models.clip.modeling_clip import CLIPAttention
 from typing import Optional, Tuple, Union
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
+from diffusers import (
+    StableDiffusionPipeline,
+    UNet2DConditionModel,
+    DDIMScheduler,
+)
 # from transformers.models.clip.modeling_clip import _make_causal_mask, _expand_mask
 _make_causal_mask = AttentionMaskConverter._make_causal_mask
 _expand_mask = AttentionMaskConverter._expand_mask
 
 from .util import perturb_tensor
+
+def create_arc2face_pipeline(base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
+                             dtype=torch.float16, unet_only=False):
+    unet = UNet2DConditionModel.from_pretrained(
+        'models/arc2face', subfolder="arc2face", torch_dtype=dtype
+    )
+    if unet_only:
+        return unet
+
+    text_encoder = CLIPTextModelWrapper.from_pretrained(
+        'models/arc2face', subfolder="encoder", torch_dtype=dtype
+    )
+    noise_scheduler = DDIMScheduler(
+        num_train_timesteps=1000,
+        beta_start=0.00085,
+        beta_end=0.012,
+        beta_schedule="scaled_linear",
+        clip_sample=False,
+        set_alpha_to_one=False,
+        steps_offset=1,
+    )    
+    pipeline = StableDiffusionPipeline.from_single_file(
+            base_model_path,
+            text_encoder=text_encoder,
+            unet=unet,
+            torch_dtype=dtype,
+            safety_checker=None
+        )
+    pipeline.scheduler = noise_scheduler
+    return pipeline
 
 # Extend CLIPAttention by using multiple k_proj and v_proj in each head.
 # To avoid too much increase of computation, we don't extend q_proj.

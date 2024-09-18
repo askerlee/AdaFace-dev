@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from transformers import CLIPTokenizer, CLIPImageProcessor
 from .arc2face_models import CLIPTextModelWrapper
-from ConsistentID.lib.pipline_ConsistentID import ConsistentIDPipeline 
+from ConsistentID.lib.pipeline_ConsistentID import ConsistentIDPipeline 
 from .util import perturb_tensor, pad_image_obj_to_square, \
                   calc_stats, patch_clip_image_encoder_with_mask, CLIPVisionModelWithMask
 import torch.nn.functional as F
@@ -612,7 +612,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             )
             pipe.load_ConsistentID_model(consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
                                          bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth")
-            # Since pipe is None, this should be called during inference,
+            # Since the passed-in pipe is None, this should be called during inference,
             # when the teacher ConsistentIDPipeline is not initialized. 
             # Therefore, we release VAE, UNet and text_encoder to save memory.
             pipe.release_components(["unet", "vae"])

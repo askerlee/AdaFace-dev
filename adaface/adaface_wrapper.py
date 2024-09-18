@@ -152,7 +152,7 @@ class AdaFaceWrapper(nn.Module):
                 print(f"Unexpected keys: {ret.unexpected_keys}")
 
         if self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0:
-            unet_ensemble = UNetEnsemble(pipeline.unet, self.extra_unet_paths, self.unet_weights,
+            unet_ensemble = UNetEnsemble([pipeline.unet], self.extra_unet_paths, self.unet_weights,
                                          device=self.device, torch_dtype=torch.float16)
             pipeline.unet = unet_ensemble
 
