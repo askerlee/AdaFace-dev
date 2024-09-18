@@ -102,6 +102,7 @@ if __name__ == "__main__":
                              args.adaface_encoder_types, args.adaface_ckpt_paths, 
                              args.adaface_encoder_scales, 
                              args.subject_string, args.num_inference_steps,
+                             unet_types=None,
                              main_unet_path=args.main_unet_path,
                              extra_unet_paths=args.extra_unet_paths,
                              unet_weights=args.unet_weights, device=args.device)

@@ -415,6 +415,7 @@ def main(opt):
                                           opt.adaface_ckpt_paths, opt.adaface_encoder_scales,
                                           opt.to_load_id2img_learnable_modules,
                                           opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
+                                          unet_types=None,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, 
                                           num_static_img_suffix_embs=opt.num_static_img_suffix_embs,

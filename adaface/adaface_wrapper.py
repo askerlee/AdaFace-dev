@@ -25,7 +25,7 @@ class AdaFaceWrapper(nn.Module):
                  adaface_ckpt_paths, adaface_encoder_scales=None, to_load_id2img_learnable_modules=True,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
-                 main_unet_path=None, extra_unet_paths=None, unet_weights=None,
+                 main_unet_path=None, unet_types=None, extra_unet_paths=None, unet_weights=None,
                  num_static_img_suffix_embs=0,
                  device='cuda', is_training=False):
         '''
@@ -54,6 +54,7 @@ class AdaFaceWrapper(nn.Module):
         self.use_840k_vae = use_840k_vae
         self.use_ds_text_encoder = use_ds_text_encoder
         self.main_unet_path = main_unet_path
+        self.unet_types = unet_types
         self.extra_unet_paths = extra_unet_paths
         self.unet_weights = unet_weights
         # apply_neg_img_prompt leads to worse results. So it's disabled.
@@ -151,8 +152,9 @@ class AdaFaceWrapper(nn.Module):
             if len(ret.unexpected_keys) > 0:
                 print(f"Unexpected keys: {ret.unexpected_keys}")
 
-        if self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0:
-            unet_ensemble = UNetEnsemble([pipeline.unet], self.extra_unet_paths, self.unet_weights,
+        if (self.unet_types is not None and len(self.unet_types) > 0) \
+          or (self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0):
+            unet_ensemble = UNetEnsemble([pipeline.unet], self.unet_types, self.extra_unet_paths, self.unet_weights,
                                          device=self.device, torch_dtype=torch.float16)
             pipeline.unet = unet_ensemble
 
