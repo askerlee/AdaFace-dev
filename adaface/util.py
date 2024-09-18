@@ -160,15 +160,16 @@ class UNetEnsemble(nn.Module):
         if unets is not None:
             self.unets += unets
 
-        for unet_type in unet_types:
-            if unet_type == "arc2face":
-                from adaface.arc2face_models import create_arc2face_pipeline
-                unet = create_arc2face_pipeline(unet_only=True)
-            elif unet_type == "consistentID":
-                unet = create_consistentid_pipeline(unet_only=True)
-            else:
-                breakpoint()
-            self.unets.append(unet)
+        if unet_types is not None:
+            for unet_type in unet_types:
+                if unet_type == "arc2face":
+                    from adaface.arc2face_models import create_arc2face_pipeline
+                    unet = create_arc2face_pipeline(unet_only=True)
+                elif unet_type == "consistentID":
+                    unet = create_consistentid_pipeline(unet_only=True)
+                else:
+                    breakpoint()
+                self.unets.append(unet)
 
         for unet_path in extra_unet_paths:
             unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
