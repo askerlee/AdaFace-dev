@@ -423,10 +423,11 @@ class DDPM(pl.LightningModule):
                 # This is to monitor how well the model performs on compositionality.
                 self.iter_flags['calc_clip_loss']   = True
                 self.iter_flags['do_normal_recon']  = False
+                self.iter_flags['do_unet_distill']  = False
 
-        if self.iter_flags['do_normal_recon'] and self.p_unet_distill_iter > 0:
+        if not self.iter_flags['is_compos_iter'] and self.p_unet_distill_iter > 0:
             if np.random.rand() < self.p_unet_distill_iter:
-                self.iter_flags['do_unet_distill'] = True
+                self.iter_flags['do_unet_distill']  = True
                 # Disable do_static_prompt_delta_reg during unet distillation.
                 self.iter_flags['do_static_prompt_delta_reg'] = False
        
@@ -611,9 +612,9 @@ class LatentDiffusion(DDPM):
 
     # Number of calls to get_text_conditioning() during training:
     # If do_mix_prompt_distillation, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
-    # If do_normal_recon with delta loss, then 2 calls (one on delta prompts, one on subject single prompts). 
+    # If do_normal_recon / do_unet_distll with delta loss, then 2 calls (one on delta prompts, one on subject single prompts). 
     # NOTE: the delta prompts consumes extram RAM.
-    # If do_normal_recon without delta loss, then 1 call.
+    # If do_normal_recon / do_unet_distll without delta loss, then 1 call.
     # cond_in: a batch of prompts like ['an illustration of a dirty z', ...]
     # return_prompt_embs_type: ['text', 'id', 'text_id'].
     # 'text': default, the conventional text embeddings produced from the embedding manager.
@@ -1014,7 +1015,7 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = False
 
-        # do_unet_distill == do_normal_recon and random() < p_unet_distill_iter.
+        # do_unet_distill and random() < p_unet_distill_iter.
         # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0 if distilling on consistentID.
         if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_id2img_rand_id:
             self.iter_flags['gen_id2img_rand_id'] = True
@@ -1050,9 +1051,9 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['same_subject_in_batch'] = False
 
             # Not gen_id2img_rand_id. The recon/distillation is on real ID embeddings.
-            # 'gen_id2img_rand_id' is only True in do_normal_recon iters.
-            # So if not do_normal_recon, then this branch is always executed.
-            #    If     do_normal_recon, then this branch is executed at 50% of the time.
+            # 'gen_id2img_rand_id' is only True in do_unet_distill iters.
+            # So if not do_unet_distill, then this branch is always executed.
+            #    If     do_unet_distill, then this branch is executed at 50% of the time.
             else:
                 # When possible, don't always use the average embedding of the same subject in the batch.
                 # Otherwise, the model may memorize the subject embedding and tend to generate subjects
@@ -1415,8 +1416,8 @@ class LatentDiffusion(DDPM):
                 # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.
                 extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
             else:
-                # do_normal_recon. The original scheme. 
-                extra_info['iter_type'] = 'normal_recon'
+                # do_normal_recon or do_unet_distill.
+                extra_info['iter_type'] = 'recon_distill'
                 c_in2                   = captions
                 # Use the original "captions" prompts and embeddings.
                 # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
@@ -1465,7 +1466,7 @@ class LatentDiffusion(DDPM):
             # This branch is only reached when do_static_prompt_delta_reg = False.
             # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
             # it's called by self.validation_step().
-            assert self.iter_flags['do_normal_recon']
+            assert self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']
 
             c_static_emb, c_in, extra_info0 = \
                 self.get_text_conditioning(captions, 
@@ -1838,7 +1839,7 @@ class LatentDiffusion(DDPM):
 
         # It's a RECON iter.
         else:
-            assert self.iter_flags['do_normal_recon']
+            assert self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']
             BLOCK_SIZE = x_start.shape[0]
             # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
             cfg_scale = -1
@@ -1911,7 +1912,7 @@ class LatentDiffusion(DDPM):
 
         loss = 0
                                 
-        if self.iter_flags['do_normal_recon']:
+        if self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']:
             # If not do_unet_distill, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
             if not self.iter_flags['do_unet_distill'] and not self.id2img_prompt_encoder_trainable:
@@ -2098,6 +2099,8 @@ class LatentDiffusion(DDPM):
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
                 loss += loss_recon
                 if not self.iter_flags['do_unet_distill']:
+                    # If not do_unet_distill, then this is a normal_recon iter with 
+                    # id2img_prompt_encoder_trainable.
                     loss_dict.update({f'{prefix}/loss_recon':   loss_recon.mean().detach().item()})
                 else:
                     loss_dict.update({f'{prefix}/loss_distill': loss_recon.mean().detach().item()})
@@ -2305,7 +2308,7 @@ class LatentDiffusion(DDPM):
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
-          and ( (self.iter_flags['do_normal_recon'] and not self.iter_flags['do_unet_distill']) \
+          and ( self.iter_flags['do_normal_recon']  \
                or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']) ):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 

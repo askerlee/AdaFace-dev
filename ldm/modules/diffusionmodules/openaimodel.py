@@ -845,9 +845,9 @@ class UNetModel(nn.Module):
         emb = self.time_embed(t_emb)
 
         use_layerwise_context       = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
-        iter_type                   = extra_info.get('iter_type', 'normal_recon')    if extra_info is not None else 'normal_recon'
+        iter_type                   = extra_info.get('iter_type', 'recon_distill')   if extra_info is not None else 'recon_distill'
         capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
-        placeholder2indices         = extra_info.get('placeholder2indices', None)        if extra_info is not None else None
+        placeholder2indices         = extra_info.get('placeholder2indices', None)    if extra_info is not None else None
         img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
         debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
