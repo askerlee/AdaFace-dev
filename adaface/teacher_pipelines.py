@@ -22,10 +22,8 @@ class UNetTeacher(pl.LightningModule):
 
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
         assert num_denoising_steps <= 10
+
         if self.p_uses_cfg > 0:
-            if teacher_context.shape[0] != x_start.shape[0] * 2:
-                breakpoint()
-            pos_context, neg_context = teacher_context.chunk(2, dim=0)
             self.uses_cfg = np.random.rand() < self.p_uses_cfg
             if self.uses_cfg:
                 # Randomly sample a cfg_scale from cfg_scale_range.
@@ -33,16 +31,40 @@ class UNetTeacher(pl.LightningModule):
                 print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
             else:
                 self.cfg_scale = 1
-                print("Teacher does not use CFG.")
+                print("Teacher does not use CFG.")      
+
+                # If p_uses_cfg > 0, we always pass both pos_context and neg_context to the teacher.
+                # But the neg_context is only used when self.uses_cfg is True.
+                # So we manually split the teacher_context into pos_context and neg_context, and only keep pos_context.
+                if self.name == 'unet_ensemble':
+                    teacher_pos_contexts = []
+                    # teacher_context is a list of teacher contexts.
+                    for teacher_context_i in teacher_context:
+                        pos_context, neg_context = torch.chunk(teacher_context_i, 2, dim=0)
+                        if pos_context.shape[0] != x_start.shape[0]:
+                            breakpoint()             
+                        teacher_pos_contexts.append(pos_context)
+                    teacher_context = teacher_pos_contexts       
+                else:
+                    pos_context, neg_context = torch.chunk(teacher_context, 2, dim=0)
+                    if pos_context.shape[0] != x_start.shape[0]:
+                        breakpoint()
+                    teacher_context = pos_context      
         else:
-            if teacher_context.shape[0] != x_start.shape[0]:
-                breakpoint()
-            pos_context = teacher_context
             # Disable CFG. self.cfg_scale will be accessed by the student. 
             # So we need to make sure it is always set correctly, 
             # in case someday we want to switch from CFG to non-CFG during runtime.
             self.cfg_scale = 1
 
+        if self.name == 'unet_ensemble':
+            # teacher_context is a list of teacher contexts.
+            for teacher_context_i in teacher_context:
+                if teacher_context_i.shape[0] != x_start.shape[0] * (1 + self.uses_cfg):
+                    breakpoint()
+        else:
+            if teacher_context.shape[0] != x_start.shape[0] * (1 + self.uses_cfg):
+                breakpoint()
+                
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
         noises      = [ noise ]
@@ -56,24 +78,29 @@ class UNetTeacher(pl.LightningModule):
                 noise   = noises[i]
                 # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
                 x_noisy = ddpm_model.q_sample(x_start, t, noise)
-                                
+                
+                if self.uses_cfg:
+                    x_noisy2 = x_noisy.repeat(2, 1, 1, 1)
+                    t2 = t.repeat(2)
+                else:
+                    x_noisy2 = x_noisy
+                    t2 = t
+
                 # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
-                noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=pos_context,
+                noise_pred = self.unet(sample=x_noisy2, timestep=t2, encoder_hidden_states=teacher_context,
                                        return_dict=False)[0]
                 if self.uses_cfg:
-                    # Usually we don't need to compute gradients w.r.t. the negative context.
-                    with torch.no_grad():
-                        neg_noise_pred = self.unet(sample=x_noisy, timestep=t, encoder_hidden_states=neg_context,
-                                                return_dict=False)[0]
-                    noise_pred = noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
+                    pos_noise_pred, neg_noise_pred = torch.chunk(noise_pred, 2, dim=0)
+                    noise_pred = pos_noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
 
-                noise_preds.append(noise_pred)
-                
                 # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
                 pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
+                noise_preds.append(noise_pred)
+                
                 # The predicted x0 is used as the x_start for the next denoising step.
                 x_starts.append(pred_x0)
 
+                # Sample an earlier timestep for the next denoising step.
                 if i < num_denoising_steps - 1:
                     # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                     relative_ts = torch.rand_like(t.float())
@@ -122,18 +149,17 @@ class ConsistentIDTeacher(UNetTeacher):
         # We couldn't initialize the ConsistentIDPipeline to CPU first and wait it to be automatically moved to GPU.
         # Instead, we have to initialize it to GPU directly.
         pipe = create_consistentid_pipeline(base_model_path)
-        # Release VAE to save memory. UNet and text_encoder is still needed for denoising 
-        # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
-        pipe.release_components(["vae"])
-        self.pipe = pipe
         # Compatible with the UNetTeacher interface.
         self.unet = pipe.unet
+        # Release VAE and text_encoder to save memory. UNet is still needed for denoising 
+        # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
+        pipe.release_components(["vae", "text_encoder"])
 
-    def to(self, device, torch_dtype):
-        self.pipe.to(device, torch_dtype)
-        return self
-    
 def create_unet_teacher(teacher_type, device, **kwargs):
+    # If teacher_type is a list with only one element, we dereference it.
+    if isinstance(teacher_type, (tuple, list)) and len(teacher_type) == 1:
+        teacher_type = teacher_type[0]
+
     if teacher_type == "arc2face":
         return Arc2FaceTeacher(**kwargs)
     elif teacher_type == "unet_ensemble":
@@ -148,6 +174,12 @@ def create_unet_teacher(teacher_type, device, **kwargs):
         return UNetEnsembleTeacher(device=device, **kwargs)
     elif teacher_type == "consistentID":
         return ConsistentIDTeacher(**kwargs)
+    # Since we've dereferenced the list if it has only one element, 
+    # this holding implies the list has more than one element. Therefore it's UNetEnsembleTeacher.
+    elif isinstance(teacher_type, (tuple, list)):
+        # teacher_type is a list of teacher types. So it's UNetEnsembleTeacher.
+        return UNetEnsembleTeacher(unet_types=teacher_type, device=device, **kwargs)
     else:
+        breakpoint()
         raise NotImplementedError(f"Teacher type {teacher_type} not implemented.")
     

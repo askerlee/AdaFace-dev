@@ -48,9 +48,6 @@ class DDPM(pl.LightningModule):
                  timesteps=1000,
                  beta_schedule="linear",
                  loss_type="l2",
-                 ckpt_path=None,
-                 ignore_keys=[],
-                 load_only_unet=False,
                  monitor=None,
                  first_stage_key="image",
                  image_size=256,
@@ -89,7 +86,7 @@ class DDPM(pl.LightningModule):
                  do_zero_shot=True,
                  num_id_vecs=16,
                  p_unet_distill_iter=0,
-                 unet_teacher_type=None,
+                 unet_teacher_types=None,
                  p_unet_teacher_uses_cfg=0,
                  unet_teacher_cfg_scale_range=[1.5, 3],
                  id2img_prompt_encoder_trainable=False,
@@ -139,7 +136,7 @@ class DDPM(pl.LightningModule):
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.p_unet_distill_iter                    = p_unet_distill_iter if (do_zero_shot and self.training) \
                                                         else 0
-        self.unet_teacher_type                      = unet_teacher_type
+        self.unet_teacher_types                     = list(unet_teacher_types) if unet_teacher_types is not None else None
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
@@ -183,8 +180,6 @@ class DDPM(pl.LightningModule):
 
         if monitor is not None:
             self.monitor = monitor
-        if ckpt_path is not None:
-            self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys, only_model=load_only_unet)
 
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
@@ -467,8 +462,8 @@ class LatentDiffusion(DDPM):
         # {'target': 'ldm.modules.encoders.modules.FrozenCLIPEmbedder'}
         # Not sure why it's compared with a string
 
-        # ckpt_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
-        ckpt_path = kwargs.pop("ckpt_path", None)
+        # base_model_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
+        base_model_path = kwargs.pop("base_model_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
         super().__init__(*args, **kwargs)
         self.concat_mode = concat_mode
@@ -490,15 +485,16 @@ class LatentDiffusion(DDPM):
         self.clip_denoised = False
         self.bbox_tokenizer = None  
 
-        self.restarted_from_ckpt = (ckpt_path is not None)
-        # ckpt_path is popped from kwargs, so that it won't be passed to the base class DDPM.
+        self.restarted_from_ckpt = (base_model_path is not None)
+        # base_model_path is popped from kwargs, so that it won't be passed to the base class DDPM.
         # As a result, the model weight is only loaded here, not in DDPM.
-        if ckpt_path is not None:
-            self.init_from_ckpt(ckpt_path, ignore_keys)
+        if base_model_path is not None:
+            self.init_from_ckpt(base_model_path, ignore_keys)
         
-        if self.p_unet_distill_iter > 0 and self.unet_teacher_type is not None:
-            # device, extra_unet_paths and unet_weights are only used for unet_teacher_type == 'unet_ensemble'.
-            self.unet_teacher = create_unet_teacher(self.unet_teacher_type, 
+        if self.p_unet_distill_iter > 0 and self.unet_teacher_types is not None:
+            # device, extra_unet_paths and unet_weights are only used 
+            # when unet_teacher_types == 'unet_ensemble' or unet_teacher_types contains multiple values.
+            self.unet_teacher = create_unet_teacher(self.unet_teacher_types, 
                                                     device='cpu',
                                                     unets=None,
                                                     extra_unet_paths=self.extra_unet_paths,
@@ -1167,24 +1163,18 @@ class LatentDiffusion(DDPM):
                 # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
                 num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
                 self.iter_flags['num_denoising_steps'] = num_denoising_steps
-
-                if self.unet_teacher_type in ['unet_ensemble', 'consistentID']:
-                    if self.unet_teacher_type == 'unet_ensemble':
-                        # The overall probability of using the compositional prompts to distill is
-                        # p_do_unet_distill * p_unet_distill_uses_comp_prompt = 0.5 * 0.5 = 0.25.
-                        p_unet_distill_uses_comp_prompt = 0.5
-                    elif self.unet_teacher_type == 'consistentID':
-                        # The overall probability of using the compositional prompts to distill is 
-                        # p_do_unet_distill * p_unet_distill_uses_comp_prompt = 0.7 * 0.2 = 0.14.
-                        p_unet_distill_uses_comp_prompt = 0.2
-                    else:
-                        breakpoint()
+                if self.unet_teacher_types != ['arc2face']:
+                    p_unet_distill_uses_comp_prompt = 0.2
 
                     # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
                     if random.random() < p_unet_distill_uses_comp_prompt:
                         captions = batch[SUBJ_PROMPT_COMP]
                         #print(captions)
                         self.iter_flags['unet_distill_uses_comp_prompt'] = True
+                else:
+                    # If only 'arc2face' is in unet_teacher_types, then we never use the compositional prompts.
+                    # Because arc2face ignores any compositional prompts.
+                    self.iter_flags['unet_distill_uses_comp_prompt'] = False
 
                 if num_denoising_steps > 1:
                     # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
@@ -1236,8 +1226,8 @@ class LatentDiffusion(DDPM):
         self.iter_flags['delta_prompts']            = delta_prompts
         self.iter_flags['image_unnorm']             = batch_images_unnorm
 
-        self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
         self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
+        self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
         if zs_clip_fgbg_features is not None:
             self.iter_flags['zs_clip_bg_features']  = zs_clip_fgbg_features.chunk(2, dim=1)[1]
         else:
@@ -1947,35 +1937,58 @@ class LatentDiffusion(DDPM):
                 # So we only need to take the first one.
                 # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
                 student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
-                if self.unet_teacher_type == 'arc2face':
-                    teacher_context = self.iter_flags['id2img_prompt_embs']
-                elif self.unet_teacher_type == 'unet_ensemble':
-                    teacher_context = student_prompt_embs
-                elif self.unet_teacher_type == 'consistentID':
-                    global_id_embeds = self.iter_flags['id2img_prompt_embs']
-                    # global_id_embeds: [BS, 4, 768]
-                    # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
-                    cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
-                    cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
-                    # teacher_context: [BS, 81, 768]
-                    teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
-                    if self.p_unet_teacher_uses_cfg:
-                        global_neg_id_embs = self.iter_flags['id2img_neg_prompt_embs']
-                        # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-                        # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
-                        cls_neg_prompt_embs = self.uncond_context[0][[0]].repeat(teacher_context.shape[0], 1, 1)
-                        # teacher_neg_context: [BS, 81, 768]
-                        teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
-                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
-                        # This is kind of arbitrary (we can also concate them on dim 1), 
-                        # since we always chunk(2) on the same dimension to restore the two parts.
-                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
+                # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
+                # extra_unet_paths (finetuned unets on the original SD unet); 
+                # in this case they are surely not 'arc2face' or 'consistentID'.
+                if self.unet_teacher_types == ['unet_ensemble']:
+                    teacher_contexts = [student_prompt_embs]
                 else:
-                    breakpoint()
+                    teacher_contexts = []
+                    for unet_teacher_type in self.unet_teacher_types:
+                        if unet_teacher_type not in ['arc2face', 'consistentID']:
+                            breakpoint()
+                        if unet_teacher_type == 'arc2face':
+                            # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
+                            teacher_context = self.iter_flags['id2img_prompt_embs']
+                            if self.p_unet_teacher_uses_cfg > 0:
+                                # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
+                                # to the teacher.
+                                # self.uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                                teacher_neg_context = self.uncond_context[0].repeat(x_start.shape[0], 1, 1)
+                                # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                                teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
+
+                        elif unet_teacher_type == 'consistentID':
+                            global_id_embeds = self.iter_flags['id2img_prompt_embs']
+                            # global_id_embeds: [BS, 4, 768]
+                            # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
+                            cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
+                            cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                            # teacher_context: [BS, 81, 768]
+                            teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
+                            if self.p_unet_teacher_uses_cfg > 0:
+                                # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
+                                # to the teacher.
+                                global_neg_id_embs = self.iter_flags['id2img_neg_prompt_embs']
+                                # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                                # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
+                                cls_neg_prompt_embs = self.uncond_context[0][[0]].repeat(teacher_context.shape[0], 1, 1)
+                                # teacher_neg_context: [BS, 81, 768]
+                                teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
+                                # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                                # This is kind of arbitrary (we can also concate them on dim 1), 
+                                # since we always chunk(2) on the same dimension to restore the two parts.
+                                teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
+
+                        teacher_contexts.append(teacher_context)
+                    # If there's only one teacher, then self.unet_teacher is not a UNetEnsembleTeacher.
+                    # So we dereference the list.
+                    if len(teacher_contexts) == 1:
+                        teacher_contexts = teacher_contexts[0]
 
                 with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
                     unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
-                        self.unet_teacher(self, x_start, noise, t, teacher_context, num_denoising_steps=num_denoising_steps)
+                        self.unet_teacher(self, x_start, noise, t, teacher_contexts, num_denoising_steps=num_denoising_steps)
                 
                 # **Objective 2**: Align student noise predictions with teacher noise predictions.
                 # targets: replaced as the reconstructed x0 by the teacher UNet.
@@ -2050,9 +2063,9 @@ class LatentDiffusion(DDPM):
                     # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
                     elif self.iter_flags['unet_distill_uses_comp_prompt']:
                         bg_pixel_weight = 0.5
-                    elif self.unet_teacher_type == 'arc2face':
+                    elif self.unet_teacher_types == ['arc2face']:
                         bg_pixel_weight = 0
-                    elif self.unet_teacher_type == 'consistentID':
+                    elif self.unet_teacher_types == ['consistentID']:
                         # If without negative prompt embeddings, consistentID will generate
                         # totally blank backgrounds. So we don't learn from its backgrounds.
                         bg_pixel_weight = 0

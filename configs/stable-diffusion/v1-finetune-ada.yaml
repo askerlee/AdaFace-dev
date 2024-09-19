@@ -26,7 +26,7 @@ model:
     num_candidate_teachers:           2
     composition_regs_iter_gap:        3
     do_zero_shot:                     True
-    unet_teacher_type:                'arc2face'
+    unet_teacher_types:                ['arc2face']
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:       0.1
     # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.

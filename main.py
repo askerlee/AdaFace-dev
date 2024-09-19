@@ -150,7 +150,7 @@ def get_parser(**parser_kwargs):
                         default=argparse.SUPPRESS,
                         help="Coefficient for d_loss")
     
-    parser.add_argument("--actual_resume", 
+    parser.add_argument("--base_model_path", 
         type=str,
         required=True,
         default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
@@ -225,21 +225,22 @@ def get_parser(**parser_kwargs):
                         help="Multiplier of the prompt2token projection attention")
     parser.add_argument("--p_unet_distill_iter", type=float, default=argparse.SUPPRESS,
                         help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")
-    parser.add_argument("--unet_teacher_type", type=str, default=argparse.SUPPRESS,
-                        choices=["arc2face", "unet_ensemble", "consistentID"], help="Type of the UNet teacher")
+    parser.add_argument("--unet_teacher_types", type=str, nargs="*", default=argparse.SUPPRESS,
+                        choices=["arc2face","consistentID", "unet_ensemble"], 
+                        help="Type(s) of the UNet teacher. Multiple values imply unet_ensemble. "
+                             "If 'unet_ensemble' is specified, this should be the only value, and "
+                             "the types of unets are specified with --extra_unet_paths.")
     parser.add_argument("--p_unet_teacher_uses_cfg", type=float, default=argparse.SUPPRESS,
                         help="The probability that the UNet teacher (as well as the student) uses the classifier-free guidance")    
     parser.add_argument("--unet_teacher_cfg_scale_range", type=float, nargs=2, default=argparse.SUPPRESS,
                         help="Range of the scale of the classifier-free guidance")
     parser.add_argument("--num_static_img_suffix_embs", type=int, default=0,
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
-    # --extra_unet_paths and --unet_weights are only used when unet_teacher_type is "unet_ensemble".
+    # --extra_unet_paths and --unet_weights are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
-                        default=['models/ensemble/sd15-unet', 
-                                 'models/ensemble/rv4-unet', 
-                                 'models/ensemble/ar18-unet'], 
+                        default=argparse.SUPPRESS, 
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
     parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
                         help="Load the old checkpoint for the embedding manager")
@@ -715,17 +716,22 @@ if __name__ == "__main__":
 
             if hasattr(opt, 'p_unet_distill_iter'):
                 config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
-            if hasattr(opt, 'unet_teacher_type'):
-                config.model.params.unet_teacher_type = opt.unet_teacher_type
+            if hasattr(opt, 'unet_teacher_types'):
+                if "unet_ensemble" in opt.unet_teacher_types:
+                    assert len(opt.unet_teacher_types) == 1, \
+                        "If 'unet_ensemble' is specified, this should be the only value for --unet_teacher_types."
+                config.model.params.unet_teacher_types = opt.unet_teacher_types
 
             if hasattr(opt, 'p_unet_teacher_uses_cfg'):
-                config.model.params.p_unet_teacher_uses_cfg           = opt.p_unet_teacher_uses_cfg
+                config.model.params.p_unet_teacher_uses_cfg         = opt.p_unet_teacher_uses_cfg
             if hasattr(opt, 'unet_teacher_cfg_scale_range'):
                 config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
 
-            config.model.params.extra_unet_paths             = opt.extra_unet_paths
-            # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
-            config.model.params.unet_weights                 = opt.unet_weights
+            if hasattr(opt, 'extra_unet_paths'):
+                config.model.params.extra_unet_paths             = opt.extra_unet_paths
+            if hasattr(opt, 'unet_weights'):
+                # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
+                config.model.params.unet_weights                 = opt.unet_weights
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
@@ -789,8 +795,8 @@ if __name__ == "__main__":
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 
-        if opt.actual_resume:
-            config.model.params.ckpt_path = opt.actual_resume
+        if opt.base_model_path:
+            config.model.params.base_model_path = opt.base_model_path
         # model will be loaded by ddpm.init_from_ckpt(). No need to load manually.
         model = instantiate_from_config(config.model)
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.

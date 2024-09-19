@@ -26,21 +26,22 @@ model:
     num_candidate_teachers:           2
     composition_regs_iter_gap:        -1
     do_zero_shot:                     True
-    unet_teacher_type:                'consistentID'
+    unet_teacher_types:               ['consistentID'] #, 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
-    unet_teacher_cfg_scale_range:     [1.5, 3]
+    unet_teacher_cfg_scale_range:     [1.3, 2.0]
     # The percentage of unet_distill_iter among do_normal_recon iters.
     # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
     # at the other 50%, we use the original image as the target.
-    p_unet_distill_iter:              0.7
+    p_unet_distill_iter:              0.5
     # Even if setting id2img_prompt_encoder_trainable to True, 
     # the performance is only slightly differ.
     id2img_prompt_encoder_trainable:  False
+    # The ratio of the id2img_prompt_encoder's lr to the main model's lr. Only effective when trainable.
     id2img_prompt_encoder_lr_ratio:   0.001
     p_gen_id2img_rand_id:             0.2
-    # perturb_face_id_embs implies computing the delta recon loss loss_recon_delta.
+    # the delta recon loss is only computed when perturb_face_id_embs.
     p_perturb_face_id_embs:           0.6
-    # ConsistentID image embeddings are quite robust to perturbations, so we set
+    # ConsistentID image embeddings are quite robust to random perturbations, so we set
     # a large std range of [0.5, 1.5].
     perturb_face_id_embs_std_range:   [0.5, 1]
     recon_delta_loss_boost:           1
@@ -175,7 +176,7 @@ data:
 lightning:
   modelcheckpoint:
     params:
-      every_n_train_steps: 250
+      every_n_train_steps: 500
 
   trainer:
     benchmark: True

@@ -395,7 +395,7 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
         # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
         # But we don't do layerwise embeddings here, so we set it to 1.
-        self.subj_basis_generator.num_out_layers = 1
+        self.subj_basis_generator.num_out_layers         = 1
         self.subj_basis_generator.num_out_embs_per_layer = self.num_id_vecs
         self.subj_basis_generator.N_ID                   = self.num_id_vecs
         # Since we directly use the subject basis generator object from the ckpt,

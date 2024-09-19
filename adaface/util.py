@@ -171,13 +171,15 @@ class UNetEnsemble(nn.Module):
                     breakpoint()
                 self.unets.append(unet)
 
-        for unet_path in extra_unet_paths:
-            unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
-            self.unets.append(unet.to(device=device))
+        if extra_unet_paths is not None:
+            for unet_path in extra_unet_paths:
+                unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
+                self.unets.append(unet.to(device=device))
 
         if unet_weights is None:
             unet_weights = [1.] * len(self.unets)
-        assert len(self.unets) == len(unet_weights)
+        if len(self.unets) != len(unet_weights):
+            breakpoint()
         unet_weights = torch.tensor(unet_weights, dtype=torch_dtype)
         unet_weights = unet_weights / unet_weights.sum()
         self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)
@@ -189,10 +191,11 @@ class UNetEnsemble(nn.Module):
 
     def forward(self, *args, **kwargs):
         return_dict = kwargs.get('return_dict', True)
+        teacher_contexts = kwargs.pop('encoder_hidden_states', None)
         samples = []
 
-        for unet in self.unets:
-            sample = unet(*args, **kwargs)
+        for unet, teacher_context in zip(self.unets, teacher_contexts):
+            sample = unet(encoder_hidden_states=teacher_context, *args, **kwargs)
             if not return_dict:
                 sample = sample[0]
             else:
