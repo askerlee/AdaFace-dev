@@ -1926,9 +1926,10 @@ class LatentDiffusion(DDPM):
                                                        bg_pixel_weight,
                                                        x_start.shape[0], loss_dict, prefix)
                 loss += loss_fg_bg_contrast
-                loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
                 loss += loss_recon
-                print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {loss_recon.item():.5f}")
+                v_loss_recon = loss_recon.mean().detach().item()
+                loss_dict.update({f'{prefix}/loss_recon': v_loss_recon})
+                print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.5f}")
             # do_unet_distill or id2img_prompt_encoder_trainable.
             else:
                 # num_denoising_steps > 1 implies do_unet_distill.
@@ -2051,6 +2052,8 @@ class LatentDiffusion(DDPM):
 
                 loss_recons = []
                 loss_distill_deltas = []
+                print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
+
                 for s in range(len(model_outputs)):
                     try:
                         model_output, target = model_outputs[s], targets[s]
@@ -2116,14 +2119,15 @@ class LatentDiffusion(DDPM):
                 # Instead, only increase the normalizer sub-linearly.
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
                 loss += loss_recon
+                v_loss_recon = loss_recon.mean().detach().item()
                 if not self.iter_flags['do_unet_distill']:
                     # ** Usually we don't reach here. **
                     # If not do_unet_distill, then this is a normal_recon iter with 
                     # id2img_prompt_encoder_trainable. 
                     assert self.id2img_prompt_encoder_trainable
-                    loss_dict.update({f'{prefix}/loss_recon':   loss_recon.mean().detach().item()})
+                    loss_dict.update({f'{prefix}/loss_recon':   v_loss_recon})
                 else:
-                    loss_dict.update({f'{prefix}/loss_distill': loss_recon.mean().detach().item()})
+                    loss_dict.update({f'{prefix}/loss_distill': v_loss_recon})
 
                 if self.iter_flags['perturb_face_id_embs']:
                     loss_distill_delta = sum(loss_distill_deltas) / np.sqrt(num_denoising_steps)
