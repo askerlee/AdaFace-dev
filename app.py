@@ -182,9 +182,9 @@ with gr.Blocks(css=css) as demo:
             guidance_scale = gr.Slider(
                 label="Guidance scale",
                 minimum=1.0,
-                maximum=10.0,
+                maximum=8.0,
                 step=1.0,
-                value=6.0,
+                value=4.0,
             )
 
             avg_at_stage = gr.Dropdown(label="Average at stage",
