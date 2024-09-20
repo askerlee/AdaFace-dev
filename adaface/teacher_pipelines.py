@@ -81,7 +81,7 @@ class UNetTeacher(pl.LightningModule):
                 
                 if self.uses_cfg:
                     x_noisy2 = x_noisy.repeat(2, 1, 1, 1)
-                    t2 = t.repeat(2)
+                    t2       = t.repeat(2)
                 else:
                     x_noisy2 = x_noisy
                     t2 = t

@@ -254,8 +254,6 @@ def parse_args():
                         help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
-    parser.add_argument("--num_static_img_suffix_embs", type=int, default=0,
-                        help="Number of extra static learnable image embeddings appended to input ID embeddings")
     # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
@@ -418,7 +416,7 @@ def main(opt):
                                           unet_types=None,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, 
-                                          num_static_img_suffix_embs=opt.num_static_img_suffix_embs,
+                                          num_static_img_suffix_embs=0,
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
                 # If id2ada_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.
@@ -585,7 +583,6 @@ def main(opt):
                                                  subj_id2img_prompt_embs = None,
                                                  zs_clip_bg_features=None,
                                                  return_prompt_embs_type = opt.return_prompt_embs_type,
-                                                 # TODO: support num_static_img_suffix_embs.
                                                  num_id_vecs = opt.num_vectors_per_subj_token,
                                                  text_conditioning_iter_type = 'negative')
             except:

@@ -234,7 +234,7 @@ def get_parser(**parser_kwargs):
                         help="The probability that the UNet teacher (as well as the student) uses the classifier-free guidance")    
     parser.add_argument("--unet_teacher_cfg_scale_range", type=float, nargs=2, default=argparse.SUPPRESS,
                         help="Range of the scale of the classifier-free guidance")
-    parser.add_argument("--num_static_img_suffix_embs", type=int, default=0,
+    parser.add_argument("--num_static_img_suffix_embs", type=int, default=4,
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
     # --extra_unet_paths and --unet_weights are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 

@@ -25,8 +25,6 @@ parser.add_argument('--extra_unet_paths', type=str, nargs="*", default=['models/
                     help="Extra paths to the checkpoints of the UNet models")
 parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
                     help="Weights for the UNet models")
-parser.add_argument("--num_static_img_suffix_embs", type=int, default=0,
-                    help="Extra number of static image-space embeddings as input to AdaFace")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
@@ -42,7 +40,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_mod
                          adaface_encoder_scales=args.adaface_encoder_scales,
                          unet_types=None,
                          extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights,
-                         num_static_img_suffix_embs=args.num_static_img_suffix_embs,
+                         num_static_img_suffix_embs=0,
                          device=device)
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:

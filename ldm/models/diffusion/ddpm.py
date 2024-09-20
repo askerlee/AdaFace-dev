@@ -420,9 +420,11 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_normal_recon']  = False
                 self.iter_flags['do_unet_distill']  = False
 
+        # By default, is_compos_iter == False.
         if not self.iter_flags['is_compos_iter'] and self.p_unet_distill_iter > 0:
             if np.random.rand() < self.p_unet_distill_iter:
                 self.iter_flags['do_unet_distill']  = True
+                self.iter_flags['do_normal_recon']  = False
                 # Disable do_static_prompt_delta_reg during unet distillation.
                 self.iter_flags['do_static_prompt_delta_reg'] = False
        
@@ -1083,6 +1085,7 @@ class LatentDiffusion(DDPM):
                 # If there are faceless input images in the batch, we have to use the unet recon as target.
                 if faceless_img_count > 0:
                     self.iter_flags['do_unet_distill'] = True
+                    self.iter_flags['do_normal_recon'] = False
                             
             # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
             # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
@@ -2114,8 +2117,10 @@ class LatentDiffusion(DDPM):
                 loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
                 loss += loss_recon
                 if not self.iter_flags['do_unet_distill']:
+                    # ** Usually we don't reach here. **
                     # If not do_unet_distill, then this is a normal_recon iter with 
-                    # id2img_prompt_encoder_trainable.
+                    # id2img_prompt_encoder_trainable. 
+                    assert self.id2img_prompt_encoder_trainable
                     loss_dict.update({f'{prefix}/loss_recon':   loss_recon.mean().detach().item()})
                 else:
                     loss_dict.update({f'{prefix}/loss_distill': loss_recon.mean().detach().item()})
@@ -2582,8 +2587,6 @@ class LatentDiffusion(DDPM):
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
                                              fg_pixel_weight=1,
                                              bg_pixel_weight=bg_pixel_weight)
-
-        loss_dict.update({f'{prefix}/loss_recon': loss_recon.mean().detach().item()})
 
         return loss_fg_bg_contrast, loss_recon
 

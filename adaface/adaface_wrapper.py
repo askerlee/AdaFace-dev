@@ -46,7 +46,7 @@ class AdaFaceWrapper(nn.Module):
             self.adaface_encoder_scales = adaface_encoder_scales
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
-        self.num_static_img_suffix_embs   = num_static_img_suffix_embs
+        self.num_static_img_suffix_embs       = num_static_img_suffix_embs
         self.to_load_id2img_learnable_modules = to_load_id2img_learnable_modules
         self.subject_string = subject_string
 

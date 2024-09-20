@@ -602,9 +602,13 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     
 # ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
-    def __init__(self, pipe=None, base_model_path=None, *args, **kwargs):
+    def __init__(self, pipe=None, base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
+                 *args, **kwargs):
         super().__init__(*args, **kwargs)
         if pipe is None:
+            # The base_model_path is kind of arbitrary, as the UNet and VAE in the model 
+            # are not used and will be released soon.
+            # Only the consistentID modules and bise_net are used.
             assert base_model_path is not None, "base_model_path should be provided."
             pipe = ConsistentIDPipeline.from_single_file(
                 base_model_path, 
@@ -695,14 +699,16 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     def get_id2img_learnable_modules(self):
         return [ self.image_proj_model ]
 
+class Multi_FaceID2AdaPrompt(FaceID2AdaPrompt):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
 def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None, *args, **kwargs):
     if adaface_encoder_type == 'arc2face':
         id2ada_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
     elif adaface_encoder_type == 'consistentID':
-        # The base_model_path is kind of arbitrary, as the UNet and VAE in the model will be released soon.
-        # Only the consistentID modules and bise_net are used.
         id2ada_prompt_encoder = ConsistentID_ID2AdaPrompt(
-                                    base_model_path="models/ensemble/sd15-dste8-vae.safetensors",
+                                    pipe=None,
                                     adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
     else:
         breakpoint()
