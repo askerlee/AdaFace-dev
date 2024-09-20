@@ -1940,6 +1940,7 @@ class LatentDiffusion(DDPM):
                 # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
                 # extra_unet_paths (finetuned unets on the original SD unet); 
                 # in this case they are surely not 'arc2face' or 'consistentID'.
+                # The same student_prompt_embs is used by all unet_teachers.
                 if self.unet_teacher_types == ['unet_ensemble']:
                     teacher_contexts = [student_prompt_embs]
                 else:

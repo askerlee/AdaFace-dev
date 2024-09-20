@@ -192,6 +192,13 @@ class UNetEnsemble(nn.Module):
     def forward(self, *args, **kwargs):
         return_dict = kwargs.get('return_dict', True)
         teacher_contexts = kwargs.pop('encoder_hidden_states', None)
+        # Only one teacher_context is provided. That means all unets will use the same teacher_context.
+        # We repeat the teacher_contexts to match the number of unets.
+        if not isinstance(teacher_contexts, (list, tuple)):
+            teacher_contexts = [teacher_contexts]
+        if len(teacher_contexts) == 1 and len(self.unets) > 1:
+            teacher_contexts = teacher_contexts * len(self.unets)
+
         samples = []
 
         for unet, teacher_context in zip(self.unets, teacher_contexts):
