@@ -83,7 +83,6 @@ class DDPM(pl.LightningModule):
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
-                 do_zero_shot=True,
                  num_id_vecs=16,
                  p_unet_distill_iter=0,
                  unet_teacher_types=None,
@@ -113,7 +112,6 @@ class DDPM(pl.LightningModule):
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
-        self.do_zero_shot                = do_zero_shot
         # num_id_vecs is first set to the default value of 16, 
         # and will be updated later after the embedding manager is instantiated.
         self.num_id_vecs                 = num_id_vecs
@@ -134,8 +132,7 @@ class DDPM(pl.LightningModule):
         self.use_background_token                   = use_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
-        self.p_unet_distill_iter                    = p_unet_distill_iter if (do_zero_shot and self.training) \
-                                                        else 0
+        self.p_unet_distill_iter                    = p_unet_distill_iter if self.training else 0
         self.unet_teacher_types                     = list(unet_teacher_types) if unet_teacher_types is not None else None
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
@@ -631,7 +628,7 @@ class LatentDiffusion(DDPM):
         if randomize_clip_weights:
             self.cond_stage_model.sample_last_layers_skip_weights()
 
-        # If do_zero_shot, but the prompt is "" (negative prompt), then zs_clip_bg_features is None.
+        # If the prompt is "" (negative prompt), then zs_clip_bg_features is None.
         # We don't update subj_id2img_prompt_embs / zs_clip_bg_features in this case.
         if subj_id2img_prompt_embs is not None or zs_clip_bg_features is not None:
             self.embedding_manager.set_zs_image_prompts_and_features(subj_id2img_prompt_embs, zs_clip_bg_features)
@@ -864,121 +861,106 @@ class LatentDiffusion(DDPM):
         self.iter_flags['do_comp_teacher_filter'] = (self.do_comp_teacher_filtering and self.iter_flags['do_mix_prompt_distillation'] \
                                                      and not self.iter_flags['reuse_init_conds'])
 
-        # do_static_prompt_delta_reg is applicable to Ada, Static layerwise embedding 
-        # or traditional TI.        
-        # do_ada_prompt_delta_reg implies do_static_prompt_delta_reg. So only check do_static_prompt_delta_reg.
-        if self.do_zero_shot or self.do_static_prompt_delta_reg or self.iter_flags['do_mix_prompt_distillation']:
-            # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
-            # when doing compositional mix regularization on humans/animals.
-            # For objects (broad_class != 1), even if use_fp_trick = True, 
-            # *_fp prompts are not available in batch, so fp_trick won't be used.
-            # 'subj_prompt_single_fp' in batch is True <=> (broad_class == 1 and use_fp_trick).
-            # If do_mix_prompt_distillation but broad_class == 0 or 2, this statement is False, and 
-            # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
-            p_use_fp_trick = 0.9
-            self.iter_flags['use_fp_trick'] = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
-                                                and 'subj_prompt_single_fp' in batch \
-                                                and random.random() < p_use_fp_trick
+        # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
+        # when doing compositional mix regularization on humans/animals.
+        # For objects (broad_class != 1), even if use_fp_trick = True, 
+        # *_fp prompts are not available in batch, so fp_trick won't be used.
+        # 'subj_prompt_single_fp' in batch is True <=> (broad_class == 1 and use_fp_trick).
+        # If do_mix_prompt_distillation but broad_class == 0 or 2, this statement is False, and 
+        # used prompts will be 'subj_prompt_comp', 'cls_prompt_single', 'cls_prompt_comp'...
+        p_use_fp_trick = 0.9
+        self.iter_flags['use_fp_trick'] = self.iter_flags['do_mix_prompt_distillation'] and self.use_fp_trick \
+                                            and 'subj_prompt_single_fp' in batch \
+                                            and random.random() < p_use_fp_trick
 
+        if self.iter_flags['do_mix_prompt_distillation'] \
+                and not self.iter_flags['reuse_init_conds'] \
+                and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # Slightly larger than 0.5, since comp_init_fg_from_training_image is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_fg_from_training_image percentage will be around 0.5.
             # p_comp_init_fg_from_training_image: 0.8 -> 1.0 over first 25% of the training, 
             # then keep at 1.0.
             # That is, mix_prompt_distill loss is only enabled at the first 25% of the training 
             # as bootstrapping, then disabled (only keep comp_fg_bg_preserve_loss).
-            if not self.do_zero_shot:
-                p_comp_init_fg_from_training_image = anneal_value(self.training_percent, 0.5, (0.7, 0.9))
-            else:
-                # If do_zero_shot, then comp_init_fg_from_training_image is always enabled.
-                # It's OK, since when do_zero_shot, we have a large diverse set of training images,
-                # and always initializing from training images won't lead to overfitting.
-                p_comp_init_fg_from_training_image = 1
-
-            # If reuse_init_conds, comp_init_fg_from_training_image may be set to True later
-            # if the previous iteration has comp_init_fg_from_training_image = True.
-            self.iter_flags['comp_init_fg_from_training_image'] \
-                = self.iter_flags['do_mix_prompt_distillation'] \
-                    and not self.iter_flags['reuse_init_conds'] \
-                    and self.iter_flags['fg_mask_avail_ratio'] > 0 \
-                    and random.random() < p_comp_init_fg_from_training_image
-            
-            # Mainly use background token on recon iters.
-            if self.iter_flags['is_compos_iter']:
-                p_use_background_token  = 0.5
-            else:
-                # Recon iters.
-                if self.iter_flags['do_unet_distill']:
-                    # If do_unet_distill, then disable the background token.
-                    p_use_background_token  = 0
-                elif self.do_zero_shot:
-                    # We lower p_use_background_token from 0.9 to 0.2 to avoid the background token
-                    # taking too much of the foreground (capturing the subject features).
-                    p_use_background_token  = 0.2
-                else:
-                    # To avoid the backgound token taking too much of the foreground (capturing the subject features),
-                    # we only use the background token on 90% of the training images, to 
-                    # force the foreground tokens to focus on the whole image.
-                    p_use_background_token  = 0.9
-
-            self.iter_flags['use_background_token'] = self.use_background_token \
-                                                      and random.random() < p_use_background_token
-                        
-            if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
-                captions = batch['caption_bg']
-                SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
-                SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
-                CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
-            # use_fp_trick but not use_background_token.
-            elif self.iter_flags['use_fp_trick']:
-                captions = batch['caption']
-                # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
-                SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
-                SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
-                CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
-            # not use_fp_trick and use_background_token.
-            elif self.iter_flags['use_background_token']:
-                captions = batch['caption_bg']
-                SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
-                SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
-                CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
-            # Either do_mix_prompt_distillation but not (use_fp_trick_iter and broad_class == 1), 
-            # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
-            # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
-            else:
-                # The above captions returned by self.get_input() is already batch['caption'].
-                # Reassign here for clarity.
-                captions = batch['caption']
-                SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
-                SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
-                CLS_PROMPT_COMP    = 'cls_prompt_comp'
-                CLS_PROMPT_SINGLE  = 'cls_prompt_single'
-
-            # Each prompt_comp consists of multiple prompts separated by "|".
-            # Split them into a list of subj_comp_prompts/cls_comp_prompts.
-            subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
-            cls_single_prompts  = batch[CLS_PROMPT_SINGLE]
-            subj_comp_prompts = []
-            for prompt_comp in batch[SUBJ_PROMPT_COMP]:
-                subj_comp_prompts.append(prompt_comp.split("|"))
-            cls_comp_prompts = []
-            for prompt_comp in batch[CLS_PROMPT_COMP]:
-                cls_comp_prompts.append(prompt_comp.split("|"))
-            # REPEATS: how many prompts correspond to each image.
-            REPEATS = len(subj_comp_prompts[0])
-            # Currently only support REPEATS == 1.
-            assert REPEATS == 1
-            subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
-            cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
-            delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-
+            # if do_mix_prompt_distillation, comp_init_fg_from_training_image is always enabled.
+            # It's OK, since when do_zero_shot, we have a large diverse set of training images,
+            # and always initializing from training images won't lead to overfitting.
+            p_comp_init_fg_from_training_image = 1
         else:
-            delta_prompts = None
-            # use_background_token is never enabled in this branch.
-            if self.iter_flags['use_background_token']:
-                captions = batch['caption_bg']
+            p_comp_init_fg_from_training_image = 0
+
+        # If reuse_init_conds, comp_init_fg_from_training_image may be set to True later
+        # if the previous iteration has comp_init_fg_from_training_image = True.
+        self.iter_flags['comp_init_fg_from_training_image'] \
+            = random.random() < p_comp_init_fg_from_training_image
+        
+        # Mainly use background token on recon iters.
+        if self.iter_flags['is_compos_iter']:
+            p_use_background_token  = 0.5
+        else:
+            # Recon iters.
+            if self.iter_flags['do_unet_distill']:
+                # If do_unet_distill, then disable the background token.
+                p_use_background_token  = 0
+            else:
+                # We lower p_use_background_token from 0.9 to 0.2 to avoid the background token
+                # taking too much of the foreground (capturing the subject features).
+                p_use_background_token  = 0.2
+
+        self.iter_flags['use_background_token'] = self.use_background_token \
+                                                    and random.random() < p_use_background_token
+                    
+        if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
+            captions = batch['caption_bg']
+            SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
+            SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
+            CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
+            CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
+        # use_fp_trick but not use_background_token.
+        elif self.iter_flags['use_fp_trick']:
+            captions = batch['caption']
+            # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
+            SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
+            SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
+            CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
+            CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
+        # not use_fp_trick and use_background_token.
+        elif self.iter_flags['use_background_token']:
+            captions = batch['caption_bg']
+            SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
+            SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
+            CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
+            CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
+        # Either do_mix_prompt_distillation but not (use_fp_trick_iter and broad_class == 1), 
+        # or recon iters (not do_mix_prompt_distillation) and not use_background_token 
+        # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
+        else:
+            # The above captions returned by self.get_input() is already batch['caption'].
+            # Reassign here for clarity.
+            captions = batch['caption']
+            SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
+            SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
+            CLS_PROMPT_COMP    = 'cls_prompt_comp'
+            CLS_PROMPT_SINGLE  = 'cls_prompt_single'
+
+        # Each prompt_comp consists of multiple prompts separated by "|".
+        # Split them into a list of subj_comp_prompts/cls_comp_prompts.
+        subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
+        cls_single_prompts  = batch[CLS_PROMPT_SINGLE]
+        subj_comp_prompts = []
+        for prompt_comp in batch[SUBJ_PROMPT_COMP]:
+            subj_comp_prompts.append(prompt_comp.split("|"))
+        cls_comp_prompts = []
+        for prompt_comp in batch[CLS_PROMPT_COMP]:
+            cls_comp_prompts.append(prompt_comp.split("|"))
+        # REPEATS: how many prompts correspond to each image.
+        REPEATS = len(subj_comp_prompts[0])
+        # Currently only support REPEATS == 1.
+        assert REPEATS == 1
+        subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
+        cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
+        delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+
 
         if 'aug_mask' in batch:
             # img_mask is another name of aug_mask.
@@ -1025,202 +1007,197 @@ class LatentDiffusion(DDPM):
 
         batch_images_unnorm = batch["image_unnorm"]
 
-        if self.do_zero_shot:
-            # images: 0~255 uint8 tensor [3, 512, 512, 3] -> [3, 3, 512, 512].
-            images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
-            image_paths = batch["image_path"]
+        # images: 0~255 uint8 tensor [3, 512, 512, 3] -> [3, 3, 512, 512].
+        images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
+        image_paths = batch["image_path"]
 
-            # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
-            # Therefore, zs_clip_fgbg_features are not available and are randomly generated as well.
-            # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
-            # NOTE: the faces generated with gen_id2img_rand_id are usually atypical outliers,
-            # so adding a small proportion of them to the training data may help increase the authenticity on
-            # atypical faces, but adding too much of them may harm the performance on typical faces.
-            if self.iter_flags['gen_id2img_rand_id']:
-                zs_id_embs              = torch.randn(BS, 512, device=x_start.device)
-                zs_clip_fgbg_features   = torch.randn(BS, 514, 1280, device=x_start.device)
-                # On random IDs, we don't need to consider img_mask and fg_mask.
-                img_mask = None
-                fg_mask  = None
-                batch_have_fg_mask[:] = False
-                # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start.
-                x_start = torch.randn_like(x_start)
-                self.iter_flags['faceless_img_count'] = 0
-                # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
-                self.iter_flags['same_subject_in_batch'] = False
+        # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
+        # Therefore, zs_clip_fgbg_features are not available and are randomly generated as well.
+        # gen_id2img_rand_id implies (not do_mix_prompt_distillation).
+        # NOTE: the faces generated with gen_id2img_rand_id are usually atypical outliers,
+        # so adding a small proportion of them to the training data may help increase the authenticity on
+        # atypical faces, but adding too much of them may harm the performance on typical faces.
+        if self.iter_flags['gen_id2img_rand_id']:
+            zs_id_embs              = torch.randn(BS, 512, device=x_start.device)
+            zs_clip_fgbg_features   = torch.randn(BS, 514, 1280, device=x_start.device)
+            # On random IDs, we don't need to consider img_mask and fg_mask.
+            img_mask = None
+            fg_mask  = None
+            batch_have_fg_mask[:] = False
+            # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start.
+            x_start = torch.randn_like(x_start)
+            self.iter_flags['faceless_img_count'] = 0
+            # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
+            self.iter_flags['same_subject_in_batch'] = False
 
-            # Not gen_id2img_rand_id. The recon/distillation is on real ID embeddings.
-            # 'gen_id2img_rand_id' is only True in do_unet_distill iters.
-            # So if not do_unet_distill, then this branch is always executed.
-            #    If     do_unet_distill, then this branch is executed at 50% of the time.
-            else:
-                # When possible, don't always use the average embedding of the same subject in the batch.
-                # Otherwise, the model may memorize the subject embedding and tend to generate subjects
-                # who look like the subjects in the training data.
-                if self.iter_flags['same_subject_in_batch'] and not self.iter_flags['do_mix_prompt_distillation']:
-                    use_subj_avg_embedding = random.random() < 0.5
-                # In mix prompt distillation iterations, we must use the average embedding of the same subject in the batch.
-                elif self.iter_flags['do_mix_prompt_distillation']:
-                    use_subj_avg_embedding = True
-                elif not self.iter_flags['same_subject_in_batch']:
-                    use_subj_avg_embedding = False
-                else:
-                    breakpoint()
-
-                # If self.iter_flags['same_subject_in_batch']:  zs_clip_fgbg_features: [1, 514, 1280]. zs_id_embs: [1, 512].
-                # Otherwise:                                    zs_clip_fgbg_features: [3, 514, 1280]. zs_id_embs: [3, 512].
-                # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_fgbg_features and zs_id_embs to get 
-                # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-                # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
-                # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
-                # ** We no longer cache and provide zs_clip_neg_features later, as it is constant and
-                # is cached in the FaceID2AdaPrompt object.
-                faceless_img_count, zs_id_embs, zs_clip_fgbg_features = \
-                    self.embedding_manager.id2ada_prompt_encoder.extract_init_id_embeds_from_images(\
-                        images, image_paths, fg_mask.squeeze(1), skip_non_faces=False, 
-                        calc_avg=use_subj_avg_embedding)
-
-                # faceless_img_count: number of images in the batch in which no faces are detected.
-                self.iter_flags['faceless_img_count'] = faceless_img_count
-                # If there are faceless input images in the batch, we have to use the unet recon as target.
-                if faceless_img_count > 0:
-                    self.iter_flags['do_unet_distill'] = True
-                    self.iter_flags['do_normal_recon'] = False
-                            
-            # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
-            # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
-            # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
-            results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
-                        images.shape[0], init_id_embs=zs_id_embs, 
-                        pre_clip_features=zs_clip_fgbg_features, 
-                        id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
-                        
-            # id2img_prompt_embs, id2img_neg_prompt_embs: [4, 21, 768]
-            # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
-            id2img_prompt_embs, id2img_neg_prompt_embs = results[2], results[3]
-            # During training, id2img_prompt_embs is float16, but x_start is float32.
-            id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
-            if id2img_neg_prompt_embs is not None:
-                id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
-
-            # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
-            # ID information.
-            p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
-            # p_perturb_face_id_embs: default 0.6.
-            # The overall prob of perturb_face_id_embs: (1 - 0.4) * 0.6 = 0.36.
-            self.iter_flags['perturb_face_id_embs'] = random.random() < p_perturb_face_id_embs
-            if self.iter_flags['perturb_face_id_embs']:
-                if not self.iter_flags['same_subject_in_batch']:
-                    self.iter_flags['same_subject_in_batch'] = True
-                    # Change the ID features of multiple subjects in the batch to the ID features of 
-                    # the first subject, before adding noise to the ID features.
-                    # Doing so is similar to contrastive learning: the embeddings in a batch are similar
-                    # (the first subject embedding + randn noise), but the generated images are quite different.
-                    # Therefore, the model may learn to distinguish the tiny differences in the embeddings.
-                    # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
-                    # the first subject's as well.
-                    # Change the batch to have the (1 subject image) * BS strcture.
-                    # NOTE: Use the same noise for differently-perturbed ID embeddings in the batch,
-                    # so that we can compute the delta loss between the generated images.
-                    # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
-                    # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
-                    # We don't repeat id2img_neg_prompt_embs, as it's constant and identical for different instances.
-                    x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
-                    batch_have_fg_mask, self.batch_subject_names, \
-                    id2img_prompt_embs, zs_clip_fgbg_features = \
-                        repeat_selected_instances(slice(0, 1), BS, 
-                                                  x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
-                                                  batch_have_fg_mask, self.batch_subject_names, 
-                                                  id2img_prompt_embs, zs_clip_fgbg_features)
-                    
-                # ** Add noise to the zero-shot ID image prompt embeddings with probability 0.6. **
-                # ** Note the noise is added to the image prompt embeddings instead of the initial face ID embeddings. **
-                # Because for ConsistentID, both the ID embeddings and the CLIP features are used to generate the image prompt embeddings.
-                # Each embedding has different roles in depicting the facial features.
-                # If we perturb both, we cannot guarantee their consistency and the perturbed faces may be quite distorted.
-                # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
-                # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
-                # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
-                # Keep the first ID embedding as it is, and add noise to the rest.
-                id2img_prompt_embs[1:] = \
-                    anneal_perturb_embedding(id2img_prompt_embs[1:], training_percent=0, 
-                                             begin_noise_std_range=self.perturb_face_id_embs_std_range, 
-                                             end_noise_std_range=None, 
-                                             perturb_prob=1, perturb_std_is_relative=True, 
-                                             keep_norm=True, verbose=True)
-
-            if self.iter_flags['do_unet_distill']:
-                # Gradually increase the chance of taking 5 or 7 denoising steps.
-                p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
-                                                        final_percent=0.5,
-                                                        begin_array=[0.4, 0.3, 0.2, 0.1], 
-                                                        end_array  =[0.4, 0.3, 0.2, 0.1],
-                                                    )
-                cand_num_denoising_steps = [1, 2, 3, 5, 7]
-                # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
-                cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
-                                                if si <= self.max_num_denoising_steps ]
-                p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
-                p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
-
-                # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
-                num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
-                self.iter_flags['num_denoising_steps'] = num_denoising_steps
-                if self.unet_teacher_types != ['arc2face']:
-                    p_unet_distill_uses_comp_prompt = 0.2
-
-                    # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
-                    if random.random() < p_unet_distill_uses_comp_prompt:
-                        captions = batch[SUBJ_PROMPT_COMP]
-                        #print(captions)
-                        self.iter_flags['unet_distill_uses_comp_prompt'] = True
-                else:
-                    # If only 'arc2face' is in unet_teacher_types, then we never use the compositional prompts.
-                    # Because arc2face ignores any compositional prompts.
-                    self.iter_flags['unet_distill_uses_comp_prompt'] = False
-
-                if num_denoising_steps > 1:
-                    # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
-                    # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
-                    # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
-                    # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
-                    HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
-                    # Setting the minimal batch size to be 2 requires skipping 3 steps if num_denoising_steps == 6.
-                    # Seems doing so will introduce too much artifact. Therefore it's DISABLED.
-                    ## The batch size when doing multi-step denoising is at least 2. 
-                    ## But naively doing so when num_denoising_steps >= 3 may cause OOM.
-                    ## In that case, we need to discard the first few steps from loss computation.
-                    ## HALF_BS = max(2, HALF_BS)
-
-                    # REPEAT = 1 in repeat_selected_instances(), so that it only selects the first HALF_BS elements without repeating.
-                    # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
-                    x_start, batch_images_unnorm, img_mask, fg_mask, \
-                    batch_have_fg_mask, self.batch_subject_names, \
-                    captions, zs_clip_fgbg_features, \
-                    id2img_prompt_embs, id2img_neg_prompt_embs = \
-                        repeat_selected_instances(slice(0, HALF_BS), 1, 
-                                                    x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                                    batch_have_fg_mask, self.batch_subject_names, 
-                                                    captions, zs_clip_fgbg_features,
-                                                    id2img_prompt_embs, id2img_neg_prompt_embs)
-
-                    subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                        subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
-                        cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
-                    
-                    delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-                    # We don't explicitly repeat noise here. 
-                    # If perturb_face_id_embs,     then the noise is already the same for all ID embeddings,
-                    # If not perturb_face_id_embs, then the noise should be different for different instances, 
-                    # and there's no need to repeat. 
-                    # But we need to use only the first HALF_BS noises to match x_start.
-                    noise = noise[:HALF_BS]
-
-        # Not do_zero_shot.
+        # Not gen_id2img_rand_id. The recon/distillation is on real ID embeddings.
+        # 'gen_id2img_rand_id' is only True in do_unet_distill iters.
+        # So if not do_unet_distill, then this branch is always executed.
+        #    If     do_unet_distill, then this branch is executed at 50% of the time.
         else:
-            zs_clip_fgbg_features   = None
-            id2img_prompt_embs      = None
-            id2img_neg_prompt_embs  = None
+            # When possible, don't always use the average embedding of the same subject in the batch.
+            # Otherwise, the model may memorize the subject embedding and tend to generate subjects
+            # who look like the subjects in the training data.
+            if self.iter_flags['same_subject_in_batch'] and not self.iter_flags['do_mix_prompt_distillation']:
+                use_subj_avg_embedding = random.random() < 0.5
+            # In mix prompt distillation iterations, we must use the average embedding of the same subject in the batch.
+            elif self.iter_flags['do_mix_prompt_distillation']:
+                use_subj_avg_embedding = True
+            elif not self.iter_flags['same_subject_in_batch']:
+                use_subj_avg_embedding = False
+            else:
+                breakpoint()
+
+            # If self.iter_flags['same_subject_in_batch']:  zs_clip_fgbg_features: [1, 514, 1280]. zs_id_embs: [1, 512].
+            # Otherwise:                                    zs_clip_fgbg_features: [3, 514, 1280]. zs_id_embs: [3, 512].
+            # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_fgbg_features and zs_id_embs to get 
+            # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
+            # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
+            # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
+            # ** We no longer cache and provide zs_clip_neg_features later, as it is constant and
+            # is cached in the FaceID2AdaPrompt object.
+            faceless_img_count, zs_id_embs, zs_clip_fgbg_features = \
+                self.embedding_manager.id2ada_prompt_encoder.extract_init_id_embeds_from_images(\
+                    images, image_paths, fg_mask.squeeze(1), skip_non_faces=False, 
+                    calc_avg=use_subj_avg_embedding)
+
+            # faceless_img_count: number of images in the batch in which no faces are detected.
+            self.iter_flags['faceless_img_count'] = faceless_img_count
+            # If there are faceless input images in the batch, we have to use the unet recon as target.
+            if faceless_img_count > 0:
+                self.iter_flags['do_unet_distill'] = True
+                self.iter_flags['do_normal_recon'] = False
+                        
+        # get_batched_img_prompt_embs() encodes zs_id_embs to id2img_prompt_embs.
+        # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
+        # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
+        results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
+                    images.shape[0], init_id_embs=zs_id_embs, 
+                    pre_clip_features=zs_clip_fgbg_features, 
+                    id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
+                    
+        # id2img_prompt_embs, id2img_neg_prompt_embs: [4, 21, 768]
+        # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
+        id2img_prompt_embs, id2img_neg_prompt_embs = results[2], results[3]
+        # During training, id2img_prompt_embs is float16, but x_start is float32.
+        id2img_prompt_embs = id2img_prompt_embs.to(x_start.dtype)
+        if id2img_neg_prompt_embs is not None:
+            id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
+
+        # If do_mix_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, to avoid distorting the
+        # ID information.
+        p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
+        # p_perturb_face_id_embs: default 0.6.
+        # The overall prob of perturb_face_id_embs: (1 - 0.4) * 0.6 = 0.36.
+        self.iter_flags['perturb_face_id_embs'] = random.random() < p_perturb_face_id_embs
+        if self.iter_flags['perturb_face_id_embs']:
+            if not self.iter_flags['same_subject_in_batch']:
+                self.iter_flags['same_subject_in_batch'] = True
+                # Change the ID features of multiple subjects in the batch to the ID features of 
+                # the first subject, before adding noise to the ID features.
+                # Doing so is similar to contrastive learning: the embeddings in a batch are similar
+                # (the first subject embedding + randn noise), but the generated images are quite different.
+                # Therefore, the model may learn to distinguish the tiny differences in the embeddings.
+                # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
+                # the first subject's as well.
+                # Change the batch to have the (1 subject image) * BS strcture.
+                # NOTE: Use the same noise for differently-perturbed ID embeddings in the batch,
+                # so that we can compute the delta loss between the generated images.
+                # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+                # zs_clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
+                # We don't repeat id2img_neg_prompt_embs, as it's constant and identical for different instances.
+                x_start, noise, batch_images_unnorm, img_mask, fg_mask, \
+                batch_have_fg_mask, self.batch_subject_names, \
+                id2img_prompt_embs, zs_clip_fgbg_features = \
+                    repeat_selected_instances(slice(0, 1), BS, 
+                                                x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
+                                                batch_have_fg_mask, self.batch_subject_names, 
+                                                id2img_prompt_embs, zs_clip_fgbg_features)
+                
+            # ** Add noise to the zero-shot ID image prompt embeddings with probability 0.6. **
+            # ** Note the noise is added to the image prompt embeddings instead of the initial face ID embeddings. **
+            # Because for ConsistentID, both the ID embeddings and the CLIP features are used to generate the image prompt embeddings.
+            # Each embedding has different roles in depicting the facial features.
+            # If we perturb both, we cannot guarantee their consistency and the perturbed faces may be quite distorted.
+            # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of zs_id_embs.
+            # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
+            # If the subject is not face, then zs_id_embs is DINO embeddings. We can still add noise to them.
+            # Keep the first ID embedding as it is, and add noise to the rest.
+            id2img_prompt_embs[1:] = \
+                anneal_perturb_embedding(id2img_prompt_embs[1:], training_percent=0, 
+                                            begin_noise_std_range=self.perturb_face_id_embs_std_range, 
+                                            end_noise_std_range=None, 
+                                            perturb_prob=1, perturb_std_is_relative=True, 
+                                            keep_norm=True, verbose=True)
+
+        if self.iter_flags['do_unet_distill']:
+            # Gradually increase the chance of taking 5 or 7 denoising steps.
+            p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
+                                                    final_percent=0.5,
+                                                    begin_array=[0.4, 0.3, 0.2, 0.1], 
+                                                    end_array  =[0.4, 0.3, 0.2, 0.1],
+                                                )
+            cand_num_denoising_steps = [1, 2, 3, 5, 7]
+            # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
+            cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
+                                            if si <= self.max_num_denoising_steps ]
+            p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
+            p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
+
+            # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
+            num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+            self.iter_flags['num_denoising_steps'] = num_denoising_steps
+            if self.unet_teacher_types != ['arc2face']:
+                p_unet_distill_uses_comp_prompt = 0.2
+
+                # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+                if random.random() < p_unet_distill_uses_comp_prompt:
+                    captions = batch[SUBJ_PROMPT_COMP]
+                    #print(captions)
+                    self.iter_flags['unet_distill_uses_comp_prompt'] = True
+            else:
+                # If only 'arc2face' is in unet_teacher_types, then we never use the compositional prompts.
+                # Because arc2face ignores any compositional prompts.
+                self.iter_flags['unet_distill_uses_comp_prompt'] = False
+
+            if num_denoising_steps > 1:
+                # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
+                # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
+                # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
+                # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
+                HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
+                # Setting the minimal batch size to be 2 requires skipping 3 steps if num_denoising_steps == 6.
+                # Seems doing so will introduce too much artifact. Therefore it's DISABLED.
+                ## The batch size when doing multi-step denoising is at least 2. 
+                ## But naively doing so when num_denoising_steps >= 3 may cause OOM.
+                ## In that case, we need to discard the first few steps from loss computation.
+                ## HALF_BS = max(2, HALF_BS)
+
+                # REPEAT = 1 in repeat_selected_instances(), so that it **only selects** the 
+                # first HALF_BS elements without repeating.
+                # zs_clip_bg_features is used by ConsistentID adaface encoder, 
+                # so we repeat zs_clip_fgbg_features as well.
+                x_start, batch_images_unnorm, img_mask, fg_mask, \
+                batch_have_fg_mask, self.batch_subject_names, \
+                captions, zs_clip_fgbg_features, \
+                id2img_prompt_embs, id2img_neg_prompt_embs = \
+                    repeat_selected_instances(slice(0, HALF_BS), 1, 
+                                                x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                batch_have_fg_mask, self.batch_subject_names, 
+                                                captions, zs_clip_fgbg_features,
+                                                id2img_prompt_embs, id2img_neg_prompt_embs)
+
+                subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
+                    subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
+                    cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
+                
+                delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+                # We don't explicitly repeat noise here. 
+                # If perturb_face_id_embs,     then the noise is already the same for all ID embeddings,
+                # If not perturb_face_id_embs, then the noise should be different for different instances, 
+                # and there's no need to repeat. 
+                # But we need to use only the first HALF_BS noises to match x_start.
+                noise = noise[:HALF_BS]
 
         # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']                 = img_mask
@@ -1583,27 +1560,12 @@ class LatentDiffusion(DDPM):
             all_subj_indices_2b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                                        self.embedding_manager.subject_string_dict)
         
-        if self.do_zero_shot:
-            # If do_zero_shot, then mix more of the subject embeddings into the class embeddings.
-            # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
-            # posing too strong regularizations to the subject embeddings.
-            if self.iter_flags['comp_init_fg_from_training_image']:
-                k_cls_scale_layerwise_range = [1.0, 0.8]
-                # Less (compared with the settings below) subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [1.0, 0.7]
-            else:
-                k_cls_scale_layerwise_range = [1.0, 0.8]
-                # More subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [1.0, 0.6]
-        else:
-            if self.iter_flags['comp_init_fg_from_training_image']:
-                k_cls_scale_layerwise_range = [1.0, 1.0]
-                # Less (compared with the settings below) subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [1.0, 0.85]
-            else:
-                k_cls_scale_layerwise_range = [1.0, 1.0]
-                # More subject embeddings mixed into v.
-                v_cls_scale_layerwise_range = [1.0, 0.7]
+        # mix some of the subject embeddings into the class embeddings for faster convergence.
+        # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
+        # posing too strong regularizations to the subject embeddings.
+        k_cls_scale_layerwise_range = [1.0, 0.8]
+        # Slightly less (compared with the settings below) subject embeddings mixed into v.
+        v_cls_scale_layerwise_range = [1.0, 0.7]
 
         if self.iter_flags['is_compos_iter']:
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
@@ -1662,7 +1624,7 @@ class LatentDiffusion(DDPM):
                     # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                     filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
                     # If do zero-shot, then don't add extra noise to the foreground.
-                    fg_noise_anneal_mean_range = (0.1, 0.4) if not self.do_zero_shot else (0.1, 0.4)
+                    fg_noise_anneal_mean_range = (0.1, 0.4)
                     x_start, fg_mask, filtered_fg_mask = \
                         init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
                                                             self.training_percent,
@@ -1838,21 +1800,15 @@ class LatentDiffusion(DDPM):
             # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
             cfg_scale = -1
 
-            if self.do_zero_shot:
-                # Increase t slightly by (1, 1.5) to increase noise amount and make the denoising more challenging,
-                # with smaller prob to keep the original t.
-                t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
-                                      keep_prob_range=(0.4, 0.2))
-                if self.iter_flags['num_denoising_steps'] > 1:
-                    # Take a weighted average of t and 1000, to shift t to larger values, 
-                    # so that the 2nd-6th denoising steps fall in more reasonable ranges.
-                    t = (4 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (3 + self.iter_flags['num_denoising_steps'])
-            else:
-                # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
-                # with larger prob to keep the original t.
-                # This branch includes non-zero-shot training iterations.
-                t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
-                                      keep_prob_range=(0.4, 0.2))
+            # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
+            # with smaller prob to keep the original t.
+            t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
+                                    keep_prob_range=(0.4, 0.2))
+            if self.iter_flags['num_denoising_steps'] > 1:
+                # Take a weighted average of t and 1000, to shift t to larger values, 
+                # so that the 2nd-6th denoising steps fall in more reasonable ranges.
+                t = (4 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (3 + self.iter_flags['num_denoising_steps'])
+
             # No need to update masks in recon iters.
 
         extra_info['capture_distill_attn'] = not self.iter_flags['do_comp_teacher_filter']
@@ -1929,7 +1885,7 @@ class LatentDiffusion(DDPM):
                 loss += loss_recon
                 v_loss_recon = loss_recon.mean().detach().item()
                 loss_dict.update({f'{prefix}/loss_recon': v_loss_recon})
-                print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.5f}")
+                print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
             # do_unet_distill or id2img_prompt_encoder_trainable.
             else:
                 # num_denoising_steps > 1 implies do_unet_distill.
@@ -2110,7 +2066,7 @@ class LatentDiffusion(DDPM):
                     else:
                         loss_distill_delta = torch.tensor(0, device=loss_recon.device)
 
-                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.5f}, {loss_distill_delta.item():.5f}")
+                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.4f}, {loss_distill_delta.item():.4f}")
                     loss_recons.append(loss_recon)
                     loss_distill_deltas.append(loss_distill_delta)
 
@@ -2258,10 +2214,9 @@ class LatentDiffusion(DDPM):
                             'filtered_fg_mask':       filtered_fg_mask,
                             'use_background_token':   self.iter_flags['use_background_token'],
                             'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                            # If not do_zero_shot, 'zs_clip_bg_features' and 'id2img_prompt_embs' are None.
+                            # We reuse init conds only in compositional iters.
                             # We don't need to cache other flags, such as do_unet_distill,
                             # as they are only applicable to recon iters. 
-                            # We reuse init conds only in compositional iters.
                             'zs_clip_bg_features':    self.iter_flags['zs_clip_bg_features'],
                             'id2img_prompt_embs':     self.iter_flags['id2img_prompt_embs'],
                             'image_unnorm':           self.iter_flags['image_unnorm'],
@@ -2297,12 +2252,11 @@ class LatentDiffusion(DDPM):
         emb_reg_loss_scale          = 0.5 if self.optimizer_type == 'Prodigy' else 1
         prompt_emb_delta_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
 
-        if self.do_zero_shot:
-            # If do_zero_shot, both static and ada embedding reg losses are disabled, as it may hurt performance.
-            emb_reg_loss_scale = 0
-            # Reduce the prompt_emb_delta_loss_scale by 5x (from 0.5 to 0.1) if do_zero_shot, 
-            # as it might make learning slow.
-            prompt_emb_delta_loss_scale /= 5
+        # If do_zero_shot, both static and ada embedding reg losses are disabled, as it may hurt performance.
+        emb_reg_loss_scale = 0
+        # Reduce the prompt_emb_delta_loss_scale by 5x (from 0.5 to 0.1) if do_zero_shot, 
+        # as it might make learning slow.
+        prompt_emb_delta_loss_scale /= 5
         
         # DISABLED: static and ada **token** embedding reg losses are disabled when do_zero_shot. 
         # In this case they are not monitored.
@@ -2351,8 +2305,8 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach().item() })
 
             # Reduce the loss_fg_xlayer_consist_loss_scale by 5x if do_zero_shot.
-            fg_xlayer_consist_loss_scale = 0.2  if self.do_zero_shot else 1
-            bg_xlayer_consist_loss_scale = 0.06 if self.do_zero_shot else 0.3
+            fg_xlayer_consist_loss_scale = 0.2
+            bg_xlayer_consist_loss_scale = 0.06
 
             loss += (loss_fg_xlayer_consist * fg_xlayer_consist_loss_scale + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
@@ -2455,7 +2409,7 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
 
-            feat_delta_align_scale = 2 if not self.do_zero_shot else 0.5
+            feat_delta_align_scale = 0.5
             if self.normalize_ca_q_and_outfeat:
                 # Normalize ca_outfeat at 50% chance.
                 normalize_ca_outfeat = random.random() < 0.5 #draw_annealed_bool(self.training_percent, 0.5, (0.5, 0.5))
@@ -2499,21 +2453,10 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
             # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
             # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.     
-            if not self.do_zero_shot:       
-                # loss_subj_attn_norm_distill is usually 5~10. 
-                # So scale it down by 0.2 to match the other two. New range: 1~2.
-                subj_attn_norm_distill_loss_scale_base  = 0.2
-                subj_attn_norm_distill_loss_base = 5.
-                # If loss_subj_attn_norm_distill == 10, then subj_attn_norm_distill_loss_scale = 0.2 * 10 / 5 = 0.4.
-                # If loss_subj_attn_norm_distill == 25, then subj_attn_norm_distill_loss_scale = 0.2 * 25 / 5 = 1.
-                subj_attn_norm_distill_loss_scale  = calc_dyn_loss_scale(loss_subj_attn_norm_distill,
-                                                                         subj_attn_norm_distill_loss_base,
-                                                                         subj_attn_norm_distill_loss_scale_base)
-            else:
-                # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
-                # So no need to use a dynamic loss scale. A scale of 1 is close to the corresponding 
-                # dynamic scale when the loss is ~25.
-                subj_attn_norm_distill_loss_scale = 1
+            # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
+            # So no need to use a dynamic loss scale. A scale of 1 is close to the corresponding 
+            # dynamic scale when the loss is ~25.
+            subj_attn_norm_distill_loss_scale = 1
 
             loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
@@ -2582,7 +2525,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach().item()})
 
             # Reduce the scale of loss_fg_bg_complementary if do_zero_shot, as it hurts performance. 
-            loss_fg_bg_complementary_scale = 0.2 if self.do_zero_shot else 1
+            loss_fg_bg_complementary_scale = 0.2
             loss_fg_bg_contrast += (loss_fg_bg_complementary * loss_fg_bg_complementary_scale + loss_subj_mb_suppress \
                                     + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
                                    * self.fg_bg_complementary_loss_weight
@@ -3662,12 +3605,8 @@ class LatentDiffusion(DDPM):
             prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
             prodigy_params = sum(prodigy_params, [])
 
-            if self.do_zero_shot:
-                # [0.9, 0.999]. Converge more slowly.
-                betas = self.prodigy_config.zs_betas
-            else:
-                # [0.985, 0.993]. Converge faster.
-                betas = self.prodigy_config.betas
+            # [0.9, 0.999]. Converge more slowly.
+            betas = self.prodigy_config.zs_betas
 
             # Prodigy uses an LR = 1.
             # weight_decay is always disabled (set to 0).

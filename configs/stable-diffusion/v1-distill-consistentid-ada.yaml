@@ -25,7 +25,6 @@ model:
     do_comp_teacher_filtering:        True
     num_candidate_teachers:           2
     composition_regs_iter_gap:        -1
-    do_zero_shot:                     True
     unet_teacher_types:               ['consistentID']
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              0.5
@@ -89,7 +88,6 @@ model:
                                    'unet_distill_iter':     0.4,
                                    'compos_distill_iter':   0.4 }
         adaface_ckpt_path:                null
-        do_zero_shot:                     True
         id2ada_prompt_encoder_type:       'consistentID'
         # Load the ada components from these placeholders in the checkpoint.
 

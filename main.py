@@ -207,8 +207,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
 
-    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use zero-shot learning")
     parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=1,
                         help="Gradient scale of the prompt2token projection layer (Set to < 1 to reduce the update speed of SubjBasisGenerator)")
     parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
@@ -301,38 +299,21 @@ def nondefault_trainer_args(opt):
 # personalization_config_params = config.model.params.personalization_config.params.
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
-    if not opt.zeroshot:
-        personalization_config_params.subject_strings                    = dataset.subject_strings
-        personalization_config_params.subj_name_to_cls_delta_string      = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-        personalization_config_params.token2num_vectors                  = dict()
-        if hasattr(opt, 'num_vectors_per_subj_token'):
-            for subject_string in dataset.subject_strings:
-                personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token
+    # Only keep the first subject and background placeholder.
+    personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
+    personalization_config_params.subj_name_to_cls_delta_string         = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+    personalization_config_params.token2num_vectors         = dict()
+    for subject_string in dataset.subject_strings[:1]:
+        personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
 
-        if opt.background_string is not None:
-            config.model.params.use_background_token = True
-            personalization_config_params.background_strings             = dataset.background_strings
+    if opt.background_string is not None:
+        config.model.params.use_background_token = True
+        personalization_config_params.background_strings              = dataset.background_strings[:1]
 
-            if hasattr(opt, 'num_vectors_per_bg_token'):
-                for background_string in dataset.background_strings:
-                    personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-    else:
-        # Only keep the first subject and background placeholder.
-        personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
-        personalization_config_params.subj_name_to_cls_delta_string         = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-        personalization_config_params.token2num_vectors         = dict()
-        for subject_string in dataset.subject_strings[:1]:
-            personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
+        for background_string in dataset.background_strings[:1]:
+            personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
 
-        if opt.background_string is not None:
-            config.model.params.use_background_token = True
-            personalization_config_params.background_strings              = dataset.background_strings[:1]
-
-            for background_string in dataset.background_strings[:1]:
-                personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-
-    # subjects_are_faces are always available in dataset. But if not do_zero_shot, the values may be wrong, 
-    # but in this case, they are not used anyway.
+    # subjects_are_faces are always available in dataset.
     personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
     
 class WrappedDataset(Dataset):
@@ -620,8 +601,7 @@ if __name__ == "__main__":
     cfgdir  = os.path.join(logdir, "configs")
     # If do zeroshot and setting seed, then the whole training sequence is deterministic, limiting the random space
     # it can explore. Therefore we don't set seed when doing zero-shot learning.
-    if not opt.zeroshot:
-        seed_everything(opt.seed, workers=True)
+    # seed_everything(opt.seed, workers=True)
     #torch.backends.cudnn.deterministic = True
     #torch.backends.cudnn.benchmark = False
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -691,10 +671,7 @@ if __name__ == "__main__":
         config.data.params.train.params.mix_subj_data_roots      = opt.mix_subj_data_roots
         config.data.params.train.params.load_meta_subj2person_type_cache_path = opt.load_meta_subj2person_type_cache_path
         config.data.params.train.params.save_meta_subj2person_type_cache_path = opt.save_meta_subj2person_type_cache_path
-        config.data.params.train.params.do_zero_shot             = opt.zeroshot
 
-        # zero-shot settings.
-        config.model.params.do_zero_shot = opt.zeroshot
         if hasattr(opt, 'p_gen_id2img_rand_id'):
             config.model.params.p_gen_id2img_rand_id    = opt.p_gen_id2img_rand_id
             
@@ -702,36 +679,34 @@ if __name__ == "__main__":
         if hasattr(opt, 'p_perturb_face_id_embs'):
             config.model.params.p_perturb_face_id_embs = opt.p_perturb_face_id_embs
 
-        config.model.params.personalization_config.params.do_zero_shot      = opt.zeroshot
         config.model.params.personalization_config.params.extend_prompt2token_proj_attention_multiplier   = opt.extend_prompt2token_proj_attention_multiplier
         config.model.params.personalization_config.params.to_load_old_adaface_ckpt  = opt.to_load_old_adaface_ckpt
         config.model.params.personalization_config.params.num_static_img_suffix_embs = opt.num_static_img_suffix_embs
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 
-        if opt.zeroshot:
-            config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
-            config.model.params.personalization_config.params.zs_extra_words_scale = 0.5
-            config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
+        config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
+        config.model.params.personalization_config.params.zs_extra_words_scale = 0.5
+        config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
 
-            if hasattr(opt, 'p_unet_distill_iter'):
-                config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
-            if hasattr(opt, 'unet_teacher_types'):
-                if "unet_ensemble" in opt.unet_teacher_types:
-                    assert len(opt.unet_teacher_types) == 1, \
-                        "If 'unet_ensemble' is specified, this should be the only value for --unet_teacher_types."
-                config.model.params.unet_teacher_types = opt.unet_teacher_types
+        if hasattr(opt, 'p_unet_distill_iter'):
+            config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
+        if hasattr(opt, 'unet_teacher_types'):
+            if "unet_ensemble" in opt.unet_teacher_types:
+                assert len(opt.unet_teacher_types) == 1, \
+                    "If 'unet_ensemble' is specified, this should be the only value for --unet_teacher_types."
+            config.model.params.unet_teacher_types = opt.unet_teacher_types
 
-            if hasattr(opt, 'p_unet_teacher_uses_cfg'):
-                config.model.params.p_unet_teacher_uses_cfg         = opt.p_unet_teacher_uses_cfg
-            if hasattr(opt, 'unet_teacher_cfg_scale_range'):
-                config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
+        if hasattr(opt, 'p_unet_teacher_uses_cfg'):
+            config.model.params.p_unet_teacher_uses_cfg         = opt.p_unet_teacher_uses_cfg
+        if hasattr(opt, 'unet_teacher_cfg_scale_range'):
+            config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
 
-            if hasattr(opt, 'extra_unet_paths'):
-                config.model.params.extra_unet_paths             = opt.extra_unet_paths
-            if hasattr(opt, 'unet_weights'):
-                # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
-                config.model.params.unet_weights                 = opt.unet_weights
+        if hasattr(opt, 'extra_unet_paths'):
+            config.model.params.extra_unet_paths             = opt.extra_unet_paths
+        if hasattr(opt, 'unet_weights'):
+            # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
+            config.model.params.unet_weights                 = opt.unet_weights
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
@@ -768,11 +743,7 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'composition_regs_iter_gap'):   
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap
-        elif opt.zeroshot:
-            # If do_zero_shot, composition_regs_iter_gap changes from 3 to 6, i.e., 
-            # the frequency of composition_regs is halved.
-            config.model.params.composition_regs_iter_gap *= 2
-        
+
         if hasattr(opt, 'optimizer_type'):
             config.model.params.optimizer_type = opt.optimizer_type
 

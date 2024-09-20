@@ -27,7 +27,6 @@ model:
     do_comp_teacher_filtering:        True
     num_candidate_teachers:           2
     composition_regs_iter_gap:        3
-    do_zero_shot:                     True
     unet_teacher_types:               ['unet_ensemble']
     extra_unet_paths:                 ['models/ensemble/sd15-unet', 
                                        'models/ensemble/rv4-unet', 

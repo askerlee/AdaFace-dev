@@ -25,7 +25,6 @@ model:
     do_comp_teacher_filtering:        True
     num_candidate_teachers:           2
     composition_regs_iter_gap:        -1
-    do_zero_shot:                     True
     unet_teacher_types:               ['consistentID'] #, 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.3, 2.0]
@@ -107,7 +106,6 @@ model:
                                    'unet_distill_iter':     0.4,
                                    'compos_distill_iter':   0.4 }
         adaface_ckpt_path:                null
-        do_zero_shot:                     True
         id2ada_prompt_encoder_type:       'consistentID'
         # Load the ada components from these placeholders in the checkpoint.
 

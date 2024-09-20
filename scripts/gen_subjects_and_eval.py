@@ -37,11 +37,6 @@ def parse_args():
                         type=int, default=4,
                         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
  
-    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use zero-shot learning")  
-    parser.add_argument("--no_id_emb", action="store_true",
-                        help="Do not use face/DINO embeddings for zero-shot generation")
-      
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning. If not specified, use subject_gt_dir.")
 
@@ -141,11 +136,6 @@ if __name__ == "__main__":
             subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes'], subj_info['sel_set']
 
     args.orig_placeholder = args.subject_string
-    # If num_vectors_per_subj_token == 3:
-    # "z"    => "z, , "
-    # Need to leave a space between multiple ",,", otherwise they are treated as one token.
-    if (not args.zeroshot) and hasattr(args, 'num_vectors_per_subj_token') and (args.num_vectors_per_subj_token > 1):
-        args.subject_string += ", " * (args.num_vectors_per_subj_token - 1)
 
     if hasattr(args, 'is_face'):
         are_faces = [args.is_face] * len(subjects)
@@ -291,34 +281,7 @@ if __name__ == "__main__":
         else:
             bb_type = args.bb_type
 
-        if not args.zeroshot:
-            if hasattr(args, 'subj_ckpt_folder_name'):
-                subj_ckpt_folder_name = args.subj_ckpt_folder_name
-            else:
-                all_ckpts = os.listdir(args.all_ckpts_dir)
-                # Sort all_ckpts by name (actually by timestamp in the name), so that most recent first.
-                all_ckpts.sort(reverse=True)
-                ckpt_sig = subject_name + "-" + args.method
-                # Find the newest checkpoint that matches the subject name.
-                subj_ckpt_folder_name = find_first_match(all_ckpts, ckpt_sig, args.ckpt_extra_sig)
-
-            if subj_ckpt_folder_name is None:
-                print("ERROR: No checkpoint found for subject: " + subject_name)
-                continue
-                # breakpoint()
-
-            ckpt_iter = args.ckpt_iter
-            emb_path  = f"{args.all_ckpts_dir}/{subj_ckpt_folder_name}/checkpoints/embeddings_gs-{ckpt_iter}.pt"
-            if not os.path.exists(emb_path):
-                emb_path2 = f"{args.all_ckpts_dir}/{subj_ckpt_folder_name}/embeddings_gs-{ckpt_iter}.pt"
-                if not os.path.exists(emb_path2):
-                    print(f"ERROR: Subject embedding not found: '{emb_path}' or '{emb_path2}'")
-                    continue
-
-                emb_path = emb_path2
-
-        else:
-            emb_path = args.zs_subj_model_ckpt
+        emb_path = args.zs_subj_model_ckpt
 
         if isinstance(args.scale, (list, tuple)):
             args.scale = " ".join([ str(s) for s in args.scale ])
@@ -349,11 +312,6 @@ if __name__ == "__main__":
 
         command_line += f" --clip_last_layers_skip_weights {args.clip_last_layers_skip_weights}"
 
-        if args.zeroshot:            
-            command_line += f" --zeroshot"
-            if args.no_id_emb:
-                command_line += f" --no_id_emb"
-
         if hasattr(args, 'num_vectors_per_subj_token'):
             command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
         if hasattr(args, 'num_vectors_per_bg_token'):
@@ -376,14 +334,13 @@ if __name__ == "__main__":
                 # Tell stable_txt2img.py to do face-specific evaluation.
                 command_line += f" --calc_face_sim"
 
-            if args.zeroshot:
-                if isinstance(args.ref_images, (list, tuple)):
-                    args.ref_images = " ".join(args.ref_images)
-                elif args.ref_images is None:
-                    command_line += f" --ref_images {subject_gt_dir}"
-                else:
-                    command_line += f" --ref_images {args.ref_images}"
-                            
+            if isinstance(args.ref_images, (list, tuple)):
+                args.ref_images = " ".join(args.ref_images)
+            elif args.ref_images is None:
+                command_line += f" --ref_images {subject_gt_dir}"
+            else:
+                command_line += f" --ref_images {args.ref_images}"
+                        
         if args.n_rows > 0:
             command_line += f" --n_rows {args.n_rows}"
         

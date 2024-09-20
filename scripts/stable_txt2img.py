@@ -218,9 +218,7 @@ def parse_args():
                         help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
     parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
                         help="Skip loading token2num_vectors from the checkpoint.")
-
-    parser.add_argument("--zeroshot", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use zero-shot learning")                    
+              
     parser.add_argument("--return_prompt_embs_type", type=str, choices=["text", "id", "text_id"],
                         default="text", help="The type of the returned prompt embeddings from get_text_conditioning()")
     parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
@@ -240,7 +238,7 @@ def parse_args():
     parser.add_argument("--cls_string", type=str, default=None,
                         help="Subject class name. Only requires for --eval_blip")
     parser.add_argument("--diffusers", action="store_true", 
-                        help="Zeroshot uses the diffusers implementation")
+                        help="Uses the diffusers implementation")
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
@@ -318,19 +316,15 @@ def main(opt):
 
     teacher_neg_id_prompt_embs = None
 
-    if opt.zeroshot:
-        assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
-        ref_image_paths = []
-        for ref_image in opt.ref_images:
-            if os.path.isdir(ref_image):
-                ref_image_paths.extend([ os.path.join(ref_image, f) for f in os.listdir(ref_image) ])
-            else:
-                ref_image_paths.append(ref_image)
-        ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
-        ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
-    else:
-        ref_images = None
-        ref_image_paths = opt.ref_images
+    assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
+    ref_image_paths = []
+    for ref_image in opt.ref_images:
+        if os.path.isdir(ref_image):
+            ref_image_paths.extend([ os.path.join(ref_image, f) for f in os.listdir(ref_image) ])
+        else:
+            ref_image_paths.append(ref_image)
+    ref_image_paths = list(filter(lambda x: filter_image(x), ref_image_paths))
+    ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
 
     if opt.adaface_ckpt_paths is not None:
         opt.subj_model_path = opt.adaface_ckpt_paths[0]
@@ -340,11 +334,8 @@ def main(opt):
 
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
-        config.model.params.do_zero_shot = opt.zeroshot
-        config.model.params.personalization_config.params.do_zero_shot = opt.zeroshot
         config.model.params.personalization_config.params.token2num_vectors = {} 
-        if opt.zeroshot:
-            config.model.params.personalization_config.params.zs_cls_delta_string = 'person'
+        config.model.params.personalization_config.params.zs_cls_delta_string = 'person'
 
         if hasattr(opt, 'num_vectors_per_subj_token'):
             # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
@@ -379,27 +370,20 @@ def main(opt):
         model  = model.to(device)
         model.cond_stage_model.device = device
 
-        assert model.embedding_manager.do_zero_shot == opt.zeroshot, \
-                f"Zero-shot learning mismatch: command line {opt.zeroshot} != ckpt {model.embedding_manager.do_zero_shot}."
-        
-        if opt.zeroshot:
-            # subj_id_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
-            # neg_id_prompt_embs is used in ConsistentID only.
-            face_image_count, faceid_embeds, subj_id_prompt_embs, neg_id_prompt_embs \
-                = model.embedding_manager.id2img_prompt_encoder.get_img_prompt_embs( \
-                    init_id_embs=None,
-                    pre_clip_features=None,
-                    image_paths=ref_image_paths,
-                    image_objs=ref_images,
-                    id_batch_size=1,
-                    perturb_at_stage='img_prompt_emb',
-                    perturb_std=0,
-                    return_core_id_embs_only=True,
-                    avg_at_stage='id_emb',
-                    verbose=True)
-            
-        else:
-            subj_id_prompt_embs = None
+        # subj_id_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
+        # neg_id_prompt_embs is used in ConsistentID only.
+        face_image_count, faceid_embeds, subj_id_prompt_embs, neg_id_prompt_embs \
+            = model.embedding_manager.id2img_prompt_encoder.get_img_prompt_embs( \
+                init_id_embs=None,
+                pre_clip_features=None,
+                image_paths=ref_image_paths,
+                image_objs=ref_images,
+                id_batch_size=1,
+                perturb_at_stage='img_prompt_emb',
+                perturb_std=0,
+                return_core_id_embs_only=True,
+                avg_at_stage='id_emb',
+                verbose=True)
 
         sampler = DDIMSampler(model)
 
@@ -574,9 +558,6 @@ def main(opt):
 
     if not opt.eval_blip and not opt.diffusers:
         placeholder_tokens_str = opt.subject_string + "".join([", "] * (opt.num_vectors_per_subj_token - 1))
-        if not opt.zeroshot:
-            # "id" and "text_id" are only used when doing zero-shot inference.
-            opt.return_prompt_embs_type = "text"
         if opt.scale != 1.0:
             try:
                 uc = model.get_text_conditioning(batch_size * [opt.neg_prompt], 
@@ -764,7 +745,7 @@ def main(opt):
             if not opt.skip_grid:
                 # additionally, save as grid
                 # logs/gabrielleunion2023-05-24T18-33-34_gabrielleunion-ada/checkpoints/embeddings_gs-4500.pt
-                if opt.zeroshot and opt.compare_with:
+                if opt.compare_with:
                     first_compared_folder = opt.compare_with[0]
                     if first_compared_folder.endswith("/") or first_compared_folder.endswith("\\"):
                         first_compared_folder = first_compared_folder[:-1]
@@ -796,9 +777,8 @@ def main(opt):
                     unet_sig = "unet-" + unet_mat.group(1)
                     subjname_method += "-" + unet_sig
 
-                if opt.zeroshot:
-                    # all-ada => all-ada-gabrielleunion
-                    subjname_method += "-" + subj_gt_folder_name
+                # all-ada => all-ada-gabrielleunion
+                subjname_method += "-" + subj_gt_folder_name
 
                 if isinstance(opt.scale, (list, tuple)):
                     scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
@@ -808,8 +788,7 @@ def main(opt):
 
                 if opt.bb_type:
                     experiment_sig += "-" + opt.bb_type
-                if opt.zeroshot:
-                    experiment_sig += "-" + ",".join(opt.adaface_encoder_types)
+                experiment_sig += "-" + ",".join(opt.adaface_encoder_types)
 
                 # Use the first prompt of the current chunk from opt.from_file as the saved file name.
                 if opt.from_file:
@@ -858,8 +837,7 @@ def main(opt):
             else:
                 emb_sig  = opt.method
 
-            if opt.zeroshot:
-                emb_sig = subjname_method + "-" + emb_sig
+            emb_sig = subjname_method + "-" + emb_sig
 
             scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
             scores   = [ f"{score:.4f}" for score in scores ]

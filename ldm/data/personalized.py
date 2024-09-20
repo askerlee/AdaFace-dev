@@ -167,13 +167,11 @@ class PersonalizedBase(Dataset):
                  subj_info_filepaths=None,
                  load_meta_subj2person_type_cache_path=None,
                  save_meta_subj2person_type_cache_path=None,
-                 do_zero_shot=True,
                  wds_db_path=None,    # Path to a folder containing webdatabase .tar files
                  use_wds_prompts=False, # Use or ignore the prompts (when the prompts are noisy) in the webdataset.
                  verbose=False, 
                  ):
 
-        self.do_zero_shot = do_zero_shot
         # If data_roots is a single string, convert it to a list of strings.
         # Otherwise, data_roots is already a list of strings.
 
@@ -379,24 +377,10 @@ class PersonalizedBase(Dataset):
                               for broad_class in self.broad_classes ]
 
         # NOTE: if do_zero_shot, all subjects share the same subject/background placeholders and embedders.
-        if self.num_subjects == 1 or self.do_zero_shot:
-            self.subject_strings        = [ subject_string ]         * self.num_subjects
-            self.background_strings     = [ background_string ]      * self.num_subjects
-            self.wds_background_strings = [ wds_background_string ]  * self.num_subjects
-        else:
-            # For multiple subjects, the subject_string is like: 'z01', 'z02', ....
-            # Avoid using z1 and z11, ..., in case the tokenizer wrongly segments z11 as z1 and 1 (probably won't happen for CLIP
-            # tokenizer, but just to be safe.)
-            self.subject_strings        = [ subject_string          + f"{i+1:02}" for i in range(self.num_subjects) ]
-            # For multiple subjects, the background_string is like: 'y01', 'y02', ....
-            # Don't share the background_string, since the background of different subject images
-            # has different distributions.
-            self.background_strings     = [ background_string       + f"{i+1:02}" for i in range(self.num_subjects) ]
-            # For multiple subjects, the wds_background_string is like: 'w01', 'w02', ....
-            # Don't share the wds_background_string, since the background of different subject images
-            # has different distributions.
-            self.wds_background_strings = [ wds_background_string   + f"{i+1:02}" for i in range(self.num_subjects) ]
-        
+        self.subject_strings        = [ subject_string ]         * self.num_subjects
+        self.background_strings     = [ background_string ]      * self.num_subjects
+        self.wds_background_strings = [ wds_background_string ]  * self.num_subjects
+
         if self.train_with_wds_data:
             self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
             # subject_token, background_token: subject_string and background_string converted to 
@@ -408,8 +392,6 @@ class PersonalizedBase(Dataset):
                                         for subject_string in self.subject_strings ]
             self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
                                         for background_string in self.background_strings ]
-
-        self.do_zero_shot = do_zero_shot
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
