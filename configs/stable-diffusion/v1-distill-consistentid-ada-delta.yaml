@@ -29,8 +29,9 @@ model:
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.3, 2.0]
     # The percentage of unet_distill_iter among do_normal_recon iters.
-    # i.e, at 50% of the normal recon iters, we use the unet teacher's output as the target.
-    # at the other 50%, we use the original image as the target.
+    # p_unet_distill_iter = 0.5 means at 50% of the non-compositional iters, 
+    # we use the unet teacher's output as the target (do_unet_distill).
+    # at the other 50%, we use the original image as the target (do_normal_recon).
     p_unet_distill_iter:              0.5
     # Even if setting id2img_prompt_encoder_trainable to True, 
     # the performance is only slightly differ.
@@ -179,7 +180,7 @@ lightning:
     benchmark: True
     max_steps: 60000
     num_sanity_val_steps: 0
-    limit_val_batches: 0  # Disable doing validation.
+    limit_val_batches:    0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
-    accumulate_grad_batches: 4
+    accumulate_grad_batches: 3

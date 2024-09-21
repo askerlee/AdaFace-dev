@@ -78,7 +78,7 @@ class DDPM(pl.LightningModule):
                  recon_delta_loss_boost=1,
                  do_comp_teacher_filtering=True,
                  num_candidate_teachers=2,
-                 use_background_token=True,
+                 enable_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -129,7 +129,7 @@ class DDPM(pl.LightningModule):
         self.num_candidate_teachers                 = num_candidate_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
         
-        self.use_background_token                   = use_background_token
+        self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
         self.p_unet_distill_iter                    = p_unet_distill_iter if self.training else 0
@@ -895,12 +895,12 @@ class LatentDiffusion(DDPM):
             = random.random() < p_comp_init_fg_from_training_image
         
         if self.iter_flags['do_unet_distill']:
-            # If do_unet_distill, then disable the background tokens.
+            # If do_unet_distill, then only use the background tokens in a small percentage of the iterations.
             # Because for ConsistentID, the background is a bit noisy, but there has been 
             # 4 static embeddings serving as the background tokens to absorb the background noise.
             # For Arc2face, the background is simple and we probably don't need to absorb the 
             # background noise with background tokens.
-            p_use_background_token  = 0
+            p_use_background_token  = 0.1
         elif self.iter_flags['do_normal_recon']:
             # We lower p_use_background_token from the previous value 0.9 to 0.3 to avoid the background token
             # taking too much of the foreground (i.e., capturing the subject features).
@@ -912,7 +912,7 @@ class LatentDiffusion(DDPM):
         else:
             breakpoint()
 
-        self.iter_flags['use_background_token'] = self.use_background_token \
+        self.iter_flags['use_background_token'] = self.enable_background_token \
                                                     and random.random() < p_use_background_token
                     
         if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
@@ -1002,7 +1002,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['same_subject_in_batch'] = False
 
         # do_unet_distill and random() < p_unet_distill_iter.
-        # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0 if distilling on consistentID.
+        # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID.
         if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_id2img_rand_id:
             self.iter_flags['gen_id2img_rand_id'] = True
             self.batch_subject_names = [ "rand_id_to_img_prompt" ] * len(batch['subject_name'])

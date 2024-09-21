@@ -307,7 +307,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
 
     if opt.background_string is not None:
-        config.model.params.use_background_token = True
+        config.model.params.enable_background_token = True
         personalization_config_params.background_strings              = dataset.background_strings[:1]
 
         for background_string in dataset.background_strings[:1]:
