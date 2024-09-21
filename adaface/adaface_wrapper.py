@@ -295,6 +295,8 @@ class AdaFaceWrapper(nn.Module):
                                    perturb_std=0, update_text_encoder=True):
         all_adaface_subj_embs = []
         all_teacher_neg_id_prompt_embs = []
+        num_available_id_vecs = 0
+
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
             adaface_subj_embs, teacher_neg_id_prompt_embs = \
                 id2ada_prompt_encoder.generate_adaface_embeddings(\
@@ -305,11 +307,21 @@ class AdaFaceWrapper(nn.Module):
                     perturb_std=perturb_std)
             
             # adaface_subj_embs: [16, 768] or [4, 768].
+            N_ID = self.encoders_num_id_vecs[i]
+            if adaface_subj_embs is None:
+                adaface_subj_embs = torch.zeros((N_ID, 768), dtype=torch.float16, device=self.device)
+            else:
+                num_available_id_vecs += N_ID
+                
             all_adaface_subj_embs.append(adaface_subj_embs)
             if teacher_neg_id_prompt_embs is None:
                 teacher_neg_id_prompt_embs = torch.zeros_like(adaface_subj_embs)
             all_teacher_neg_id_prompt_embs.append(teacher_neg_id_prompt_embs)
-            
+        
+        # No faces are found in the images, so return None embeddings.
+        if num_available_id_vecs == 0:
+            return None, None
+        
         # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then all_adaface_subj_embs: [20, 768].
         all_adaface_subj_embs           = torch.cat(all_adaface_subj_embs, dim=0)
         all_teacher_neg_id_prompt_embs  = torch.cat(all_teacher_neg_id_prompt_embs, dim=0)
@@ -317,6 +329,8 @@ class AdaFaceWrapper(nn.Module):
         if update_text_encoder:
             self.update_text_encoder_subj_embs(all_adaface_subj_embs)
 
+        # Cache all_teacher_neg_id_prompt_embs for the img2img pipeline, 
+        # but don't cache all_adaface_subj_embs.
         self.all_teacher_neg_id_prompt_embs = all_teacher_neg_id_prompt_embs
         return all_adaface_subj_embs, all_teacher_neg_id_prompt_embs
 

@@ -118,20 +118,20 @@ class FaceID2AdaPrompt(nn.Module):
             image_obj, _, _ = pad_image_obj_to_square(image_obj)
             image_np = np.array(image_obj.resize(size, Image.NEAREST))
             face_info = self.face_app.get(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
-            if len(face_info) == 0 and not skip_non_faces:
-                print(f'No face detected in {image_paths[idx]}. Replace with random face embedding.')
-                # If no face is detected (e.g. animals or bad images), then use a random tensor as the face embedding.
-                id_emb = torch.randn(512)
-                faceless_img_count += 1
-            elif len(face_info) > 0:
+            if len(face_info) > 0:
                 face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                 # id_emb: [512,]
                 id_emb = torch.from_numpy(face_info.normed_embedding)
             else:
-                # len(face_info) == 0 and skip_non_faces.
-                # Skip images without faces.
-                print(f'Skip image with no face: {image_paths[idx]}')
-                continue
+                faceless_img_count += 1
+                print(f'No face detected in {image_paths[idx]}.', end=' ')
+                if not skip_non_faces:
+                    print('Replace with random face embedding.')
+                    # During training, use a random tensor as the face embedding.
+                    id_emb = torch.randn(512)
+                else:
+                    print(f'Skip.')
+                    continue
 
             all_id_embs.append(id_emb)
 
@@ -303,6 +303,10 @@ class FaceID2AdaPrompt(nn.Module):
                 if clip_fgbg_features is not None:
                     clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
 
+        # faceid_embeds_from_images, and no face images are detected.
+        if faceid_embeds is None:
+            return face_image_count, None, None, None
+        
         if perturb_at_stage == 'id_emb' and perturb_std > 0:
             # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
             faceid_embeds = perturb_tensor(faceid_embeds, perturb_std, perturb_std_is_relative=True, keep_norm=True)
