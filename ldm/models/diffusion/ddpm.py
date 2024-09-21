@@ -27,7 +27,7 @@ from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_t
 from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
-from adaface.teacher_pipelines import create_unet_teacher
+from adaface.unet_teachers import create_unet_teacher
 
 import copy
 from functools import partial
