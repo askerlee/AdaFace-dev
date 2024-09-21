@@ -20,7 +20,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         calc_elastic_matching_loss, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
                         extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_value, anneal_array, anneal_perturb_embedding
+                        probably_anneal_t, anneal_array, anneal_perturb_embedding
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -820,7 +820,7 @@ class LatentDiffusion(DDPM):
     #          'image':   [2, 512, 512, 3] }
     # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
-    def shared_step(self, batch, **kwargs):
+    def shared_step(self, batch):
         # captions = batch['caption'].
         # Do not use the returned captions from get_input(). Assign the correct caption later.
         # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
@@ -894,18 +894,23 @@ class LatentDiffusion(DDPM):
         self.iter_flags['comp_init_fg_from_training_image'] \
             = random.random() < p_comp_init_fg_from_training_image
         
-        # Mainly use background token on recon iters.
-        if self.iter_flags['is_compos_iter']:
-            p_use_background_token  = 0.5
+        if self.iter_flags['do_unet_distill']:
+            # If do_unet_distill, then disable the background tokens.
+            # Because for ConsistentID, the background is a bit noisy, but there has been 
+            # 4 static embeddings serving as the background tokens to absorb the background noise.
+            # For Arc2face, the background is simple and we probably don't need to absorb the 
+            # background noise with background tokens.
+            p_use_background_token  = 0
+        elif self.iter_flags['do_normal_recon']:
+            # We lower p_use_background_token from the previous value 0.9 to 0.3 to avoid the background token
+            # taking too much of the foreground (i.e., capturing the subject features).
+            p_use_background_token  = 0.3
+        elif self.iter_flags['is_compos_iter']:
+            # When doing compositional distillation, the background is quite different between 
+            # single prompts and comp prompts. So using a background token is probably not a good idea.
+            p_use_background_token  = 0
         else:
-            # Recon iters.
-            if self.iter_flags['do_unet_distill']:
-                # If do_unet_distill, then disable the background token.
-                p_use_background_token  = 0
-            else:
-                # We lower p_use_background_token from 0.9 to 0.2 to avoid the background token
-                # taking too much of the foreground (capturing the subject features).
-                p_use_background_token  = 0.2
+            breakpoint()
 
         self.iter_flags['use_background_token'] = self.use_background_token \
                                                     and random.random() < p_use_background_token
@@ -1133,9 +1138,9 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_unet_distill']:
             # Gradually increase the chance of taking 5 or 7 denoising steps.
             p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
-                                                    final_percent=0.5,
-                                                    begin_array=[0.4, 0.3, 0.2, 0.1], 
-                                                    end_array  =[0.4, 0.3, 0.2, 0.1],
+                                                 final_percent=0.5,
+                                                 begin_array=[0.4, 0.3, 0.2, 0.1], 
+                                                 end_array  =[0.4, 0.3, 0.2, 0.1],
                                                 )
             cand_num_denoising_steps = [1, 2, 3, 5, 7]
             # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
