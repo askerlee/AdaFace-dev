@@ -67,8 +67,8 @@ def parse_args():
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
-    parser.add_argument("--scale", type=float, nargs='+', default=[8, 8],
-                        help="Guidance scale. From high annealed to low. If high = low, no annealing.")
+    parser.add_argument("--scale", type=float, default=6,
+                        help="Guidance scale. If two numbers are given, the scale is annealed from high to low.")
     parser.add_argument("--n_samples", type=int, default=-1, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=-1, 

@@ -137,9 +137,8 @@ def parse_args():
     parser.add_argument(
         "--scale",
         type=float,
-        nargs='+',
-        default=[10, 4],
-        help="unconditional guidance scale: eps = eps(x, empty) + scale * (eps(x, cond) - eps(x, empty))",
+        default=6,
+        help="Conditional guidance scale",
     )
     parser.add_argument(
         "--from_file",
@@ -389,7 +388,6 @@ def main(opt):
 
     else:        
         if opt.diffusers:
-            opt.scale = opt.scale[0]
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
 

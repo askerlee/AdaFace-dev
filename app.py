@@ -182,7 +182,7 @@ with gr.Blocks(css=css) as demo:
                 minimum=1.0,
                 maximum=8.0,
                 step=1.0,
-                value=4.0,
+                value=6.0,
             )
 
             avg_at_stage = gr.Dropdown(label="Average at stage",
