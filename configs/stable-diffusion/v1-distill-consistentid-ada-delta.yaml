@@ -58,53 +58,52 @@ model:
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight: 5e-5
 
-    optimizer_type: AdamW           # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
-    grad_clip:  0.5
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
+    optimizer_type:           AdamW 
+    grad_clip:                0.5
     adam_config:
       # Half life:
       # 0.995  0.996  0.997  0.998  0.999
       # 138    172    231    346    693
-      # To trade off between the high variances of diffusion training and slow iterations 
-      # (because accumulate_grad_batches = 6), we set beta2 to 0.997, 
-      # whose half life 231 is roughly the gap (250 iterations) between two checkpoints.
-      betas:    [0.9,  0.997]  
+      # We set beta2 to 0.995 for faster update of the estimated variances.
+      betas:                  [0.9,  0.995]  
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
           verbosity_interval: 0
-          warm_up_steps: 500
-          lr_start:      0.01
-          lr_max:        1.0
-          lr_min:        0.1
+          warm_up_steps:      500
+          lr_start:           0.01
+          lr_max:             1.0
+          lr_min:             0.1
 
     prodigy_config:
-      betas:    [0.985, 0.993]  # Faster to converge than zs_betas.
+      betas:    [0.985, 0.993]   # Faster to converge than zs_betas.
       zs_betas: [0.9,   0.999]   # Slower to converge than betas.
       d_coef:           5
       warm_up_steps:    500
       # 1 cycle after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
-      scheduler_cycles: 1 #2
+      scheduler_cycles: 1
       # CyclicLR, CosineAnnealingWarmRestarts, Linear. 
       # Linear or CosineAnnealingWarmRestarts doesn't work well.
-      scheduler_type: 'Linear' #'CyclicLR'
+      scheduler_type: 'Linear'
       
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
-        subject_strings:          ['z']
-        background_strings:       ['y']
-        subj_name_to_cls_delta_string: { 'z': "person", 'rand_id_to_img_prompt': 'person' }
-        token2num_vectors:         {'z': 4, 'y': 4}
+        subject_strings:                    ['z']
+        background_strings:                 ['y']
+        subj_name_to_cls_delta_string:      { 'z': "person", 'rand_id_to_img_prompt': 'person' }
+        token2num_vectors:                  {'z': 4, 'y': 4}
         use_layerwise_embedding: True
-        training_begin_perturb_std_range:  [ 0.05, 0.1 ]
-        training_end_perturb_std_range:    [ 0.05, 0.1 ]
+        training_begin_perturb_std_range:   [ 0.05, 0.1 ]
+        training_end_perturb_std_range:     [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively
-        training_perturb_prob:   { 'recon_iter':            0.6, 
-                                   'unet_distill_iter':     0.4,
-                                   'compos_distill_iter':   0.4 }
-        adaface_ckpt_path:                null
-        id2ada_prompt_encoder_type:       'consistentID'
+        training_perturb_prob:              { 'recon_iter':            0.6, 
+                                              'unet_distill_iter':     0.4,
+                                              'compos_distill_iter':   0.4 }
+        adaface_ckpt_path:                  null
+        id2ada_prompt_encoder_type:         'consistentID'
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:

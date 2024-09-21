@@ -11,13 +11,13 @@ from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
 
-from ldm.util import    exists, default, count_params, instantiate_from_config, SequentialLR2, \
+from ldm.util import    exists, default, count_params, instantiate_from_config, disabled_train, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_dyn_loss_scale, \
                         save_grid, chunk_list, normalize_dict_values, normalized_sum, masked_mean, \
                         join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
                         sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
-                        calc_elastic_matching_loss, \
+                        calc_elastic_matching_loss, SequentialLR2, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
                         extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
                         probably_anneal_t, anneal_array, anneal_perturb_embedding
@@ -36,10 +36,6 @@ from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 import sys
 
-def disabled_train(self, mode=True):
-    """Overwrite model.train with this function to make sure train/eval mode
-    does not change anymore."""
-    return self
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -2272,7 +2268,7 @@ class LatentDiffusion(DDPM):
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
           and ( self.iter_flags['do_normal_recon']  \
-               or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']) ):
+                or (self.iter_flags['do_mix_prompt_distillation'] and self.iter_flags['is_teachable']) ):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 
             # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
@@ -3637,8 +3633,8 @@ class LatentDiffusion(DDPM):
             elif self.prodigy_config.scheduler_type == 'CosineAnnealingWarmRestarts':
                 # eta_min should be 0.1 instead of 0.1 * LR, since the full LR is 1 for Prodigy.
                 schedulers.append(CosineAnnealingWarmRestarts(opt, T_0=int(single_cycle_steps), T_mult=1, 
-                                                                eta_min=0.1,
-                                                                last_epoch=-1))
+                                                              eta_min=0.1,
+                                                              last_epoch=-1))
             elif self.prodigy_config.scheduler_type == 'CyclicLR':
                 # step_size_up = step_size_down = single_cycle_steps / 2 (float).
                 # last_epoch will be updated to single_cycle_steps / 2 in training_step(), 
@@ -3647,13 +3643,14 @@ class LatentDiffusion(DDPM):
                 # scheduler.step(0) at the first iteration, which will set the last_epoch to 0.
                 # Therefore, after the first scheduler.step(), we set the last_epoch of CyclicLR 
                 # to single_cycle_steps / 2.
-                schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, step_size_up=single_cycle_steps / 2,
-                                            last_epoch=single_cycle_steps / 2 - 1, cycle_momentum=False))
+                schedulers.append(CyclicLR(opt, base_lr=0.1, max_lr=1, 
+                                           step_size_up = single_cycle_steps / 2,
+                                           last_epoch = single_cycle_steps / 2 - 1, 
+                                           cycle_momentum=False))
                 # Disable SequentialLR2 from calling scheduler.step(0) at the first iteration, which will 
                 # set the last_epoch of CyclicLR to 0.
                 schedulers[-1].start_from_epoch_0 = False
 
-            #print(scheduler._schedulers[-1].get_lr())
             else:
                 raise NotImplementedError()
             

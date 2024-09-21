@@ -137,6 +137,11 @@ class FaceID2AdaPrompt(nn.Module):
 
         if verbose:
             print(f'{len(all_id_embs)} face images identified, {faceless_img_count} faceless images.')
+        
+        # No face is detected in the input images.
+        if len(all_id_embs) == 0:
+            return faceless_img_count, None, None
+        
         # all_id_embs: [BS, 512].
         all_id_embs = torch.stack(all_id_embs, dim=0).to(device=device, dtype=torch.float16)
 
