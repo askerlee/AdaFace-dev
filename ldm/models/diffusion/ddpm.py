@@ -2256,16 +2256,9 @@ class LatentDiffusion(DDPM):
         ###### end of preparation for is_compos_iter ######
 
         # The Prodigy optimizer seems to suppress the embeddings too much, 
-        # so we reduce the scale to 0.5 to dampen the embedding reg loss.
-        emb_reg_loss_scale          = 0.5 if self.optimizer_type == 'Prodigy' else 1
-        prompt_emb_delta_loss_scale = 0.5 if self.optimizer_type == 'Prodigy' else 1
+        # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
+        prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
 
-        # If do_zero_shot, both static and ada embedding reg losses are disabled, as it may hurt performance.
-        emb_reg_loss_scale = 0
-        # Reduce the prompt_emb_delta_loss_scale by 5x (from 0.5 to 0.1) if do_zero_shot, 
-        # as it might make learning slow.
-        prompt_emb_delta_loss_scale /= 5
-        
         if self.iter_flags['do_static_prompt_delta_reg']:
             # 'c_static_emb_4b' is the static embedding before mixing.
             loss_static_prompt_delta = calc_prompt_emb_delta_loss( 
@@ -2273,8 +2266,7 @@ class LatentDiffusion(DDPM):
 
             loss_dict.update({f'{prefix}/static_prompt_delta': loss_static_prompt_delta.mean().detach().item() })
 
-            # prompt_emb_delta_loss_scale == 0.1 if do_zero_shot and use Prodigy. prompt_emb_delta_reg_weight is 2e-4.
-            # Therefore, the effective prompt_emb_delta_reg_weight is 2e-5.
+            # prompt_emb_delta_loss_scale == 1 if use Prodigy. prompt_emb_delta_reg_weight is 2e-5.
             loss += loss_static_prompt_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
