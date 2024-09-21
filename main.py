@@ -244,10 +244,7 @@ def get_parser(**parser_kwargs):
                         help="Load the old checkpoint for the embedding manager")
     parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
-
-    parser.add_argument("--static_embedding_reg_weight",
-        type=float, default=argparse.SUPPRESS,
-        help="Static embedding regularization weight")
+    
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
@@ -728,9 +725,6 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.use_fp_trick = opt.use_fp_trick
-
-        if hasattr(opt, 'static_embedding_reg_weight'):
-            config.model.params.static_embedding_reg_weight = opt.static_embedding_reg_weight
 
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):

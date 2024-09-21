@@ -69,7 +69,6 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  use_layerwise_embedding=True,
                  composition_regs_iter_gap=3,
-                 static_embedding_reg_weight=0.,
                  prompt_emb_delta_reg_weight=0.,
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
@@ -116,7 +115,6 @@ class DDPM(pl.LightningModule):
         # and will be updated later after the embedding manager is instantiated.
         self.num_id_vecs                 = num_id_vecs
         
-        self.static_embedding_reg_weight = static_embedding_reg_weight
         self.composition_regs_iter_gap   = composition_regs_iter_gap
 
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
@@ -1331,6 +1329,9 @@ class LatentDiffusion(DDPM):
             # at the beginning part of the prompts.
             # halve_token_indices() can take either a tuple or a dict of tuples.
 
+            # placeholder2indices_2b is copied from self.embedding_manager.placeholder2indices 
+            # during get_text_conditioning(). Because such indices are volatile 
+            # (change with different prompts), we need to cache them immediately for later use.
             placeholder2indices_2b = extra_info['placeholder2indices']
             placeholder2indices_1b = {}
             for k in placeholder2indices_2b:
@@ -1346,9 +1347,9 @@ class LatentDiffusion(DDPM):
             # treat the indices as if they are always in the same instance.
             # len(ph_indices_1b_N): embedding number of the subject token.
             cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb,
-                                                                        placeholder2indices_1b)
+                                                                      placeholder2indices_1b)
             cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,
-                                                                        placeholder2indices_1b)
+                                                                      placeholder2indices_1b)
             
             extra_info['placeholder2indices_1b'] = placeholder2indices_1b
             extra_info['placeholder2indices_2b'] = placeholder2indices_2b
@@ -1555,6 +1556,8 @@ class LatentDiffusion(DDPM):
 
         placeholder2indices2  = placeholder2indices   = extra_info['placeholder2indices']
         prompt_emb_mask2      = prompt_emb_mask       = extra_info['prompt_emb_mask']
+        # all_subj_indices, all_bg_indices are used to extract the attention weights
+        # of the subject and background tokens for the attention loss computation.
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.subject_string_dict)
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
@@ -2263,21 +2266,6 @@ class LatentDiffusion(DDPM):
         # as it might make learning slow.
         prompt_emb_delta_loss_scale /= 5
         
-        # DISABLED: static and ada **token** embedding reg losses are disabled when do_zero_shot. 
-        # In this case they are not monitored.
-        if self.static_embedding_reg_weight > 0:
-            loss_emb_reg = self.embedding_manager.embedding_reg_loss()
-            if self.use_layerwise_embedding:
-                loss_static_emb_reg = loss_emb_reg
-            else:
-                loss_static_emb_reg = loss_emb_reg
-
-            if loss_static_emb_reg > 0:
-                loss_dict.update({f'{prefix}/loss_static_emb_reg': loss_static_emb_reg.mean().detach().item() })
-
-            loss_emb_reg = loss_static_emb_reg * self.static_embedding_reg_weight
-            loss += loss_emb_reg * emb_reg_loss_scale
-
         if self.iter_flags['do_static_prompt_delta_reg']:
             # 'c_static_emb_4b' is the static embedding before mixing.
             loss_static_prompt_delta = calc_prompt_emb_delta_loss( 
@@ -2510,14 +2498,14 @@ class LatentDiffusion(DDPM):
             # So we don't do sqrt norm.
             loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
                         self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
-                                                            all_subj_indices,
-                                                            all_bg_indices,
-                                                            BLOCK_SIZE=BLOCK_SIZE,
-                                                            fg_grad_scale=0.1,
-                                                            fg_mask=fg_mask,
-                                                            instance_mask=batch_have_fg_mask,
-                                                            do_sqrt_norm=False
-                                                            )
+                                                           all_subj_indices,
+                                                           all_bg_indices,
+                                                           BLOCK_SIZE=BLOCK_SIZE,
+                                                           fg_grad_scale=0.1,
+                                                           fg_mask=fg_mask,
+                                                           instance_mask=batch_have_fg_mask,
+                                                           do_sqrt_norm=False
+                                                          )
 
             if loss_fg_bg_complementary > 0:
                 loss_dict.update({f'{prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach().item()})

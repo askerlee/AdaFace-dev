@@ -11,7 +11,7 @@ class UNetTeacher(pl.LightningModule):
         self.name = None
         # self.unet will be initialized in the child class.
         self.unet = None
-        self.p_uses_cfg        = kwargs.get("p_uses_cfg", 0)
+        self.p_uses_cfg      = kwargs.get("p_uses_cfg", 0)
         # self.cfg_scale will be randomly sampled from cfg_scale_range.
         self.cfg_scale_range = kwargs.get("cfg_scale_range", [2, 4])
         self.cfg_scale       = 1

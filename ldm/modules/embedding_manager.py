@@ -604,16 +604,18 @@ class EmbeddingManager(nn.Module):
         # [B, N] => [B, N, 1]
         self.prompt_emb_mask  = prompt_emb_mask.float().unsqueeze(2)
 
+    # clear_prompt_adhoc_info() is called in ddpm.py:guided_denoise() when switching prompts.
     def clear_prompt_adhoc_info(self):
         self.placeholder2indices    = {}
         self.prompt_emb_mask        = None
 
     # Set ad-hoc data structures for computing placeholder embeddings and various losses.
+    # set_prompt_adhoc_info() is called in ddpm.py:guided_denoise() when switching prompts.
     def set_prompt_adhoc_info(self, prompt_adhoc_info):
         self.placeholder2indices    = prompt_adhoc_info['placeholder2indices']
         self.prompt_emb_mask        = prompt_adhoc_info['prompt_emb_mask']
     
-    # During training, set_curr_batch_subject_names() is called in ddpm.py.
+    # During training,  set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.
     def set_curr_batch_subject_names(self, subj_names):
         self.curr_batch_subj_names = subj_names
@@ -928,27 +930,3 @@ class EmbeddingManager(nn.Module):
         print(f"Filtered out {num_no_grad_params} no-grad / {num_total_params} total parameters in subj_basis_generator_param_list0.")
 
         return subj_basis_generator_param_list
-
-    def zs_subject_embedding_norm_loss(self):
-        loss_static = 0.
-        euc_loss_type   = 'l2'       # l1, l2. l2 is recommended.
-
-        zs_subj_emb_bias_reg_weight = 0.1
-        static_l2_loss_boost        = 5
-        num_out_embeddings          = 0
-
-        for key in self.placeholder_strings:
-            subj_embeddings = self.static_subj_embs_dict[key]
-            loss_subjemb_bias   = reg_loss(subj_embeddings, loss_type=euc_loss_type)
-            num_out_embeddings += subj_embeddings.shape[1]
-            curr_loss   = loss_subjemb_bias * zs_subj_emb_bias_reg_weight                
-            loss_static = loss_static + curr_loss * static_l2_loss_boost
-
-        loss_static /= num_out_embeddings
-
-        return loss_static
-
-    def embedding_reg_loss(self):
-        self.loss_call_count += 1
-        return self.zs_subject_embedding_norm_loss()
-    

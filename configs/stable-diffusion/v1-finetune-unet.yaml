@@ -38,9 +38,6 @@ model:
     extra_unet_paths:                 []
     unet_weights:                     [1.0]
 
-    # typical loss_static_emb_reg is ~2e-3, * weight -> 4e-8.
-    # Disabled under zero-shot setting.
-    static_embedding_reg_weight:      0 #2e-5
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      2e-4
     # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
