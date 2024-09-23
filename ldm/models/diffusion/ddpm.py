@@ -1912,7 +1912,9 @@ class LatentDiffusion(DDPM):
                     teacher_contexts = [student_prompt_embs]
                 else:
                     teacher_contexts = []
-                    encoders_num_id_vecs        = self.iter_flags['encoders_num_id_vecs']
+                    encoders_num_id_vecs = self.iter_flags['encoders_num_id_vecs']
+                    # If id2ada_prompt_encoder.name == 'jointIDs',         then encoders_num_id_vecs is not None.
+                    # Otherwise, id2ada_prompt_encoder is a single encoder, and encoders_num_id_vecs is None.
                     if encoders_num_id_vecs is not None:
                         all_id2img_prompt_embs      = self.iter_flags['id2img_prompt_embs'].split(encoders_num_id_vecs, dim=1)
                         all_id2img_neg_prompt_embs  = self.iter_flags['id2img_neg_prompt_embs'].split(encoders_num_id_vecs, dim=1)
@@ -1929,13 +1931,13 @@ class LatentDiffusion(DDPM):
                             img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(x_start.shape[0], 1, 1)
                             # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
                             teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[i]], dim=1)
-                            LEN_POS_PROMPT = teacher_context.shape[1]
 
                             if self.p_unet_teacher_uses_cfg > 0:
                                 # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
                                 # to the teacher.
                                 # self.uncond_context is a tuple of (uncond_embs, uncond_c_in, extra_info).
                                 # Truncate the uncond_embs to the same length as teacher_context.
+                                LEN_POS_PROMPT = teacher_context.shape[1]
                                 teacher_neg_context = self.uncond_context[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
                                 # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
                                 teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
@@ -1954,7 +1956,7 @@ class LatentDiffusion(DDPM):
                                 global_neg_id_embs = all_id2img_neg_prompt_embs[i]
                                 # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
                                 # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
-                                cls_neg_prompt_embs = self.uncond_context[0][[0]].repeat(teacher_context.shape[0], 1, 1)
+                                cls_neg_prompt_embs = self.uncond_context[0][:1].repeat(teacher_context.shape[0], 1, 1)
                                 # teacher_neg_context: [BS, 81, 768]
                                 teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
                                 # The concatenation of teacher_context and teacher_neg_context is done on dim 0.

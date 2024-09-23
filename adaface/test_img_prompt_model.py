@@ -6,7 +6,6 @@ from .face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from .util            import create_consistentid_pipeline
 from .arc2face_models import create_arc2face_pipeline
 from transformers import CLIPTextModel
-from diffusers import StableDiffusionImg2ImgPipeline
 
 def save_images(images, subject_name, id2img_prompt_encoder_type,
                 prompt, perturb_std, save_dir = "samples-ada"):
@@ -49,8 +48,8 @@ if __name__ == "__main__":
 
     # --base_model_path models/Realistic_Vision_V4.0_noVAE
     parser.add_argument("--base_model_path", type=str, default="models/sar/sar.safetensors")    
-    parser.add_argument("--id2img_prompt_encoder_types", type=str, nargs="+",
-                        default=["arc2face", "consistentID"],
+    parser.add_argument("--id2img_prompt_encoder_type", type=str, 
+                        choices=["arc2face", "consistentID"],
                         help="Types of the ID2Img prompt encoder")    
     parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
@@ -76,9 +75,10 @@ if __name__ == "__main__":
     pipeline = pipeline.to('cuda', torch.float16)
 
     # When the second argument, adaface_ckpt_path = None, create_id2ada_prompt_encoder()
-    # returns only an id2img_prompt_encoder object, instead of an id2ada_prompt_encoder object.
-    # The difference is .subj_basis_generator is None in an id2img_prompt_encoder.
-    id2img_prompt_encoder = create_id2ada_prompt_encoder(args.id2img_prompt_encoder_types)
+    # returns an id2ada_prompt_encoder object, with .subj_basis_generator uninitialized.
+    # But it doesn't matter, as we don't use the subj_basis_generator to generate ada embeddings.
+    id2img_prompt_encoder = create_id2ada_prompt_encoder(args.id2img_prompt_encoder_type,
+                                                         num_static_img_suffix_embs=0)
     id2img_prompt_encoder.to('cuda')
 
     if not args.randface:
