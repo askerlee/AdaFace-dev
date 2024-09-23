@@ -806,7 +806,6 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             else:
                 breakpoint()
             self.id2ada_prompt_encoders.append(encoder)
-            self.encoders_num_id_vecs.append(encoder.num_id_vecs)
             self.encoders_num_static_img_suffix_embs.append(encoder.num_static_img_suffix_embs)
 
         self.num_static_img_suffix_embs     = sum(self.encoders_num_static_img_suffix_embs)
