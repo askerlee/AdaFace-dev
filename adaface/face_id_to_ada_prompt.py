@@ -780,9 +780,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         
         super().__init__(*args, **kwargs)
         assert len(adaface_encoder_types) > 0, "adaface_encoder_types should not be empty."
-        assert adaface_ckpt_paths is None or len(adaface_encoder_types) == len(adaface_ckpt_paths), \
-            "The number of adaface_encoder_types and adaface_ckpt_paths should be the same."
-        
+
         self.id2ada_prompt_encoders = nn.ModuleList()
         self.encoders_num_id_vecs = []
         self.encoders_num_static_img_suffix_embs = []

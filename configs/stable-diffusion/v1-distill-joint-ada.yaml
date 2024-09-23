@@ -161,7 +161,7 @@ data:
     # Since we optimize two subj basis generators, we can only afford a batch size of 2.
     # Effective batch size is 2 * 2 GPUs * 4 accum_grad_batches = 16.
     batch_size:  2
-    num_workers: 1
+    num_workers: 4
     wrap: false
     max_steps: 60000
     train:
