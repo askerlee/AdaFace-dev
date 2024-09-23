@@ -57,6 +57,8 @@ if __name__ == "__main__":
     parser.add_argument("--init_img", type=str, default=None)
     parser.add_argument("--prompt", type=str, default="portrait photo of a person in superman costume")
     parser.add_argument("--use_core_only", action="store_true")
+    parser.add_argument("--truncate_prompt_at", type=int, default=-1,
+                        help="Truncate the prompt to this length")
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--seed", type=int, default=-1)
     parser.add_argument("--perturb_std", type=float, default=1)
@@ -160,6 +162,11 @@ if __name__ == "__main__":
         # Postpend the id prompt embeddings to the prompt embeddings.
         # For arc2face, id_prompt_emb can be either pre- or post-pended.
         # But for ConsistentID, id_prompt_emb has to be **post-pended**. Otherwise, the result images are blank.
+
+        if args.truncate_prompt_at >= 0:
+            prompt_embeds_ = prompt_embeds_[:, :args.truncate_prompt_at]
+            negative_prompt_embeds_ = negative_prompt_embeds_[:, :args.truncate_prompt_at]
+            
         prompt_embeds_ = torch.cat([prompt_embeds_, id_prompt_emb], dim=1)
         M = id_prompt_emb.shape[1]
 
