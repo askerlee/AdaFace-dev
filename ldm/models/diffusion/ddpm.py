@@ -72,7 +72,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_xlayer_consist_loss_weight=0.,
                  recon_delta_loss_boost=1,
                  do_comp_teacher_filtering=True,
-                 num_candidate_teachers=2,
+                 num_candidate_comp_teachers=2,
                  enable_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -114,9 +114,9 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.recon_delta_loss_boost                = recon_delta_loss_boost
+        self.recon_delta_loss_boost                 = recon_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
-        self.num_candidate_teachers                 = num_candidate_teachers
+        self.num_candidate_comp_teachers            = num_candidate_comp_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
         
         self.enable_background_token                = enable_background_token
@@ -1651,12 +1651,12 @@ class LatentDiffusion(DDPM):
 
             else:
                 # First iteration of a two-iteration do_mix_prompt_distillation.
-                # If num_candidate_teachers=4, generate a batch of 8 instances in *two* sets, 
-                # each set with *num_candidate_teachers* instances. 
+                # If num_candidate_comp_teachers=4, generate a batch of 8 instances in *two* sets, 
+                # each set with *num_candidate_comp_teachers* instances. 
                 # We want to select 1 block of BLOCK_SIZE(=1) instances.
                 # Within each set, we set static prompt embeddings to be the same,
                 # but initial x_start, noise and t are different (x_start and t may have repetitions
-                # if ORIG_HALF_BS < num_candidate_teachers).
+                # if ORIG_HALF_BS < num_candidate_comp_teachers).
                 # The corresponding instances across the two sets have the same initial 
                 # x_start, noise and t, but different prompt embeddings (subj vs. mix).
                 # Then do a no_grad generation, find the best teachable set (if any) and pass to 
@@ -1665,11 +1665,11 @@ class LatentDiffusion(DDPM):
                 # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
                 # That means, instances are arranged as: 
                 # (subj comp 1, ..., subj comp N, mix comp 1, ..., mix comp N).
-                # If BS=3, then N = self.num_candidate_teachers = 3 or 6.
+                # If BS=3, then N = self.num_candidate_comp_teachers = 3 or 6.
                 # If batch size = 3 and N = 6, then we quadruple the batch size to 12
                 # (6 subj comp, 6 mix comp).
                 if self.iter_flags['do_comp_teacher_filter']:
-                    NEW_HALF_BS  = self.num_candidate_teachers * BLOCK_SIZE
+                    NEW_HALF_BS  = self.num_candidate_comp_teachers * BLOCK_SIZE
                     assert NEW_HALF_BS <= x_start.shape[0], \
                         f"NEW_HALF_BS {NEW_HALF_BS} should be no larger than the batch size {x_start.shape[0]}."
                     # Repeat twice to get a FULL BATCH consisting of two sets of instances.
@@ -1688,21 +1688,21 @@ class LatentDiffusion(DDPM):
                     mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE * self.N_CA_LAYERS]
                     # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
                     # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
-                    # So repeat them by num_candidate_teachers times to match the size of x_start.
+                    # So repeat them by num_candidate_comp_teachers times to match the size of x_start.
                     # subj_comp_emb, mix_comp_emb: [16*BLOCK_SIZE, 77, 768] => [16*BLOCK_SIZE*T, 77, 768].
                     # c_static_emb2: [32*BLOCK_SIZE*T, 77, 768].
                     # We don't need to consider NEW_HALF_BS % ORIG_HALF_BS > 0 and truncation, 
                     # since prompts are decoupled with x_start/noise/t and can be simply repeated
                     # by as many times as needed.
-                    c_static_emb2 = torch.cat([ subj_comp_emb.repeat(self.num_candidate_teachers, 1, 1), 
-                                                 mix_comp_emb.repeat(self.num_candidate_teachers, 1, 1) ], dim=0)
+                    c_static_emb2 = torch.cat([ subj_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1), 
+                                                 mix_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1) ], dim=0)
                     
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                         chunk_list(c_in, 4)
                     # We change the prompts to be twin structure: (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
                     # Since subj comp and subj single have the same placeholder_indices,
                     # We don't need to update placeholder2indices of text_prompt_adhoc_info.
-                    c_in2 = subj_comp_prompts * self.num_candidate_teachers + cls_comp_prompts * self.num_candidate_teachers
+                    c_in2 = subj_comp_prompts * self.num_candidate_comp_teachers + cls_comp_prompts * self.num_candidate_comp_teachers
                     # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
                     cond_orig = cond
                     cond = (c_static_emb2, c_in2, extra_info)
@@ -1715,7 +1715,7 @@ class LatentDiffusion(DDPM):
                     placeholder2indices2 = {}
                     for k in placeholder2indices:
                         placeholder2indices2[k], _ = extend_indices_B_by_n_times(extra_info['placeholder2indices_1b'][k],
-                                                                                 self.num_candidate_teachers,
+                                                                                 self.num_candidate_comp_teachers,
                                                                                  block_offset=BLOCK_SIZE)
                     
                     subj_single_emb_mask, subj_comp_emb_mask, cls_single_emb_mask, cls_comp_emb_mask = \
@@ -1724,8 +1724,8 @@ class LatentDiffusion(DDPM):
                     cls_comp_emb_mask  = cls_comp_emb_mask[:BLOCK_SIZE]
                     # prompt_emb_mask2: [4 or 6, 77, 1]
                     prompt_emb_mask2 = \
-                        torch.cat( [subj_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1),
-                                     cls_comp_emb_mask.repeat(self.num_candidate_teachers, 1, 1)], dim=0)
+                        torch.cat( [subj_comp_emb_mask.repeat(self.num_candidate_comp_teachers, 1, 1),
+                                     cls_comp_emb_mask.repeat(self.num_candidate_comp_teachers, 1, 1)], dim=0)
 
                     # Update masks to be a b-fold * 2 structure.
                     # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
@@ -2133,7 +2133,7 @@ class LatentDiffusion(DDPM):
                     t_sel       = t[best_cand_idx].repeat(4)
                     # Mark the best candidate with a purple box, although it's in the first iteration.
                     log_image_colors[best_cand_idx] = 3
-                    log_image_colors[best_cand_idx + self.num_candidate_teachers] = 3
+                    log_image_colors[best_cand_idx + self.num_candidate_comp_teachers] = 3
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
@@ -2565,7 +2565,7 @@ class LatentDiffusion(DDPM):
             #del extra_info['ca_layers_activations']
             clip_images_code  = x_recon
             # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
-            clip_prompts_comp = extra_info['cls_comp_prompts'] * self.num_candidate_teachers * 2
+            clip_prompts_comp = extra_info['cls_comp_prompts'] * self.num_candidate_comp_teachers * 2
         else:
             # Either self.iter_flags['reuse_init_conds'], or a pure ada delta loss iter.
             # A batch of either type has the (subj_single, subj_comp, mix_single, mix_comp) structure.
