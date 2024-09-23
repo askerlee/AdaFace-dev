@@ -69,8 +69,7 @@ def parse_args():
                         help="Guidance scale for the diffusion model")
     parser.add_argument("--id_cfg_scale", type=float, default=6, 
                         help="CFG scale when generating the identity embeddings")
-    parser.add_argument("--use_teacher_neg", action="store_true")
-    
+
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
@@ -148,10 +147,9 @@ if __name__ == "__main__":
     # args.perturb_std: the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-    adaface_subj_embs, teacher_neg_id_prompt_embs = \
-        adaface.prepare_adaface_embeddings(image_paths, init_id_embs, args.randface, 
+    adaface_subj_embs = \
+        adaface.prepare_adaface_embeddings(image_paths, init_id_embs, 
                                            perturb_at_stage='img_prompt_emb',
                                            perturb_std=args.perturb_std, update_text_encoder=True)    
-    teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if args.use_teacher_neg else None
-    images = adaface(noise, args.prompt, None, teacher_neg_id_prompt_embs, args.guidance_scale, args.out_image_count, verbose=True)
+    images = adaface(noise, args.prompt, None, args.guidance_scale, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.perturb_std)

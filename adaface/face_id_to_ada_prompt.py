@@ -5,12 +5,36 @@ from .arc2face_models import CLIPTextModelWrapper
 from ConsistentID.lib.pipeline_ConsistentID import ConsistentIDPipeline 
 from .util import perturb_tensor, pad_image_obj_to_square, \
                   calc_stats, patch_clip_image_encoder_with_mask, CLIPVisionModelWithMask
+from adaface.subj_basis_generator import SubjBasisGenerator
 import torch.nn.functional as F
 import numpy as np
 import cv2
 from PIL import Image
 from insightface.app import FaceAnalysis
-import os
+import os, copy
+from omegaconf.listconfig import ListConfig
+
+# adaface_encoder_type can be one or a list of encoder types.
+# adaface_ckpt_paths can be one or a list of ckpt paths.
+# adaface_encoder_scales is None, or a list of scales for the adaface encoder types.
+def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_paths=None, 
+                                 adaface_encoder_scales=None, *args, **kwargs):
+    if isinstance(adaface_encoder_type, (list, tuple, ListConfig)):
+        id2ada_prompt_encoder = Joint_FaceID2AdaPrompt(adaface_encoder_type, adaface_ckpt_paths, 
+                                                       adaface_encoder_scales, *args, **kwargs)
+    elif adaface_encoder_type == 'arc2face':
+        id2ada_prompt_encoder = \
+            Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_paths[0], 
+                                  *args, **kwargs)
+    elif adaface_encoder_type == 'consistentID':
+        id2ada_prompt_encoder = \
+            ConsistentID_ID2AdaPrompt(pipe=None,
+                                      adaface_ckpt_path=adaface_ckpt_paths[0], 
+                                      *args, **kwargs)
+    else:
+        breakpoint()
+    
+    return id2ada_prompt_encoder
 
 class FaceID2AdaPrompt(nn.Module):
     # To be initialized in derived classes.
@@ -34,26 +58,119 @@ class FaceID2AdaPrompt(nn.Module):
         # -1: use the default scale for the adaface encoder type.
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
-        self.to_load_id2img_learnable_modules = kwargs.get('to_load_id2img_learnable_modules', True)
-
+        # to_load_id2img_learnable_modules is ignored, i.e., id2img_learnable_modules are never loaded.
+        # self.to_load_id2img_learnable_modules = kwargs.get('to_load_id2img_learnable_modules', False)
+        self.is_training                    = kwargs.get('is_training', False)
+        # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
+        # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
+        self.extend_prompt2token_proj_attention_multiplier = kwargs.get('extend_prompt2token_proj_attention_multiplier', 1)
+        self.prompt2token_proj_ext_attention_perturb_ratio = kwargs.get('prompt2token_proj_ext_attention_perturb_ratio', 0.1)
+        
         # Set model behavior configurations.
         self.gen_neg_img_prompt             = False
-        self.num_static_img_suffix_embs     = kwargs.get('num_static_img_suffix_embs', 0)
         self.clip_neg_features              = None
+
+        self.use_clip_embs                          = False
+        self.do_contrast_clip_embs_on_bg_features   = False
+        # num_id_vecs is the output embeddings of the ID2ImgPrompt module.
+        # If there's no static image suffix embeddings, then num_id_vecs is also
+        # the number of ada embeddings returned by the subject basis generator.
+        # num_id_vecs will be set in each derived class.
+        self.num_id_vecs                    = -1
+        self.num_static_img_suffix_embs     = kwargs.get('num_static_img_suffix_embs', 0)
         if self.num_static_img_suffix_embs > 0:
             print(f'Adaface uses {self.num_static_img_suffix_embs} fixed image embeddings as input.')
         else:
             print(f'Adaface uses only pos ID image embeddings as input.')
 
-        self.use_clip_embs                  = False
-        self.do_contrast_clip_embs          = False
-        # num_id_vecs as the output embeddings of the ID2ImgPrompt module, 
-        # as well as the output embeddings of the subject basis generator.
-        self.num_id_vecs                    = -1
         self.id_img_prompt_max_length       = 77
+        self.face_id_dim                    = 512
+        # clip_embedding_dim: by default it's the OpenAI CLIP embedding dim.
+        # Could be overridden by derived classes.
         self.clip_embedding_dim             = 1024
+        self.output_dim                     = 768
         self.name                           = None
 
+    def get_id2img_learnable_modules(self):
+        raise NotImplementedError
+    
+    def load_id2img_learnable_modules(self, id2img_learnable_modules_state_dict_list):
+        id2img_prompt_encoder_learnable_modules = self.get_id2img_learnable_modules()
+        for module, state_dict in zip(id2img_prompt_encoder_learnable_modules, id2img_learnable_modules_state_dict_list):
+            module.load_state_dict(state_dict)
+        print(f'{len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules loaded.')
+    
+    # init_subj_basis_generator() can only be called after the derived class is initialized,
+    # when self.num_id_vecs, self.num_static_img_suffix_embs and self.clip_embedding_dim have been set.
+    def init_subj_basis_generator(self):
+        self.subj_basis_generator = \
+            SubjBasisGenerator(num_id_vecs = self.num_id_vecs,
+                               num_static_img_suffix_embs = self.num_static_img_suffix_embs,
+                               num_out_layers = 1,
+                               bg_image_embedding_dim = self.clip_embedding_dim, 
+                               output_dim = self.output_dim,
+                               placeholder_is_bg = False,
+                               prompt2token_proj_grad_scale = 1,
+                               bg_prompt_translator_has_to_out_proj=False)
+
+    def load_adaface_ckpt(self, adaface_ckpt_path):
+        ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
+        string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
+        if self.subject_string not in string_to_subj_basis_generator_dict:
+            print(f"Subject '{self.subject_string}' not found in the embedding manager.")
+            breakpoint()
+
+        ckpt_subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
+        # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
+        # But we don't do layerwise embeddings here, so we set it to 1.
+        ckpt_subj_basis_generator.num_out_layers    = 1
+        ckpt_subj_basis_generator.N_ID              = self.num_id_vecs
+        # Since we directly use the subject basis generator object from the ckpt,
+        # fixing the number of static image suffix embeddings is much simpler.
+        # Otherwise if we want to load the subject basis generator from its state_dict, 
+        # things are more complicated, see embedding manager's load().
+        ckpt_subj_basis_generator.N_SFX             = self.num_static_img_suffix_embs
+        # obj_proj_in and pos_embs are for non-faces. So they are useless for human faces.
+        ckpt_subj_basis_generator.obj_proj_in       = None
+        ckpt_subj_basis_generator.pos_embs          = None     
+        # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
+        ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.num_static_img_suffix_embs, img_prompt_dim=self.output_dim)
+        # Fix missing variables in old ckpt.
+        ckpt_subj_basis_generator.patch_old_subj_basis_generator_ckpt()
+
+        self.subj_basis_generator.extend_prompt2token_proj_attention(\
+            ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)
+        ret = self.subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+        print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
+        print(repr(ckpt_subj_basis_generator))
+
+        if ret is not None and len(ret.missing_keys) > 0:
+            print(f"Missing keys: {ret.missing_keys}")
+        if ret is not None and len(ret.unexpected_keys) > 0:
+            print(f"Unexpected keys: {ret.unexpected_keys}")
+
+        # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
+        # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
+        # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, 
+        # extend subj_basis_generator again.
+        if self.extend_prompt2token_proj_attention_multiplier > 1:
+            # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
+            # During training,  prompt2token_proj_ext_attention_perturb_ratio == 0.1.
+            # During inference, prompt2token_proj_ext_attention_perturb_ratio == 0.
+            self.subj_basis_generator.extend_prompt2token_proj_attention(\
+                None, -1, -1, self.extend_prompt2token_proj_attention_multiplier,
+                perturb_std=self.prompt2token_proj_ext_attention_perturb_ratio)
+
+        self.subj_basis_generator.freeze_prompt2token_proj()
+
+        '''
+        if 'id2img_prompt_encoder_learnable_modules' in ckpt:
+            if self.to_load_id2img_learnable_modules:
+                self.load_id2img_learnable_modules(ckpt['id2img_prompt_encoder_learnable_modules'])
+            else:
+                print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
+        '''
+        
     @torch.no_grad()
     def get_clip_neg_features(self, BS):
         if self.clip_neg_features is None:
@@ -73,13 +190,13 @@ class FaceID2AdaPrompt(nn.Module):
     def extract_init_id_embeds_from_images(self, image_objs, image_paths, fg_masks=None, 
                                            size=(512, 512), calc_avg=False, 
                                            skip_non_faces=True, 
-                                           return_clip_embs=None, do_contrast_clip_embs=None, 
+                                           return_clip_embs=None, do_contrast_clip_embs_on_bg_features=True, 
                                            verbose=False):
-        # If return_clip_embs and do_contrast_clip_embs are not provided, then use the default values.
+        # If return_clip_embs and do_contrast_clip_embs_on_bg_features are not provided, then use the default values.
         if return_clip_embs is None:
             return_clip_embs = self.use_clip_embs
-        if do_contrast_clip_embs is None:
-            do_contrast_clip_embs = self.do_contrast_clip_embs
+        if do_contrast_clip_embs_on_bg_features is None:
+            do_contrast_clip_embs_on_bg_features = self.do_contrast_clip_embs_on_bg_features
 
         # clip_image_encoder should be already put on GPU. 
         # So its .device is the device of its parameters.
@@ -186,8 +303,6 @@ class FaceID2AdaPrompt(nn.Module):
                 image_fg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=fg_masks2, output_hidden_states=True)
                 # attn_mask: [BS, 1, 257]
                 image_fg_features = image_fg_dict.hidden_states[-2]
-                if do_contrast_clip_embs:
-                    image_fg_features = image_fg_features - clip_neg_features
                 if image_fg_dict.attn_mask is not None:
                     image_fg_features = image_fg_features * image_fg_dict.attn_mask
 
@@ -197,7 +312,8 @@ class FaceID2AdaPrompt(nn.Module):
                 # meaningless in this case.
                 image_bg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
                 image_bg_features = image_bg_dict.hidden_states[-2]
-                if do_contrast_clip_embs:
+                # Remove the feature bias (null features) from the bg features, to highlight the useful bg features.
+                if do_contrast_clip_embs_on_bg_features:
                     image_bg_features = image_bg_features - clip_neg_features                
                 if image_bg_dict.attn_mask is not None:
                     image_bg_features = image_bg_features * image_bg_dict.attn_mask        
@@ -246,8 +362,7 @@ class FaceID2AdaPrompt(nn.Module):
     # We don't plan to fine-tune the ID2ImgPrompt module. So disable the gradient computation.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
-                                       called_for_neg_img_prompt=False,
-                                       return_full_and_core_embs=True):
+                                       called_for_neg_img_prompt=False):
         raise NotImplementedError
         
     # If init_id_embs/pre_clip_features is provided, then use the provided face embeddings.
@@ -255,7 +370,7 @@ class FaceID2AdaPrompt(nn.Module):
     # Otherwise, we generate random face embeddings [id_batch_size, 512].
     def get_img_prompt_embs(self, init_id_embs, pre_clip_features, image_paths, image_objs,
                             id_batch_size, 
-                            skip_non_faces=True, return_core_id_embs_only=True,
+                            skip_non_faces=True, 
                             avg_at_stage=None,     # id_emb, img_prompt_emb, or None.
                             perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                             perturb_std=0.0, 
@@ -298,33 +413,33 @@ class FaceID2AdaPrompt(nn.Module):
             else:
                 clip_fgbg_features = None
 
-            if init_id_embs.shape[0] == 1:
+            if faceid_embeds.shape[0] == 1:
                 faceid_embeds = faceid_embeds.repeat(id_batch_size, 1)
                 if clip_fgbg_features is not None:
                     clip_fgbg_features = clip_fgbg_features.repeat(id_batch_size, 1, 1)
 
-        # faceid_embeds_from_images, and no face images are detected.
+        # If skip_non_faces, then faceid_embeds won't be None.
+        # Otherwise, if faceid_embeds_from_images, and no face images are detected,
+        # then we return Nones.
         if faceid_embeds is None:
             return face_image_count, None, None, None
         
         if perturb_at_stage == 'id_emb' and perturb_std > 0:
             # If id_batch_size > 1, after adding noises, the id_batch_size embeddings will be different.
             faceid_embeds = perturb_tensor(faceid_embeds, perturb_std, perturb_std_is_relative=True, keep_norm=True)
-            if self.name == 'consistentID':
+            if self.name == 'consistentID' or self.name == 'jointIDs':
                 clip_fgbg_features = perturb_tensor(clip_fgbg_features, perturb_std, perturb_std_is_relative=True, keep_norm=True)
 
         faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
         # pos_prompt_embs, neg_prompt_embs: [BS, 77, 768] or [BS, 22, 768].
         with torch.set_grad_enabled(id2img_prompt_encoder_trainable):
-            pos_prompt_embs, pos_core_prompt_emb  = \
+            pos_prompt_embs  = \
                 self.map_init_id_to_img_prompt_embs(faceid_embeds, clip_fgbg_features,
-                                                    called_for_neg_img_prompt=False,
-                                                    return_full_and_core_embs=True)
+                                                    called_for_neg_img_prompt=False)
         
         if avg_at_stage == 'img_prompt_emb':
             pos_prompt_embs     = pos_prompt_embs.mean(dim=0, keepdim=True)
-            pos_core_prompt_emb = pos_core_prompt_emb.mean(dim=0, keepdim=True)
             faceid_embeds       = faceid_embeds.mean(dim=0, keepdim=True)
             if clip_fgbg_features is not None:
                 clip_fgbg_features = clip_fgbg_features.mean(dim=0, keepdim=True)
@@ -335,10 +450,6 @@ class FaceID2AdaPrompt(nn.Module):
             # But in practice, unless we use both pos_prompt_embs and pos_core_prompt_emb
             # this is not an issue. But we rarely use pos_prompt_embs and pos_core_prompt_emb together.
             pos_prompt_embs     = perturb_tensor(pos_prompt_embs,     perturb_std, perturb_std_is_relative=True, keep_norm=True)
-            pos_core_prompt_emb = perturb_tensor(pos_core_prompt_emb, perturb_std, perturb_std_is_relative=True, keep_norm=True)
-
-        if return_core_id_embs_only:
-            pos_prompt_embs = pos_core_prompt_emb
 
         # If faceid_embeds_from_images, and the prompt embeddings are already averaged, then 
         # we assume all images are from the same subject, and the batch dim of faceid_embeds is 1. 
@@ -352,18 +463,17 @@ class FaceID2AdaPrompt(nn.Module):
         if self.gen_neg_img_prompt:
             # Never perturb the negative prompt embeddings.
             with torch.set_grad_enabled(id2img_prompt_encoder_trainable):
-                neg_prompt_embs, neg_core_prompt_emb = \
+                neg_prompt_embs = \
                     self.map_init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
                                                         clip_neg_features,
-                                                        called_for_neg_img_prompt=True,
-                                                        return_full_and_core_embs=True)
-                if return_core_id_embs_only:
-                    neg_prompt_embs = neg_core_prompt_emb
-
+                                                        called_for_neg_img_prompt=True)
+    
             return face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs
         else:
             return face_image_count, faceid_embeds, pos_prompt_embs, None
 
+    # get_batched_img_prompt_embs() is a wrapper of get_img_prompt_embs() 
+    # which is convenient for batched training.
     # NOTE: get_batched_img_prompt_embs() should only be called during training.
     # It is a wrapper of get_img_prompt_embs() which is convenient for batched training.
     # If init_id_embs is None, generate random face embeddings [BS, 512].
@@ -380,122 +490,85 @@ class FaceID2AdaPrompt(nn.Module):
                                         # During training, don't skip non-face images. Instead, 
                                         # setting skip_non_faces=False will replace them by random face embeddings.
                                         skip_non_faces=False,
-                                        return_core_id_embs_only=True, 
                                         avg_at_stage=None, 
                                         id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                                         verbose=False)
 
-    def get_id2img_learnable_modules(self):
-        raise NotImplementedError
-    
-    def load_id2img_learnable_modules(self, id2img_learnable_modules_state_dict_list):
-        id2img_prompt_encoder_learnable_modules = self.get_id2img_learnable_modules()
-        for module, state_dict in zip(id2img_prompt_encoder_learnable_modules, id2img_learnable_modules_state_dict_list):
-            module.load_state_dict(state_dict)
-        print(f'{len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules loaded.')
-    
-    def load_adaface_ckpt(self, adaface_ckpt_path):
-        ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
-        string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
-        if self.subject_string not in string_to_subj_basis_generator_dict:
-            print(f"Subject '{self.subject_string}' not found in the embedding manager.")
-            breakpoint()
-
-        self.subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
-        # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
-        # But we don't do layerwise embeddings here, so we set it to 1.
-        self.subj_basis_generator.num_out_layers         = 1
-        self.subj_basis_generator.num_out_embs_per_layer = self.num_id_vecs
-        self.subj_basis_generator.N_ID                   = self.num_id_vecs
-        # Since we directly use the subject basis generator object from the ckpt,
-        # fixing the number of static image suffix embeddings is much simpler.
-        # Otherwise if we want to load the subject basis generator from its state_dict, 
-        # things are more complicated, see embedding manager's load().
-        self.subj_basis_generator.num_static_img_suffix_embs = self.num_static_img_suffix_embs
-        self.subj_basis_generator.patch_old_subj_basis_generator_ckpt()
-        print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
-        print(repr(self.subj_basis_generator))
-
-        if 'id2img_prompt_encoder_learnable_modules' in ckpt:
-            if self.to_load_id2img_learnable_modules:
-                self.load_id2img_learnable_modules(ckpt['id2img_prompt_encoder_learnable_modules'])
-            else:
-                print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
-
+    # If img_prompt_embs is provided, we use it directly.
+    # Otherwise, if face_id_embs is provided, we use it to generate img_prompt_embs.
+    # Otherwise, if image_paths is provided, we extract face_id_embs from the images.
     # image_paths: a list of image paths. image_folder: the parent folder name.
-    # avg_at_stage: 'id_emb', 'img_prompt_emb', 'ada_prompt_emb', or None.
+    # avg_at_stage: 'id_emb', 'img_prompt_emb', or None.
     # avg_at_stage == ada_prompt_emb usually produces the worst results.
-    # id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
-    def generate_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
-                                    avg_at_stage='id_emb', # id_emb, img_prompt_emb, ada_prompt_emb, or None.
+    # avg_at_stage == id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
+    def generate_adaface_embeddings(self, image_paths, face_id_embs=None, img_prompt_embs=None,
+                                    avg_at_stage='id_emb', # id_emb, img_prompt_emb, or None.
                                     perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
-                                    perturb_std=0, id2img_prompt_encoder_trainable=False):
-        if avg_at_stage != 'ada_prompt_emb' and avg_at_stage != None and avg_at_stage.lower() != 'none':
-            img_prompt_avg_at_stage = avg_at_stage
-            id_batch_size = 1
-        else:
+                                    perturb_std=0, id2img_prompt_encoder_trainable=False,
+                                    enable_static_img_suffix_embs=False):
+        if (avg_at_stage is None) or avg_at_stage.lower() == 'none':
             img_prompt_avg_at_stage = None
-            if face_id_embs is not None:
-                id_batch_size = face_id_embs.shape[0]
-            elif image_paths is not None:
-                id_batch_size = len(image_paths)
-            else:
-                id_batch_size = 1
-            
-        # faceid_embeds is a batch of extracted face analysis embeddings (BS * 512 = id_batch_size * 512).
-        # If gen_rand_face, faceid_embeds/id_prompt_embs is a batch of random embeddings, each instance is different.
-        # Otherwise, face_id_embs is used.
-        # faceid_embeds is in the face analysis embeddings. id_prompt_embs is in the image prompt space.
-        # Here id_batch_size = 1, so
-        # faceid_embeds: [1, 512]. NOT used later.
-        # id_prompt_embs: [1, 16/4, 768]. 
-        # NOTE: Since return_core_id_embs_only is True, id_prompt_embs is only the 16 core ID embeddings.
-        # arc2face prompt template: "photo of a id person"
-        # ID embeddings start from "id person ...". So there are 3 template tokens before the 16 ID embeddings.
-        face_image_count, faceid_embeds, id_prompt_embs, neg_id_prompt_embs \
-            = self.get_img_prompt_embs(\
-                init_id_embs=None if gen_rand_face else face_id_embs,
-                pre_clip_features=None,
-                # image_folder is passed only for logging purpose. 
-                # image_paths contains the paths of the images.
-                image_paths=image_paths, image_objs=None,
-                id_batch_size=id_batch_size, 
-                perturb_at_stage=perturb_at_stage,
-                perturb_std=perturb_std, 
-                return_core_id_embs_only=True, 
-                avg_at_stage=img_prompt_avg_at_stage,
-                id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
-                verbose=True)
-        
-        if face_image_count == 0:
-            return None, None
-
-        if avg_at_stage == 'ada_prompt_emb':
-            all_id_prompt_embs = [ id_prompt_embs[[i]] for i in range(id_prompt_embs.shape[0]) ]
         else:
-            all_id_prompt_embs = [ id_prompt_embs ]
+            img_prompt_avg_at_stage = avg_at_stage
 
-        all_adaface_subj_embs = []
+        if img_prompt_embs is None:
+            # Do averaging. So id_batch_size becomes 1 after averaging.
+            if img_prompt_avg_at_stage is not None:
+                id_batch_size = 1
+            else:
+                if face_id_embs is not None:
+                    id_batch_size = face_id_embs.shape[0]
+                elif image_paths is not None:
+                    id_batch_size = len(image_paths)
+                else:
+                    id_batch_size = 1
+                
+            # faceid_embeds: [BS, 512] is a batch of extracted face analysis embeddings. NOT used later.
+            # NOTE: If face_id_embs, image_paths and image_objs are all None, 
+            # then get_img_prompt_embs() generates random faceid_embeds/img_prompt_embs, 
+            # and each instance is different.
+            # Otherwise, if face_id_embs is provided, it's used.
+            # If not, image_paths/image_objs are used to extract face embeddings.
+            # img_prompt_embs is in the image prompt space.
+            # img_prompt_embs: [BS, 16/4, 768].
+            face_image_count, faceid_embeds, img_prompt_embs \
+                = self.get_img_prompt_embs(\
+                    init_id_embs=face_id_embs,
+                    pre_clip_features=None,
+                    # image_folder is passed only for logging purpose. 
+                    # image_paths contains the paths of the images.
+                    image_paths=image_paths, image_objs=None,
+                    id_batch_size=id_batch_size, 
+                    perturb_at_stage=perturb_at_stage,
+                    perturb_std=perturb_std, 
+                    avg_at_stage=img_prompt_avg_at_stage,
+                    id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
+                    verbose=True)
+            
+            if face_image_count == 0:
+                return None
+        
+        # No matter whether avg_at_stage is id_emb or img_prompt_emb, we average img_prompt_embs.
+        elif avg_at_stage is not None and avg_at_stage.lower() != 'none':
+            # img_prompt_embs: [BS, 16/4, 768] -> [1, 16/4, 768].
+            img_prompt_embs = img_prompt_embs.mean(dim=0, keepdim=True)
+            
+        # adaface_subj_embs: [16/4, 768]. 
+        # adaface_prompt_embs: [1, 77, 768] (not used).
+        adaface_subj_embs = \
+            self.subj_basis_generator(img_prompt_embs, clip_features=None, raw_id_embs=None, 
+                                      out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
+                                      is_face=True, 
+                                      enable_static_img_suffix_embs=enable_static_img_suffix_embs)
+        # adaface_subj_embs: [BS, 1, 16, 768] -> [BS, 16, 768]
+        adaface_subj_embs = adaface_subj_embs.squeeze(1)
+        # During training,  img_prompt_avg_at_stage is None, and BS >= 1.
+        # During inference, img_prompt_avg_at_stage is 'id_emb' or 'img_prompt_emb', and BS == 1.
+        if img_prompt_avg_at_stage is not None:
+            # adaface_subj_embs: [1, 16, 768] -> [16, 768]
+            adaface_subj_embs = adaface_subj_embs.squeeze(0)
 
-        for id_prompt_embs in all_id_prompt_embs:            
-            # adaface_subj_embs: [16/4, 768]. 
-            # adaface_prompt_embs: [1, 77, 768] (not used).
-            # The adaface_prompt_embs_inf_type doesn't matter, since it only affects 
-            # adaface_prompt_embs, which is not used.
-            adaface_subj_embs, adaface_prompt_embs = \
-                self.subj_basis_generator(id_prompt_embs, None, None, 
-                                          out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
-                                          is_face=True, is_training=False,
-                                          adaface_prompt_embs_inf_type='full_half_pad')
-            # adaface_subj_embs: [1, 1, 16, 768] -> [16, 768]
-            adaface_subj_embs = adaface_subj_embs.squeeze(0).squeeze(0)
-            all_adaface_subj_embs.append(adaface_subj_embs)
-
-        adaface_subj_embs = torch.stack(all_adaface_subj_embs, dim=0).mean(dim=0)
-        if neg_id_prompt_embs is not None:
-            neg_id_prompt_embs = neg_id_prompt_embs.mean(dim=0)
-
-        return adaface_subj_embs, neg_id_prompt_embs
+        return adaface_subj_embs
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, *args, **kwargs):
@@ -534,35 +607,32 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
 
         if self.out_id_embs_cfg_scale == -1:
             self.out_id_embs_cfg_scale = 1
-        # Arc2Face pipeline specific behaviors.
+        #### Arc2Face pipeline specific configs ####
         self.gen_neg_img_prompt             = False
-        # Never use extra static img suffix embeddings for Adaface, 
-        # even if num_static_img_suffix_embs > 0 is passed for initialization.
-        self.num_static_img_suffix_embs     = 0
-        self.use_clip_embs                  = False
-        self.do_contrast_clip_embs          = False
+        # bg CLIP features are used by the bg subject basis generator.
+        self.use_clip_embs                  = True
+        self.do_contrast_clip_embs_on_bg_features   = True
         self.num_id_vecs                    = 16
+        # self.num_static_img_suffix_embs is initialized in the parent class.
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
         self.name                           = 'arc2face'
 
+        self.init_subj_basis_generator()
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
-        print(f'Arc2Face text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
-    
+        print(f"{self.name} ada prompt encoder initialized, "
+              f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}.")
+
     # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
-                                       called_for_neg_img_prompt=False,
-                                       return_full_and_core_embs=True):
+                                       called_for_neg_img_prompt=False):
 
         '''
         self.text_to_image_prompt_encoder: arc2face_models.py:CLIPTextModelWrapper instance.
         init_id_embs: (N, 512) normalized Face ID embeddings.
-        return_full_and_core_embs: Return both the full prompt embeddings and the core embeddings. 
-                                If False, return only the core embeddings.
-
         '''
 
         # arcface_token_id: 1014
@@ -597,14 +667,10 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         # Restore the original dtype of prompt_embeds: float16 -> float32.
         prompt_embeds = prompt_embeds.to(self.dtype)
 
-        if return_full_and_core_embs:
-            # token 4: 'id' in "photo of a id person". 
-            # 4:20 are the most important 16 embeddings that contain the subject's identity.
-            # [N, 22, 768] -> [N, 16, 768]
-            return prompt_embeds, prompt_embeds[:, 4:20]
-        else:
-            # [N, 16, 768]
-            return prompt_embeds[:, 4:20]
+        # token 4: 'id' in "photo of a id person". 
+        # 4:20 are the most important 16 embeddings that contain the subject's identity.
+        # [N, 22, 768] -> [N, 16, 768]
+        return prompt_embeds[:, 4:20]
 
     def get_id2img_learnable_modules(self):
         return [ self.text_to_image_prompt_encoder ]
@@ -649,27 +715,27 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
 
         if self.out_id_embs_cfg_scale == -1:
             self.out_id_embs_cfg_scale = 6
-        # ConsistentIDPipeline specific behaviors.
-        # ConsistentID_ID2AdaPrompt.num_id_vecs doesn't include num_static_img_suffix_embs.
-        # But the underlying subj_basis_generator.num_id_vecs does include num_static_img_suffix_embs.
-        self.num_id_vecs                    = 4 + self.num_static_img_suffix_embs
+        #### ConsistentID pipeline specific configs ####
+        self.num_id_vecs                    = 4
+        # self.num_static_img_suffix_embs is initialized in the parent class.
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
-        self.do_contrast_clip_embs          = False
+        self.do_contrast_clip_embs_on_bg_features   = True
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
         self.name                           = 'consistentID'
 
+        self.init_subj_basis_generator()
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
-        print(f'ConsistentID text-to-ada prompt encoder initialized, number of ID vecs: {self.num_id_vecs}.')
+        print(f"{self.name} ada prompt encoder initialized, "
+              f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}.")
 
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
-                                       called_for_neg_img_prompt=False,
-                                       return_full_and_core_embs=True):
+                                       called_for_neg_img_prompt=False):
         assert init_id_embs is not None, "init_id_embs should be provided."
 
         init_id_embs  = init_id_embs.to(self.dtype)
@@ -697,32 +763,324 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         if faceid_embeds.shape[0] != clip_image_embeds.shape[0]:
             breakpoint()
 
-        global_id_embeds = self.image_proj_model(faceid_embeds, clip_image_embeds, shortcut=self.shortcut, scale=self.s_scale)
+        try:
+            global_id_embeds = self.image_proj_model(faceid_embeds, clip_image_embeds, shortcut=self.shortcut, scale=self.s_scale)
+        except:
+            breakpoint()
         
-        if return_full_and_core_embs:
-            # All ID prompt embeddings are core embeddings.
-            return global_id_embeds, global_id_embeds
-        else:
-            return global_id_embeds
+        return global_id_embeds
 
     def get_id2img_learnable_modules(self):
         return [ self.image_proj_model ]
 
-class Multi_FaceID2AdaPrompt(FaceID2AdaPrompt):
-    def __init__(self, *args, **kwargs):
+# A wrapper for combining multiple FaceID2AdaPrompt instances.
+class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
+    def __init__(self, adaface_encoder_types, adaface_ckpt_paths, 
+                 adaface_encoder_scales, *args, **kwargs):
+        
         super().__init__(*args, **kwargs)
+        assert len(adaface_encoder_types) > 0, "adaface_encoder_types should not be empty."
+        assert adaface_ckpt_paths is None or len(adaface_encoder_types) == len(adaface_ckpt_paths), \
+            "The number of adaface_encoder_types and adaface_ckpt_paths should be the same."
+        
+        self.id2ada_prompt_encoders = nn.ModuleList()
+        self.encoders_num_id_vecs = []
+        self.encoders_num_static_img_suffix_embs = []
 
-def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_path=None, *args, **kwargs):
-    if adaface_encoder_type == 'arc2face':
-        id2ada_prompt_encoder = Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
-    elif adaface_encoder_type == 'consistentID':
-        id2ada_prompt_encoder = ConsistentID_ID2AdaPrompt(
-                                    pipe=None,
-                                    adaface_ckpt_path=adaface_ckpt_path, *args, **kwargs)
-    else:
-        breakpoint()
+        # TODO: apply adaface_encoder_scales to influence the final prompt embeddings.
+        # Now they are just placeholders.
+        if adaface_encoder_scales is None:
+            # -1: use the default scale for the adaface encoder type.
+            # i.e., 6 for arc2face and 1 for consistentID.
+            self.adaface_encoder_scales = [-1] * len(adaface_encoder_types)
+        else:
+            # Do not normalize the weights, and just use them as is.
+            self.adaface_encoder_scales = adaface_encoder_scales
+
+        # Note we don't pass the adaface_ckpt_paths to the base class, but instead,
+        # we load them once and for all in self.load_adaface_ckpt().
+        for i, encoder_type in enumerate(adaface_encoder_types):
+            if encoder_type == 'arc2face':
+                encoder = Arc2Face_ID2AdaPrompt(*args, **kwargs)
+            elif encoder_type == 'consistentID':
+                encoder = ConsistentID_ID2AdaPrompt(*args, **kwargs)
+            else:
+                breakpoint()
+            self.id2ada_prompt_encoders.append(encoder)
+            self.encoders_num_id_vecs.append(encoder.num_id_vecs)
+            self.encoders_num_static_img_suffix_embs.append(encoder.num_static_img_suffix_embs)
+
+        self.num_id_vecs                    = sum(self.encoders_num_id_vecs)
+        self.num_static_img_suffix_embs     = sum(self.encoders_num_static_img_suffix_embs)
+        self.gen_neg_img_prompt             = True
+        self.use_clip_embs                  = True
+        self.do_contrast_clip_embs_on_bg_features   = True
+        self.face_id_dims                   = [encoder.face_id_dim for encoder in self.id2ada_prompt_encoders]
+        self.face_id_dim                    = sum(self.face_id_dims)
+        # Different adaface encoders may have different clip_embedding_dim.
+        # clip_embedding_dim is only used for bg subject basis generator.
+        # Here we use the joint clip embeddings of both OpenAI CLIP and laion CLIP.
+        # Therefore, the clip_embedding_dim is the sum of the clip_embedding_dims of all adaface encoders.
+        self.clip_embedding_dims            = [encoder.clip_embedding_dim for encoder in self.id2ada_prompt_encoders]
+        self.clip_embedding_dim             = sum(self.clip_embedding_dims)
+        # The ctors of the derived classes have already initialized encoder.subj_basis_generator.
+        # If subj_basis_generator expansion params are specified, they are equally applied to all adaface encoders.
+        # This self.subj_basis_generator is not meant to be called as self.subj_basis_generator(), but instead,
+        # it's used as a unified interface to save/load the subj_basis_generator of all adaface encoders.
+        self.subj_basis_generator           = nn.ModuleList( \
+                                                [encoder.subj_basis_generator for encoder \
+                                                 in self.id2ada_prompt_encoders] )
+        
+        if adaface_ckpt_paths is not None:
+            self.load_adaface_ckpt(adaface_ckpt_paths)
+
+        self.name                           = 'jointIDs'
+        print(f"{self.name} ada prompt encoder initialized, "
+              f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}.")
+
+    def load_adaface_ckpt(self, adaface_ckpt_paths):
+        # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
+        # so we dereference the list to get the actual path and load the subj_basis_generators of all adaface encoders.
+        if isinstance(adaface_ckpt_paths, (list, tuple, ListConfig)):
+            if len(adaface_ckpt_paths) == 1 and len(self.id2ada_prompt_encoders) > 1:
+                adaface_ckpt_paths = adaface_ckpt_paths[0]
+
+        if isinstance(adaface_ckpt_paths, str):
+            # This is only applicable to newest ckpts of Joint_FaceID2AdaPrompt, where 
+            # the ckpt_subj_basis_generator is an nn.ModuleList of multiple subj_basis_generators. 
+            # Therefore, no need to patch missing variables. 
+            ckpt = torch.load(adaface_ckpt_paths, map_location='cpu')
+            string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
+            if self.subject_string not in string_to_subj_basis_generator_dict:
+                print(f"Subject '{self.subject_string}' not found in the embedding manager.")
+                breakpoint()
+
+            ckpt_subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
+            for i, subj_basis_generator in enumerate(self.subj_basis_generator):
+                subj_basis_generator.extend_prompt2token_proj_attention(\
+                    ckpt_subj_basis_generator[i].prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
+                subj_basis_generator.load_state_dict(ckpt_subj_basis_generator[i].state_dict())
+
+                # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
+                # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
+                # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, 
+                # extend subj_basis_generator again.
+                if self.extend_prompt2token_proj_attention_multiplier > 1:
+                    # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
+                    # During training,  prompt2token_proj_ext_attention_perturb_ratio == 0.1.
+                    # During inference, prompt2token_proj_ext_attention_perturb_ratio == 0.
+                    subj_basis_generator.extend_prompt2token_proj_attention(\
+                        None, -1, -1, self.extend_prompt2token_proj_attention_multiplier,
+                        perturb_std=self.prompt2token_proj_ext_attention_perturb_ratio)
+
+                subj_basis_generator.freeze_prompt2token_proj()
+
+        elif isinstance(adaface_ckpt_paths, (list, tuple, ListConfig)):
+            for i, ckpt_path in enumerate(adaface_ckpt_paths):
+                self.id2ada_prompt_encoders[i].load_adaface_ckpt(ckpt_path)
+        else:
+            breakpoint()
+
+    def extract_init_id_embeds_from_images(self, *args, **kwargs):
+        total_faceless_img_count = 0
+        all_id_embs = []
+        all_clip_fgbg_features = []
+        id_embs_shape = None
+        clip_fgbg_features_shape = None
+        # clip_image_encoder should be already put on GPU. 
+        # So its .device is the device of its parameters.
+        device = self.id2ada_prompt_encoders[0].clip_image_encoder.device
+
+        for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
+            faceless_img_count, id_embs, clip_fgbg_features = \
+                id2ada_prompt_encoder.extract_init_id_embeds_from_images(*args, **kwargs)
+            total_faceless_img_count += faceless_img_count
+            # id_embs: [BS, 512] or [1, 512] (if calc_avg == True), or None.
+            # id_embs has the same shape across all id2ada_prompt_encoders.
+            all_id_embs.append(id_embs)
+            # clip_fgbg_features: [BS, 514, 1280/1024] or [1, 514, 1280/1024] (if calc_avg == True), or None.
+            # clip_fgbg_features has the same shape except for the last dimension across all id2ada_prompt_encoders.
+            all_clip_fgbg_features.append(clip_fgbg_features)
+            if id_embs is not None:
+                id_embs_shape = id_embs.shape
+            if clip_fgbg_features is not None:
+                clip_fgbg_features_shape = clip_fgbg_features.shape
+        
+        num_extracted_id_embs = 0
+        for i in range(len(all_id_embs)):
+            if all_id_embs[i] is not None:
+                # As calc_avg is the same for all id2ada_prompt_encoders, 
+                # each id_embs and clip_fgbg_features should have the same shape, if they are not None.
+                if all_id_embs[i].shape != id_embs_shape:
+                    print("Inconsistent ID embedding shapes.")
+                    breakpoint()
+                else:
+                    num_extracted_id_embs += 1
+            else:
+                all_id_embs[i] = torch.zeros(id_embs_shape, dtype=torch.float16, device=device)
+
+            clip_fgbg_features_shape2 = torch.Size(clip_fgbg_features_shape[:-1] + (self.clip_embedding_dims[i],))
+            if all_clip_fgbg_features[i] is not None:
+                if all_clip_fgbg_features[i].shape != clip_fgbg_features_shape2:
+                    print("Inconsistent clip features shapes.")
+                    breakpoint()
+            else:
+                all_clip_fgbg_features[i] = torch.zeros(clip_fgbg_features_shape2, 
+                                                        dtype=torch.float16, device=device)
+
+        # If at least one face encoder detects faces, then return the embeddings.
+        # Otherwise return None embeddings.
+        # It's possible that some face encoders detect faces, while others don't,
+        # since different face encoders use different face detection models.
+        if num_extracted_id_embs == 0:
+            return 0, None, None
     
-    return id2ada_prompt_encoder
+        all_id_embs = torch.cat(all_id_embs, dim=1)
+        # clip_fgbg_features: [BS, 514, 1280] or [BS, 514, 1024]. So we concatenate them along dim=2.
+        all_clip_fgbg_features = torch.cat(all_clip_fgbg_features, dim=2)
+        print(all_clip_fgbg_features.shape)
+        return total_faceless_img_count, all_id_embs, all_clip_fgbg_features
+
+    # init_id_embs, clip_features are never None.
+    def map_init_id_to_img_prompt_embs(self, init_id_embs, 
+                                       clip_features=None,
+                                       called_for_neg_img_prompt=False):
+        if init_id_embs is None or clip_features is None:
+            breakpoint()
+
+        # each id_embs and clip_fgbg_features should have the same shape.
+        # If some of them were None, they have been replaced by zero embeddings.        
+        all_init_id_embs  = init_id_embs.split(self.face_id_dims,         dim=1)
+        all_clip_features = clip_features.split(self.clip_embedding_dims, dim=2)
+        all_img_prompt_embs = []
+
+        for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
+            img_prompt_embs = id2ada_prompt_encoder.map_init_id_to_img_prompt_embs(
+                all_init_id_embs[i], clip_features=all_clip_features[i],
+                called_for_neg_img_prompt=called_for_neg_img_prompt,
+            )
+            all_img_prompt_embs.append(img_prompt_embs)
+
+        all_img_prompt_embs = torch.cat(all_img_prompt_embs, dim=1)
+        return all_img_prompt_embs
+
+    # If init_id_embs/pre_clip_features is provided, then use the provided face embeddings.
+    # Otherwise, if image_paths/image_objs are provided, extract face embeddings from the images.
+    # Otherwise, we generate random face embeddings [id_batch_size, 512].
+    def get_img_prompt_embs(self, init_id_embs, pre_clip_features, *args, **kwargs):
+        face_image_counts = []
+        all_faceid_embeds = []
+        all_pos_prompt_embs = []
+        all_neg_prompt_embs = []
+        faceid_embeds_shape = None
+        # clip_image_encoder should be already put on GPU. 
+        # So its .device is the device of its parameters.
+        device = self.id2ada_prompt_encoders[0].clip_image_encoder.device
+
+        # init_id_embs, pre_clip_features could be None. If they are None,
+        # we split them into individual vectors for each id2ada_prompt_encoder.
+        if init_id_embs is not None:
+            all_init_id_embs = init_id_embs.split(self.face_id_dims, dim=1)
+        else:
+            all_init_id_embs = [None] * len(self.id2ada_prompt_encoders)
+        if pre_clip_features is not None:
+            all_pre_clip_features = pre_clip_features.split(self.clip_embedding_dims, dim=2)
+        else:
+            all_pre_clip_features = [None] * len(self.id2ada_prompt_encoders)
+
+        faceid_embeds_shape = None
+        for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
+            face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs = \
+                id2ada_prompt_encoder.get_img_prompt_embs(all_init_id_embs[i], all_pre_clip_features[i], 
+                                                          *args, **kwargs)
+            face_image_counts.append(face_image_count)
+            all_faceid_embeds.append(faceid_embeds)
+            all_pos_prompt_embs.append(pos_prompt_embs)
+            all_neg_prompt_embs.append(neg_prompt_embs)
+            # all faceid_embeds have the same shape across all id2ada_prompt_encoders.
+            # But pos_prompt_embs and neg_prompt_embs may have different number of ID embeddings.
+            if faceid_embeds is not None:
+                faceid_embeds_shape = faceid_embeds.shape
+
+        if faceid_embeds_shape is None:
+            return 0, None, None, None
+
+        # We take the maximum face_image_count among all adaface encoders.
+        face_image_count = max(face_image_counts)
+        BS = faceid_embeds.shape[0]
+
+        for i in range(len(all_faceid_embeds)):
+            if all_faceid_embeds[i] is not None:
+                if all_faceid_embeds[i].shape != faceid_embeds_shape:
+                    print("Inconsistent face embedding shapes.")
+                    breakpoint()
+            else:
+                all_faceid_embeds[i] = torch.zeros(faceid_embeds_shape, dtype=torch.float16, device=device)
+
+            N_ID = self.encoders_num_id_vecs[i]
+            if all_pos_prompt_embs[i] is None:
+                # Both pos_prompt_embs and neg_prompt_embs have N_ID == num_id_vecs embeddings.
+                all_pos_prompt_embs[i] = torch.zeros((BS, N_ID, 768), dtype=torch.float16, device=device)
+            if all_neg_prompt_embs[i] is None:
+                all_neg_prompt_embs[i] = torch.zeros((BS, N_ID, 768), dtype=torch.float16, device=device)
+
+        all_faceid_embeds   = torch.cat(all_faceid_embeds,   dim=1)
+        all_pos_prompt_embs = torch.cat(all_pos_prompt_embs, dim=1)
+        all_neg_prompt_embs = torch.cat(all_neg_prompt_embs, dim=1)
+
+        return face_image_count, all_faceid_embeds, all_pos_prompt_embs, all_neg_prompt_embs
+    
+    # We don't need to implement get_batched_img_prompt_embs() since the interface
+    # is fully compatible with FaceID2AdaPrompt.get_batched_img_prompt_embs().
+
+    def generate_adaface_embeddings(self, image_paths, face_id_embs=None, img_prompt_embs=None, *args, **kwargs): 
+        all_adaface_subj_embs = []
+        num_available_id_vecs = 0
+        # clip_image_encoder should be already put on GPU. 
+        # So its .device is the device of its parameters.
+        device = self.id2ada_prompt_encoders[0].clip_image_encoder.device
+
+        if face_id_embs is not None:
+            all_face_id_embs = face_id_embs.split(self.face_id_dims, dim=1)
+        else:
+            all_face_id_embs = [None] * len(self.id2ada_prompt_encoders)
+        if img_prompt_embs is not None:
+            if img_prompt_embs.shape[1] != self.num_id_vecs:
+                breakpoint()
+            all_img_prompt_embs = img_prompt_embs.split(self.encoders_num_id_vecs, dim=1)
+        else:
+            all_img_prompt_embs = [None] * len(self.id2ada_prompt_encoders)
+        
+        for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
+            adaface_subj_embs = \
+                id2ada_prompt_encoder.generate_adaface_embeddings(image_paths,
+                                                                  all_face_id_embs[i],
+                                                                  all_img_prompt_embs[i],
+                                                                  *args, **kwargs)
+            
+            # adaface_subj_embs: [16, 768] or [4, 768].
+            N_ID = self.encoders_num_id_vecs[i]
+            if adaface_subj_embs is None:
+                adaface_subj_embs = torch.zeros((N_ID, 768), dtype=torch.float16, device=device)
+            else:
+                num_available_id_vecs += N_ID
+                
+            all_adaface_subj_embs.append(adaface_subj_embs)
+
+        # No faces are found in the images, so return None embeddings.
+        # We don't want to return an all-zero embedding, which is useless.
+        if num_available_id_vecs == 0:
+            return None, None
+        
+        # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then 
+        # all_adaface_subj_embs[0]: [4, 768]. all_adaface_subj_embs[1]: [16, 768].
+        # all_adaface_subj_embs: [20, 768].
+        try:
+            all_adaface_subj_embs = torch.cat(all_adaface_subj_embs, dim=1)
+        except:
+            breakpoint()
+        return all_adaface_subj_embs
+
 
 '''
 # For ip-adapter distillation on objects. Strictly speaking, it's not face-to-image prompts, but

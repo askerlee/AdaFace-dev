@@ -174,11 +174,11 @@ def get_parser(**parser_kwargs):
         type=str, nargs="*", default=argparse.SUPPRESS,
         help="Path to the subject info file (only necessary if multiple subjects are used)")
 
-    parser.add_argument("--adaface_ckpt_path", 
-        type=str, 
-        default="", 
-        help="Initialize embedding manager from a checkpoint")
-
+    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
+                        default=[],
+                        help="Initialize embedding manager from one or multiple checkpoints")
+    parser.add_argument("--num_id2ada_prompt_encoder_types", type=int, default=1,
+                        help="Number of id2ada prompt encoder types")
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
@@ -204,14 +204,12 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_vectors_per_bg_token",
         type=int, default=argparse.SUPPRESS,
         help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
-    parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
-                        help="Skip loading token2num_vectors from the checkpoint.")
+    parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
+                        help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
 
-    parser.add_argument("--zs_prompt2token_proj_grad_scale", type=float, default=1,
+    parser.add_argument("--prompt2token_proj_grad_scale", type=float, default=1,
                         help="Gradient scale of the prompt2token projection layer (Set to < 1 to reduce the update speed of SubjBasisGenerator)")
-    parser.add_argument("--zs_extra_words_scale", type=float, default=0.5,  
-                        help="Scale of the extra words embeddings")
-    parser.add_argument("--zs_prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
+    parser.add_argument("--prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_id2img_rand_id", type=float, default=argparse.SUPPRESS,
                         help="Probability of generating random faces during arc2face distillation")
@@ -240,11 +238,7 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
-                        help="Load the old checkpoint for the embedding manager")
-    parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
-    
+
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
@@ -297,15 +291,16 @@ def nondefault_trainer_args(opt):
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
     # Only keep the first subject and background placeholder.
-    personalization_config_params.subject_strings                       = dataset.subject_strings[:1]
-    personalization_config_params.subj_name_to_cls_delta_string         = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-    personalization_config_params.token2num_vectors         = dict()
+    personalization_config_params.subject_strings               = dataset.subject_strings[:1]
+    personalization_config_params.subj_name_to_cls_delta_string = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
+    personalization_config_params.token2num_vectors             = dict()
     for subject_string in dataset.subject_strings[:1]:
-        personalization_config_params.token2num_vectors[subject_string] = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
+        personalization_config_params.token2num_vectors[subject_string] = \
+            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_id2ada_prompt_encoder_types
 
     if opt.background_string is not None:
         config.model.params.enable_background_token = True
-        personalization_config_params.background_strings              = dataset.background_strings[:1]
+        personalization_config_params.background_strings = dataset.background_strings[:1]
 
         for background_string in dataset.background_strings[:1]:
             personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
@@ -328,8 +323,6 @@ class WrappedDataset(Dataset):
 
 def worker_init_fn(_):
     worker_info = torch.utils.data.get_worker_info()
-
-    dataset = worker_info.dataset
     worker_id = worker_info.id
 
     return np.random.seed(np.random.get_state()[1][0] + worker_id)
@@ -650,7 +643,8 @@ if __name__ == "__main__":
         # broad_class
         config.data.params.train.params.broad_class                 = opt.broad_class
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
-        config.data.params.train.params.num_vectors_per_subj_token  = opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs
+        config.data.params.train.params.num_vectors_per_subj_token  = \
+            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_id2ada_prompt_encoder_types
         config.data.params.train.params.num_vectors_per_bg_token    = opt.num_vectors_per_bg_token
 
         if opt.background_string is not None:
@@ -677,14 +671,12 @@ if __name__ == "__main__":
             config.model.params.p_perturb_face_id_embs = opt.p_perturb_face_id_embs
 
         config.model.params.personalization_config.params.extend_prompt2token_proj_attention_multiplier   = opt.extend_prompt2token_proj_attention_multiplier
-        config.model.params.personalization_config.params.to_load_old_adaface_ckpt  = opt.to_load_old_adaface_ckpt
         config.model.params.personalization_config.params.num_static_img_suffix_embs = opt.num_static_img_suffix_embs
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 
-        config.model.params.personalization_config.params.zs_prompt2token_proj_grad_scale = opt.zs_prompt2token_proj_grad_scale
-        config.model.params.personalization_config.params.zs_extra_words_scale = 0.5
-        config.model.params.personalization_config.params.zs_prompt2token_proj_ext_attention_perturb_ratio = opt.zs_prompt2token_proj_ext_attention_perturb_ratio
+        config.model.params.personalization_config.params.prompt2token_proj_grad_scale = opt.prompt2token_proj_grad_scale
+        config.model.params.personalization_config.params.prompt2token_proj_ext_attention_perturb_ratio = opt.prompt2token_proj_ext_attention_perturb_ratio
 
         if hasattr(opt, 'p_unet_distill_iter'):
             config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
@@ -754,9 +746,8 @@ if __name__ == "__main__":
             config.model.base_lr = opt.lr
 
         # Personalization config
-        config.model.params.personalization_config.params.adaface_ckpt_path = opt.adaface_ckpt_path
-        config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
-        config.model.params.personalization_config.params.to_load_id2img_learnable_modules = opt.to_load_id2img_learnable_modules
+        config.model.params.personalization_config.params.adaface_ckpt_paths = opt.adaface_ckpt_paths
+        config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
 
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 

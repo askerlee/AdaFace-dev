@@ -38,10 +38,8 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_mod
                          adaface_encoder_types=args.adaface_encoder_types, 
                          adaface_ckpt_paths=args.adaface_ckpt_paths, 
                          adaface_encoder_scales=args.adaface_encoder_scales,
-                         unet_types=None,
-                         extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights,
-                         num_static_img_suffix_embs=0,
-                         device=device)
+                         unet_types=None, extra_unet_paths=args.extra_unet_paths, 
+                         unet_weights=args.unet_weights, device=device)
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
@@ -75,7 +73,7 @@ def generate_image(image_paths, guidance_scale, avg_at_stage, perturb_std,
     if prompt is None:
         prompt = ""
 
-    adaface_subj_embs, teacher_neg_id_prompt_embs = \
+    adaface_subj_embs = \
         adaface.prepare_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
                                            avg_at_stage=avg_at_stage,
                                            perturb_at_stage='img_prompt_emb',

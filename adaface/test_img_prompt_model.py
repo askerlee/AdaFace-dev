@@ -49,8 +49,9 @@ if __name__ == "__main__":
 
     # --base_model_path models/Realistic_Vision_V4.0_noVAE
     parser.add_argument("--base_model_path", type=str, default="models/sar/sar.safetensors")    
-    parser.add_argument("--id2img_prompt_encoder_type", type=str, default="arc2face",
-                        choices=["arc2face", "consistentID"], help="Type of the ID2Img prompt encoder")    
+    parser.add_argument("--id2img_prompt_encoder_types", type=str, nargs="+",
+                        default=["arc2face", "consistentID"],
+                        help="Types of the ID2Img prompt encoder")    
     parser.add_argument("--subject", type=str, default="subjects-celebrity/taylorswift")
     parser.add_argument("--example_image_count", type=int, default=5, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4, help="Number of images to generate")
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     # When the second argument, adaface_ckpt_path = None, create_id2ada_prompt_encoder()
     # returns only an id2img_prompt_encoder object, instead of an id2ada_prompt_encoder object.
     # The difference is .subj_basis_generator is None in an id2img_prompt_encoder.
-    id2img_prompt_encoder = create_id2ada_prompt_encoder(args.id2img_prompt_encoder_type)
+    id2img_prompt_encoder = create_id2ada_prompt_encoder(args.id2img_prompt_encoder_types)
     id2img_prompt_encoder.to('cuda')
 
     if not args.randface:
@@ -144,7 +145,6 @@ if __name__ == "__main__":
                 id_batch_size=id_batch_size,
                 perturb_at_stage='img_prompt_emb',
                 perturb_std=perturb_std,
-                return_core_id_embs_only=False,
                 avg_at_stage='id_emb',
                 verbose=True)
         

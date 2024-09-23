@@ -22,11 +22,10 @@ sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
-                 adaface_ckpt_paths, adaface_encoder_scales=None, to_load_id2img_learnable_modules=True,
+                 adaface_ckpt_paths, adaface_encoder_scales=None, 
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, unet_types=None, extra_unet_paths=None, unet_weights=None,
-                 num_static_img_suffix_embs=0,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "img2img", "text2img3", "flux", or None. 
@@ -37,17 +36,9 @@ class AdaFaceWrapper(nn.Module):
         self.pipeline_name = pipeline_name
         self.base_model_path = base_model_path
         self.adaface_encoder_types = adaface_encoder_types
-        if adaface_encoder_scales is None:
-            # -1: use the default scale for the adaface encoder type.
-            # i.e., 6 for arc2face and 1 for consistentID.
-            self.adaface_encoder_scales = [-1] * len(adaface_encoder_types)
-        else:
-            # Do not normalize the weights, and just use them as is.
-            self.adaface_encoder_scales = adaface_encoder_scales
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
-        self.num_static_img_suffix_embs       = num_static_img_suffix_embs
-        self.to_load_id2img_learnable_modules = to_load_id2img_learnable_modules
+        self.adaface_encoder_scales = adaface_encoder_scales
         self.subject_string = subject_string
 
         self.num_inference_steps = num_inference_steps
@@ -57,8 +48,6 @@ class AdaFaceWrapper(nn.Module):
         self.unet_types = unet_types
         self.extra_unet_paths = extra_unet_paths
         self.unet_weights = unet_weights
-        # apply_neg_img_prompt leads to worse results. So it's disabled.
-        self.apply_neg_img_prompt = False
         self.device = device
         self.is_training = is_training
 
@@ -72,23 +61,17 @@ class AdaFaceWrapper(nn.Module):
             self.negative_prompt = negative_prompt
 
         self.initialize_pipeline()
-        self.encoders_num_id_vecs = [id2ada_prompt_encoder.num_id_vecs for id2ada_prompt_encoder in self.id2ada_prompt_encoders]
+        # During inference, we never use static image suffix embeddings. 
+        # So num_id_vecs is the length of the returned adaface embeddings for each encoder.
+        self.encoders_num_id_vecs = self.id2ada_prompt_encoder.encoders_num_id_vecs
         self.extend_tokenizer_and_text_encoder()
 
     def initialize_pipeline(self):
-        self.id2ada_prompt_encoders = nn.ModuleList()
-        for i, adaface_encoder_type in enumerate(self.adaface_encoder_types):
-            adaface_ckpt_path = self.adaface_ckpt_paths[i]
-            out_id_embs_cfg_scale = self.adaface_encoder_scales[i]
-            id2ada_prompt_encoder = create_id2ada_prompt_encoder(adaface_encoder_type,
-                                                                 adaface_ckpt_path, 
-                                                                 out_id_embs_cfg_scale=out_id_embs_cfg_scale,
-                                                                 num_static_img_suffix_embs=self.num_static_img_suffix_embs,
-                                                                 to_load_id2img_learnable_modules=self.to_load_id2img_learnable_modules)
-            id2ada_prompt_encoder.eval()
-            self.id2ada_prompt_encoders.append(id2ada_prompt_encoder)
+        self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(self.adaface_encoder_types,
+                                                                  self.adaface_ckpt_paths,
+                                                                  self.adaface_encoder_scales)
 
-        self.id2ada_prompt_encoders.to(self.device)
+        self.id2ada_prompt_encoder.to(self.device)
         print(f"adaface_encoder_scales: {self.adaface_encoder_scales}")
 
         if self.use_840k_vae:
@@ -257,7 +240,7 @@ class AdaFaceWrapper(nn.Module):
 
     # Extend pipeline.text_encoder with the adaface subject emeddings.
     # subj_embs: [16, 768].
-    def update_text_encoder_subj_embs(self, subj_embs):
+    def update_text_encoder_subj_embeddings(self, subj_embs):
         # Initialise the newly added placeholder token with the embeddings of the initializer token
         # token_embeds: [49412, 768]
         token_embeds = self.pipeline.text_encoder.get_input_embeddings().weight.data
@@ -286,53 +269,33 @@ class AdaFaceWrapper(nn.Module):
 
         return prompt
 
-    # avg_at_stage: 'id_emb', 'img_prompt_emb', 'ada_prompt_emb', or None.
+    # avg_at_stage: 'id_emb', 'img_prompt_emb', or None.
     # avg_at_stage == ada_prompt_emb usually produces the worst results.
     # id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
-    def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, gen_rand_face=False, 
+    def prepare_adaface_embeddings(self, image_paths, face_id_embs=None, 
                                    avg_at_stage='id_emb', # id_emb, img_prompt_emb, ada_prompt_emb, or None.
                                    perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                    perturb_std=0, update_text_encoder=True):
-        all_adaface_subj_embs = []
-        all_teacher_neg_id_prompt_embs = []
-        num_available_id_vecs = 0
 
-        for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
-            adaface_subj_embs, teacher_neg_id_prompt_embs = \
-                id2ada_prompt_encoder.generate_adaface_embeddings(\
+        all_adaface_subj_embs = \
+            self.id2ada_prompt_encoder.generate_adaface_embeddings(\
                     image_paths, face_id_embs=face_id_embs, 
-                    gen_rand_face=gen_rand_face, 
+                    img_prompt_embs=None, 
                     avg_at_stage=avg_at_stage,
                     perturb_at_stage=perturb_at_stage,
-                    perturb_std=perturb_std)
-            
-            # adaface_subj_embs: [16, 768] or [4, 768].
-            N_ID = self.encoders_num_id_vecs[i]
-            if adaface_subj_embs is None:
-                adaface_subj_embs = torch.zeros((N_ID, 768), dtype=torch.float16, device=self.device)
-            else:
-                num_available_id_vecs += N_ID
-                
-            all_adaface_subj_embs.append(adaface_subj_embs)
-            if teacher_neg_id_prompt_embs is None:
-                teacher_neg_id_prompt_embs = torch.zeros_like(adaface_subj_embs)
-            all_teacher_neg_id_prompt_embs.append(teacher_neg_id_prompt_embs)
+                    perturb_std=perturb_std,
+                    id2img_prompt_encoder_trainable=False,
+                    enable_static_img_suffix_embs=False)
         
-        # No faces are found in the images, so return None embeddings.
-        if num_available_id_vecs == 0:
-            return None, None
+        if all_adaface_subj_embs is None:
+            return None
         
-        # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then all_adaface_subj_embs: [20, 768].
-        all_adaface_subj_embs           = torch.cat(all_adaface_subj_embs, dim=0)
-        all_teacher_neg_id_prompt_embs  = torch.cat(all_teacher_neg_id_prompt_embs, dim=0)
+        # [1, 1, 16, 768] -> [16, 768]
+        all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0).squeeze(0)
 
         if update_text_encoder:
-            self.update_text_encoder_subj_embs(all_adaface_subj_embs)
-
-        # Cache all_teacher_neg_id_prompt_embs for the img2img pipeline, 
-        # but don't cache all_adaface_subj_embs.
-        self.all_teacher_neg_id_prompt_embs = all_teacher_neg_id_prompt_embs
-        return all_adaface_subj_embs, all_teacher_neg_id_prompt_embs
+            self.update_text_encoder_subj_embeddings(all_adaface_subj_embs)
+        return all_adaface_subj_embs
 
     def encode_prompt(self, prompt, negative_prompt=None, device=None, verbose=False):
         if negative_prompt is None:
@@ -390,14 +353,11 @@ class AdaFaceWrapper(nn.Module):
                                                 num_images_per_prompt=1, 
                                                 do_classifier_free_guidance=True,
                                                 negative_prompt=negative_prompt)
-
-        if self.pipeline_name == "text2img" and self.apply_neg_img_prompt and self.all_teacher_neg_id_prompt_embs is not None:
-            negative_prompt_embeds_[:, -self.all_teacher_neg_id_prompt_embs.shape[0]:] = self.all_teacher_neg_id_prompt_embs
-
+                
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, negative_prompt=None, teacher_neg_id_prompt_embs=None, guidance_scale=4.0, 
+    def forward(self, noise, prompt, negative_prompt=None, guidance_scale=4.0, 
                 out_image_count=4, ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
 
@@ -410,13 +370,6 @@ class AdaFaceWrapper(nn.Module):
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
         if negative_prompt_embeds_ is not None:
-            if teacher_neg_id_prompt_embs is not None:
-                # Since pos_id_prompt_embs is embedded in the beginning of prompt_embeds_,
-                # to keep the same length, we insert teacher_neg_id_prompt_embs at the end of negative_prompt_embeds_.
-                # negative_prompt_embeds_: [1, 77, 768].
-                # For consistentID, teacher_neg_id_prompt_embs: [1, 4, 768]. 
-                # For arc2face,     teacher_neg_id_prompt_embs: None.
-                negative_prompt_embeds_[:, -teacher_neg_id_prompt_embs.shape[1]:]  = teacher_neg_id_prompt_embs
             negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
 
         if self.pipeline_name == "text2img3":

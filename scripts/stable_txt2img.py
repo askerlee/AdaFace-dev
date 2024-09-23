@@ -215,13 +215,11 @@ def parse_args():
     parser.add_argument("--num_vectors_per_bg_token",
                         type=int, default=4,
                         help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
-    parser.add_argument("--skip_loading_token2num_vectors", action="store_true",
-                        help="Skip loading token2num_vectors from the checkpoint.")
+    parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
+                        help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
               
     parser.add_argument("--return_prompt_embs_type", type=str, choices=["text", "id", "text_id"],
-                        default="text", help="The type of the returned prompt embeddings from get_text_conditioning()")
-    parser.add_argument("--to_load_old_adaface_ckpt", action="store_true", 
-                        help="Load the old checkpoint for the embedding manager")       
+                        default="text", help="The type of the returned prompt embeddings from get_text_conditioning()")     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image(s) for zero-shot learning. Each item could be a path to an image or a directory.")
     
@@ -247,8 +245,6 @@ def parse_args():
     # If adaface_encoder_scales is not specified, the weights will be set to 1 for arc2face and 6 for consistentID.
     parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
                         help="Weights for the ID2Ada prompt encoders")
-    parser.add_argument("--to_load_id2img_learnable_modules", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to load the id2img prompt encoder learnable modules in adaface_ckpt")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
@@ -313,8 +309,6 @@ def main(opt):
     if opt.neg_prompt != "":
         print("Negative prompt:", opt.neg_prompt)
 
-    teacher_neg_id_prompt_embs = None
-
     assert opt.ref_images is not None, "Must specify --ref_images for zero-shot learning"
     ref_image_paths = []
     for ref_image in opt.ref_images:
@@ -328,30 +322,28 @@ def main(opt):
     if opt.adaface_ckpt_paths is not None:
         opt.subj_model_path = opt.adaface_ckpt_paths[0]
     else:
-        # Legacy branch left by DreamBooth. No longer used.
-        opt.subj_model_path = opt.ckpt
+        opt.subj_model_path = "uninitialized"
 
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.personalization_config.params.token2num_vectors = {} 
-        config.model.params.personalization_config.params.zs_cls_delta_string = 'person'
+        config.model.params.personalization_config.params.cls_delta_string = 'person'
 
         if hasattr(opt, 'num_vectors_per_subj_token'):
             # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
-            opt.skip_loading_token2num_vectors = True
+            opt.loading_token2num_vectors_from_ckpt = False
         if hasattr(opt, 'num_vectors_per_bg_token'):
             # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
-        config.model.params.personalization_config.params.skip_loading_token2num_vectors = opt.skip_loading_token2num_vectors
+        config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.id2ada_prompt_encoder_type       = opt.adaface_encoder_types[0]
-        config.model.params.personalization_config.params.to_load_id2img_learnable_modules = opt.to_load_id2img_learnable_modules
 
         opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
-            model.embedding_manager.load(opt.subj_model_path, to_load_old_adaface_ckpt=opt.to_load_old_adaface_ckpt)
+            model.embedding_manager.load(opt.adaface_ckpt_paths)
             model.embedding_manager.eval()
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -370,7 +362,6 @@ def main(opt):
         model.cond_stage_model.device = device
 
         # subj_id_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
-        # neg_id_prompt_embs is used in ConsistentID only.
         face_image_count, faceid_embeds, subj_id_prompt_embs, neg_id_prompt_embs \
             = model.embedding_manager.id2img_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=None,
@@ -380,7 +371,6 @@ def main(opt):
                 id_batch_size=1,
                 perturb_at_stage='img_prompt_emb',
                 perturb_std=0,
-                return_core_id_embs_only=True,
                 avg_at_stage='id_emb',
                 verbose=True)
 
@@ -393,18 +383,14 @@ def main(opt):
 
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
                                           opt.adaface_ckpt_paths, opt.adaface_encoder_scales,
-                                          opt.to_load_id2img_learnable_modules,
                                           opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
                                           unet_types=None,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
                                           unet_weights=opt.unet_weights, 
-                                          num_static_img_suffix_embs=0,
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-                # If id2ada_prompt_encoder_type == "arc2face", teacher_neg_id_prompt_embs is None.
-                # If id2ada_prompt_encoder_type == "consistentID", teacher_neg_id_prompt_embs will be used for CFG.
-                adaface_subj_embs, teacher_neg_id_prompt_embs = \
-                    pipeline.prepare_adaface_embeddings(ref_image_paths, None, False, 
+                adaface_subj_embs = \
+                    pipeline.prepare_adaface_embeddings(ref_image_paths, None, 
                                                         perturb_at_stage='img_prompt_emb',
                                                         perturb_std=0, 
                                                         update_text_encoder=True)
@@ -560,7 +546,7 @@ def main(opt):
             try:
                 uc = model.get_text_conditioning(batch_size * [opt.neg_prompt], 
                                                  subj_id2img_prompt_embs = None,
-                                                 zs_clip_bg_features=None,
+                                                 clip_bg_features=None,
                                                  return_prompt_embs_type = opt.return_prompt_embs_type,
                                                  num_id_vecs = opt.num_vectors_per_subj_token,
                                                  text_conditioning_iter_type = 'negative')
@@ -604,7 +590,7 @@ def main(opt):
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
-                                                        zs_clip_bg_features = None,
+                                                        clip_bg_features = None,
                                                         return_prompt_embs_type = opt.return_prompt_embs_type,
                                                         num_id_vecs = opt.num_vectors_per_subj_token)
                         if opt.debug:

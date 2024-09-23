@@ -94,7 +94,7 @@ model:
         training_perturb_prob:   { 'recon_iter':            0.6, 
                                    'unet_distill_iter':     0.4,
                                    'compos_distill_iter':   0.4 }
-        adaface_ckpt_path:        null
+        adaface_ckpt_paths:        null
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:

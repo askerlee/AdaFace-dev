@@ -50,7 +50,7 @@ class EmbeddingManager(nn.Module):
             # the subject (represented as the subject token) and the background. 
             # token2num_vectors is a dict.
             token2num_vectors={},
-            skip_loading_token2num_vectors=False,
+            loading_token2num_vectors_from_ckpt=False,
             use_layerwise_embedding=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
@@ -63,16 +63,14 @@ class EmbeddingManager(nn.Module):
             id2img_prompt_encoder_trainable=False,
             to_load_id2img_learnable_modules=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
-            zs_cls_delta_string='person',
-            zs_cls_delta_token_weights=None,
-            zs_prompt2token_proj_grad_scale=1,
-            zs_extra_words_scale=0.5,
-            # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio is not specified. 
-            # Therefore no perturbation during inference.
-            zs_prompt2token_proj_ext_attention_perturb_ratio=0, 
-            adaface_ckpt_path=None,
+            cls_delta_string='person',
+            cls_delta_token_weights=None,
+            prompt2token_proj_grad_scale=1,
+            # During training,  prompt2token_proj_ext_attention_perturb_ratio is 0.1.
+            # During inference, prompt2token_proj_ext_attention_perturb_ratio is 0. 
+            prompt2token_proj_ext_attention_perturb_ratio=0, 
+            adaface_ckpt_paths=None,
             extend_prompt2token_proj_attention_multiplier=1,
-            to_load_old_adaface_ckpt=False,
             num_static_img_suffix_embs=0,
     ):
         super().__init__()
@@ -123,7 +121,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaFace also supports it for more expressive modeling.
-        self.skip_loading_token2num_vectors = skip_loading_token2num_vectors
+        self.loading_token2num_vectors_from_ckpt = loading_token2num_vectors_from_ckpt
         self.set_num_vectors_per_subj_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim
 
@@ -149,34 +147,34 @@ class EmbeddingManager(nn.Module):
         else:
             self.num_vectors_each_bg = 0
 
-        self.zs_cls_delta_string  = zs_cls_delta_string
-        self.zs_prompt2token_proj_grad_scale = zs_prompt2token_proj_grad_scale
-        self.zs_extra_words_scale = zs_extra_words_scale
-
-        if zs_prompt2token_proj_grad_scale == 0:
-            print("Warning: prompt2token_proj is frozen, so don't add noise to it.")
-            self.zs_prompt2token_proj_ext_attention_perturb_ratio = 0
-        else:
-            self.zs_prompt2token_proj_ext_attention_perturb_ratio = zs_prompt2token_proj_ext_attention_perturb_ratio
+        self.cls_delta_string  = cls_delta_string
+        self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
+        self.prompt2token_proj_ext_attention_perturb_ratio = prompt2token_proj_ext_attention_perturb_ratio
+        # The embedding manager is primarily used during training, so we set is_training=True.
         self.id2ada_prompt_encoder = \
-            create_id2ada_prompt_encoder(id2ada_prompt_encoder_type, num_static_img_suffix_embs=num_static_img_suffix_embs)
+            create_id2ada_prompt_encoder(id2ada_prompt_encoder_type, 
+                                         num_static_img_suffix_embs=num_static_img_suffix_embs,
+                                         extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
+                                         prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
+                                         is_training=True)
+        
         self.id2img_prompt_encoder_trainable    = id2img_prompt_encoder_trainable
         self.to_load_id2img_learnable_modules   = to_load_id2img_learnable_modules
 
-        if self.zs_cls_delta_string is not None:
-            self.zs_cls_delta_tokens = self.get_tokens_for_string(zs_cls_delta_string)
-            if zs_cls_delta_token_weights is None:
-                self.zs_cls_delta_token_weights = torch.ones(len(self.zs_cls_delta_tokens))
-                self.zs_cls_delta_token_weights[-1] = 2
+        if self.cls_delta_string is not None:
+            self.cls_delta_tokens = self.get_tokens_for_string(cls_delta_string)
+            if cls_delta_token_weights is None:
+                self.cls_delta_token_weights = torch.ones(len(self.cls_delta_tokens))
+                self.cls_delta_token_weights[-1] = 2
             else:
-                self.zs_cls_delta_token_weights = torch.tensor(zs_cls_delta_token_weights, dtype=float)
+                self.cls_delta_token_weights = torch.tensor(cls_delta_token_weights, dtype=float)
             # The last word is the main word "man, woman, boy, girl" whose weight will be normalized to 1;
             # if there are any words before this word, their weights will be normalized to 0.25.
-            self.zs_cls_delta_token_weights **= 2
-            self.zs_cls_delta_token_weights /= self.zs_cls_delta_token_weights.max()
+            self.cls_delta_token_weights **= 2
+            self.cls_delta_token_weights /= self.cls_delta_token_weights.max()
         else:
-            self.zs_cls_delta_tokens = None
-            self.zs_cls_delta_token_weights = None
+            self.cls_delta_tokens = None
+            self.cls_delta_token_weights = None
 
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
             placeholder_is_bg =  (placeholder_string in self.background_string_dict)
@@ -185,26 +183,34 @@ class EmbeddingManager(nn.Module):
             placeholder_token = self.get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
             self.string_to_token_dict[placeholder_string] = placeholder_token
 
-            # num_out_embs_per_layer: 16 if fg or 4 if bg. 
-            num_out_embs_per_layer = self.number_vectors_each_subj if not placeholder_is_bg else self.num_vectors_each_bg
+            # num_id_vecs: 16 if fg or 4 if bg. 
+            num_id_vecs = self.number_vectors_each_subj if not placeholder_is_bg else self.num_vectors_each_bg
 
-            subj_basis_generator = SubjBasisGenerator(num_out_embs_per_layer = num_out_embs_per_layer,
-                                                        num_out_layers = self.num_unet_ca_layers,
-                                                        # bg_image_embedding_dim: laion: 1280, openai: 1024.
-                                                        # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-                                                        bg_image_embedding_dim = self.id2ada_prompt_encoder.clip_embedding_dim, 
-                                                        output_dim = out_emb_dim,
-                                                        placeholder_is_bg = placeholder_is_bg,
-                                                        prompt2token_proj_grad_scale = self.zs_prompt2token_proj_grad_scale,
-                                                        bg_prompt_translator_has_to_out_proj=False,
-                                                        num_static_img_suffix_embs = num_static_img_suffix_embs,
-                                                        zs_extra_words_scale = self.zs_extra_words_scale)
+            if placeholder_is_bg:
+                # Only initialize the bg SubjBasisGenerator here.
+                subj_basis_generator = \
+                    SubjBasisGenerator(num_id_vecs = num_id_vecs,
+                                       num_out_layers = 1,
+                                       # bg_image_embedding_dim: laion: 1280, openai: 1024.
+                                       # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
+                                       bg_image_embedding_dim = self.id2ada_prompt_encoder.clip_embedding_dim, 
+                                       output_dim = out_emb_dim,
+                                       placeholder_is_bg = True,
+                                       prompt2token_proj_grad_scale = self.prompt2token_proj_grad_scale,
+                                       bg_prompt_translator_has_to_out_proj=False,
+                                       num_static_img_suffix_embs = 0)
+            else:
+                # The subject SubjBasisGenerator will be initialized in self.id2ada_prompt_encoder.
+                # If id2ada_prompt_encoder_type is 'jointIDs', then .subj_basis_generator is not a SubjBasisGenerator instance,
+                # but rather an nn.ModuleList of SubjBasisGenerator instances.
+                # Such an instance should not be called to get the adaface_subj_embs, but only be used for save/load.
+                subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
 
             self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, self.get_embeddings_for_tokens, 
-                                   subj_name_to_cls_delta_string, zs_cls_delta_string)
+                                   subj_name_to_cls_delta_string, cls_delta_string)
         self.init_subj_name_to_being_faces(subj_name_to_being_faces)
 
         self.layer_idx = -1
@@ -212,7 +218,7 @@ class EmbeddingManager(nn.Module):
         self.clear_prompt_adhoc_info()
         # 'recon_iter', 'unet_distill_iter', 'compos_distill_iter', 'empty'.
         self.iter_type = None       
-        self.set_curr_batch_subject_names(["zs_default"])
+        self.set_curr_batch_subject_names(["default"])
         self.set_curr_iter_type('recon_iter')
 
         self.loss_call_count = 0
@@ -231,11 +237,11 @@ class EmbeddingManager(nn.Module):
         self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
         self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
-        # zs_image_prompt_dict have two keys: 'subj', 'bg'.
-        # zs_image_prompt_dict['subj'] is the image prompt embs for the subject, which is ready to be used.
-        # zs_image_prompt_dict['bg'] is the clip features for the background, 
+        # image_prompt_dict have two keys: 'subj', 'bg'.
+        # image_prompt_dict['subj'] is the image prompt embs for the subject, which is ready to be used.
+        # image_prompt_dict['bg'] is the clip features for the background, 
         # which needs to be translated by a bg SubjBasisGenerator.
-        self.zs_image_prompt_dict = {}
+        self.image_prompt_dict = {}
 
         print("EmbeddingManager on subj={}, bg={} init with {} vec(s)".format(
                self.subject_strings, self.background_strings, self.token2num_vectors))
@@ -244,20 +250,20 @@ class EmbeddingManager(nn.Module):
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
-        if adaface_ckpt_path is not None:
-            self.load(adaface_ckpt_path,
-                      extend_prompt2token_proj_attention_multiplier,
-                      to_load_old_adaface_ckpt)
+        if adaface_ckpt_paths is not None:
+            # TODO: fix this Ad-hoc solution to handle the incosistent bg subj basis generator 
+            # weight sizes in the ckpt.
+            self.load(adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=True)
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
                               subj_name_to_cls_delta_string, 
-                              zs_cls_delta_string=None):
+                              cls_delta_string=None):
         if subj_name_to_cls_delta_string is None:
             subj_name_to_cls_delta_string = {}
-        if zs_cls_delta_string is not None:
-            # During inference, subj_name_to_cls_delta_string contains 'zs_default' as the subject name, and maps
-            # to zs_cls_delta_string, the default class delta string.
-            subj_name_to_cls_delta_string['zs_default'] = zs_cls_delta_string
+        if cls_delta_string is not None:
+            # During inference, subj_name_to_cls_delta_string contains 'default' as the subject name, and maps
+            # to cls_delta_string, the default class delta string.
+            subj_name_to_cls_delta_string['default'] = cls_delta_string
 
         # We don't know the gender of a rand_id_to_img_prompt subject.
         subj_name_to_cls_delta_string['rand_id_to_img_prompt'] = 'person'
@@ -292,7 +298,7 @@ class EmbeddingManager(nn.Module):
         self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
                                             else {subj_name: True for subj_name in self.subject_strings}
         self.subj_name_to_being_faces['rand_id_to_img_prompt'] = True
-        self.subj_name_to_being_faces['zs_default']            = True
+        self.subj_name_to_being_faces['default']            = True
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     # If self.use_layerwise_embedding, then each token expands to num_unet_ca_layers = 16 
@@ -333,7 +339,6 @@ class EmbeddingManager(nn.Module):
     
     # N: length of sequence (including padding).
     def get_static_embedding(self, tokenized_text, embedded_text, BS, N, num_unet_ca_layers):
-        
         # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
         # at that time.
         if self.rank == -1:
@@ -412,31 +417,36 @@ class EmbeddingManager(nn.Module):
             # The matrix operations are done on the fly.
             # subj_static_embedding: [16, K, 768].
             if placeholder_is_bg:
-                id2img_prompt_embs  = None
-                zs_clip_features    = self.zs_image_prompt_dict['bg']
+                clip_features        = self.image_prompt_dict['bg']
+                subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
+                                
+                # clip_features: [BS, 257, 1280]
+                # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
+                # NOTE: Static image suffix embeddings are used to adjust the student model to 
+                # match the pecularities of the teacher model. Its role is similar to background embeddings.
+                # used to match weird background objects in the images generated by the teacher model.
+                # If it's a recon_iter, there are few weird background objects in the groundtruth images,
+                # so we don't append the static image suffix embeddings.
+                adaface_subj_embs = \
+                        subj_basis_generator(faceid2img_prompt_embs=None,
+                                             clip_features=clip_features, raw_id_embs=None, 
+                                             out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
+                                             enable_static_img_suffix_embs=False)
             else:
                 # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
-                id2img_prompt_embs  = self.zs_image_prompt_dict['subj'] if self.curr_subj_is_face else None
-                zs_clip_features    = None
+                id2img_prompt_embs  = self.image_prompt_dict['subj'] if self.curr_subj_is_face else None
+                clip_features       = None
+                enable_static_img_suffix_embs = True #(self.iter_type == 'unet_distill_iter')
+                adaface_subj_embs   = self.id2ada_prompt_encoder.generate_adaface_embeddings(
+                                          image_paths=None, face_id_embs=None,
+                                          img_prompt_embs=id2img_prompt_embs,
+                                          avg_at_stage=None,
+                                          id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable,
+                                          enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                                        )
+                adaface_subj_embs = adaface_subj_embs.unsqueeze(1)
 
-            subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-                
-            # zs_clip_features: [BS, 257, 1280]
-            # adaface_subj_embs:   [BS, 16, 16, 768] if fg, or [BS,  16, 4, 768] if bg.
-            # NOTE: Static image suffix embeddings are used to adjust the student model to 
-            # match the pecularities of the teacher model. Its role is similar to background embeddings.
-            # used to match weird background objects in the images generated by the teacher model.
-            # If it's a recon_iter, there are few weird background objects in the groundtruth images,
-            # so we don't append the static image suffix embeddings.
-            enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
-            adaface_subj_embs, placeholder_adaface_prompt_embs = \
-                    subj_basis_generator(id2img_prompt_embs,
-                                            zs_clip_features, None, 
-                                            out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
-                                            is_training=self.training,
-                                            adaface_prompt_embs_inf_type='full_half_pad',
-                                            enable_static_img_suffix_embs=enable_static_img_suffix_embs)
-            
+            adaface_subj_embs = adaface_subj_embs.repeat(1, self.num_unet_ca_layers, 1, 1)
             # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
             # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
             # But adaface_subj_embs is generated from the subject-single instance only.
@@ -449,47 +459,6 @@ class EmbeddingManager(nn.Module):
             if not placeholder_is_bg:
                 # id2img_prompt_embs: [BS, 16, 768] or [BS, 4, 768] is the ID2ImgPrompt embeddings. 
                 self.id2img_embs = id2img_prompt_embs
-                if self.iter_type in ['compos_distill_iter']:
-                    assert placeholder_adaface_prompt_embs is not None
-
-            # NOTE: the condition iter_type == 'compos_distill_iter' is vital, as a recon_iter with delta loss 
-            # also has the 4-type prompt structure.
-            # But we should NEVER replace the subject-single embeddings with the frozen ones, 
-            # because these embeddings are used to reconstruct the noisy image, and if replaced,
-            # the model will learn nothing from the recon loss.
-            # One potential issue is the delta loss may slowly degrade the identity information in the embeddings.
-            # So we will replace the subject-single embeddings when computing the delta loss in ddpm.py later.
-            if self.training and not placeholder_is_bg and self.iter_type in ['compos_distill_iter']: #, 'recon_iter']:
-                # compos_distill_iter always has same_subject_in_batch == True. 
-                # So id2img_prompt_embs: [1, 512].
-                if id2img_prompt_embs.shape[0] != 1:
-                    breakpoint()
-                subj_basis_generator0 = self.frozen_string_to_subj_basis_generator_dict[placeholder_string]
-                with torch.no_grad():
-                    # adaface_subj_embs0: ID embeddings from the frozen subj_basis_generator.
-                    # This is to reduce overfitting of subj_basis_generator after it's been finetuned.
-                    adaface_subj_embs0, placeholder_adaface_prompt_embs0 = \
-                            subj_basis_generator0(id2img_prompt_embs, zs_clip_features, None, 
-                                                    out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
-                                                    is_training=self.training,
-                                                    adaface_prompt_embs_inf_type='full_half_pad')
-                    
-                # adaface_subj_embs0: [1, 16, 16, 768] -> [2, 16, 16, 768].
-                adaface_subj_embs0 = adaface_subj_embs0.repeat(REAL_OCCURS_IN_BATCH // 2, 1, 1, 1)
-                # adaface_subj_embs0: [2, 16, 16, 768] -> [32, 16, 768].
-                self.adaface_subj_embs0 = rearrange(adaface_subj_embs0, 'b l k d -> (b l) k d').contiguous()
-                # Only replace the subject-single embeddings in the compos_distill_iter.
-                # Replace the the subj-single embeddings with frozen subject embeddings, which is the first 1/4
-                # of the whole batch, i.e., the first REAL_OCCURS_IN_BATCH // 2 embeddings.
-                if self.iter_type == 'compos_distill_iter':
-                    NUM_HALF_SUBJS = REAL_OCCURS_IN_BATCH // 2
-                    # Still allow a small inference from the updated subj-single embeddings, 
-                    # maybe this will make the images more natural?
-                    adaface_subj_embs[:NUM_HALF_SUBJS] = adaface_subj_embs0.to(adaface_subj_embs.dtype) * 0.9 \
-                                                        + adaface_subj_embs[:NUM_HALF_SUBJS] * 0.1
-                    
-                    if self.rank == 0:
-                        print(f"compos_distill_iter. Replace the first {REAL_OCCURS_IN_BATCH // 2} embeddings with the frozen embeddings.")
 
             # subj_static_embedding is adaface_subj_embs reshaped.
             subj_static_embedding = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d').contiguous()
@@ -625,7 +594,7 @@ class EmbeddingManager(nn.Module):
                 
         # During training, we get the current subject name from self.curr_batch_subj_names, then map to 
         # curr_subj_is_face. 
-        # During inference, curr_batch_subj_names = ['zs_default'], which maps to True in subj_name_to_being_faces,
+        # During inference, curr_batch_subj_names = ['default'], which maps to True in subj_name_to_being_faces,
         # so curr_subj_is_face == True.
         # BUG: if there are multiple subjects in the same batch, then is_face is only 
         # about the first subject. But now we only support one subject in a batch.
@@ -684,13 +653,13 @@ class EmbeddingManager(nn.Module):
             print(f"training perturbance std range: {training_begin_perturb_std_range}-{training_end_perturb_std_range}"
                   f", with prob = {training_perturb_prob}")
 
-    def set_zs_image_prompts_and_features(self, id2img_prompt_embs, zs_clip_bg_features):
+    def set_image_prompts_and_features(self, id2img_prompt_embs, clip_bg_features):
         # id2img_prompt_embs: [1, 16, 768] or [1, 4, 768].
-        # zs_clip_bg_features: [1, 257, 1280].
+        # clip_bg_features: [1, 257, 1280].
 
-        self.zs_image_prompt_dict = { 'subj': id2img_prompt_embs,
-                                      'bg':   zs_clip_bg_features,
-                                    }
+        self.image_prompt_dict = { 'subj': id2img_prompt_embs,
+                                   'bg':   clip_bg_features,
+                                 }
 
         # Clear the saved subj_embs.
         self.static_subj_embs_dict = {}
@@ -701,7 +670,7 @@ class EmbeddingManager(nn.Module):
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, adaface_ckpt_path):
-        saved_dict = { "string_to_subj_basis_generator_dict":   self.string_to_subj_basis_generator_dict,
+        saved_dict = {  "string_to_subj_basis_generator_dict":  self.string_to_subj_basis_generator_dict,
                         "token2num_vectors":                    self.token2num_vectors,
                         "placeholder_strings":                  self.placeholder_strings,
                         "subject_strings":                      self.subject_strings,
@@ -718,7 +687,7 @@ class EmbeddingManager(nn.Module):
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, adaface_ckpt_paths, extend_prompt2token_proj_attention_multiplier=1, to_load_old_adaface_ckpt=False):
+    def load(self, adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=False):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
@@ -727,8 +696,8 @@ class EmbeddingManager(nn.Module):
         self.subject_strings                = []
         self.background_strings             = []
 
-        if isinstance(adaface_ckpt_paths, str):
-            adaface_ckpt_paths = [adaface_ckpt_paths]
+        # Load fg SubjBasisGenerators through id2ada_prompt_encoder.
+        self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths)
 
         for adaface_ckpt_path in adaface_ckpt_paths:
             ckpt_path_parts = adaface_ckpt_path.split(":")
@@ -754,154 +723,58 @@ class EmbeddingManager(nn.Module):
                 self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
             for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
-                ret = None
-                # repr(ckpt_subj_basis_generator) will assign missing variables to ckpt_subj_basis_generator.
-                if to_load_old_adaface_ckpt:
-                    print(f"Loading ckpt_subj_basis_generator {km}")
-                else:
-                    print(f"Loading {repr(ckpt_subj_basis_generator)}")
-
-                # self.string_to_subj_basis_generator_dict[km] is either not initialized, or initialized with a smaller depth.
-                # Then replace it with the one in ckpt.
-                # print(f"Overwrite {repr(self.string_to_subj_basis_generator_dict[km])}")
-                ckpt_subj_basis_generator.face_proj_in = None
-                # If old ckpts don't have num_static_img_suffix_embs, set it to 0.
-                if not hasattr(ckpt_subj_basis_generator, "num_static_img_suffix_embs"):
-                    ckpt_subj_basis_generator.num_static_img_suffix_embs = 0
-                    ckpt_subj_basis_generator.static_img_suffix_embs = None
-
                 if ckpt_subj_basis_generator.placeholder_is_bg:
-                    curr_num_static_img_suffix_embs = 0
+                    print(f"Loading {repr(ckpt_subj_basis_generator)}")
+                    if not skip_loading_bg_subj_basis_generator:
+                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
+                        if ret is not None and len(ret.missing_keys) > 0:
+                            print(f"Missing keys: {ret.missing_keys}")
+                        if ret is not None and len(ret.unexpected_keys) > 0:
+                            print(f"Unexpected keys: {ret.unexpected_keys}")
+                # Since we load fg SubjBasisGenerators through id2ada_prompt_encoder, we skip loading them here.
                 else:
-                    curr_num_static_img_suffix_embs = self.string_to_subj_basis_generator_dict[km].num_static_img_suffix_embs
-
-                if to_load_old_adaface_ckpt:
-                    # Delete lora2hira, latent_queries and layers, as lora2hira and layers belong to 
-                    # old ckpts, and latent_queries has different shapes.
-                    ckpt_subj_basis_generator.lora2hira = None
-                    ckpt_subj_basis_generator.latent_queries = None
-                    ckpt_subj_basis_generator.latent_query_lns = None
-                    ckpt_subj_basis_generator.layers = None
-                    ckpt_subj_basis_generator.obj_proj_in = None
-                    ckpt_subj_basis_generator.proj_in = None
-                    ckpt_subj_basis_generator.pos_embs = None
-                    ckpt_subj_basis_generator.num_static_img_suffix_embs = curr_num_static_img_suffix_embs
-
-                    self.string_to_subj_basis_generator_dict[km] = ckpt_subj_basis_generator
-                    # If curr_num_static_img_suffix_embs is different with num_static_img_suffix_embs in the ckpt,
-                    # ckpt_subj_basis_generator.static_img_suffix_embs will be adjusted to the correct size 
-                    # in patch_old_subj_basis_generator_ckpt().
-                    self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
-                    self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
                     continue
 
-                # Compatible with older ckpts which only have per-layer hidden_state_layer_weights.
-                if (not ckpt_subj_basis_generator.placeholder_is_bg) \
-                    and ckpt_subj_basis_generator.hidden_state_layer_weights.shape[-1] != self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1]:
-                    if self.string_to_subj_basis_generator_dict[km].hidden_state_layer_weights.shape[-1] == 1:
-                        # hidden_state_layer_weights: [3, 768] -> [3, 1]
-                        ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.mean(dim=1, keepdim=True))
-                        print(f"Average along features: hidden_state_layer_weights -> {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
+            if "placeholder_strings" in ckpt:
+                for token_idx, km in enumerate(ckpt["placeholder_strings"]):
+                    # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
+                    if (placeholder_mapper is not None) and (km in placeholder_mapper):
+                        km2 = placeholder_mapper[km]
                     else:
-                        # hidden_state_layer_weights: [3, 1] -> [3, 768]
-                        ckpt_subj_basis_generator.hidden_state_layer_weights = nn.Parameter(ckpt_subj_basis_generator.hidden_state_layer_weights.repeat(1, 768))
-                        print(f"Expand along features:  hidden_state_layer_weights -> {ckpt_subj_basis_generator.hidden_state_layer_weights.shape}")
+                        km2 = km
 
-                # ckpt_subj_basis_generator.prompt2token_proj hasn't been extended. 
-                # So only extend self.string_to_subj_basis_generator_dict[km] after loading the state_dict.
-                # This should happen only during training, not inference. 
-                # Therefore, whether perturb_std is 0 or not doesn't really matter the inference result.
-                if ckpt_subj_basis_generator.placeholder_is_bg:
-                    ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-                else:
-                    ckpt_prompt2token_proj_attention_multipliers = ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers
-                    # Fix old ckpt bug of having negative attention multipliers.
-                    ckpt_prompt2token_proj_attention_multipliers = [ m if m > 0 else 1 for m in ckpt_prompt2token_proj_attention_multipliers ]
-                    self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
-                        ckpt_prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)
-                    # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
-                    if curr_num_static_img_suffix_embs != ckpt_subj_basis_generator.num_static_img_suffix_embs:
-                        if curr_num_static_img_suffix_embs == 0 or curr_num_static_img_suffix_embs > ckpt_subj_basis_generator.num_static_img_suffix_embs:
-                            # The current model has more static_img_suffix_embs than the old ckpt, or has no static_img_suffix_embs.
-                            # So we skip loading the static_img_suffix_embs from the ckpt.
-                            ckpt_subj_basis_generator.static_img_suffix_embs = None
-                        else:
-                            # The old ckpt has more static_img_suffix_embs than the current model.
-                            # So we need to remove the extra static_img_suffix_embs from the ckpt before loading.
-                            ckpt_subj_basis_generator.static_img_suffix_embs = ckpt_subj_basis_generator.static_img_suffix_embs[:, :curr_num_static_img_suffix_embs]
+                    try:
+                        k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
+                    except:
+                        breakpoint()
+                    if km2 in self.string_to_token_dict:
+                        if km2 in self.background_strings:
+                            print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
+                            continue
 
-                    ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-                    # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, extend the prompt2token_proj.
-                    if extend_prompt2token_proj_attention_multiplier > 1:
-                        # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
-                        # During training,  zs_prompt2token_proj_ext_attention_perturb_ratio == 0.1.
-                        # During inference, zs_prompt2token_proj_ext_attention_perturb_ratio == 0.
-                        # All CLIP encoder layers are 0-11. 
-                        # 0, 6: extend the first 6 layers 0-5 (not including layer 6).
-                        # 0, 3: extend the first 3 layers 0-2 (not including layer 3).
-                        self.string_to_subj_basis_generator_dict[km].extend_prompt2token_proj_attention(\
-                            None, -1, -1, extend_prompt2token_proj_attention_multiplier,
-                            perturb_std=self.zs_prompt2token_proj_ext_attention_perturb_ratio)
+                        raise ValueError(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}")
 
-                if ret is not None and len(ret.missing_keys) > 0:
-                    print(f"Missing keys: {ret.missing_keys}")
-                if ret is not None and len(ret.unexpected_keys) > 0:
-                    print(f"Unexpected keys: {ret.unexpected_keys}")
+                    # Merge the (possibly substituted) subject strings from the ckpt with 
+                    # self.subject_strings and self.background_strings.
+                    if km in ckpt_background_strings:
+                        self.background_strings = list(set(self.background_strings + [km2]))
+                        print("Add background string", km2)
+                    elif km not in self.background_strings:
+                        # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
+                        # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
+                        self.subject_strings = list(set(self.subject_strings + [km2]))
+                        print("Add subject string", km2)
 
-                # Fix missing variables in the old ckpt.
-                self.string_to_subj_basis_generator_dict[km].patch_old_subj_basis_generator_ckpt()
-                self.string_to_subj_basis_generator_dict[km].freeze_prompt2token_proj()
+                    # The mapping in string_to_token_dict is determined by the tokenizer. 
+                    # Shouldn't do the km->km2 mapping on string_to_token_dict.
+                    self.string_to_token_dict[km2] = k2_token
 
-                if "id2img_prompt_encoder_learnable_modules" in ckpt:
-                    if self.to_load_id2img_learnable_modules:
-                        self.id2ada_prompt_encoder.load_id2img_learnable_modules(ckpt["id2img_prompt_encoder_learnable_modules"])
-                    else:
-                        print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
+                    if km in ckpt["token2num_vectors"]:
+                        token2num_vectors[km2] = ckpt["token2num_vectors"][km]
 
-                if self.training:
-                    # make_frozen_copy_of_subj_basis_generators() make a frozen copy of the original subj_basis_generators, 
-                    # which is used to generate the subject embeddings for subject-single prompts.
-                    self.make_frozen_copy_of_subj_basis_generators()
-
-            for token_idx, km in enumerate(ckpt["placeholder_strings"]):
-                # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
-                if (placeholder_mapper is not None) and (km in placeholder_mapper):
-                    km2 = placeholder_mapper[km]
-                else:
-                    km2 = km
-
-                try:
-                    k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
-                except:
-                    breakpoint()
-                if km2 in self.string_to_token_dict:
-                    if km2 in self.background_strings:
-                        print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
-                        continue
-
-                    raise ValueError(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}")
-
-                # Merge the (possibly substituted) subject strings from the ckpt with 
-                # self.subject_strings and self.background_strings.
-                if km in ckpt_background_strings:
-                    self.background_strings = list(set(self.background_strings + [km2]))
-                    print("Add background string", km2)
-                elif km not in self.background_strings:
-                    # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
-                    # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
-                    self.subject_strings = list(set(self.subject_strings + [km2]))
-                    print("Add subject string", km2)
-
-                # The mapping in string_to_token_dict is determined by the tokenizer. 
-                # Shouldn't do the km->km2 mapping on string_to_token_dict.
-                self.string_to_token_dict[km2] = k2_token
-
-                if km in ckpt["token2num_vectors"]:
-                    token2num_vectors[km2] = ckpt["token2num_vectors"][km]
-
-                print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
+                    print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
-            if "token2num_vectors" in ckpt and not self.skip_loading_token2num_vectors:
+            if "token2num_vectors" in ckpt and self.loading_token2num_vectors_from_ckpt:
                 self.set_num_vectors_per_subj_token(token2num_vectors)
 
         self.placeholder_strings = self.subject_strings + self.background_strings
@@ -910,15 +783,6 @@ class EmbeddingManager(nn.Module):
         # in case subject_strings or background_strings have been changed.
         self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.background_string_dict = { s: True for s in self.background_strings }
-
-    # make_frozen_copy_of_subj_basis_generators() is only used during training, to generate the subject embeddings for subject-single prompts.
-    def make_frozen_copy_of_subj_basis_generators(self, dtype=torch.float16):
-        # frozen_string_to_subj_basis_generator_dict won't be returned by optimized_parameters(),
-        # so it won't be updated.
-        self.frozen_string_to_subj_basis_generator_dict = copy.deepcopy(self.string_to_subj_basis_generator_dict)
-        # Convert the frozen copy of subj_basis_generators to float16 to save RAM.
-        self.frozen_string_to_subj_basis_generator_dict.to(dtype=dtype)
-        print("Made a frozen copy of subj_basis_generators")
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
