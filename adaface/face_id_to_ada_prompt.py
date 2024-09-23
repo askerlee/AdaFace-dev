@@ -11,7 +11,7 @@ import numpy as np
 import cv2
 from PIL import Image
 from insightface.app import FaceAnalysis
-import os, copy
+import os
 from omegaconf.listconfig import ListConfig
 
 # adaface_encoder_types can be a list of one or more encoder types.
@@ -142,7 +142,7 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator.extend_prompt2token_proj_attention(\
             ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)
         ret = self.subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-        print(f"{adaface_ckpt_path}: loaded subject basis generator for '{self.subject_string}'.")
+        print(f"{adaface_ckpt_path}: subject basis generator loaded for '{self.name}'.")
         print(repr(ckpt_subj_basis_generator))
 
         if ret is not None and len(ret.missing_keys) > 0:
@@ -877,6 +877,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                         perturb_std=self.prompt2token_proj_ext_attention_perturb_ratio)
 
                 subj_basis_generator.freeze_prompt2token_proj()
+
+            print(f"{adaface_ckpt_paths}: {len(self.subj_basis_generator)} subj_basis_generators loaded for {self.name}.")
 
         elif isinstance(adaface_ckpt_paths, (list, tuple, ListConfig)):
             for i, ckpt_path in enumerate(adaface_ckpt_paths):

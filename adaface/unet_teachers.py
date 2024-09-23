@@ -4,7 +4,35 @@ import pytorch_lightning as pl
 from diffusers import UNet2DConditionModel
 from adaface.util import UNetEnsemble, create_consistentid_pipeline
 from diffusers import UNet2DConditionModel
+from omegaconf.listconfig import ListConfig
 
+def create_unet_teacher(teacher_type, device, **kwargs):
+    # If teacher_type is a list with only one element, we dereference it.
+    if isinstance(teacher_type, (tuple, list, ListConfig)) and len(teacher_type) == 1:
+        teacher_type = teacher_type[0]
+
+    if teacher_type == "arc2face":
+        return Arc2FaceTeacher(**kwargs)
+    elif teacher_type == "unet_ensemble":
+        # unet, extra_unet_paths and unet_weights are passed in kwargs.
+        # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
+        # arc2face embeddings.
+        # The first (optional) ctor param of UNetEnsembleTeacher is an instantiated unet, 
+        # in our case, the ddpm unet. Ideally we should reuse it to save GPU RAM.
+        # However, since the __call__ method of the ddpm unet takes different formats of params, 
+        # for simplicity, we still use the diffusers unet.
+        # unet_teacher is put on CPU first, then moved to GPU when DDPM is moved to GPU.
+        return UNetEnsembleTeacher(device=device, **kwargs)
+    elif teacher_type == "consistentID":
+        return ConsistentIDTeacher(**kwargs)
+    # Since we've dereferenced the list if it has only one element, 
+    # this holding implies the list has more than one element. Therefore it's UNetEnsembleTeacher.
+    elif isinstance(teacher_type, (tuple, list, ListConfig)):
+        # teacher_type is a list of teacher types. So it's UNetEnsembleTeacher.
+        return UNetEnsembleTeacher(unet_types=teacher_type, device=device, **kwargs)
+    else:
+        raise NotImplementedError(f"Teacher type {teacher_type} not implemented.")
+    
 class UNetTeacher(pl.LightningModule):
     def __init__(self, **kwargs):
         super().__init__()
@@ -13,7 +41,8 @@ class UNetTeacher(pl.LightningModule):
         self.unet = None
         self.p_uses_cfg      = kwargs.get("p_uses_cfg", 0)
         # self.cfg_scale will be randomly sampled from cfg_scale_range.
-        self.cfg_scale_range = kwargs.get("cfg_scale_range", [2, 4])
+        self.cfg_scale_range = kwargs.get("cfg_scale_range", [1.3, 2])
+        # Initialize cfg_scale to 1. It will be randomly sampled during forward pass.
         self.cfg_scale       = 1
         if self.p_uses_cfg > 0:
             print(f"Using CFG with probability {self.p_uses_cfg} and scale range {self.cfg_scale_range}.")
@@ -132,6 +161,7 @@ class Arc2FaceTeacher(UNetTeacher):
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
                     )
+        self.cfg_scale_range = [1, 1]
 
 class UNetEnsembleTeacher(UNetTeacher):
     # unet_weights are not model weights, but scalar weights for individual unets.
@@ -154,32 +184,3 @@ class ConsistentIDTeacher(UNetTeacher):
         # Release VAE and text_encoder to save memory. UNet is still needed for denoising 
         # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
         pipe.release_components(["vae", "text_encoder"])
-
-def create_unet_teacher(teacher_type, device, **kwargs):
-    # If teacher_type is a list with only one element, we dereference it.
-    if isinstance(teacher_type, (tuple, list)) and len(teacher_type) == 1:
-        teacher_type = teacher_type[0]
-
-    if teacher_type == "arc2face":
-        return Arc2FaceTeacher(**kwargs)
-    elif teacher_type == "unet_ensemble":
-        # unet, extra_unet_paths and unet_weights are passed in kwargs.
-        # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
-        # arc2face embeddings.
-        # The first (optional) ctor param of UNetEnsembleTeacher is an instantiated unet, 
-        # in our case, the ddpm unet. Ideally we should reuse it to save GPU RAM.
-        # However, since the __call__ method of the ddpm unet takes different formats of params, 
-        # for simplicity, we still use the diffusers unet.
-        # unet_teacher is put on CPU first, then moved to GPU when DDPM is moved to GPU.
-        return UNetEnsembleTeacher(device=device, **kwargs)
-    elif teacher_type == "consistentID":
-        return ConsistentIDTeacher(**kwargs)
-    # Since we've dereferenced the list if it has only one element, 
-    # this holding implies the list has more than one element. Therefore it's UNetEnsembleTeacher.
-    elif isinstance(teacher_type, (tuple, list)):
-        # teacher_type is a list of teacher types. So it's UNetEnsembleTeacher.
-        return UNetEnsembleTeacher(unet_types=teacher_type, device=device, **kwargs)
-    else:
-        breakpoint()
-        raise NotImplementedError(f"Teacher type {teacher_type} not implemented.")
-    
