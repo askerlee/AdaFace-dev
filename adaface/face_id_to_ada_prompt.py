@@ -77,12 +77,8 @@ class FaceID2AdaPrompt(nn.Module):
         # If there's no static image suffix embeddings, then num_id_vecs is also
         # the number of ada embeddings returned by the subject basis generator.
         # num_id_vecs will be set in each derived class.
-        self.num_id_vecs                    = -1
         self.num_static_img_suffix_embs     = kwargs.get('num_static_img_suffix_embs', 0)
-        if self.num_static_img_suffix_embs > 0:
-            print(f'Adaface uses {self.num_static_img_suffix_embs} fixed image embeddings as input.')
-        else:
-            print(f'Adaface uses only pos ID image embeddings as input.')
+        print(f'{self.name} Adaface uses {self.num_id_vecs} ID image embeddings and {self.num_static_img_suffix_embs} fixed image embeddings as input.')
 
         self.id_img_prompt_max_length       = 77
         self.face_id_dim                    = 512
@@ -90,7 +86,6 @@ class FaceID2AdaPrompt(nn.Module):
         # Could be overridden by derived classes.
         self.clip_embedding_dim             = 1024
         self.output_dim                     = 768
-        self.name                           = None
 
     def get_id2img_learnable_modules(self):
         raise NotImplementedError
@@ -573,6 +568,9 @@ class FaceID2AdaPrompt(nn.Module):
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, *args, **kwargs):
+        self.name = 'arc2face'
+        self.num_id_vecs = 16
+
         super().__init__(*args, **kwargs)
 
         self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained('openai/clip-vit-large-patch14')
@@ -613,11 +611,9 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         # bg CLIP features are used by the bg subject basis generator.
         self.use_clip_embs                  = True
         self.do_contrast_clip_embs_on_bg_features   = True
-        self.num_id_vecs                    = 16
         # self.num_static_img_suffix_embs is initialized in the parent class.
         self.id_img_prompt_max_length       = 22
         self.clip_embedding_dim             = 1024
-        self.name                           = 'arc2face'
 
         self.init_subj_basis_generator()
         if self.adaface_ckpt_path is not None:
@@ -680,6 +676,9 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, pipe=None, base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
                  *args, **kwargs):
+        self.name = 'consistentID'
+        self.num_id_vecs = 4
+        
         super().__init__(*args, **kwargs)
         if pipe is None:
             # The base_model_path is kind of arbitrary, as the UNet and VAE in the model 
@@ -717,7 +716,6 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         if self.out_id_embs_cfg_scale == -1:
             self.out_id_embs_cfg_scale = 6
         #### ConsistentID pipeline specific configs ####
-        self.num_id_vecs                    = 4
         # self.num_static_img_suffix_embs is initialized in the parent class.
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
@@ -725,7 +723,6 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
-        self.name                           = 'consistentID'
 
         self.init_subj_basis_generator()
         if self.adaface_ckpt_path is not None:
@@ -778,12 +775,15 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
 class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, adaface_encoder_types, adaface_ckpt_paths, 
                  adaface_encoder_scales, *args, **kwargs):
-        
-        super().__init__(*args, **kwargs)
+        self.name = 'jointIDs'        
         assert len(adaface_encoder_types) > 0, "adaface_encoder_types should not be empty."
-
+        adaface_encoder_types2num_id_vecs = { 'arc2face': 16, 'consistentID': 4 }
+        self.encoders_num_id_vecs = [ adaface_encoder_types2num_id_vecs[encoder_type] \
+                                      for encoder_type in adaface_encoder_types ]
+        self.num_id_vecs = sum(self.encoders_num_id_vecs)
+        super().__init__(*args, **kwargs)
+        
         self.id2ada_prompt_encoders = nn.ModuleList()
-        self.encoders_num_id_vecs = []
         self.encoders_num_static_img_suffix_embs = []
 
         # TODO: apply adaface_encoder_scales to influence the final prompt embeddings.
@@ -809,7 +809,6 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             self.encoders_num_id_vecs.append(encoder.num_id_vecs)
             self.encoders_num_static_img_suffix_embs.append(encoder.num_static_img_suffix_embs)
 
-        self.num_id_vecs                    = sum(self.encoders_num_id_vecs)
         self.num_static_img_suffix_embs     = sum(self.encoders_num_static_img_suffix_embs)
         self.gen_neg_img_prompt             = True
         self.use_clip_embs                  = True
@@ -833,7 +832,6 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         if adaface_ckpt_paths is not None:
             self.load_adaface_ckpt(adaface_ckpt_paths)
 
-        self.name                           = 'jointIDs'
         print(f"{self.name} ada prompt encoder initialized, "
               f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}.")
 
