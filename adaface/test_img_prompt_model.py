@@ -77,7 +77,7 @@ if __name__ == "__main__":
     # When the second argument, adaface_ckpt_path = None, create_id2ada_prompt_encoder()
     # returns an id2ada_prompt_encoder object, with .subj_basis_generator uninitialized.
     # But it doesn't matter, as we don't use the subj_basis_generator to generate ada embeddings.
-    id2img_prompt_encoder = create_id2ada_prompt_encoder(args.id2img_prompt_encoder_type,
+    id2img_prompt_encoder = create_id2ada_prompt_encoder([args.id2img_prompt_encoder_type],
                                                          num_static_img_suffix_embs=0)
     id2img_prompt_encoder.to('cuda')
 

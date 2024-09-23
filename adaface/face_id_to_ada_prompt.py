@@ -21,14 +21,15 @@ def create_id2ada_prompt_encoder(adaface_encoder_types, adaface_ckpt_paths=None,
                                  adaface_encoder_scales=None, *args, **kwargs):
     if len(adaface_encoder_types) == 1:
         adaface_encoder_type = adaface_encoder_types[0]
+        adaface_ckpt_path = adaface_ckpt_paths[0] if adaface_ckpt_paths is not None else None
         if adaface_encoder_type == 'arc2face':
             id2ada_prompt_encoder = \
-                Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_paths[0], 
+                Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path, 
                                     *args, **kwargs)
         elif adaface_encoder_type == 'consistentID':
             id2ada_prompt_encoder = \
                 ConsistentID_ID2AdaPrompt(pipe=None,
-                                        adaface_ckpt_path=adaface_ckpt_paths[0], 
+                                        adaface_ckpt_path=adaface_ckpt_path, 
                                         *args, **kwargs)
     else:
         id2ada_prompt_encoder = Joint_FaceID2AdaPrompt(adaface_encoder_types, adaface_ckpt_paths, 
