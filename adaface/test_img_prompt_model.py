@@ -163,17 +163,18 @@ if __name__ == "__main__":
         # For arc2face, id_prompt_emb can be either pre- or post-pended.
         # But for ConsistentID, id_prompt_emb has to be **post-pended**. Otherwise, the result images are blank.
 
+        full_negative_prompt_embeds_ = negative_prompt_embeds_
         if args.truncate_prompt_at >= 0:
             prompt_embeds_ = prompt_embeds_[:, :args.truncate_prompt_at]
             negative_prompt_embeds_ = negative_prompt_embeds_[:, :args.truncate_prompt_at]
             
         prompt_embeds_ = torch.cat([prompt_embeds_, id_prompt_emb], dim=1)
         M = id_prompt_emb.shape[1]
-
+        
         if (not use_teacher_neg) or neg_id_prompt_emb is None:
             # For arc2face, neg_id_prompt_emb is None. So we concatenate the last M negative prompt embeddings,
             # to make the negative prompt embeddings have the same length as the prompt embeddings.
-            negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, negative_prompt_embeds_[:, -M:]], dim=1)
+            negative_prompt_embeds_ = torch.cat([negative_prompt_embeds_, full_negative_prompt_embeds_[:, -M:]], dim=1)
         else:
             # NOTE: For ConsistentID, neg_id_prompt_emb has to be present in the negative prompt embeddings.
             # Otherwise, the result images are cartoonish.
@@ -182,7 +183,7 @@ if __name__ == "__main__":
         if args.use_core_only:
             prompt_embeds_ = id_prompt_emb
             if (not use_teacher_neg) or neg_id_prompt_emb is None:
-                negative_prompt_embeds_ = negative_prompt_embeds_[:, :M]
+                negative_prompt_embeds_ = full_negative_prompt_embeds_[:, :M]
             else:
                 negative_prompt_embeds_ = neg_id_prompt_emb
 
