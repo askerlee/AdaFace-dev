@@ -82,6 +82,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  p_unet_teacher_uses_cfg=0,
                  unet_teacher_cfg_scale_range=[1.5, 3],
+                 p_unet_distill_uses_comp_prompt=0.1,
                  id2img_prompt_encoder_trainable=False,
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_paths=None,
@@ -126,6 +127,13 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_types                     = list(unet_teacher_types) if unet_teacher_types is not None else None
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
+        # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+        # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
+        # never use the compositional prompts as the distillation target of arc2face.
+        # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
+        # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
+        self.p_unet_distill_uses_comp_prompt        = p_unet_distill_uses_comp_prompt \
+                                                        if self.unet_teacher_types != ['arc2face'] else 0
         self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
         self.extra_unet_paths                       = extra_unet_paths
@@ -338,8 +346,8 @@ class DDPM(pl.LightningModule):
                             'do_mix_prompt_distillation':   False,
                             'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
                             'do_ada_prompt_delta_reg':      False,
-                            # 'do_comp_teacher_filter':        False,
-                            # 'is_teachable':             False,
+                            # 'do_comp_teacher_filter':     False,
+                            # 'is_teachable':               False,
                             'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
                             'use_fp_trick':                 False,
@@ -1138,18 +1146,16 @@ class LatentDiffusion(DDPM):
             # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
             num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
-            if self.unet_teacher_types != ['arc2face']:
-                p_unet_distill_uses_comp_prompt = 0.2
 
-                # Use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
-                if random.random() < p_unet_distill_uses_comp_prompt:
-                    captions = batch[SUBJ_PROMPT_COMP]
-                    #print(captions)
-                    self.iter_flags['unet_distill_uses_comp_prompt'] = True
-            else:
-                # If only 'arc2face' is in unet_teacher_types, then we never use the compositional prompts.
-                # Because arc2face ignores any compositional prompts.
-                self.iter_flags['unet_distill_uses_comp_prompt'] = False
+            # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+            # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
+            # never use the compositional prompts as the distillation target of arc2face.
+            # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
+            # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
+            if random.random() < self.p_unet_distill_uses_comp_prompt:
+                captions = batch[SUBJ_PROMPT_COMP]
+                #print(captions)
+                self.iter_flags['unet_distill_uses_comp_prompt'] = True
 
             if num_denoising_steps > 1:
                 # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
