@@ -59,7 +59,7 @@ class EmbeddingManager(nn.Module):
             training_begin_perturb_std_range=None,
             training_end_perturb_std_range=None,
             training_perturb_prob=None,
-            id2ada_prompt_encoder_type='arc2face',
+            id2ada_prompt_encoder_types=['arc2face'],
             id2img_prompt_encoder_trainable=False,
             to_load_id2img_learnable_modules=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
@@ -152,7 +152,7 @@ class EmbeddingManager(nn.Module):
         self.prompt2token_proj_ext_attention_perturb_ratio = prompt2token_proj_ext_attention_perturb_ratio
         # The embedding manager is primarily used during training, so we set is_training=True.
         self.id2ada_prompt_encoder = \
-            create_id2ada_prompt_encoder(id2ada_prompt_encoder_type, 
+            create_id2ada_prompt_encoder(id2ada_prompt_encoder_types, 
                                          num_static_img_suffix_embs=num_static_img_suffix_embs,
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
@@ -201,7 +201,8 @@ class EmbeddingManager(nn.Module):
                                        num_static_img_suffix_embs = 0)
             else:
                 # The subject SubjBasisGenerator will be initialized in self.id2ada_prompt_encoder.
-                # If id2ada_prompt_encoder_type is 'jointIDs', then .subj_basis_generator is not a SubjBasisGenerator instance,
+                # If id2ada_prompt_encoder_types contains multiple encoders (i.e, an actual type of 'jointIDs')
+                # then .subj_basis_generator is not a SubjBasisGenerator instance,
                 # but rather an nn.ModuleList of SubjBasisGenerator instances.
                 # Such an instance should not be called to get the adaface_subj_embs, but only be used for save/load.
                 subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator

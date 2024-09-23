@@ -338,7 +338,7 @@ def main(opt):
             config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
         # Currently embedding manager only supports one type of prompt encoder.
-        config.model.params.personalization_config.params.id2ada_prompt_encoder_type       = opt.adaface_encoder_types[0]
+        config.model.params.personalization_config.params.id2ada_prompt_encoder_types = opt.adaface_encoder_types
 
         opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")

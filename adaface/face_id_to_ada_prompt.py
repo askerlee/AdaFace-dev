@@ -14,25 +14,25 @@ from insightface.app import FaceAnalysis
 import os, copy
 from omegaconf.listconfig import ListConfig
 
-# adaface_encoder_type can be one or a list of encoder types.
+# adaface_encoder_types can be a list of one or more encoder types.
 # adaface_ckpt_paths can be one or a list of ckpt paths.
 # adaface_encoder_scales is None, or a list of scales for the adaface encoder types.
-def create_id2ada_prompt_encoder(adaface_encoder_type, adaface_ckpt_paths=None, 
+def create_id2ada_prompt_encoder(adaface_encoder_types, adaface_ckpt_paths=None, 
                                  adaface_encoder_scales=None, *args, **kwargs):
-    if isinstance(adaface_encoder_type, (list, tuple, ListConfig)):
-        id2ada_prompt_encoder = Joint_FaceID2AdaPrompt(adaface_encoder_type, adaface_ckpt_paths, 
-                                                       adaface_encoder_scales, *args, **kwargs)
-    elif adaface_encoder_type == 'arc2face':
-        id2ada_prompt_encoder = \
-            Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_paths[0], 
-                                  *args, **kwargs)
-    elif adaface_encoder_type == 'consistentID':
-        id2ada_prompt_encoder = \
-            ConsistentID_ID2AdaPrompt(pipe=None,
-                                      adaface_ckpt_path=adaface_ckpt_paths[0], 
-                                      *args, **kwargs)
+    if len(adaface_encoder_types) == 1:
+        adaface_encoder_type = adaface_encoder_types[0]
+        if adaface_encoder_type == 'arc2face':
+            id2ada_prompt_encoder = \
+                Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_paths[0], 
+                                    *args, **kwargs)
+        elif adaface_encoder_type == 'consistentID':
+            id2ada_prompt_encoder = \
+                ConsistentID_ID2AdaPrompt(pipe=None,
+                                        adaface_ckpt_path=adaface_ckpt_paths[0], 
+                                        *args, **kwargs)
     else:
-        breakpoint()
+        id2ada_prompt_encoder = Joint_FaceID2AdaPrompt(adaface_encoder_types, adaface_ckpt_paths, 
+                                                       adaface_encoder_scales, *args, **kwargs)
     
     return id2ada_prompt_encoder
 
