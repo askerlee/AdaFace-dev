@@ -259,13 +259,7 @@ class AdaFaceWrapper(nn.Module):
         prompt = re.sub(r'\b' + self.subject_string + r'\b,?', "", prompt)
         
         for i, placeholder_tokens_str in enumerate(self.placeholder_tokens_strs):
-            adaface_encoder_type = self.adaface_encoder_types[i]
-            if adaface_encoder_type == "arc2face":
-                # arc2face     ada embeddings work better when they are at the beginning of the prompt.
-                prompt = placeholder_tokens_str + " " + prompt
-            elif adaface_encoder_type == "consistentID":
-                # consistentID ada embeddings work better when they are at the end       of the prompt.
-                prompt = prompt + " " + placeholder_tokens_str
+            prompt = prompt + " " + placeholder_tokens_str
 
         return prompt
 

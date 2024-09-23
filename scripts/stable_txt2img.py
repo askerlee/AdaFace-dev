@@ -620,8 +620,7 @@ def main(opt):
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
                         if opt.method == "adaface":                      
                             teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if opt.use_teacher_neg else None
-                            x_samples_ddim = pipeline(noise, prompts[0], None, teacher_neg_id_prompt_embs, 
-                                                      opt.scale, batch_size, verbose=True)
+                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale, batch_size, verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []
                             prompt = re.sub(rf"a\s+{opt.subject_string},? ", "", prompts[0])

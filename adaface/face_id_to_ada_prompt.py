@@ -531,7 +531,7 @@ class FaceID2AdaPrompt(nn.Module):
             # If not, image_paths/image_objs are used to extract face embeddings.
             # img_prompt_embs is in the image prompt space.
             # img_prompt_embs: [BS, 16/4, 768].
-            face_image_count, faceid_embeds, img_prompt_embs \
+            face_image_count, faceid_embeds, img_prompt_embs, neg_img_prompt_embs \
                 = self.get_img_prompt_embs(\
                     init_id_embs=face_id_embs,
                     pre_clip_features=None,
@@ -853,11 +853,15 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 print(f"Subject '{self.subject_string}' not found in the embedding manager.")
                 breakpoint()
 
-            ckpt_subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
+            ckpt_subj_basis_generators = string_to_subj_basis_generator_dict[self.subject_string]
             for i, subj_basis_generator in enumerate(self.subj_basis_generator):
+                ckpt_subj_basis_generator = ckpt_subj_basis_generators[i]
+                # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
+                ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.num_static_img_suffix_embs, img_prompt_dim=self.output_dim)
+
                 subj_basis_generator.extend_prompt2token_proj_attention(\
-                    ckpt_subj_basis_generator[i].prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
-                subj_basis_generator.load_state_dict(ckpt_subj_basis_generator[i].state_dict())
+                    ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
+                subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict())
 
                 # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
                 # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
@@ -1071,12 +1075,13 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             return None, None
         
         # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then 
+        # during inference, we average across the batch dim.
         # all_adaface_subj_embs[0]: [4, 768]. all_adaface_subj_embs[1]: [16, 768].
         # all_adaface_subj_embs: [20, 768].
-        try:
-            all_adaface_subj_embs = torch.cat(all_adaface_subj_embs, dim=1)
-        except:
-            breakpoint()
+        # during training, we don't average across the batch dim.
+        # all_adaface_subj_embs[0]: [BS, 4, 768]. all_adaface_subj_embs[1]: [BS, 16, 768].
+        # all_adaface_subj_embs: [BS, 20, 768].
+        all_adaface_subj_embs = torch.cat(all_adaface_subj_embs, dim=-2)
         return all_adaface_subj_embs
 
 

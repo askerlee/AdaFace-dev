@@ -371,9 +371,20 @@ class ImgPrompt2TextPrompt(nn.Module):
         # We always take the first num_static_img_suffix_embs embeddings out of static_img_suffix_embs.
         # So it's OK that static_img_suffix_embs is larger than required number num_static_img_suffix_embs.
         # This holds even if num_static_img_suffix_embs is 0.
-        if hasattr(self, 'static_img_suffix_embs') and self.static_img_suffix_embs is not None \
-          and self.static_img_suffix_embs.shape[1] >= self.N_SFX:
-            print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs ({self.N_SFX} required). Skip initialization.")
+        if hasattr(self, 'static_img_suffix_embs') and self.static_img_suffix_embs is not None:
+            if self.static_img_suffix_embs.shape[1] == self.N_SFX:
+                print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs ({self.N_SFX} required). Skip initialization.")
+            elif self.static_img_suffix_embs.shape[1] < self.N_SFX:
+                print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs (< {self.N_SFX} required). Reinitialize.")
+                self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.N_SFX, img_prompt_dim))
+            elif self.N_SFX > 0:
+                # self.static_img_suffix_embs.shape[1] > self.N_SFX > 0.
+                print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs (> {self.N_SFX} required). Truncate.")
+                self.static_img_suffix_embs = nn.Parameter(self.static_img_suffix_embs[:, :self.N_SFX])
+            else:
+                # self.static_img_suffix_embs.shape[1] > self.N_SFX == 0.
+                print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs (0 required). Erase.")
+                self.static_img_suffix_embs = None
         else:
             if self.N_SFX > 0:
                 # Either static_img_suffix_embs does not exist or is None, 
@@ -777,7 +788,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         for i in range(begin_layer_idx, end_layer_idx+1):
             self.prompt2token_proj_attention_multipliers[i] *= prompt2token_proj_attention_multipliers[i]
 
-        print(f"{num_extended_layers} layers in prompt2token_proj_attention are extended by {multiplier}x")
+        print(f"{num_extended_layers} layers in prompt2token_proj_attention are extended by {prompt2token_proj_attention_multipliers}")
 
     def freeze_prompt2token_proj(self):
         # Only applicable to fg basis generator.
