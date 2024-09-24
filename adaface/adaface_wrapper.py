@@ -22,7 +22,7 @@ sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
-                 adaface_ckpt_paths, adaface_encoder_scales=None, 
+                 adaface_ckpt_paths, adaface_encoder_cfg_scales=None, 
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, unet_types=None, extra_unet_paths=None, unet_weights=None,
@@ -38,7 +38,7 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_encoder_types = adaface_encoder_types
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
-        self.adaface_encoder_scales = adaface_encoder_scales
+        self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.subject_string = subject_string
 
         self.num_inference_steps = num_inference_steps
@@ -69,10 +69,10 @@ class AdaFaceWrapper(nn.Module):
     def initialize_pipeline(self):
         self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(self.adaface_encoder_types,
                                                                   self.adaface_ckpt_paths,
-                                                                  self.adaface_encoder_scales)
+                                                                  self.adaface_encoder_cfg_scales)
 
         self.id2ada_prompt_encoder.to(self.device)
-        print(f"adaface_encoder_scales: {self.adaface_encoder_scales}")
+        print(f"adaface_encoder_cfg_scales: {self.adaface_encoder_cfg_scales}")
 
         if self.use_840k_vae:
             # The 840000-step vae model is slightly better in face details than the original vae model.

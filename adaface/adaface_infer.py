@@ -49,9 +49,9 @@ def parse_args():
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
-    # If adaface_encoder_scales is not specified, the weights will be set to all 6.0.
-    parser.add_argument('--adaface_encoder_scales', type=float, nargs="+", default=None,    
-                        help="Weights for the ID2Ada prompt encoders")
+    # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
+    parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
+                        help="CFG scales of output embeddings of the ID2Ada prompt encoders")
     parser.add_argument("--main_unet_path", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
     parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
                              args.adaface_encoder_types, args.adaface_ckpt_paths, 
-                             args.adaface_encoder_scales, 
+                             args.adaface_encoder_cfg_scales, 
                              args.subject_string, args.num_inference_steps,
                              unet_types=None,
                              main_unet_path=args.main_unet_path,
