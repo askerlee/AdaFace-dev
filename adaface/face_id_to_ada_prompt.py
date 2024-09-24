@@ -1068,6 +1068,9 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         if BS == -1:
             breakpoint()
 
+        # During training, p_dropout is 0.1. During inference, p_dropout is 0.
+        # When there are two sub-encoders, the prob of one encoder being dropped is 
+        # p_dropout * 2 - p_dropout^2 = 0.18.
         if p_dropout > 0:
             is_encoder_dropped = torch.rand(self.num_sub_encoders) < p_dropout
             # At least enable one encoder.
@@ -1084,6 +1087,9 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 adaface_subj_embs = None
                 print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
             else:
+                # ddpm.embedding_manager.train() -> id2ada_prompt_encoder.train() -> each sub-enconder's train().
+                # -> each sub-enconder's subj_basis_generator.train(). 
+                # Therefore grad for the following call is enabled.
                 adaface_subj_embs = \
                     id2ada_prompt_encoder.generate_adaface_embeddings(image_paths,
                                                                       all_face_id_embs[i],

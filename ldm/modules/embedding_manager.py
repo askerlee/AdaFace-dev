@@ -72,7 +72,7 @@ class EmbeddingManager(nn.Module):
             adaface_ckpt_paths=None,
             extend_prompt2token_proj_attention_multiplier=1,
             num_static_img_suffix_embs=0,
-            p_joint_ids_dropout=0.1,
+            p_encoder_dropout=0.1,
     ):
         super().__init__()
 
@@ -125,7 +125,7 @@ class EmbeddingManager(nn.Module):
         self.loading_token2num_vectors_from_ckpt = loading_token2num_vectors_from_ckpt
         self.set_num_vectors_per_subj_token(token2num_vectors)
         self.out_emb_dim = out_emb_dim
-        self.p_joint_ids_dropout = p_joint_ids_dropout
+        self.p_encoder_dropout = p_encoder_dropout
 
         # Save this function to be used in load() when doing placeholder substitution.
         self.get_tokens_for_string       = partial(get_clip_tokens_for_string,       text_embedder.tokenizer)
@@ -442,7 +442,7 @@ class EmbeddingManager(nn.Module):
                 adaface_subj_embs   = self.id2ada_prompt_encoder.generate_adaface_embeddings(
                                           image_paths=None, face_id_embs=None,
                                           img_prompt_embs=id2img_prompt_embs,
-                                          p_dropout=self.p_joint_ids_dropout,
+                                          p_dropout=self.p_encoder_dropout if self.training else 0,
                                           # If an encoder is dropped out, then the corresponding adaface_subj_embs
                                           # will not be included in the returned adaface_subj_embs. 
                                           # So the returned adaface_subj_embs only contain valid embeddings and 
