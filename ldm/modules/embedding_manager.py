@@ -742,7 +742,7 @@ class EmbeddingManager(nn.Module):
                 self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
             for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
-                if ckpt_subj_basis_generator.placeholder_is_bg:
+                if hasattr(ckpt_subj_basis_generator, 'placeholder_is_bg') and ckpt_subj_basis_generator.placeholder_is_bg:
                     print(f"Loading {repr(ckpt_subj_basis_generator)}")
                     if not skip_loading_bg_subj_basis_generator:
                         ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)

@@ -836,9 +836,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         if adaface_ckpt_paths is not None:
             self.load_adaface_ckpt(adaface_ckpt_paths)
 
-        print(f"{self.name} ada prompt encoder initialized, "
-              f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}, "
-              f"{self.num_sub_encoders} sub-encoders.")
+        print(f"{self.name} ada prompt encoder initialized with {self.num_sub_encoders} sub-encoders. "
+              f"ID vecs: {self.num_id_vecs}, static suffix embs: {self.num_static_img_suffix_embs}.")
 
     def load_adaface_ckpt(self, adaface_ckpt_paths):
         # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
@@ -861,7 +860,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             for i, subj_basis_generator in enumerate(self.subj_basis_generator):
                 ckpt_subj_basis_generator = ckpt_subj_basis_generators[i]
                 # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
-                ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.num_static_img_suffix_embs, img_prompt_dim=self.output_dim)
+                ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.encoders_num_static_img_suffix_embs[i], 
+                                                                            img_prompt_dim=self.output_dim)
 
                 subj_basis_generator.extend_prompt2token_proj_attention(\
                     ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
@@ -1082,6 +1082,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
             if is_encoder_dropped[i]:
                 adaface_subj_embs = None
+                print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
             else:
                 adaface_subj_embs = \
                     id2ada_prompt_encoder.generate_adaface_embeddings(image_paths,
