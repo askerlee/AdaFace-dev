@@ -41,7 +41,12 @@ model:
     id2img_prompt_encoder_trainable:  False
     # The ratio of the id2img_prompt_encoder's lr to the main model's lr. Only effective when trainable.
     id2img_prompt_encoder_lr_ratio:   0.001
-    p_gen_id2img_rand_id:             0.2
+    # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
+    # of the IDs (belonging to two face detectors) are not consistent. However, a small proportion
+    # of random face IDs may help force the arc2face ada focuses on reconstructing the arc2face random ID,
+    # and the consistentID ada focuses on reconstructing the consistentID random ID. Therefore, it may still
+    # be helpful to set a small p_gen_id2img_rand_id.
+    p_gen_id2img_rand_id:             0.1
     # the delta recon loss is only computed when perturb_face_id_embs.
     p_perturb_face_id_embs:           0.6
     # ConsistentID image embeddings are quite robust to random perturbations, so we set

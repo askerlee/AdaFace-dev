@@ -1007,7 +1007,8 @@ class LatentDiffusion(DDPM):
             self.iter_flags['same_subject_in_batch'] = False
 
         # do_unet_distill and random() < p_unet_distill_iter.
-        # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID.
+        # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
+        # 0.1 if distilling on jointIDs.
         if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_id2img_rand_id:
             self.iter_flags['gen_id2img_rand_id'] = True
             self.batch_subject_names = [ "rand_id_to_img_prompt" ] * len(batch['subject_name'])
