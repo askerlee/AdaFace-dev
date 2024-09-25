@@ -744,7 +744,7 @@ def main(opt):
                         date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
                         subjname_method = 'unknown'
 
-                    iter_mat = re.search(r"(\d+).(pt|safetensors)", opt.subj_model_path)
+                    iter_mat = re.search(r"(\d+[a-z]?).(pt|safetensors)", opt.subj_model_path)
                     if iter_mat is not None:
                         iter_sig = iter_mat.group(1)
                     else:
