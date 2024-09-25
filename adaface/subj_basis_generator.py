@@ -781,15 +781,40 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             prompt2token_proj_attention_multipliers = [1] * 12
             for i in range(begin_layer_idx, end_layer_idx+1):
                 prompt2token_proj_attention_multipliers[i] = multiplier            
-
         # Otherwise, use the given prompt2token_proj_attention_multipliers.
+
         num_extended_layers = self.prompt2token_proj.extend_clip_attention_MKV_multiplier(prompt2token_proj_attention_multipliers, perturb_std)
         # Update prompt2token_proj_attention_multipliers (relative to the original CLIPTextModel).
         for i in range(begin_layer_idx, end_layer_idx+1):
             self.prompt2token_proj_attention_multipliers[i] *= prompt2token_proj_attention_multipliers[i]
 
         print(f"{num_extended_layers} layers in prompt2token_proj_attention are extended by {prompt2token_proj_attention_multipliers}")
+        return num_extended_layers
+    
+    def squeeze_prompt2token_proj_attention(self, prompt2token_proj_attention_divisors=None, 
+                                            begin_layer_idx=-1, end_layer_idx=-1, divisor=1):
+        if begin_layer_idx == -1:
+            begin_layer_idx = 0
+        if end_layer_idx == -1:
+            end_layer_idx = 11
+        
+        if prompt2token_proj_attention_divisors is None and divisor == 1:
+            print("prompt2token_proj_attention_divisors are all 1. No squeezing is done.")
+            return
+        elif prompt2token_proj_attention_divisors is None:
+            prompt2token_proj_attention_divisors = [1] * 12
+            for i in range(begin_layer_idx, end_layer_idx+1):
+                prompt2token_proj_attention_divisors[i] = divisor
+        # Otherwise, use the given prompt2token_proj_attention_divisors.
 
+        num_squeezed_layers = self.prompt2token_proj.squeeze_clip_attention_MKV_divisor(prompt2token_proj_attention_divisors)
+        # Update prompt2token_proj_attention_multipliers (relative to the original CLIPTextModel).
+        for i in range(begin_layer_idx, end_layer_idx+1):
+            self.prompt2token_proj_attention_multipliers[i] //= prompt2token_proj_attention_divisors[i]
+            
+        print(f"{num_squeezed_layers} layers in prompt2token_proj_attention are squeezed by {prompt2token_proj_attention_divisors}")
+        return num_squeezed_layers
+    
     def freeze_prompt2token_proj(self):
         # Only applicable to fg basis generator.
         if self.placeholder_is_bg:

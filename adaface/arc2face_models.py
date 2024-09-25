@@ -80,7 +80,7 @@ class CLIPAttentionMKV(nn.Module):
 
     # clip_attn_layer is usually self.
     def extend_weights(self, clip_attn_layer, layer_idx, multiplier, perturb_std=0.2, 
-                       perturb_std_is_relative=True, keep_norm=False, verbose=False):
+                       perturb_std_is_relative=True, perturb_keep_norm=False, verbose=False):
         ORIG_V_SHAPE    = list(clip_attn_layer.v_proj.weight.shape)
         ORIG_V_SHAPE_D0 = ORIG_V_SHAPE[0]
         ORIG_K_SHAPE    = list(clip_attn_layer.k_proj.weight.shape)
@@ -97,11 +97,11 @@ class CLIPAttentionMKV(nn.Module):
         # bias doesn't need noise perturbation, as after the weights are noised, 
         # different copies of the weight/bias will receive different gradients, 
         # making the bias terms diverge and identifiable after training.
-        self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(multiplier)
         self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.repeat(multiplier)
+        self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.repeat(multiplier)
 
-        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(multiplier, 1)
         self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.repeat(multiplier, 1)
+        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.repeat(multiplier, 1)
 
         # Correct the out_features attribute of k_proj and v_proj.
         self.k_proj.out_features = self.k_proj.weight.shape[0]
@@ -111,7 +111,7 @@ class CLIPAttentionMKV(nn.Module):
             # Adding noise to the extra copies of the weights (keep the first copy unchanged).
             self.v_proj.weight.data[ORIG_V_SHAPE_D0:] = \
                 perturb_tensor(self.v_proj.weight.data[ORIG_V_SHAPE_D0:], 
-                                    perturb_std, perturb_std_is_relative, keep_norm, verbose=verbose)
+                                    perturb_std, perturb_std_is_relative, perturb_keep_norm, verbose=verbose)
             if verbose:
                 NEW_V_SHAPE     = list(self.v_proj.weight.shape)
                 NOISED_V_SHAPE  = list(self.v_proj.weight.data[ORIG_V_SHAPE_D0:].shape)
@@ -120,11 +120,27 @@ class CLIPAttentionMKV(nn.Module):
             # Adding noise to the extra copies of the weights.
             self.k_proj.weight.data[ORIG_K_SHAPE_D0:] = \
                 perturb_tensor(self.k_proj.weight.data[ORIG_K_SHAPE_D0:], 
-                                    perturb_std, perturb_std_is_relative, keep_norm, verbose=verbose)
+                                    perturb_std, perturb_std_is_relative, perturb_keep_norm, verbose=verbose)
             if verbose:
                 NEW_K_SHAPE     = list(self.k_proj.weight.shape)
                 NOISED_K_SHAPE  = list(self.k_proj.weight.data[ORIG_K_SHAPE_D0:].shape)
                 print(f"Layer {layer_idx}: {NOISED_K_SHAPE} in {NEW_K_SHAPE} of k_proj is added with {perturb_std} noise")
+
+    def squeeze_weights(self, clip_attn_layer, divisor):
+        if self.multiplier % divisor != 0:
+            breakpoint()
+        self.multiplier //= divisor
+
+        self.k_proj.bias.data     = clip_attn_layer.k_proj.bias.data.reshape(divisor, -1).mean(dim=0)
+        self.v_proj.bias.data     = clip_attn_layer.v_proj.bias.data.reshape(divisor, -1).mean(dim=0)
+
+        self.k_proj.weight.data   = clip_attn_layer.k_proj.weight.data.reshape(divisor, -1, self.k_proj.weight.shape[1]).mean(dim=0)
+        self.v_proj.weight.data   = clip_attn_layer.v_proj.weight.data.reshape(divisor, -1, self.v_proj.weight.shape[1]).mean(dim=0)
+
+        # Correct the out_features attribute of k_proj and v_proj.
+        self.k_proj.out_features = self.k_proj.weight.shape[0]
+        self.v_proj.out_features = self.v_proj.weight.shape[0]
+
 
     def forward(
         self,
@@ -321,7 +337,7 @@ class CLIPTextModelWrapper(CLIPTextModel):
             attentions=encoder_outputs.attentions,
         )
     
-    # Applied to layers [begin_layer_idx, end_layer_idx) in the encoder.
+    # Applied to all attention layers in the encoder, if the corresponding multiplier is not 1.
     # The layer indexed by end_layer_idx is not included.
     # If both layer indices are -1, then apply to all layers (0-11).
     def extend_clip_attention_MKV_multiplier(self, prompt2token_proj_attention_multipliers, perturb_std=0.1):
@@ -342,3 +358,25 @@ class CLIPTextModelWrapper(CLIPTextModel):
             num_extended_layers += 1
     
         return num_extended_layers
+
+    # Applied to layers [begin_layer_idx, end_layer_idx) in the encoder.
+    # The layer indexed by end_layer_idx is not included.
+    # If both layer indices are -1, then apply to all layers (0-11).
+    def squeeze_clip_attention_MKV_divisor(self, prompt2token_proj_attention_divisors):
+        num_squeezed_layers = 0
+
+        for layer_idx, layer in enumerate(self.text_model.encoder.layers):
+            divisor = prompt2token_proj_attention_divisors[layer_idx]
+            if divisor == 1:
+                continue
+            # This shouldn't happen, unless self_attn has already been extended as CLIPAttentionMKV.
+            if not isinstance(layer.self_attn, (CLIPAttention, CLIPAttentionMKV)):
+                breakpoint()
+            old_attn_layer = layer.self_attn
+            if not isinstance(old_attn_layer, CLIPAttentionMKV):
+                layer.self_attn = CLIPAttentionMKV(old_attn_layer.config, 1)
+            # Squeeze the k_proj and v_proj  weights in the self_attn layer.
+            layer.self_attn.squeeze_weights(old_attn_layer, divisor)
+            num_squeezed_layers += 1
+    
+        return num_squeezed_layers
