@@ -185,10 +185,11 @@ class FaceID2AdaPrompt(nn.Module):
     # fg_masks: None, or a list of [Hi, Wi].
     def extract_init_id_embeds_from_images(self, image_objs, image_paths, fg_masks=None, 
                                            size=(512, 512), calc_avg=False, 
-                                           skip_non_faces=True, 
-                                           return_clip_embs=None, do_contrast_clip_embs_on_bg_features=True, 
+                                           skip_non_faces=True, return_clip_embs=None, 
+                                           do_contrast_clip_embs_on_bg_features=None, 
                                            verbose=False):
-        # If return_clip_embs and do_contrast_clip_embs_on_bg_features are not provided, then use the default values.
+        # If return_clip_embs or do_contrast_clip_embs_on_bg_features is not provided, 
+        # then use their default values.
         if return_clip_embs is None:
             return_clip_embs = self.use_clip_embs
         if do_contrast_clip_embs_on_bg_features is None:
@@ -308,7 +309,7 @@ class FaceID2AdaPrompt(nn.Module):
                 # meaningless in this case.
                 image_bg_dict  = self.clip_image_encoder(image_pixel_values, attn_mask=1-fg_masks2, output_hidden_states=True)
                 image_bg_features = image_bg_dict.hidden_states[-2]
-                # Remove the feature bias (null features) from the bg features, to highlight the useful bg features.
+                # Subtract the feature bias (null features) from the bg features, to highlight the useful bg features.
                 if do_contrast_clip_embs_on_bg_features:
                     image_bg_features = image_bg_features - clip_neg_features                
                 if image_bg_dict.attn_mask is not None:
@@ -816,9 +817,11 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             self.encoders_num_static_img_suffix_embs.append(encoder.num_static_img_suffix_embs)
 
         self.num_static_img_suffix_embs     = sum(self.encoders_num_static_img_suffix_embs)
-        self.gen_neg_img_prompt             = True
-        self.use_clip_embs                  = True
-        self.do_contrast_clip_embs_on_bg_features   = True
+        # No need to set gen_neg_img_prompt, as we don't access it in this class, but rather
+        # in the derived classes.
+        # self.gen_neg_img_prompt           = True
+        # self.use_clip_embs                = True
+        # self.do_contrast_clip_embs_on_bg_features   = True
         self.face_id_dims                   = [encoder.face_id_dim for encoder in self.id2ada_prompt_encoders]
         self.face_id_dim                    = sum(self.face_id_dims)
         # Different adaface encoders may have different clip_embedding_dim.
@@ -831,9 +834,9 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # If subj_basis_generator expansion params are specified, they are equally applied to all adaface encoders.
         # This self.subj_basis_generator is not meant to be called as self.subj_basis_generator(), but instead,
         # it's used as a unified interface to save/load the subj_basis_generator of all adaface encoders.
-        self.subj_basis_generator           = nn.ModuleList( \
-                                                [encoder.subj_basis_generator for encoder \
-                                                 in self.id2ada_prompt_encoders] )
+        self.subj_basis_generator           = \
+            nn.ModuleList( [encoder.subj_basis_generator for encoder \
+                            in self.id2ada_prompt_encoders] )
         
         if adaface_ckpt_paths is not None:
             self.load_adaface_ckpt(adaface_ckpt_paths)
