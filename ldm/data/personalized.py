@@ -481,6 +481,9 @@ class PersonalizedBase(Dataset):
 
         example = {}
         if is_subject_idx:
+            # Draw a random image from the image set corresponding to the subject index.
+            # The subject index could also point to a mixed subject folder, which contains 
+            # thousands of images of different subjects.
             image_paths     = self.image_paths_by_subj[index]
             for trial in range(10):
                 # Draw a random image from the subject dataset indexed by index.
@@ -953,37 +956,33 @@ class PersonalizedBase(Dataset):
                          wds_background_string, prompt)
         return prompt2
     
-# Randomly sample a subject number.
-# This subject number will be used by an PersonalizedBase instance to draw random images.
-# epoch_len: number of batches in one epoch. Usually initialized to be the same 
-# as the number of batches of the training data.
+# SubjectSampler randomly samples a subject/mix-subject-folder index.
+# This subject index will be used by an PersonalizedBase instance to draw random images.
+# num_batches: total number of batches of this training.
 # In a multi-GPU training, we haven't done anything to seed each sampler differently.
 # In the first few iterations, they will sample the same subjects, but 
 # due to randomness in the DDPM model (?), soon the sampled subjects will be different on different GPUs.
 # subject_names: a list of subject names, each name is indexed by subj_idx (for debugging).
 # subjects_are_faces: a list of boolean values, indicating whether the subject(s) is a face, indexed by subj_idx.
-# are_mix_subj_folders: a list of boolean values, indicating whether the folder contains 
-# multiple subjects, indexed by subj_idx.
 class SubjectSampler(Sampler):
-    def __init__(self, num_subjects, subject_names, subjects_are_faces, are_mix_subj_folders, 
+    def __init__(self, num_subjects, subject_names, subjects_are_faces, 
                  image_count_by_subj, num_batches, batch_size, skip_non_faces=True, debug=False):
 
         # If do_zero_shot, then skip non-faces in the dataset. Otherwise, non-face subjects (dogs, cats)
         # will disrupt the model update.
         self.subjects_are_faces = subjects_are_faces
-        self.skip_non_faces = skip_non_faces        
-        self.are_mix_subj_folders = are_mix_subj_folders
-        self.batch_size = batch_size
-        self.num_batches  = num_batches
-        self.num_subjects = num_subjects
-        self.subject_names = subject_names
-        image_count_by_subj = np.array(image_count_by_subj)
-        self.subj_weights = image_count_by_subj / image_count_by_subj.sum()
+        self.skip_non_faces     = skip_non_faces        
+        self.batch_size         = batch_size
+        self.num_batches        = num_batches
+        self.num_subjects       = num_subjects
+        self.subject_names      = subject_names
+        image_count_by_subj     = np.array(image_count_by_subj)
+        self.subj_weights       = image_count_by_subj / image_count_by_subj.sum()
 
-        assert self.num_subjects > 0, "FATAL: no subjects found in the dataset!"
+        assert self.num_subjects > 0, "FATAL: no subjects are found in the dataset!"
         self.rank = dist.get_rank()
-        print("SubjectSampler rank {}, initialized on {} subjects, batches: {}*{}".format(self.rank, self.num_subjects, 
-                                                                                 self.batch_size, self.num_batches))
+        print(f"SubjectSampler rank {self.rank}, initialized on {self.num_subjects} subjects, "
+              f"batches: {self.batch_size}*{self.num_batches}")
         self.prefetch_buffer = Queue()
         self.curr_subj_idx = 0
 

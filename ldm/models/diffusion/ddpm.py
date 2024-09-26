@@ -70,7 +70,7 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 recon_delta_loss_boost=1,
+                 distill_delta_loss_boost=1,
                  do_comp_teacher_filtering=True,
                  num_candidate_comp_teachers=2,
                  enable_background_token=True,
@@ -115,7 +115,7 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.recon_delta_loss_boost                 = recon_delta_loss_boost
+        self.distill_delta_loss_boost                 = distill_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_comp_teachers            = num_candidate_comp_teachers
         self.prompt_mix_scheme                      = 'mix_hijk'
@@ -1029,9 +1029,14 @@ class LatentDiffusion(DDPM):
         # so adding a small proportion of them to the training data may help increase the authenticity on
         # atypical faces, but adding too much of them may harm the performance on typical faces.
         if self.iter_flags['gen_id2img_rand_id']:
+            # FACE_ID_DIM: 512 for each encoder. 1024 for two encoders.
+            # FACE_ID_DIM is the sum of all encoders' face ID dimensions.
             FACE_ID_DIM             = self.embedding_manager.id2ada_prompt_encoder.face_id_dim
             face_id_embs            = torch.randn(BS, FACE_ID_DIM, device=x_start.device)
             CLIP_DIM                = self.embedding_manager.id2ada_prompt_encoder.clip_embedding_dim
+            # 514 is for fg and bg tokens (257 * 2). 
+            # CLIP_DIM is the total dimension of the CLIP embeddings. If there are two encoders,
+            # then CLIP_DIM is the sum of both encoders' CLIP dimensions.
             zs_clip_fgbg_features   = torch.randn(BS, 514, CLIP_DIM, device=x_start.device)
             # On random IDs, we don't need to consider img_mask and fg_mask.
             img_mask = None
@@ -1054,7 +1059,7 @@ class LatentDiffusion(DDPM):
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
             # If do_mix_prompt_distillation, then we have repeated the instances in the batch, 
             # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
-            # ** We no longer cache and provide zs_clip_neg_features later, as it is constant and
+            # ** We don't cache and provide zs_clip_neg_features later, as it is constant and
             # is cached in the FaceID2AdaPrompt object.
             faceless_img_count, face_id_embs, zs_clip_fgbg_features = \
                 self.embedding_manager.id2ada_prompt_encoder.extract_init_id_embeds_from_images(\
@@ -2056,9 +2061,9 @@ class LatentDiffusion(DDPM):
 
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
                     loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                                            img_mask, fg_mask, 
-                                                            fg_pixel_weight=1,
-                                                            bg_pixel_weight=bg_pixel_weight)
+                                                         img_mask, fg_mask, 
+                                                         fg_pixel_weight=1,
+                                                         bg_pixel_weight=bg_pixel_weight)
 
                     # The ID embedding of the first instance in the batch is intact,
                     # and the remaining ID embeddings are added with noise.
@@ -2096,9 +2101,9 @@ class LatentDiffusion(DDPM):
                 loss += loss_recon
                 v_loss_recon = loss_recon.mean().detach().item()
                 if not self.iter_flags['do_unet_distill']:
-                    # ** Usually we don't reach here. **
-                    # If not do_unet_distill, then this is a normal_recon iter with 
-                    # id2img_prompt_encoder_trainable. 
+                    # If not do_unet_distill, then this is a normal_recon iter 
+                    # with id2img_prompt_encoder_trainable. 
+                    # Otherwise, we shouldn't reach here.
                     assert self.id2img_prompt_encoder_trainable
                     loss_dict.update({f'{prefix}/loss_recon':   v_loss_recon})
                 else:
@@ -2107,7 +2112,7 @@ class LatentDiffusion(DDPM):
                 if self.iter_flags['perturb_face_id_embs']:
                     loss_distill_delta = sum(loss_distill_deltas) / np.sqrt(num_denoising_steps)
                     loss_dict.update({f'{prefix}/loss_distill_delta': loss_distill_delta.mean().detach().item()})
-                    loss += loss_distill_delta * self.recon_delta_loss_boost
+                    loss += loss_distill_delta * self.distill_delta_loss_boost
 
         ###### begin of preparation for is_compos_iter ######
         # is_compos_iter <=> calc_clip_loss. But we keep this redundancy for possible flexibility.
@@ -2978,12 +2983,14 @@ class LatentDiffusion(DDPM):
             # avg_subj_score_at_mf: [BLOCK_SIZE, 1, 1]
             # keepdim=True, since scores at all locations will use them as references (subtract them).
             avg_subj_score_at_mf = masked_mean(subj_score_at_mf, fg_mask3, dim=(1,2), keepdim=True)
-            avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
 
-            if False and 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+            '''
+            avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
+            if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                 print(f'layer {unet_layer_idx}')
                 print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf.mean():.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb.mean():.4f}')
-            
+            '''
+
             # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
             # to be at least larger by mfmb_contrast_score_margin = 0.4 than 
             # subj_score_at_mb at any background locations.
