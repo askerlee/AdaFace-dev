@@ -977,6 +977,15 @@ class SubjectSampler(Sampler):
         self.num_subjects       = num_subjects
         self.subject_names      = subject_names
         image_count_by_subj     = np.array(image_count_by_subj)
+
+        '''
+        (Pdb) self.subj_weights[-10:]
+        array([0.00001 , 0.000039, 0.000039, 0.000039, 0.020065, 0.012911,
+            0.208715, 0.096761, 0.09661 , 0.096963])      
+        (Pdb) self.subj_weights[-10:].sum()
+        0.5321516276579649              
+        '''
+        
         self.subj_weights       = image_count_by_subj / image_count_by_subj.sum()
 
         assert self.num_subjects > 0, "FATAL: no subjects are found in the dataset!"

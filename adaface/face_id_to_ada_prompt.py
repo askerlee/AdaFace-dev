@@ -486,6 +486,8 @@ class FaceID2AdaPrompt(nn.Module):
                                         # During training, don't skip non-face images. Instead, 
                                         # setting skip_non_faces=False will replace them by random face embeddings.
                                         skip_non_faces=False,
+                                        # We always assume the instances belong to different subjects. 
+                                        # So never average the embeddings across instances. 
                                         avg_at_stage=None, 
                                         id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                                         verbose=False)

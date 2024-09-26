@@ -45,8 +45,18 @@ args = parser.parse_args()
 model1 = torch.load(args.ckpt1)
 model2 = torch.load(args.ckpt2)
 if args.is_ada:
-    model1 = model1['string_to_subj_basis_generator_dict']['z'].prompt2token_proj.text_model
-    model2 = model2['string_to_subj_basis_generator_dict']['z'].prompt2token_proj.text_model
-    
-find_top_k_most_different_parameter(model1, model2)
+    model1 = model1['string_to_subj_basis_generator_dict']['z']
+    model2 = model2['string_to_subj_basis_generator_dict']['z']
+    if isinstance(model1, torch.nn.ModuleList):
+        models1 = [ m.prompt2token_proj.text_model for m in model1 ]
+        models2 = [ m.prompt2token_proj.text_model for m in model2 ]
+    else:
+        models1 = [model1.prompt2token_proj.text_model]
+        models2 = [model2.prompt2token_proj.text_model]
+else:
+    models1 = [model1]
+    models2 = [model2]
 
+for i, (model1, model2) in enumerate(zip(models1, models2)):
+    print(f"Model {i+1}")
+    find_top_k_most_different_parameter(model1, model2)

@@ -272,32 +272,11 @@ class DDPM(pl.LightningModule):
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
 
-    def q_mean_variance(self, x_start, t):
-        """
-        Get the distribution q(x_t | x_0).
-        :param x_start: the [N x C x ...] tensor of noiseless inputs.
-        :param t: the number of diffusion steps (minus 1). Here, 0 means one step.
-        :return: A tuple (mean, variance, log_variance), all of x_start's shape.
-        """
-        mean = (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start)
-        variance = extract_into_tensor(1.0 - self.alphas_cumprod, t, x_start.shape)
-        log_variance = extract_into_tensor(self.log_one_minus_alphas_cumprod, t, x_start.shape)
-        return mean, variance, log_variance
-
     def predict_start_from_noise(self, x_t, t, noise):
         return (
                 extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
                 extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
-
-    def q_posterior(self, x_start, x_t, t):
-        posterior_mean = (
-                extract_into_tensor(self.posterior_mean_coef1, t, x_t.shape) * x_start +
-                extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) * x_t
-        )
-        posterior_variance = extract_into_tensor(self.posterior_variance, t, x_t.shape)
-        posterior_log_variance_clipped = extract_into_tensor(self.posterior_log_variance_clipped, t, x_t.shape)
-        return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -356,11 +335,8 @@ class DDPM(pl.LightningModule):
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
-    #LINK #shared_step
     def shared_step(self, batch):
-        x = self.get_input(batch, self.first_stage_key)
-        loss, loss_dict = self(x)
-        return loss, loss_dict
+        raise NotImplementedError("shared_step() is not implemented in DDPM.")
 
     def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
@@ -557,7 +533,7 @@ class LatentDiffusion(DDPM):
             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
             # uncond_context[0]: [16, 77, 768], as there are 16 cross-attn layers.
             self.uncond_context = self.get_text_conditioning([""], text_conditioning_iter_type='negative')
-            # "photo of a" is the template of Arc2face.
+            # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
             img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='recon_iter')
             # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
             self.img_prompt_prefix_embs = img_prompt_prefix_context[0][:1, :4]
@@ -1115,9 +1091,9 @@ class LatentDiffusion(DDPM):
                 batch_have_fg_mask, self.batch_subject_names, \
                 id2img_prompt_embs, zs_clip_fgbg_features = \
                     repeat_selected_instances(slice(0, 1), BS, 
-                                                x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
-                                                batch_have_fg_mask, self.batch_subject_names, 
-                                                id2img_prompt_embs, zs_clip_fgbg_features)
+                                              x_start, noise, batch_images_unnorm, img_mask, fg_mask, 
+                                              batch_have_fg_mask, self.batch_subject_names, 
+                                              id2img_prompt_embs, zs_clip_fgbg_features)
                 
             # ** Add noise to the zero-shot ID image prompt embeddings with probability 0.6. **
             # ** Note the noise is added to the image prompt embeddings instead of the initial face ID embeddings. **
@@ -1954,6 +1930,7 @@ class LatentDiffusion(DDPM):
                             # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
                             cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
                             cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                            # Always append the ID prompt embeddings to the class (general) prompt embeddings.
                             # teacher_context: [BS, 81, 768]
                             teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
                             if self.p_unet_teacher_uses_cfg > 0:
