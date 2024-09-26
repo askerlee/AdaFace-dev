@@ -64,6 +64,7 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  use_layerwise_embedding=True,
+                 pass_one_layer_embedding_to_clip=True,
                  composition_regs_iter_gap=3,
                  prompt_emb_delta_reg_weight=0.,
                  mix_prompt_distill_weight=0.,
@@ -106,6 +107,7 @@ class DDPM(pl.LightningModule):
         self.channels = channels
 
         self.use_layerwise_embedding = use_layerwise_embedding
+        self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
 
         self.composition_regs_iter_gap = composition_regs_iter_gap
@@ -532,9 +534,9 @@ class LatentDiffusion(DDPM):
             self.create_clip_evaluator(device)
             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
             # uncond_context[0]: [16, 77, 768], as there are 16 cross-attn layers.
-            self.uncond_context = self.get_text_conditioning([""], text_conditioning_iter_type='negative')
+            self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
             # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
-            img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='recon_iter')
+            img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
             # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
             self.img_prompt_prefix_embs = img_prompt_prefix_context[0][:1, :4]
 
@@ -606,11 +608,6 @@ class LatentDiffusion(DDPM):
         self.cond_stage_model.device = self.device
         if randomize_clip_weights:
             self.cond_stage_model.sample_last_layers_skip_weights()
-
-        # If the prompt is "" (negative prompt), then clip_bg_features is None.
-        # In this case, we don't update subj_id2img_prompt_embs / clip_bg_features.
-        if subj_id2img_prompt_embs is not None or clip_bg_features is not None:
-            self.embedding_manager.set_image_prompts_and_features(subj_id2img_prompt_embs, clip_bg_features)
             
         if text_conditioning_iter_type is None:
             if self.iter_flags['is_compos_iter']:
@@ -622,19 +619,26 @@ class LatentDiffusion(DDPM):
                 # generate the conventional text embeddings.
                 # Therefore, text_conditioning_iter_type is set to 'recon_iter'.
                 text_conditioning_iter_type = 'recon_iter'
-        # Update the iteration type of the embedding manager, according to the arguments passed in.
-        self.embedding_manager.set_curr_iter_type(text_conditioning_iter_type)
 
-        # static_prompt_embedding: [128, 77, 768]
+        # Update subj_id2img_prompt_embs, clip_bg_features to be used to generate ada embeddings in the embedding manager.
+        # If the prompt is "" (negative prompt), then clip_bg_features is None.
+        # Also update the iteration type of the embedding manager, according to the arguments passed in.
+        self.embedding_manager.set_image_prompts_and_iter_type(subj_id2img_prompt_embs, clip_bg_features,
+                                                               text_conditioning_iter_type)
+
+        # static_prompt_embedding: [B*16, 77, 768]
         static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+        if self.pass_one_layer_embedding_to_clip:
+            # static_prompt_embedding: [B, 1, 768] -> [B*16, 77, 768]
+            static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, self.N_CA_LAYERS, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
         # return_prompt_embs_type: ['text', 'id', 'text_id']. Default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         if return_prompt_embs_type in ['id', 'text_id']:
-            # if text_conditioning_iter_type == 'negative', the current prompt is negative prompt.
+            # if text_conditioning_iter_type == 'plain_text_iter', the current prompt is a plain text (e.g., a negative prompt).
             # So subj_id2img_prompt_embs serves as the negative ID prompt embeddings (only applicable to ConsistentID).
             # NOTE: These are not really negative ID embeddings, and is just to make the prompt to have the correct length.
-            if text_conditioning_iter_type == 'negative' and subj_id2img_prompt_embs is None:
+            if text_conditioning_iter_type == 'plain_text_iter' and subj_id2img_prompt_embs is None:
                 if return_prompt_embs_type == 'id':
                     # If subj_id2img_prompt_embs is used as standalone negative embeddings,
                     # then we take the beginning N embeddings of static_prompt_embedding.
@@ -1050,8 +1054,9 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['do_normal_recon'] = False
                         
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
-        # results is either (face_image_count, faceid_embeds, pos_prompt_embs),
-        # or (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
+        # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
+        # if the encoder is arc2face, neg_prompt_embs is None.
+        # If it's consistentID or jointIDs, neg_prompt_embs is not None.
         results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
                     images.shape[0], init_id_embs=face_id_embs, 
                     pre_clip_features=zs_clip_fgbg_features, 
@@ -1221,10 +1226,9 @@ class LatentDiffusion(DDPM):
             text_conditioning_iter_type = 'unet_distill_iter'
         else:
             text_conditioning_iter_type = 'recon_iter'
-        # As a special case, 'id2img_only_iter' is only set in get_text_conditioning(), instead of here.
+        self.iter_flags['text_conditioning_iter_type'] = text_conditioning_iter_type
 
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
-        self.embedding_manager.set_curr_iter_type(text_conditioning_iter_type)
 
         loss = self(x_start, captions, noise)
 
@@ -1293,7 +1297,8 @@ class LatentDiffusion(DDPM):
                 self.get_text_conditioning(delta_prompts, 
                                            self.iter_flags['id2img_prompt_embs'],
                                            self.iter_flags['clip_bg_features'],
-                                           randomize_clip_weights=True)
+                                           randomize_clip_weights=True,
+                                           text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
 
             subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
                 c_static_emb.chunk(4)
@@ -1391,7 +1396,7 @@ class LatentDiffusion(DDPM):
                 # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
                 extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                 extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                        *c_static_emb.shape[1:])
+                                                                     *c_static_emb.shape[1:])
                                         
                 # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
                 # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
@@ -1430,7 +1435,8 @@ class LatentDiffusion(DDPM):
                 self.get_text_conditioning(captions, 
                                            self.iter_flags['id2img_prompt_embs'],
                                            self.iter_flags['clip_bg_features'],                                                      
-                                           randomize_clip_weights=True)
+                                           randomize_clip_weights=True,
+                                           text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
             
             extra_info = extra_info0
             extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
@@ -1673,7 +1679,7 @@ class LatentDiffusion(DDPM):
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
                     subj_comp_emb = subj_comp_emb[:BLOCK_SIZE * self.N_CA_LAYERS]
-                    mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE * self.N_CA_LAYERS]
+                    mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE  * self.N_CA_LAYERS]
                     # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
                     # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
                     # So repeat them by num_candidate_comp_teachers times to match the size of x_start.

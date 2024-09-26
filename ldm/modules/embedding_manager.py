@@ -52,6 +52,7 @@ class EmbeddingManager(nn.Module):
             token2num_vectors={},
             loading_token2num_vectors_from_ckpt=False,
             use_layerwise_embedding=True,
+            pass_one_layer_embedding_to_clip=True,
             out_emb_dim=768,
             num_unet_ca_layers=16,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
@@ -83,6 +84,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_subj_basis_generator_dict = nn.ModuleDict()
         self.placeholder_to_emb_cache            = nn.ParameterDict() # These should not be optimized
         self.use_layerwise_embedding = use_layerwise_embedding
+        self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
         self.num_unet_ca_layers      = num_unet_ca_layers
         if self.use_layerwise_embedding:
             # self.num_layers_per_embedder specifies the total layers of embeddings for each embedder.
@@ -217,12 +219,11 @@ class EmbeddingManager(nn.Module):
         self.init_subj_name_to_being_faces(subj_name_to_being_faces)
 
         self.layer_idx = -1
-        self.static_subj_embs_dict = {}   
         self.clear_prompt_adhoc_info()
-        # 'recon_iter', 'unet_distill_iter', 'compos_distill_iter', 'empty'.
+        # 'recon_iter', 'unet_distill_iter', 'compos_distill_iter', 'plain_text_iter'.
         self.iter_type = None       
         self.set_curr_batch_subject_names(["default"])
-        self.set_curr_iter_type('recon_iter')
+        self.set_image_prompts_and_iter_type(None, None, 'plain_text_iter')
 
         self.loss_call_count = 0
         self.training_percent = 0
@@ -323,15 +324,8 @@ class EmbeddingManager(nn.Module):
         
         # We need to clone embedded_text, as when it's not layerwise,
         # the modification in get_static_embedding() will be in-place. 
-        # The keys of static_subj_embs_dict are the placeholder strings.
-        static_embeded_text, tokenized_text_repeated, static_subj_embs_dict = \
+        static_embeded_text, tokenized_text_repeated = \
                 self.get_static_embedding(tokenized_text, embedded_text.clone(), B, N)
-        # Cache the static embeddings to be used in ada embedding computation and
-        # embedding orthogonal loss later.
-        self.static_subj_embs_dict = {}
-
-        for k in static_subj_embs_dict:
-            self.static_subj_embs_dict[k] = static_subj_embs_dict[k]
 
         # Update the prompt token embedding mask.
         # tokenized_text_repeated is repeated 16 times along the batch dimension.
@@ -351,9 +345,7 @@ class EmbeddingManager(nn.Module):
                 self.rank = 0
 
         orig_tokenized_text = tokenized_text
-        static_subj_embs_dict = {}
         self.cls_delta_string_indices = []
-
         if self.use_layerwise_embedding:
             # embedded_text: [B, N, 768] => [B, 16, N, 768] => [16*B, N, 768].
             # "Tuck" the layer dimension into the batch dimension, 
@@ -362,11 +354,11 @@ class EmbeddingManager(nn.Module):
             # to each other across the batch dim:
             # [b1_l1, ..., b1_l16, b2_l1, ..., b2_l16, ..., bB_l1, ..., bB_l16].
             # {________b1________} {_______b2_______}  ...  {_______bB________}
-            embedded_text = embedded_text.unsqueeze(1).repeat(1, self.num_layers_per_embedder, 1, 1).view(BS * self.num_layers_per_embedder, N, -1)
+            embedded_text  = embedded_text.unsqueeze(1).repeat(1, self.num_layers_per_embedder, 1, 1).reshape(BS * self.num_layers_per_embedder, N, -1)
             # tokenized_text: [B, 16, N] => [16*B, N]
             # tokenized_text has to be repeated along the layer dimension as well, so that 
             # placeholder_indices can index the embedding at each layer in the batch.
-            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_layers_per_embedder, 1).view(BS * self.num_layers_per_embedder, N)
+            tokenized_text = tokenized_text.unsqueeze(1).repeat(1, self.num_layers_per_embedder, 1).reshape(BS * self.num_layers_per_embedder, N)
             # mirror-reflect the embedding along the layer dimension, to make it symmetric 
             # in the encoder & decoder.
 
@@ -459,6 +451,7 @@ class EmbeddingManager(nn.Module):
                     adaface_subj_embs = torch.zeros(REAL_OCCURS_IN_BATCH, 1, self.out_emb_dim, device=embedded_text.device)
                 adaface_subj_embs = adaface_subj_embs.unsqueeze(1)
 
+            # adaface_subj_embs: [BS, 16, K, 768]. 
             adaface_subj_embs = adaface_subj_embs.repeat(1, self.num_layers_per_embedder, 1, 1)
             # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
             # REAL_OCCURS_IN_BATCH counts the number of subject-single and subject-comp instances.
@@ -473,10 +466,9 @@ class EmbeddingManager(nn.Module):
                 # id2img_prompt_embs: [BS, 16, 768] or [BS, 4, 768] is the ID2ImgPrompt embeddings. 
                 self.id2img_embs = id2img_prompt_embs
 
-            # adaface_subj_embs is adaface_subj_embs reshaped.
+            # adaface_subj_embs is reshaped: [BS, 16, K, 768] => [16*BS, K, 768].
             adaface_subj_embs = rearrange(adaface_subj_embs, 'b l k d -> (b l) k d').contiguous()
             adaface_subj_embs = adaface_subj_embs.to(embedded_text.dtype)
-            static_subj_embs_dict[placeholder_string] = adaface_subj_embs
 
             if adaface_subj_embs.shape[1] > self.token2num_vectors[placeholder_string]:
                 breakpoint()
@@ -542,10 +534,17 @@ class EmbeddingManager(nn.Module):
             # If background_strings is None, then always update the indices. Otherwise, 
             # skip updating placeholder indices of the background string.
             self.update_placeholder_indices(orig_tokenized_text, placeholder_string, placeholder_token, 
-                                            adaface_subj_embs.shape[1],
-                                            placeholder_is_bg=placeholder_is_bg)
-  
-        return embedded_text, tokenized_text, static_subj_embs_dict
+                                            adaface_subj_embs.shape[1])
+
+        # This is a dirty hack to avoid the repeated computation/RAM of 16 identical embeddings by CLIP.
+        # TODO: fix this dirty hack.
+        if self.pass_one_layer_embedding_to_clip:
+            # embedded_text: [B*16, N, 768] => [B, N, 768]
+            embedded_text  = embedded_text.reshape(BS, self.num_layers_per_embedder, N, -1)[:, 0]
+            # tokenized_text: [B*16, N] => [B, N]
+            tokenized_text = tokenized_text.reshape(BS, self.num_layers_per_embedder, N)[:, 0]
+
+        return embedded_text, tokenized_text
 
     # extend_placeholders() should only be called during inference, 
     # or after the model has been initialized.
@@ -628,13 +627,7 @@ class EmbeddingManager(nn.Module):
 
         print(f"{self.rank} subjects: {self.curr_batch_subj_names}, cls_delta_strings: {self.cls_delta_strings}")
 
-    def set_curr_iter_type(self, text_conditioning_iter_type):
-        self.iter_type = text_conditioning_iter_type
-        # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
-        if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
-            self.cls_delta_strings = self.cls_delta_strings[:1]
-        
-    def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_subj_token, placeholder_is_bg):
+    def update_placeholder_indices(self, tokenized_text, placeholder_string, placeholder_token, num_vectors_per_subj_token):
         placeholder_indices = torch.where(tokenized_text == placeholder_token)
         placeholder_indices_B, placeholder_indices_N = extract_first_index_in_each_instance(placeholder_indices)
 
@@ -672,17 +665,18 @@ class EmbeddingManager(nn.Module):
             print(f"training perturbance std range: {training_begin_perturb_std_range}-{training_end_perturb_std_range}"
                   f", with prob = {training_perturb_prob}")
 
-    def set_image_prompts_and_features(self, id2img_prompt_embs, clip_bg_features):
-        # id2img_prompt_embs: [1, 16, 768] or [1, 4, 768].
-        # clip_bg_features: [1, 257, 1280].
-
+    def set_image_prompts_and_iter_type(self, id2img_prompt_embs, clip_bg_features, iter_type):
+        #                     consistentID       arc2face          jointIDs
+        # id2img_prompt_embs: [1, 16, 768]   or [1, 4, 768]    or [1, 20, 768].
+        # clip_bg_features:   [1, 257, 1280] or [1, 257, 1024] or [1, 257, 1280+1024].
         self.image_prompt_dict = { 'subj': id2img_prompt_embs,
                                    'bg':   clip_bg_features,
                                  }
-
-        # Clear the saved subj_embs.
-        self.static_subj_embs_dict = {}
-
+        self.iter_type = iter_type
+        # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
+        if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
+            self.cls_delta_strings = self.cls_delta_strings[:1]
+        
     def set_num_vectors_per_subj_token(self, token2num_vectors):
         self.token2num_vectors = token2num_vectors
         print(f"Set token2num_vectors: {self.token2num_vectors}")

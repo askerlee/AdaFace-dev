@@ -21,6 +21,7 @@ model:
     unfreeze_unet:                    False
     unet_lr:                          0.0
     use_layerwise_embedding:          True
+    pass_one_layer_embedding_to_clip: True
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_comp_teachers:      2
@@ -104,7 +105,9 @@ model:
         background_strings:                 ['y']
         subj_name_to_cls_delta_string:      { 'z': "person", 'rand_id_to_img_prompt': 'person' }
         token2num_vectors:                  {'z': 20, 'y': 4}
-        use_layerwise_embedding: True
+        # Pass one prompt embedding to CLIP, then repeat 16 times to become layerwise.
+        use_layerwise_embedding:            True
+        pass_one_layer_embedding_to_clip:   True
         training_begin_perturb_std_range:   [ 0.05, 0.1 ]
         training_end_perturb_std_range:     [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively
