@@ -18,7 +18,8 @@ from omegaconf.listconfig import ListConfig
 # adaface_ckpt_paths can be one or a list of ckpt paths.
 # adaface_encoder_cfg_scales is None, or a list of scales for the adaface encoder types.
 def create_id2ada_prompt_encoder(adaface_encoder_types, adaface_ckpt_paths=None, 
-                                 adaface_encoder_cfg_scales=None, *args, **kwargs):
+                                 adaface_encoder_cfg_scales=None, enabled_encoders=None,
+                                 *args, **kwargs):
     if len(adaface_encoder_types) == 1:
         adaface_encoder_type = adaface_encoder_types[0]
         adaface_ckpt_path = adaface_ckpt_paths[0] if adaface_ckpt_paths is not None else None
@@ -33,7 +34,8 @@ def create_id2ada_prompt_encoder(adaface_encoder_types, adaface_ckpt_paths=None,
                                         *args, **kwargs)
     else:
         id2ada_prompt_encoder = Joint_FaceID2AdaPrompt(adaface_encoder_types, adaface_ckpt_paths, 
-                                                       adaface_encoder_cfg_scales, *args, **kwargs)
+                                                       adaface_encoder_cfg_scales, enabled_encoders,
+                                                       *args, **kwargs)
     
     return id2ada_prompt_encoder
 
@@ -779,7 +781,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
 # A wrapper for combining multiple FaceID2AdaPrompt instances.
 class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, adaface_encoder_types, adaface_ckpt_paths, 
-                 out_id_embs_cfg_scales=None, *args, **kwargs):
+                 out_id_embs_cfg_scales=None, enabled_encoders=None,
+                 *args, **kwargs):
         self.name = 'jointIDs'        
         assert len(adaface_encoder_types) > 0, "adaface_encoder_types should not be empty."
         adaface_encoder_types2num_id_vecs = { 'arc2face': 16, 'consistentID': 4 }
@@ -840,6 +843,16 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
 
         print(f"{self.name} ada prompt encoder initialized with {self.num_sub_encoders} sub-encoders. "
               f"ID vecs: {self.num_id_vecs}, static suffix embs: {self.num_static_img_suffix_embs}.")
+        
+        if enabled_encoders is not None:
+            self.are_encoders_disabled = [True if encoder_type not in enabled_encoders else False \
+                                          for encoder_type in adaface_encoder_types]
+            if any(self.are_encoders_disabled):
+                disabled_encoders = [ encoder_type for i, encoder_type in enumerate(adaface_encoder_types) \
+                                        if self.are_encoders_disabled[i] ]
+                print(f"{sum(self.are_encoders_disabled)} encoders are disabled: {disabled_encoders}.")
+        else:
+            self.are_encoders_disabled = [False] * self.num_sub_encoders
 
     def load_adaface_ckpt(self, adaface_ckpt_paths):
         # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
@@ -1074,18 +1087,18 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # When there are two sub-encoders, the prob of one encoder being dropped is 
         # p_dropout * 2 - p_dropout^2 = 0.18.
         if p_dropout > 0:
-            is_encoder_dropped = torch.rand(self.num_sub_encoders) < p_dropout
+            self.are_encoders_disabled = torch.rand(self.num_sub_encoders) < p_dropout
             # At least enable one encoder.
-            if is_encoder_dropped.all():
-                is_encoder_dropped[torch.randint(0, self.num_sub_encoders, (1,))] = False
+            if self.are_encoders_disabled.all():
+                self.are_encoders_disabled[torch.randint(0, self.num_sub_encoders, (1,))] = False
         else:
-            is_encoder_dropped = [False] * self.num_sub_encoders
+            self.are_encoders_disabled = [False] * self.num_sub_encoders
 
         all_adaface_subj_embs = []
         num_available_id_vecs = 0
 
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
-            if is_encoder_dropped[i]:
+            if self.are_encoders_disabled[i]:
                 adaface_subj_embs = None
                 print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
             else:

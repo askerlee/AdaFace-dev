@@ -23,6 +23,7 @@ sys.modules['ldm.modules'] = sys.modules['adaface']
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
                  adaface_ckpt_paths, adaface_encoder_cfg_scales=None, 
+                 enabled_encoders=None,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_path=None, unet_types=None, extra_unet_paths=None, unet_weights=None,
@@ -39,6 +40,7 @@ class AdaFaceWrapper(nn.Module):
 
         self.adaface_ckpt_paths = adaface_ckpt_paths
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
+        self.enabled_encoders = enabled_encoders
         self.subject_string = subject_string
 
         self.num_inference_steps = num_inference_steps
@@ -69,7 +71,8 @@ class AdaFaceWrapper(nn.Module):
     def initialize_pipeline(self):
         self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(self.adaface_encoder_types,
                                                                   self.adaface_ckpt_paths,
-                                                                  self.adaface_encoder_cfg_scales)
+                                                                  self.adaface_encoder_cfg_scales,
+                                                                  self.enabled_encoders)
 
         self.id2ada_prompt_encoder.to(self.device)
         print(f"adaface_encoder_cfg_scales: {self.adaface_encoder_cfg_scales}")

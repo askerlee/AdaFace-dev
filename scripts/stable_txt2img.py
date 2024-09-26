@@ -245,6 +245,8 @@ def parse_args():
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
+    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                        help="List of enabled encoders (among the list of adaface_encoder_types)")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
@@ -383,6 +385,7 @@ def main(opt):
 
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
                                           opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
+                                          opt.enabled_encoders,
                                           opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
                                           unet_types=None,
                                           main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
