@@ -1106,7 +1106,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 sel_idx = torch.randint(0, len(enabled_indices), (1,)).item()
                 are_encoders_enabled[enabled_indices[sel_idx]] = True
         else:
-            are_encoders_enabled = torch.tensor([True] * self.num_sub_encoders)
+            are_encoders_enabled = self.are_encoders_enabled
 
         all_adaface_subj_embs = []
         num_available_id_vecs = 0
