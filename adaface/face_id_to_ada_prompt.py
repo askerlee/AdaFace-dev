@@ -848,14 +848,19 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
               f"ID vecs: {self.num_id_vecs}, static suffix embs: {self.num_static_img_suffix_embs}.")
         
         if enabled_encoders is not None:
-            self.are_encoders_disabled = [True if encoder_type not in enabled_encoders else False \
-                                          for encoder_type in adaface_encoder_types]
-            if any(self.are_encoders_disabled):
+            self.are_encoders_enabled = \
+                torch.tensor([True if encoder_type in enabled_encoders else False \
+                              for encoder_type in adaface_encoder_types])
+            if not self.are_encoders_enabled.any():
+                print(f"All encoders are disabled, which shoudn't happen.")
+                breakpoint()
+            if self.are_encoders_enabled.sum() < self.num_sub_encoders:
                 disabled_encoders = [ encoder_type for i, encoder_type in enumerate(adaface_encoder_types) \
-                                        if self.are_encoders_disabled[i] ]
-                print(f"{sum(self.are_encoders_disabled)} encoders are disabled: {disabled_encoders}.")
+                                        if not self.are_encoders_enabled[i] ]
+                print(f"{len(disabled_encoders)} encoders are disabled: {disabled_encoders}.")
         else:
-            self.are_encoders_disabled = [False] * self.num_sub_encoders
+            self.are_encoders_enabled = \
+                torch.tensor([True] * self.num_sub_encoders)
 
     def load_adaface_ckpt(self, adaface_ckpt_paths):
         # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
@@ -1090,18 +1095,24 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # When there are two sub-encoders, the prob of one encoder being dropped is 
         # p_dropout * 2 - p_dropout^2 = 0.18.
         if p_dropout > 0:
-            self.are_encoders_disabled = torch.rand(self.num_sub_encoders) < p_dropout
-            # At least enable one encoder.
-            if self.are_encoders_disabled.all():
-                self.are_encoders_disabled[torch.randint(0, self.num_sub_encoders, (1,))] = False
+            # self.are_encoders_enabled is a global mask.
+            # are_encoders_enabled is a local mask for each batch.
+            are_encoders_enabled = torch.rand(self.num_sub_encoders) < p_dropout
+            are_encoders_enabled = are_encoders_enabled & self.are_encoders_enabled
+            # We should at least enable one encoder.
+            if not are_encoders_enabled.any():
+                # Randomly enable an encoder with self.are_encoders_enabled[i] == True.
+                enabled_indices = torch.nonzero(self.are_encoders_enabled).squeeze(1)
+                sel_idx = torch.randint(0, len(enabled_indices), (1,)).item()
+                are_encoders_enabled[enabled_indices[sel_idx]] = True
         else:
-            self.are_encoders_disabled = [False] * self.num_sub_encoders
+            are_encoders_enabled = torch.tensor([True] * self.num_sub_encoders)
 
         all_adaface_subj_embs = []
         num_available_id_vecs = 0
 
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
-            if self.are_encoders_disabled[i]:
+            if not are_encoders_enabled[i]:
                 adaface_subj_embs = None
                 print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
             else:
