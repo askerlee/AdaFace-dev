@@ -388,7 +388,7 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
         dst_path = dst_path[:-1]
     src_path_base = os.path.basename(src_path)
     dst_path_base = os.path.basename(dst_path)
-    print("avg face sim: %.3f    '%s' vs '%s' (%d)" %(avg_similarity, src_path_base, dst_path_base, dst_no_face_img_count))
+    print(f"avg face sim: {avg_similarity:.3f}    '{src_path_base}' vs '{dst_path_base}' ({dst_no_face_img_count} no face)")
     return avg_similarity, dst_normal_img_count, dst_no_face_img_count
 
 # extra_sig could be a regular expression

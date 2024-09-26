@@ -525,7 +525,7 @@ def main(opt):
                 # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
                 # Note there's a second "model" in the path.
                 insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
-                insightface_app.prepare(ctx_id=opt.gpu, det_size=(512, 512))
+                insightface_app.prepare(ctx_id=0, det_size=(512, 512))
             else:
                 # face_engine == "deepface". It cannot be pre-initialized.
                 insightface_app = None
@@ -715,7 +715,7 @@ def main(opt):
                                 if opt.calc_face_sim:
                                     sim_face, normal_img_count, except_img_count = \
                                         compare_face_folders(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
-                                                                    face_engine=opt.face_engine, insightface_app=insightface_app)
+                                                             face_engine=opt.face_engine, insightface_app=insightface_app)
                                     # sim_face is a float, so no need to detach().cpu().numpy().
                                     all_sims_face.append(sim_face)
                                     all_normal_img_counts.append(normal_img_count)
