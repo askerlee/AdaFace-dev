@@ -18,6 +18,8 @@ parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", default=None,
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                     help="Scales for the ID2Ada prompt encoders")
+parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                    help="List of enabled encoders (among the list of adaface_encoder_types)")
 parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
 parser.add_argument('--extra_unet_paths', type=str, nargs="*", default=['models/ensemble/rv4-unet', 
                                                                         'models/ensemble/ar18-unet'], 
@@ -37,6 +39,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_mod
                          adaface_encoder_types=args.adaface_encoder_types, 
                          adaface_ckpt_paths=args.adaface_ckpt_paths, 
                          adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
+                         enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_paths=args.extra_unet_paths, 
                          unet_weights=args.unet_weights, device=device)
 
