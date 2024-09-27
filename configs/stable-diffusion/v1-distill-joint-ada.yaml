@@ -51,9 +51,10 @@ model:
     p_gen_id2img_rand_id:             0.1
     # the delta recon loss is only computed when perturb_face_id_embs.
     p_perturb_face_id_embs:           0.6
-    # ConsistentID image embeddings are quite robust to random perturbations, so we set
-    # a large std range of [0.5, 1.5].
-    perturb_face_id_embs_std_range:   [0.5, 1]
+    # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
+    # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6]. 
+    # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
+    perturb_face_id_embs_std_range:   [0.3, 0.6]
     distill_delta_loss_boost:           1
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
@@ -171,7 +172,7 @@ data:
   params:
     # Since we optimize two subj basis generators, we can only afford a batch size of 2.
     # Effective batch size is 2 * 2 GPUs * 4 accum_grad_batches = 16.
-    batch_size:  3
+    batch_size:  4
     num_workers: 4
     wrap: false
     max_steps: 60000
@@ -195,4 +196,4 @@ lightning:
     limit_val_batches:    0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
-    accumulate_grad_batches: 3
+    accumulate_grad_batches: 2

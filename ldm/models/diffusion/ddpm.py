@@ -1074,7 +1074,7 @@ class LatentDiffusion(DDPM):
         # ID information.
         p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
         # p_perturb_face_id_embs: default 0.6.
-        # The overall prob of perturb_face_id_embs: (1 - 0.4) * 0.6 = 0.36.
+        # The overall prob of perturb_face_id_embs: (1 - 0.5) * 0.6 = 0.3.
         self.iter_flags['perturb_face_id_embs'] = random.random() < p_perturb_face_id_embs
         if self.iter_flags['perturb_face_id_embs']:
             if not self.iter_flags['same_subject_in_batch']:
@@ -1101,20 +1101,21 @@ class LatentDiffusion(DDPM):
                                               id2img_prompt_embs, zs_clip_fgbg_features)
                 
             # ** Add noise to the zero-shot ID image prompt embeddings with probability 0.6. **
-            # ** Note the noise is added to the image prompt embeddings instead of the initial face ID embeddings. **
+            # The noise is added to the image prompt embeddings instead of the initial face ID embeddings.
             # Because for ConsistentID, both the ID embeddings and the CLIP features are used to generate the image prompt embeddings.
             # Each embedding has different roles in depicting the facial features.
             # If we perturb both, we cannot guarantee their consistency and the perturbed faces may be quite distorted.
             # perturb_std_is_relative=True: The perturb_std is relative to the std of the last dim (512) of face_id_embs.
-            # A noise_std_range of 0.08 could change gender, but 0.06 is usually safe to gender (but could change look drastically).
             # If the subject is not face, then face_id_embs is DINO embeddings. We can still add noise to them.
             # Keep the first ID embedding as it is, and add noise to the rest.
+            # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
+            # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6].
             id2img_prompt_embs[1:] = \
                 anneal_perturb_embedding(id2img_prompt_embs[1:], training_percent=0, 
-                                            begin_noise_std_range=self.perturb_face_id_embs_std_range, 
-                                            end_noise_std_range=None, 
-                                            perturb_prob=1, perturb_std_is_relative=True, 
-                                            keep_norm=True, verbose=True)
+                                         begin_noise_std_range=self.perturb_face_id_embs_std_range, 
+                                         end_noise_std_range=None, 
+                                         perturb_prob=1, perturb_std_is_relative=True, 
+                                         keep_norm=True, verbose=True)
 
         if self.iter_flags['do_unet_distill']:
             # Gradually increase the chance of taking 5 or 7 denoising steps.
@@ -1177,8 +1178,8 @@ class LatentDiffusion(DDPM):
                 
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
                 # We don't explicitly repeat noise here. 
-                # If perturb_face_id_embs,     then the noise is already the same for all ID embeddings,
-                # If not perturb_face_id_embs, then the noise should be different for different instances, 
+                # If perturb_face_id_embs,     then the noise latent is already the same for all ID embeddings,
+                # If not perturb_face_id_embs, then the noise latent should be different for different instances, 
                 # and there's no need to repeat. 
                 # But we need to use only the first HALF_BS noises to match x_start.
                 noise = noise[:HALF_BS]
@@ -2048,13 +2049,14 @@ class LatentDiffusion(DDPM):
                                                          fg_pixel_weight=1,
                                                          bg_pixel_weight=bg_pixel_weight)
 
-                    # The ID embedding of the first instance in the batch is intact,
-                    # and the remaining ID embeddings are added with noise.
+                    # The first ID embedding in the batch is intact,
+                    # and the remaining ID embeddings are the first added with noise.
                     # So we can contrast the first instance with the remaining instances,
-                    # and highlight their differences caused by the noise.
+                    # so as to highlight their differences caused by the noise.
                     # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
                     # Therefore, targets == unet_teacher_noise_preds.
-                    if self.iter_flags['perturb_face_id_embs']:
+                    # We can set distill_delta_loss_boost = 0 to disable the delta distillation loss.
+                    if self.iter_flags['perturb_face_id_embs'] and self.distill_delta_loss_boost > 0:
                         # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
                         # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
                         # So we can contrast the first instance with the remaining instances.
