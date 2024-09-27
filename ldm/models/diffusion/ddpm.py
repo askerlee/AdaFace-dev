@@ -844,7 +844,8 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_background_token'] = self.enable_background_token \
                                                     and random.random() < p_use_background_token
-                    
+
+        # ** use_fp_trick is only for compositional iterations. **
         if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
             SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
@@ -864,8 +865,8 @@ class LatentDiffusion(DDPM):
             CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
             CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
         # Either do_comp_prompt_distillation but not use_fp_trick_iter, 
-        # or recon iters (not do_comp_prompt_distillation) and not use_background_token.
-        # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
+        # or recon/unet_distill iters (not do_comp_prompt_distillation) and not use_background_token.
+        # We don't use_fp_trick on training images. 
         else:
             SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp'

@@ -25,7 +25,7 @@ model:
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_comp_teachers:      2
-    composition_regs_iter_gap:        -1
+    composition_regs_iter_gap:        -1  # Change to 4 when unet distillation plateaus.
     unet_teacher_types:               ['consistentID', 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.3, 2.0]
@@ -172,7 +172,7 @@ data:
   params:
     # Since we optimize two subj basis generators, we can only afford a batch size of 2.
     # Effective batch size is 2 * 2 GPUs * 4 accum_grad_batches = 16.
-    batch_size:  4
+    batch_size:  3
     num_workers: 4
     wrap: false
     max_steps: 60000
