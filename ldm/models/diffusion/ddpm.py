@@ -879,14 +879,12 @@ class LatentDiffusion(DDPM):
                                                     and random.random() < p_use_background_token
                     
         if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
-            captions = batch['caption_bg']
             SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
             CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
         # use_fp_trick but not use_background_token.
         elif self.iter_flags['use_fp_trick']:
-            captions = batch['caption']
             # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
             SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
@@ -894,7 +892,6 @@ class LatentDiffusion(DDPM):
             CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
         # not use_fp_trick and use_background_token.
         elif self.iter_flags['use_background_token']:
-            captions = batch['caption_bg']
             SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
@@ -903,32 +900,21 @@ class LatentDiffusion(DDPM):
         # or recon iters (not do_comp_prompt_distillation) and not use_background_token.
         # We don't use_fp_trick on training images. use_fp_trick is only for compositional regularization.
         else:
-            # The above captions returned by self.get_input() is already batch['caption'].
-            # Reassign here for clarity.
-            captions = batch['caption']
             SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
             CLS_PROMPT_COMP    = 'cls_prompt_comp'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single'
 
-        # Each prompt_comp consists of multiple prompts separated by "|".
-        # Split them into a list of subj_comp_prompts/cls_comp_prompts.
-        subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
+        captions = subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
         cls_single_prompts  = batch[CLS_PROMPT_SINGLE]
-        subj_comp_prompts = []
-        for prompt_comp in batch[SUBJ_PROMPT_COMP]:
-            subj_comp_prompts.append(prompt_comp.split("|"))
-        cls_comp_prompts = []
-        for prompt_comp in batch[CLS_PROMPT_COMP]:
-            cls_comp_prompts.append(prompt_comp.split("|"))
+        subj_comp_prompts   = batch[SUBJ_PROMPT_COMP]
+        cls_comp_prompts    = batch[CLS_PROMPT_COMP]
+
         # REPEATS: how many prompts correspond to each image.
         REPEATS = len(subj_comp_prompts[0])
         # Currently only support REPEATS == 1.
         assert REPEATS == 1
-        subj_comp_prompts = [ prompts[0] for prompts in subj_comp_prompts ]
-        cls_comp_prompts  = [ prompts[0] for prompts in cls_comp_prompts ]
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-
 
         if 'aug_mask' in batch:
             # img_mask is another name of aug_mask.
@@ -1123,9 +1109,8 @@ class LatentDiffusion(DDPM):
             # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
             if random.random() < self.p_unet_distill_uses_comp_prompt:
-                captions = batch[SUBJ_PROMPT_COMP]
-                #print(captions)
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
+                captions = batch[SUBJ_PROMPT_COMP]
 
             if num_denoising_steps > 1:
                 # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
@@ -1158,6 +1143,7 @@ class LatentDiffusion(DDPM):
                     subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
                     cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
                 
+                # Update delta_prompts to have the first HALF_BS prompts.
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
                 # We don't explicitly repeat noise here. 
                 # If perturb_face_id_embs,     then the noise latent is already the same for all ID embeddings,
@@ -1232,181 +1218,155 @@ class LatentDiffusion(DDPM):
         # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
         # When do_unet_distill and distilling on ConsistentID, we still
         # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
-        if self.iter_flags['do_static_prompt_delta_reg'] or self.iter_flags['do_comp_prompt_distillation'] \
-          or self.iter_flags['do_unet_distill']:
-            # reuse_init_conds, discard the prompts offered in shared_step().
-            if self.iter_flags['reuse_init_conds']:
-                # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                delta_prompts = self.cached_inits[self.batch_1st_subject_name]['delta_prompts']
-                # cached_inits will be used in p_losses(), 
-                # so don't delete cached_init[self.batch_1st_subject_name] to False yet.
-            else:
-                # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
-                delta_prompts = self.iter_flags['delta_prompts']
 
-            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
-            #if self.iter_flags['use_background_token']:
-            #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-            
-            if self.iter_flags['do_comp_prompt_distillation']:                        
-                # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
-                BLOCK_SIZE  = 1
-                # Only keep the first half of batched prompts to save RAM.
-                subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                    subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
-                    cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
-            else:
-                # Otherwise, do_static_prompt_delta_reg.
-                # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
-                # 12 prompts will be fed into get_text_conditioning().
-                BLOCK_SIZE = ORIG_BS
-                                        
-            # We still compute the static embeddings of the 4 types of prompts, 
-            # to compute static delta loss. 
-            # But now there are 12 prompts (4 * ORIG_BS = 12), as the batch is not halved.
-            delta_prompts = subj_single_prompts + subj_comp_prompts \
-                            + cls_single_prompts + cls_comp_prompts
-            #print(delta_prompts)
-            # breakpoint()
-            # c_static_emb: the static embeddings for static delta loss.
-            # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_CA_LAYERS,
-            # whose layer dimension (N_CA_LAYERS) is tucked into the batch dimension. 
-            # delta_prompts: the concatenation of
-            # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
-            # extra_info: a dict that contains extra info.
-            c_static_emb, _, extra_info = \
-                self.get_text_conditioning(delta_prompts, 
-                                           self.iter_flags['id2img_prompt_embs'],
-                                           self.iter_flags['clip_bg_features'],
-                                           randomize_clip_weights=True,
-                                           text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
-
-            subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
-                c_static_emb.chunk(4)
-
-            # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
-            # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
-            # Only keep the first half (for single prompts), as the second half is the same 
-            # (for comp prompts, differs at the batch index, but the token index is identical).
-            # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
-            # the placeholder token doesn't appear in the class prompts. 
-            # Now we take the first half of placeholder_indices_fg, so that 
-            # they only account for the subject single prompt, but they are also 
-            # applicable to the other 3 types of prompts as they are all aligned 
-            # at the beginning part of the prompts.
-            # halve_token_indices() can take either a tuple or a dict of tuples.
-
-            # placeholder2indices_2b is copied from self.embedding_manager.placeholder2indices 
-            # during get_text_conditioning(). Because such indices are volatile 
-            # (change with different prompts), we need to cache them immediately for later use.
-            placeholder2indices_2b = extra_info['placeholder2indices']
-            placeholder2indices_1b = {}
-            for k in placeholder2indices_2b:
-                placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
-                if placeholder2indices_1b[k] is None:
-                    continue
-
-            # The subject is represented with a multi-embedding token. The corresponding tokens
-            # in the class prompts are "class , , ,", 
-            # therefore the embeddings of "," need to be patched.
-            # BUG: if the batch size of a mix batch > 4, then the ph_indices_1b_N
-            # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
-            # treat the indices as if they are always in the same instance.
-            # len(ph_indices_1b_N): embedding number of the subject token.
-            cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb,
-                                                                      placeholder2indices_1b)
-            cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,
-                                                                      placeholder2indices_1b)
-            
-            extra_info['placeholder2indices_1b'] = placeholder2indices_1b
-            extra_info['placeholder2indices_2b'] = placeholder2indices_2b
-
-            # These embeddings are patched. So combine them back into c_static_emb.
-            c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
-                                        cls_single_emb, cls_comp_emb], dim=0)
-            
-            # [64, 77, 768] => [16, 4, 77, 768].
-            extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_CA_LAYERS, 
-                                                                    *c_static_emb.shape[1:])
-            if self.iter_flags['do_comp_prompt_distillation']:
-                # c_in2 = delta_prompts is used to generate ada embeddings.
-                # c_in2: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
-                # The cls_single_prompts/cls_comp_prompts within c_in2 will only be used to 
-                # generate ordinary prompt embeddings, i.e., 
-                # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
-                # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
-                # are manually mixed into their embeddings.
-                c_in2 = delta_prompts
-                # The prompts are either (subj single, subj comp, cls single, cls comp) or
-                # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
-                # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
-                extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
-            else:
-                # do_normal_recon or do_unet_distill.
-                c_in2                   = captions
-                # Use the original "captions" prompts and embeddings.
-                # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
-                # it holds in all other cases.
-                if not self.iter_flags['unet_distill_uses_comp_prompt']:
-                    assert captions == subj_single_prompts
-                else:
-                    assert captions == subj_comp_prompts
-                # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
-                # So in this case, subj_single_emb == subj_comp_emb.
-                c_static_emb = subj_single_emb
-                # The blocks as input to get_text_conditioning() are not halved. 
-                # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-                extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
-                extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                     *c_static_emb.shape[1:])
-                                        
-                # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
-                # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
-                # to do the replacement.
-                # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
-                                    
-                ##### End of normal_recon with static delta loss iters. #####
-
-            extra_info['cls_single_prompts'] = cls_single_prompts
-            extra_info['cls_single_emb']     = cls_single_emb
-            extra_info['cls_comp_prompts']   = cls_comp_prompts
-            extra_info['cls_comp_emb']       = cls_comp_emb
-                                
-            # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
-            # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
-            # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
-            # than those actually used in this iter.)
-            # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
-            extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
-                                                cls_single_prompts,  cls_comp_prompts)
-
-            # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
-            # cls_single_prompts, cls_comp_prompts. 
-            # c_static_emb: [64, 77, 768]                    
-            cond = (c_static_emb, c_in2, extra_info)
+        # reuse_init_conds, discard the prompts offered in shared_step().
+        if self.iter_flags['reuse_init_conds']:
+            # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
+            delta_prompts = self.cached_inits[self.batch_1st_subject_name]['delta_prompts']
+            # cached_inits will be used in p_losses(), 
+            # so don't delete cached_init[self.batch_1st_subject_name] to False yet.
         else:
-            # Not (self.iter_flags['do_static_prompt_delta_reg'] or 'do_comp_prompt_distillation').
-            # That is, non-compositional iter, or recon iter without static delta loss. 
-            # Keep the tuple cond unchanged. prompts: subject single.
-            # This branch is only reached when do_static_prompt_delta_reg = False.
-            # Either prompt_emb_delta_reg_weight == 0 (ablation only) or 
-            # it's called by self.validation_step().
-            assert self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']
+            # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
+            delta_prompts = self.iter_flags['delta_prompts']
 
-            c_static_emb, c_in, extra_info0 = \
-                self.get_text_conditioning(captions, 
-                                           self.iter_flags['id2img_prompt_embs'],
-                                           self.iter_flags['clip_bg_features'],                                                      
-                                           randomize_clip_weights=True,
-                                           text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
-            
-            extra_info = extra_info0
-            extra_info['placeholder2indices_1b'] = extra_info['placeholder2indices']
-            extra_info['c_static_emb_1b']        = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                        *c_static_emb.shape[1:])
+        subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
+        #if self.iter_flags['use_background_token']:
+        #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
+        
+        if self.iter_flags['do_comp_prompt_distillation']:                        
+            # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
+            BLOCK_SIZE  = 1
+            # Only keep the first half of batched prompts to save RAM.
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
+                subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
+                cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
+        else:
+            # Otherwise, do_static_prompt_delta_reg.
+            # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
+            # 12 prompts will be fed into get_text_conditioning().
+            BLOCK_SIZE = ORIG_BS
+                                    
+        # We still compute the static embeddings of the 4 types of prompts, 
+        # to compute static delta loss. 
+        # But now there are 12 prompts (4 * ORIG_BS = 12), as the batch is not halved.
+        delta_prompts = subj_single_prompts + subj_comp_prompts \
+                        + cls_single_prompts + cls_comp_prompts
+        #print(delta_prompts)
+        # breakpoint()
+        # c_static_emb: the static embeddings for static delta loss.
+        # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_CA_LAYERS,
+        # whose layer dimension (N_CA_LAYERS) is tucked into the batch dimension. 
+        # delta_prompts: the concatenation of
+        # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
+        # extra_info: a dict that contains extra info.
+        c_static_emb, _, extra_info = \
+            self.get_text_conditioning(delta_prompts, 
+                                       self.iter_flags['id2img_prompt_embs'],
+                                       self.iter_flags['clip_bg_features'],
+                                       randomize_clip_weights=True,
+                                       text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
+
+        subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
+            c_static_emb.chunk(4)
+
+        # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
+        # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
+        # Only keep the first half (for single prompts), as the second half is the same 
+        # (for comp prompts, differs at the batch index, but the token index is identical).
+        # placeholder_indices_fg is only for (subj_single_prompts, subj_comp_prompts), since
+        # the placeholder token doesn't appear in the class prompts. 
+        # Now we take the first half of placeholder_indices_fg, so that 
+        # they only account for the subject single prompt, but they are also 
+        # applicable to the other 3 types of prompts as they are all aligned 
+        # at the beginning part of the prompts.
+        # halve_token_indices() can take either a tuple or a dict of tuples.
+
+        # placeholder2indices_2b is copied from self.embedding_manager.placeholder2indices 
+        # during get_text_conditioning(). Because such indices are volatile 
+        # (change with different prompts), we need to cache them immediately for later use.
+        placeholder2indices_2b = extra_info['placeholder2indices']
+        placeholder2indices_1b = {}
+        for k in placeholder2indices_2b:
+            placeholder2indices_1b[k] = halve_token_indices(placeholder2indices_2b[k])
+            if placeholder2indices_1b[k] is None:
+                continue
+
+        # The subject is represented with a multi-embedding token. The corresponding tokens
+        # in the class prompts are "class , , ,", 
+        # therefore the embeddings of "," need to be patched.
+        # BUG: if the batch size of a mix batch > 4, then the ph_indices_1b_N
+        # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
+        # treat the indices as if they are always in the same instance.
+        # len(ph_indices_1b_N): embedding number of the subject token.
+        cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb, placeholder2indices_1b)
+        cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb, placeholder2indices_1b)
+        
+        extra_info['placeholder2indices_1b'] = placeholder2indices_1b
+        extra_info['placeholder2indices_2b'] = placeholder2indices_2b
+
+        # These embeddings are patched. So combine them back into c_static_emb.
+        c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
+                                    cls_single_emb, cls_comp_emb], dim=0)
+        
+        # [64, 77, 768] => [16, 4, 77, 768].
+        extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_CA_LAYERS, 
+                                                             *c_static_emb.shape[1:])
+        if self.iter_flags['do_comp_prompt_distillation']:
+            # c_in = delta_prompts is used to generate ada embeddings.
+            # c_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
+            # The cls_single_prompts/cls_comp_prompts within c_in will only be used to 
+            # generate ordinary prompt embeddings, i.e., 
+            # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
+            # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
+            # are manually mixed into their embeddings.
+            c_in = delta_prompts
+            # The prompts are either (subj single, subj comp, cls single, cls comp) or
+            # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
+            # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
+            extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
+        else:
+            # do_normal_recon or do_unet_distill.
+            c_in = captions
+            # Use the original "captions" prompts and embeddings.
+            # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
+            # it holds in all other cases.
+            if not self.iter_flags['unet_distill_uses_comp_prompt']:
+                assert captions == subj_single_prompts
+            else:
+                assert captions == subj_comp_prompts
+            # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
+            # So in this case, subj_single_emb == subj_comp_emb.
+            c_static_emb = subj_single_emb
+            # The blocks as input to get_text_conditioning() are not halved. 
+            # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
+            extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
+            extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
+                                                                    *c_static_emb.shape[1:])
+                                    
+            # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
+            # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
+            # to do the replacement.
+            # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
                                 
-            cond = (c_static_emb, c_in, extra_info)
-            ##### End of normal_recon without static delta loss iters. #####
+            ##### End of normal_recon with static delta loss iters. #####
+
+        extra_info['cls_single_prompts'] = cls_single_prompts
+        extra_info['cls_single_emb']     = cls_single_emb
+        extra_info['cls_comp_prompts']   = cls_comp_prompts
+        extra_info['cls_comp_emb']       = cls_comp_emb
+                            
+        # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
+        # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
+        # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
+        # than those actually used in this iter.)
+        # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
+        extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
+                                            cls_single_prompts,  cls_comp_prompts)
+
+        # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
+        # cls_single_prompts, cls_comp_prompts. 
+        # c_static_emb: [64, 77, 768]                    
+        cond = (c_static_emb, c_in, extra_info)
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
@@ -1632,7 +1592,7 @@ class LatentDiffusion(DDPM):
                     noise   = noise[:NEW_HALF_BS].repeat(2, 1, 1, 1)
                     t       = t[:NEW_HALF_BS].repeat(2)
 
-                    # Make two identical sets of c_static_emb2 and c_in2 (first half batch and second half batch).
+                    # Make two identical sets of c_static_emb2 and c_in (first half batch and second half batch).
                     # The two sets are applied on different initial x_start, noise and t (within each half batch).
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)

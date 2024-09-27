@@ -312,10 +312,9 @@ class EmbeddingManager(nn.Module):
             tokenized_text,         # [B, N]. 
             embedded_text,          # [B, N, 768]. 
     ):
-        # When delta loss is used, B is not batch_size, but batch_size * 4 * num_compositions_per_image.
-        # If bs=2, num_compositions_per_image=2, then B=16.
-        # In the iterations when ada delta loss is enabled, in effect num_compositions_per_image is 1, 
-        # even if it's specified as 2, so B=8.
+        # When delta loss is used, B is not batch_size, but batch_size * 4.
+        # If bs=2, then B=8.
+        # In the iterations when ada delta loss is enabled, B=8.
         B, N = tokenized_text.shape
 
         # placeholder_indices will be regenerated with update_placeholder_indices() 

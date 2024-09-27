@@ -10,7 +10,6 @@ from .compositions import sample_compositions
 import random
 import torch
 import regex as re
-import webdataset as wds
 from ldm.util import parse_subject_file
 import torch.distributed as dist
 from queue import Queue
@@ -145,7 +144,6 @@ class PersonalizedBase(Dataset):
                  set_name="train",
                  subject_string="z",
                  background_string="y",
-                 wds_background_string="w",
                  # placeholder_prefix for all types of prompts. Could be a list of strings, separated by ",".
                  common_placeholder_prefix=None,   
                  # cls string used to compute the delta loss.
@@ -158,7 +156,6 @@ class PersonalizedBase(Dataset):
                  num_vectors_per_subj_token=1,
                  num_vectors_per_bg_token=1,
                  center_crop=False,
-                 num_compositions_per_image=1,
                  broad_class=1,
                  # If data_roots contain multiple top folders, and multiple subfolders in each top folder, 
                  # and a subject in each subfolder folder, 
@@ -167,8 +164,6 @@ class PersonalizedBase(Dataset):
                  subj_info_filepaths=None,
                  load_meta_subj2person_type_cache_path=None,
                  save_meta_subj2person_type_cache_path=None,
-                 wds_db_path=None,    # Path to a folder containing webdatabase .tar files
-                 use_wds_prompts=False, # Use or ignore the prompts (when the prompts are noisy) in the webdataset.
                  verbose=False, 
                  ):
 
@@ -339,19 +334,6 @@ class PersonalizedBase(Dataset):
             self.is_training = False
             self._length = self.num_images 
 
-        self.wds_db_path = wds_db_path
-        self.use_wds_prompts = use_wds_prompts
-        # wds composition is enabled if there are fg masks.
-        if self.is_training and (self.wds_db_path is not None):
-            self.comp_wds = wds.WebDataset(self.wds_db_path).shuffle(100).decode("pil").to_tuple("jpg;png", "json")
-            self.comp_wds_iter = iter(self.comp_wds)
-            self.train_with_wds_data = True
-            print(f"Webdataset {self.wds_db_path} is enabled")
-        else:
-            self.comp_wds = None
-            self.comp_wds_iter = None
-            self.train_with_wds_data = False
-
         subj2attr = {}
         if subj_info_filepaths is not None:
             for subj_info_filepath in subj_info_filepaths:
@@ -379,19 +361,6 @@ class PersonalizedBase(Dataset):
         # NOTE: if do_zero_shot, all subjects share the same subject/background placeholders and embedders.
         self.subject_strings        = [ subject_string ]         * self.num_subjects
         self.background_strings     = [ background_string ]      * self.num_subjects
-        self.wds_background_strings = [ wds_background_string ]  * self.num_subjects
-
-        if self.train_with_wds_data:
-            self.tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-            # subject_token, background_token: subject_string and background_string converted to 
-            # token numbers.
-            # BUG: self.tokenizer hasn't been extended with the new tokens yet. 
-            # So the tokens are WRONG under multi-subject training.
-            # But this only matters when we use wds images.
-            self.subject_tokens     = [ self.tokenizer(subject_string)['input_ids'][1] \
-                                        for subject_string in self.subject_strings ]
-            self.background_tokens  = [ self.tokenizer(background_string)['input_ids'][1] \
-                                        for background_string in self.background_strings ]
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
@@ -452,20 +421,9 @@ class PersonalizedBase(Dataset):
                                         transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                      ])
                 print(f"{set_name} images will be randomly scaled in range {rand_scale_range}")
-
-            if self.train_with_wds_data:
-                # rand_scale_range is (0.7, 1.0) by default. Here we use a smaller range, 
-                # i.e., more aggressive scaling.
-                print(f"{set_name} fg will be randomly scaled to (0.5, 0.8) before overlaying to bg images")
-                self.resize_and_crop = transforms.Compose([
-                                            transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
-                                            transforms.CenterCrop(size),
-                                        ])
         else:
             self.random_scaler = None
             self.flip = None
-
-        self.num_compositions_per_image = num_compositions_per_image
 
     def __len__(self):
         return self._length
@@ -508,9 +466,6 @@ class PersonalizedBase(Dataset):
             fg_mask_path  = self.fg_mask_paths[index % self.num_images] 
             caption_path  = self.caption_paths[index % self.num_images]
             subject_idx   = 0
-
-        cls_delta_string      = self.cls_delta_strings[subject_idx]
-        wds_background_string = self.wds_background_strings[subject_idx]
 
         image_obj = Image.open(image_path)
         if image_obj.mode != "RGB":
@@ -570,13 +525,6 @@ class PersonalizedBase(Dataset):
             image_mask_obj = self.flip(image_mask_obj)
         
         image_mask = np.array(image_mask_obj)
-
-        if self.train_with_wds_data:
-            gen_wds_comp = True
-            # If train_with_wds_data, and fg areas are large enough, then we do more aggressive scaling to fg,
-            # so that fg won't dominate the whole image, which may help learning composition.
-        else:
-            gen_wds_comp = False
 
         if self.random_scaler is not None:
             scale_p = 1
@@ -645,10 +593,10 @@ class PersonalizedBase(Dataset):
                 if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
                     breakpoint()
         else:
-            # If random scaling or wds composition is enabled, then even if no scaling happens
-            # or no wds_image_mask is generated, we still need to put a all-1 'aug_mask' into the example.
+            # If random scaling is enabled, then even if no scaling happens,
+            # we still need to put a all-1 'aug_mask' into the example.
             # 'aug_mask' has to be present in all examples, otherwise collation will encounter exceptions.
-            if self.random_scaler or self.train_with_wds_data:
+            if self.random_scaler:
                 aug_mask = np.ones_like(image_mask[:, :, 0])
             else:
                 # aug_mask will not be present in any examples, so set it to None.
@@ -684,111 +632,7 @@ class PersonalizedBase(Dataset):
             example["mean_emb"] = torch.zeros(1, 512)
         '''
         
-        if gen_wds_comp:
-            # subject_token, background_token: subject_string and background_string converted to 
-            # token numbers.        
-            subject_token         = self.subject_tokens[subject_idx]
-            background_token      = self.background_tokens[subject_idx]
-
-            Found = False
-            while not Found:
-                try:
-                    bg_img, bg_json = next(self.comp_wds_iter)
-                except:
-                    self.comp_wds_iter = iter(self.comp_wds)
-                    bg_img, bg_json = next(self.comp_wds_iter)
-
-                bg_prompt = bg_json['caption'].lower()
-                # Skip too short prompts.
-                if len(bg_prompt.strip()) < 5:
-                    continue
-                bg_prompt_tokens = self.tokenizer(bg_prompt)['input_ids']
-                # Skip those image/prompt pairs that will cause parsing errors.
-                contains_special_token = subject_token       in bg_prompt_tokens \
-                                         or background_token in bg_prompt_tokens \
-                                         or (wds_background_string is not None \
-                                             and wds_background_string in bg_prompt_tokens)
-                
-                if re.search(human_animal_pat, bg_prompt):
-                    contains_human = True
-                else:
-                    contains_human = False
-
-                hw_ratio = bg_json['width'] / bg_json['height']
-                if hw_ratio >= 1.34 and hw_ratio < 0.75:
-                    is_bad_size = True
-                else:
-                    is_bad_size = False
-                
-                orig_h, orig_w = bg_json['original_height'], bg_json['original_width']
-                # Here we use max() instead of min() as below, to filter on the smaller dimension.
-                edge_ratio = max(self.size / orig_h, self.size / orig_w)
-                # edge_ratio is the ratio between the target 512x512 image and the shorter edge of the original image.
-                # If it's too large, it means the original image is too small, and we skip it.
-                if edge_ratio >= 1.3:
-                    is_too_small = True
-                else:
-                    is_too_small = False
-
-                # Skip wds image/prompt pairs that contain humans, special tokens or are of bad size.
-                Found = not contains_special_token and not contains_human \
-                         and not is_bad_size and not is_too_small
-
-            # bg_img is PIL Image -> np.array (512, 512, 3)
-            bg_img = np.array(bg_img).astype(np.uint8)
-            orig_h, orig_w = bg_json['original_height'], bg_json['original_width']
-            min_height, min_width = self.size, self.size
-            scale = min(min_height / orig_h, min_width / orig_w)
-            bg_h, bg_w   = int(orig_h * scale), int(orig_w * scale)
-
-            if bg_h < min_height:
-                h_pad_top = int((min_height - bg_h) / 2.0)
-            else:
-                h_pad_top = 0
-
-            if bg_w < min_width:
-                w_pad_left = int((min_width - bg_w) / 2.0)
-            else:
-                w_pad_left = 0
-
-            # Remove the padding from the original bg image. 
-            # bg_image_nopad: [bg_h, bg_w, 3]
-            bg_image_nopad = bg_img[h_pad_top:h_pad_top+bg_h, w_pad_left:w_pad_left+bg_w, :]
-            # Resize and crop to 512x512.
-            bg_image_512_obj = self.resize_and_crop(Image.fromarray(bg_image_nopad))
-            # Convert back to numpy array.
-            bg_image_512 = np.array(bg_image_512_obj).astype(np.uint8)
-
-            # Blend fg area with bg_img. fg_mask is 2D, so add 1D channel.
-            wds_image    = np.where(fg_mask[:, :, None] > 0, image, bg_image_512)
-
         self.generate_prompts(example, subject_idx)
-
-        if gen_wds_comp:
-            # common_placeholder_prefix is prepended to caption and caption_bg.
-            wds_comp_extra      = ", in front of " + bg_prompt
-            wds_cls_comp_extra  = " " + cls_delta_string + wds_comp_extra
-            example["wds_comp_extra"]       = wds_comp_extra
-            example["wds_cls_comp_extra"]   = wds_cls_comp_extra
-            example["wds_caption"]          = example["caption"]    + wds_comp_extra
-            example["wds_cls_caption"]      = example["caption"]    + wds_cls_comp_extra
-            example["wds_caption_bg"]       = self.repl_bg_as_wbg(example["caption_bg"], subject_idx) + wds_comp_extra
-            example["wds_cls_caption_bg"]   = self.repl_bg_as_wbg(example["caption_bg"], subject_idx) + wds_cls_comp_extra
-            example["wds_image"]            = (wds_image    / 127.5 - 1.0).astype(np.float32)
-            example["wds_image_bgonly"]     = (bg_image_512 / 127.5 - 1.0).astype(np.float32)
-            # fg_mask of wds_image is the same as non-wds instances. So no need to assign.
-            example["wds_aug_mask"]         = aug_mask
-        else:
-            example["wds_comp_extra"]       = ""
-            example["wds_cls_comp_extra"]   = ""
-            example["wds_caption"]          = example["caption"]
-            example["wds_caption_bg"]       = example["caption_bg"]
-            example["wds_image"]            = example["image"]
-            example["wds_aug_mask"]         = example["aug_mask"]
-            # No wds_cls_caption, wds_cls_caption_bg, wds_image_bgonly. 
-            # They are only accessed when 'has_wds_comp' is True.
-
-        example["has_wds_comp"]         = gen_wds_comp
 
         if is_subject_idx:
             is_in_mix_subj_folder = self.are_mix_subj_folders[subject_idx]
@@ -797,39 +641,6 @@ class PersonalizedBase(Dataset):
             # So is_in_mix_subj_folder is False.
             is_in_mix_subj_folder = False
         example["is_in_mix_subj_folder"] = is_in_mix_subj_folder
-
-        DEBUG_WDS = False
-        if DEBUG_WDS and gen_wds_comp:
-            self.wds_sample_dir = "wds-samples"
-            os.makedirs(self.wds_sample_dir, exist_ok=True)
-            wds_sample_count = len(os.listdir(self.wds_sample_dir))
-            wds_sample_image_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
-            if os.path.exists(wds_sample_image_filepath):
-                while os.path.exists(wds_sample_image_filepath):
-                    wds_sample_count += 1
-                    wds_sample_image_filepath   = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.jpg')
-            
-            wds_sample_caption_filepath = os.path.join(self.wds_sample_dir, f'{wds_sample_count:04}.txt')
-            # Overlay wds_aug_mask on wds_image.
-            # Create a pure red image
-            red_image  = np.ones_like(wds_image) * 255
-            red_image[:, :, 1:] = 0
-            green_image = np.ones_like(wds_image) * 255
-            green_image[:, :, [0,2]] = 0
-
-            if random.random() < 0:
-                wds_image2 = wds_image * 0.9 \
-                            + aug_mask[:, :, None] * green_image * 0.1 \
-                            + fg_mask[:, :, None]  * red_image   * 0.3
-                wds_image2 = np.clip(wds_image2, 0, 255).astype(np.uint8)
-            else:
-                wds_image2 = wds_image
-
-            Image.fromarray(wds_image2).save(wds_sample_image_filepath)
-            print("Saved wds sample to {}".format(wds_sample_image_filepath))
-            wds_sample_caption = example['cls_prompt_single'] + wds_comp_extra
-            with open(wds_sample_caption_filepath, 'w') as f:
-                f.write(wds_sample_caption)
 
         return example
 
@@ -863,9 +674,6 @@ class PersonalizedBase(Dataset):
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
             subject_string          = common_placeholder_prefix + " " + subject_string
             cls_delta_string        = common_placeholder_prefix + " " + cls_delta_string
-        # common_placeholder_prefixes are specified for red_cartoon.
-        compos_subject_string   = subject_string
-        compos_cls_delta_string = cls_delta_string
 
         template = random.choice(imagenet_templates_small)
 
@@ -876,86 +684,59 @@ class PersonalizedBase(Dataset):
         # If background_string is None, then cls_bg_delta_string is None as well, thus cls_bg_suffix is "".
         cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
-        subject_string_with_bg          = subject_string            + bg_suffix
-        compos_subject_string_with_bg   = compos_subject_string     + bg_suffix
-        compos_cls_delta_string_with_bg = compos_cls_delta_string   + cls_bg_suffix
+        subject_string_with_bg   = subject_string     + bg_suffix
+        cls_delta_string_with_bg = cls_delta_string   + cls_bg_suffix
 
         # "face portrait" trick for humans/animals.
         if broad_class == 1:
             fp_prompt_template = "a face portrait of a {}"
             subj_prompt_single_fp = fp_prompt_template
             cls_prompt_single_fp  = fp_prompt_template
-            subj_prompt_comps_fp  = []
-            cls_prompt_comps_fp   = []
-
-        subj_prompt_comps = []
-        cls_prompt_comps  = []
 
         if is_animal:
             subj_type = "animal" 
         else:
             subj_type = "object"
 
-        for _ in range(self.num_compositions_per_image):
-            compositions_partial = sample_compositions(1, subj_type, is_training=True)
-            composition_partial = compositions_partial[0]
-            subj_prompt_comp    = subj_prompt_single + " " + composition_partial
-            cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
-            subj_prompt_comps.append(subj_prompt_comp)
-            cls_prompt_comps.append(cls_prompt_comp)
+        compositions_partial = sample_compositions(1, subj_type, is_training=True)
+        composition_partial = compositions_partial[0]
+        subj_prompt_comp    = subj_prompt_single + " " + composition_partial
+        cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
 
-            if broad_class == 1:
-                subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
-                cls_prompt_comp_fp  = cls_prompt_single_fp  + " " + composition_partial
-                subj_prompt_comps_fp.append(subj_prompt_comp_fp)
-                cls_prompt_comps_fp.append(cls_prompt_comp_fp)
+        if broad_class == 1:
+            subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
+            cls_prompt_comp_fp  = cls_prompt_single_fp  + " " + composition_partial
 
-        # NOTE: "caption" and "caption_bg" are only for image reconstruction iterations.
-        # Only "caption" and "caption_bg" are formatted with subject_string and subject_string_with_bg.
-        # Other 4 types of prompts are formatted with compos_subject_string and compos_cls_delta_string.
-        example["caption"]              = subj_prompt_single.format(subject_string)
-        example["caption_bg"]           = subj_prompt_single.format(subject_string_with_bg)
-
-        example["subj_prompt_single"]   = subj_prompt_single.format(compos_subject_string)
-        example["cls_prompt_single"]    = cls_prompt_single.format(compos_cls_delta_string)
+        example["subj_prompt_single"]   = subj_prompt_single.format(subject_string)
+        example["cls_prompt_single"]    = cls_prompt_single.format(cls_delta_string)
         # Will be split by "|" in the ddpm trainer.
-        subj_prompt_comp = "|".join([ subj_prompt_comp.format(compos_subject_string) for subj_prompt_comp in subj_prompt_comps])
-        cls_prompt_comp  = "|".join([ cls_prompt_comp.format(compos_cls_delta_string)     for cls_prompt_comp  in cls_prompt_comps])
+        subj_prompt_comp = subj_prompt_comp.format(subject_string) 
+        cls_prompt_comp  = cls_prompt_comp.format(cls_delta_string)
         example["subj_prompt_comp"]     = subj_prompt_comp
         example["cls_prompt_comp"]      = cls_prompt_comp
 
         if bg_suffix:
-            example["subj_prompt_single_bg"] = subj_prompt_single.format(compos_subject_string_with_bg)
-            example["cls_prompt_single_bg"]  = cls_prompt_single.format(compos_cls_delta_string_with_bg)
+            example["subj_prompt_single_bg"] = subj_prompt_single.format(subject_string_with_bg)
+            example["cls_prompt_single_bg"]  = cls_prompt_single.format(cls_delta_string_with_bg)
             # *_comp_bg prompts are for static delta loss on training images.
-            example["subj_prompt_comp_bg"]   = "|".join([ subj_prompt_comp.format(compos_subject_string_with_bg) for subj_prompt_comp in subj_prompt_comps])
-            example["cls_prompt_comp_bg"]    = "|".join([ cls_prompt_comp.format(compos_cls_delta_string_with_bg)     for cls_prompt_comp  in cls_prompt_comps])
+            example["subj_prompt_comp_bg"]   = subj_prompt_comp.format(subject_string_with_bg)
+            example["cls_prompt_comp_bg"]    = cls_prompt_comp.format(cls_delta_string_with_bg)
 
         if broad_class == 1:
             # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
-            example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(compos_subject_string)
-            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(compos_cls_delta_string)
-            example["subj_prompt_comp_fp"]   = "|".join([ subj_prompt_comp_fp.format(compos_subject_string) for subj_prompt_comp_fp in subj_prompt_comps_fp]) 
-            example["cls_prompt_comp_fp"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_string)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
+            example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(subject_string)
+            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(cls_delta_string)
+            example["subj_prompt_comp_fp"]   = subj_prompt_comp_fp.format(subject_string)
+            example["cls_prompt_comp_fp"]    = cls_prompt_comp_fp.format(cls_delta_string)
 
             if bg_suffix:
-                example["subj_prompt_single_fp_bg"] = subj_prompt_single_fp.format(compos_subject_string_with_bg)
-                example["cls_prompt_single_fp_bg"]  = cls_prompt_single_fp.format(compos_cls_delta_string_with_bg)
+                example["subj_prompt_single_fp_bg"] = subj_prompt_single_fp.format(subject_string_with_bg)
+                example["cls_prompt_single_fp_bg"]  = cls_prompt_single_fp.format(cls_delta_string_with_bg)
                 # *_comp_bg prompts are for static delta loss on training images.
-                example["subj_prompt_comp_fp_bg"]   = "|".join([ subj_prompt_comp_fp.format(compos_subject_string_with_bg) for subj_prompt_comp_fp in subj_prompt_comps_fp])
-                example["cls_prompt_comp_fp_bg"]    = "|".join([ cls_prompt_comp_fp.format(compos_cls_delta_string_with_bg)     for cls_prompt_comp_fp  in cls_prompt_comps_fp])
+                example["subj_prompt_comp_fp_bg"]   = subj_prompt_comp_fp.format(subject_string_with_bg)
+                example["cls_prompt_comp_fp_bg"]    = cls_prompt_comp_fp.format(cls_delta_string_with_bg)
 
-    def repl_bg_as_wbg(self, prompt, subject_idx):
-        background_string = self.background_strings[subject_idx]
-        wds_background_string = self.wds_background_strings[subject_idx]
-        if wds_background_string is None:
-            return prompt
-        # Replace singleton 'y' with 'w'.
-        prompt2 = re.sub(rf"(?<=(\W|^)){background_string}(?=(\W|$))", 
-                         wds_background_string, prompt)
-        return prompt2
-    
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.
 # num_batches: total number of batches of this training.

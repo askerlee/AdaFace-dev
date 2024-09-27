@@ -1831,8 +1831,7 @@ def replace_prompt_comp_extra(comp_prompts, single_prompts, new_comp_extras):
             # Replace the compositional prompt with the new compositional part.
             new_comp_prompts.append( single_prompts[i] + new_comp_extras[i] )
         else:
-            # new_comp_extra is empty, i.e., either wds is not enabled, or 
-            # the particular instance has no corresponding fg_mask.
+            # new_comp_extra is empty, i.e., the particular instance has no corresponding fg_mask.
             # Keep the original compositional prompt.
             new_comp_prompts.append( comp_prompts[i] )
     
