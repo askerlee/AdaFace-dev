@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
 
-        self.iter_type_rng = np.random.default_rng(12345)
+        self.sync_rng = np.random.default_rng(12345)
         self.use_layerwise_embedding = use_layerwise_embedding
         self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
@@ -361,7 +361,7 @@ class DDPM(pl.LightningModule):
         if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0:
             if self.global_step % self.composition_regs_iter_gap == 0:
                 # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
-                reg_type_idx = self.iter_type_rng.choice(N_CAND_REGS, p=cand_reg_probs)
+                reg_type_idx = self.sync_rng.choice(N_CAND_REGS, p=cand_reg_probs)
                 iter_reg_type     = cand_reg_types[reg_type_idx]
                 if iter_reg_type == 'do_comp_prompt_distillation':
                     self.iter_flags['do_comp_prompt_distillation']  = True
@@ -376,7 +376,7 @@ class DDPM(pl.LightningModule):
         if not self.iter_flags['do_comp_prompt_distillation']:
             # Synchronize the iter_type across DDP instances to avoid being slowed down 
             # by different iter_types (different iter durations).
-            if self.p_unet_distill_iter > 0 and self.iter_type_rng.random() < self.p_unet_distill_iter:
+            if self.p_unet_distill_iter > 0 and self.sync_rng.random() < self.p_unet_distill_iter:
                 self.iter_flags['do_unet_distill']  = True
                 self.iter_flags['do_normal_recon']  = False
                 # Disable do_static_prompt_delta_reg during unet distillation.
@@ -1071,7 +1071,7 @@ class LatentDiffusion(DDPM):
             p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
 
             # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
-            num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+            num_denoising_steps = self.sync_rng.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
