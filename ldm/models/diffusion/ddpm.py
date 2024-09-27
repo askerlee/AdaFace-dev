@@ -65,7 +65,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  use_layerwise_embedding=True,
                  pass_one_layer_embedding_to_clip=True,
-                 composition_regs_iter_gap=3,
+                 composition_regs_iter_gap=-1,
                  prompt_emb_delta_reg_weight=0.,
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
@@ -110,8 +110,7 @@ class DDPM(pl.LightningModule):
         self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
 
-        self.composition_regs_iter_gap = composition_regs_iter_gap
-
+        self.composition_regs_iter_gap              = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.mix_prompt_distill_weight              = mix_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
@@ -858,9 +857,8 @@ class LatentDiffusion(DDPM):
                                             and 'subj_prompt_single_fp' in batch \
                                             and random.random() < p_use_fp_trick
 
-        if self.iter_flags['do_mix_prompt_distillation'] \
-                and not self.iter_flags['reuse_init_conds'] \
-                and self.iter_flags['fg_mask_avail_ratio'] > 0:
+        if self.iter_flags['do_mix_prompt_distillation'] and not self.iter_flags['reuse_init_conds'] \
+          and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # Slightly larger than 0.5, since comp_init_fg_from_training_image is disabled under reuse_init_conds.
             # So in all distillation iterations, comp_init_fg_from_training_image percentage will be around 0.5.
             # p_comp_init_fg_from_training_image: 0.8 -> 1.0 over first 25% of the training, 

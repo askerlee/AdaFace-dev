@@ -429,7 +429,11 @@ class EmbeddingManager(nn.Module):
             else:
                 # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
                 id2img_prompt_embs  = self.image_prompt_dict['subj'] if self.curr_subj_is_face else None
-                clip_features       = None
+                if self.iter_type == 'compos_distill_iter':
+                    # Only use the first instance in the batch to generate the adaface_subj_embs,
+                    # as the whole batch is of the same subject.
+                    id2img_prompt_embs = id2img_prompt_embs[[0]]
+
                 enable_static_img_suffix_embs = True #(self.iter_type == 'unet_distill_iter')
                 adaface_subj_embs   = self.id2ada_prompt_encoder.generate_adaface_embeddings(
                                           image_paths=None, face_id_embs=None,
