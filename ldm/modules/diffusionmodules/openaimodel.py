@@ -858,7 +858,6 @@ class UNetModel(nn.Module):
 
         # Return the static context.
         def get_layer_context(layer_idx):
-            # print(h.shape)
             if not use_layerwise_context:
                 return context
 

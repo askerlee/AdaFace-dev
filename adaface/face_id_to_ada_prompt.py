@@ -969,7 +969,6 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         all_id_embs = torch.cat(all_id_embs, dim=1)
         # clip_fgbg_features: [BS, 514, 1280] or [BS, 514, 1024]. So we concatenate them along dim=2.
         all_clip_fgbg_features = torch.cat(all_clip_fgbg_features, dim=2)
-        print(all_clip_fgbg_features.shape)
         return total_faceless_img_count, all_id_embs, all_clip_fgbg_features
 
     # init_id_embs, clip_features are never None.
