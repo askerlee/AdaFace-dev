@@ -684,8 +684,7 @@ class LatentDiffusion(DDPM):
 
     # k: key for the images, i.e., 'image'. k is not a number.
     @torch.no_grad()
-    def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
-                  cond_key=None, return_original_cond=False, bs=None):
+    def get_input(self, batch, k, bs=None):
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -713,36 +712,7 @@ class LatentDiffusion(DDPM):
         encoder_posterior = self.encode_first_stage(x, mask_dict)
         z = self.get_first_stage_encoding(encoder_posterior).detach()
 
-        if cond_key is None:
-            # cond_stage_key: 'caption'.
-            cond_key = self.cond_stage_key
-        # first_stage_key: 'image'.
-        if cond_key != self.first_stage_key:
-            if cond_key in ['caption', 'coordinates_bbox']:
-                # batch.keys(): 'image', 'caption'.
-                # batch['caption']: 
-                # ['an illustration of a dirty z', 'an illustration of the cool z']
-                xc = batch[cond_key]
-            elif cond_key == 'class_label':
-                xc = batch
-            else:
-                xc = super().get_input(batch, cond_key).to(self.device)
-        else:
-            xc = x
-
-        c = xc
-        #if bs is not None:
-        #    c = c[:bs]
-        #if bs is not None and c.shape[0] != bs:
-        #    breakpoint()
-
-        out = [z, c]
-        if return_first_stage_outputs:
-            xrec = self.decode_first_stage(z)
-            out.extend([x, xrec])
-        if return_original_cond:
-            out.append(xc)
-        return out
+        return z
 
     # output: -1 ~ 1.
     @torch.no_grad()
@@ -788,12 +758,9 @@ class LatentDiffusion(DDPM):
     # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch):
-        # captions = batch['caption'].
-        # Do not use the returned captions from get_input(). Assign the correct caption later.
-        # Encode noise as 4-channel latent features. Get prompts from batch. No gradient into here.
-        # NOTE: captions (batch['caption'] or batch['caption_bg'])
-        # are only for image reconstruction iterations.
-        x_start, _ = self.get_input(batch, self.first_stage_key)
+        # Encode noise as 4-channel latent features.
+        # first_stage_key="image"
+        x_start = self.get_input(batch, self.first_stage_key)
         noise = torch.randn_like(x_start)
         # Update the training_percent of embedding_manager.
         self.embedding_manager.training_percent = self.training_percent
