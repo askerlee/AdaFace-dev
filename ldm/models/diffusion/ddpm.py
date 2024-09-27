@@ -877,10 +877,6 @@ class LatentDiffusion(DDPM):
         subj_comp_prompts   = batch[SUBJ_PROMPT_COMP]
         cls_comp_prompts    = batch[CLS_PROMPT_COMP]
 
-        # REPEATS: how many prompts correspond to each image.
-        REPEATS = len(subj_comp_prompts[0])
-        # Currently only support REPEATS == 1.
-        assert REPEATS == 1
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         if 'aug_mask' in batch:
@@ -1215,7 +1211,7 @@ class LatentDiffusion(DDPM):
                                     
         # We still compute the static embeddings of the 4 types of prompts, 
         # to compute static delta loss. 
-        # But now there are 12 prompts (4 * ORIG_BS = 12), as the batch is not halved.
+        # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
         delta_prompts = subj_single_prompts + subj_comp_prompts \
                         + cls_single_prompts + cls_comp_prompts
         #print(delta_prompts)

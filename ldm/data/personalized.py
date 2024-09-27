@@ -675,23 +675,12 @@ class PersonalizedBase(Dataset):
             subject_string          = common_placeholder_prefix + " " + subject_string
             cls_delta_string        = common_placeholder_prefix + " " + cls_delta_string
 
-        template = random.choice(imagenet_templates_small)
-
-        subj_prompt_single  = template
-        cls_prompt_single   = template
-
         bg_suffix     = " with background {}".format(background_string)   if background_string   is not None else ""
         # If background_string is None, then cls_bg_delta_string is None as well, thus cls_bg_suffix is "".
         cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
         # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
         subject_string_with_bg   = subject_string     + bg_suffix
         cls_delta_string_with_bg = cls_delta_string   + cls_bg_suffix
-
-        # "face portrait" trick for humans/animals.
-        if broad_class == 1:
-            fp_prompt_template = "a face portrait of a {}"
-            subj_prompt_single_fp = fp_prompt_template
-            cls_prompt_single_fp  = fp_prompt_template
 
         if is_animal:
             subj_type = "animal" 
@@ -700,42 +689,41 @@ class PersonalizedBase(Dataset):
 
         compositions_partial = sample_compositions(1, subj_type, is_training=True)
         composition_partial = compositions_partial[0]
-        subj_prompt_comp    = subj_prompt_single + " " + composition_partial
-        cls_prompt_comp     = cls_prompt_single  + " " + composition_partial
 
+        template = random.choice(imagenet_templates_small)
+        single_prompt_tmpl  = template
+        comp_prompt_tmpl    = template + " " + composition_partial
+
+        # "face portrait" trick for humans/animals.
         if broad_class == 1:
-            subj_prompt_comp_fp = subj_prompt_single_fp + " " + composition_partial
-            cls_prompt_comp_fp  = cls_prompt_single_fp  + " " + composition_partial
+            fp_prompt_template      = "a face portrait of a {}"
+            single_fp_prompt_tmpl   = fp_prompt_template
+            comp_fp_prompt_tmpl     = single_fp_prompt_tmpl + " " + composition_partial
 
-        example["subj_prompt_single"]   = subj_prompt_single.format(subject_string)
-        example["cls_prompt_single"]    = cls_prompt_single.format(cls_delta_string)
-        # Will be split by "|" in the ddpm trainer.
-        subj_prompt_comp = subj_prompt_comp.format(subject_string) 
-        cls_prompt_comp  = cls_prompt_comp.format(cls_delta_string)
-        example["subj_prompt_comp"]     = subj_prompt_comp
-        example["cls_prompt_comp"]      = cls_prompt_comp
+        example["subj_prompt_single"]   = single_prompt_tmpl.format(subject_string)
+        example["cls_prompt_single"]    = single_prompt_tmpl.format( cls_delta_string)
+        example["subj_prompt_comp"]     = comp_prompt_tmpl.format(subject_string) 
+        example["cls_prompt_comp"]      = comp_prompt_tmpl.format( cls_delta_string)
 
         if bg_suffix:
-            example["subj_prompt_single_bg"] = subj_prompt_single.format(subject_string_with_bg)
-            example["cls_prompt_single_bg"]  = cls_prompt_single.format(cls_delta_string_with_bg)
-            # *_comp_bg prompts are for static delta loss on training images.
-            example["subj_prompt_comp_bg"]   = subj_prompt_comp.format(subject_string_with_bg)
-            example["cls_prompt_comp_bg"]    = cls_prompt_comp.format(cls_delta_string_with_bg)
+            example["subj_prompt_single_bg"] = single_prompt_tmpl.format(subject_string_with_bg)
+            example["subj_prompt_comp_bg"]   = comp_prompt_tmpl.format(  subject_string_with_bg)
+            example["cls_prompt_single_bg"]  = single_prompt_tmpl.format( cls_delta_string_with_bg)
+            example["cls_prompt_comp_bg"]    = comp_prompt_tmpl.format(   cls_delta_string_with_bg)
 
         if broad_class == 1:
             # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
             # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
-            example["subj_prompt_single_fp"] = subj_prompt_single_fp.format(subject_string)
-            example["cls_prompt_single_fp"]  = cls_prompt_single_fp.format(cls_delta_string)
-            example["subj_prompt_comp_fp"]   = subj_prompt_comp_fp.format(subject_string)
-            example["cls_prompt_comp_fp"]    = cls_prompt_comp_fp.format(cls_delta_string)
+            example["subj_prompt_single_fp"] = single_fp_prompt_tmpl.format(subject_string)
+            example["subj_prompt_comp_fp"]   = comp_fp_prompt_tmpl.format(  subject_string)
+            example["cls_prompt_single_fp"]  = single_fp_prompt_tmpl.format( cls_delta_string)
+            example["cls_prompt_comp_fp"]    = comp_fp_prompt_tmpl.format(   cls_delta_string)
 
             if bg_suffix:
-                example["subj_prompt_single_fp_bg"] = subj_prompt_single_fp.format(subject_string_with_bg)
-                example["cls_prompt_single_fp_bg"]  = cls_prompt_single_fp.format(cls_delta_string_with_bg)
-                # *_comp_bg prompts are for static delta loss on training images.
-                example["subj_prompt_comp_fp_bg"]   = subj_prompt_comp_fp.format(subject_string_with_bg)
-                example["cls_prompt_comp_fp_bg"]    = cls_prompt_comp_fp.format(cls_delta_string_with_bg)
+                example["subj_prompt_single_fp_bg"] = single_fp_prompt_tmpl.format(subject_string_with_bg)
+                example["subj_prompt_comp_fp_bg"]   = comp_fp_prompt_tmpl.format(  subject_string_with_bg)
+                example["cls_prompt_single_fp_bg"]  = single_fp_prompt_tmpl.format( cls_delta_string_with_bg)
+                example["cls_prompt_comp_fp_bg"]    = comp_fp_prompt_tmpl.format(   cls_delta_string_with_bg)
 
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.
