@@ -784,10 +784,12 @@ class LatentDiffusion(DDPM):
         # we can still use the cached inits. But in order to avoid these subjects from the mix subject folder dominating 
         # the reuse_init_conds iterations (we will always find such subjects in the cache, but if the subject is not from the mix folder,
         # the chance of finding the subject in the cache is much lower), we set p_reuse_init_conds = 0.25.
-        p_reuse_init_conds = 0.25 if self.batch_1st_subject_is_in_mix_subj_folder else 1
-        self.iter_flags['reuse_init_conds']  = (self.iter_flags['do_comp_prompt_distillation'] \
-                                                and self.batch_1st_subject_name in self.cached_inits \
-                                                and random.random() < p_reuse_init_conds)
+        if self.iter_flags['do_comp_prompt_distillation']:
+            p_reuse_init_conds = 0.25 if self.batch_1st_subject_is_in_mix_subj_folder else 1
+        else:
+            p_reuse_init_conds = 0
+        self.iter_flags['reuse_init_conds']  = self.batch_1st_subject_name in self.cached_inits \
+                                                and random.random() < p_reuse_init_conds
 
         # do_comp_teacher_filter: If not reuse_init_conds and do_comp_teacher_filtering, then we choose the better instance 
         # between the two in the batch, if it's above the usable threshold.
@@ -977,13 +979,15 @@ class LatentDiffusion(DDPM):
 
             # faceless_img_count: number of images in the batch in which no faces are detected.
             self.iter_flags['faceless_img_count'] = faceless_img_count
-            # If there are faceless input images in the batch, we have to use the unet recon as target.
-            if faceless_img_count > 0:
-                self.iter_flags['do_unet_distill'] = True
+            # If there are faceless input images in the batch, then the face ID embeddings are randomly generated.
+            # If do_normal_recon, then we have to change the iteration type to do_unet_distill. Otherwise there'll 
+            # be a large recon error, as the face ID embeddings don't correspond to input images.
+            # If this is an compositional distillation iteration, then it's OK to use random ID embeddings.
+            if faceless_img_count > 0 and self.iter_flags['do_normal_recon']:
                 self.iter_flags['do_normal_recon'] = False
+                self.iter_flags['do_unet_distill'] = True
                 # Disable do_static_prompt_delta_reg during unet distillation.
                 self.iter_flags['do_static_prompt_delta_reg']  = False
-                self.iter_flags['do_comp_prompt_distillation'] = False
 
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
         # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -1095,17 +1099,17 @@ class LatentDiffusion(DDPM):
                 # so we repeat zs_clip_fgbg_features as well.
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
                 batch_have_fg_mask, self.batch_subject_names, \
-                captions, zs_clip_fgbg_features, \
-                id2img_prompt_embs, id2img_neg_prompt_embs = \
-                    repeat_selected_instances(slice(0, HALF_BS), 1, 
-                                                x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                                batch_have_fg_mask, self.batch_subject_names, 
-                                                captions, zs_clip_fgbg_features,
-                                                id2img_prompt_embs, id2img_neg_prompt_embs)
-
-                subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                    subj_single_prompts[:HALF_BS], subj_comp_prompts[:HALF_BS], \
-                    cls_single_prompts[:HALF_BS],  cls_comp_prompts[:HALF_BS]
+                zs_clip_fgbg_features, \
+                id2img_prompt_embs, id2img_neg_prompt_embs, \
+                captions, subj_single_prompts, subj_comp_prompts, \
+                cls_single_prompts, cls_comp_prompts \
+                = repeat_selected_instances(slice(0, HALF_BS), 1, 
+                                            x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                            batch_have_fg_mask, self.batch_subject_names, 
+                                            zs_clip_fgbg_features,
+                                            id2img_prompt_embs, id2img_neg_prompt_embs,
+                                            captions, subj_single_prompts, subj_comp_prompts,
+                                            cls_single_prompts, cls_comp_prompts)
                 
                 # Update delta_prompts to have the first HALF_BS prompts.
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
@@ -1745,8 +1749,8 @@ class LatentDiffusion(DDPM):
                     # subj embeddings' contribution to the background (serving as a contrast to the fg).
                     bg_pixel_weight = 0 #0.01
                 else:
-                    # use_background_token == True.
-                    # bg loss is somewhat discounted.
+                    # use_background_token == True. bg loss is somewhat discounted.
+                    # p_use_background_token = 0.1 if do_unet_distill. 
                     bg_pixel_weight = 0.1
                                     
                 loss_fg_bg_contrast, loss_recon = \
@@ -2312,13 +2316,9 @@ class LatentDiffusion(DDPM):
             # TODO: check if we need to totally disable loss_subj_attn_delta_align, by setting its scale to 0.
             subj_attn_delta_align_loss_scale = 0.1
             # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
-
-            # loss_subj_attn_norm_distill is L1 loss, so need to use dynamic loss scale.
-            # The scale of subj_attn_norm_distill_loss based on mix_prompt_distill_weight.
-            # subj_attn_norm_distill_loss is DISABLED for faces, but enabled for objects.     
+ 
             # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
-            # So no need to use a dynamic loss scale. A scale of 1 is close to the corresponding 
-            # dynamic scale when the loss is ~25.
+            # So no need to use a dynamic loss scale.
             subj_attn_norm_distill_loss_scale = 1
 
             loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
