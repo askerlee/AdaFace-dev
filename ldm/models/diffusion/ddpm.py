@@ -18,7 +18,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, SequentialLR2, \
-                        distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_vk_embeddings, \
+                        distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_embeddings, \
                         extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
                         probably_anneal_t, anneal_array, anneal_perturb_embedding
 
@@ -116,10 +116,10 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.distill_delta_loss_boost                 = distill_delta_loss_boost
+        self.distill_delta_loss_boost               = distill_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_comp_teachers            = num_candidate_comp_teachers
-        self.prompt_mix_scheme                      = 'mix_hijk'
+        self.prompt_mix_scheme                      = 'simple_mix'
         
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
@@ -1357,7 +1357,6 @@ class LatentDiffusion(DDPM):
                 # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
                 # are manually mixed into their embeddings.
                 c_in2 = delta_prompts
-                extra_info['iter_type']      = self.prompt_mix_scheme   # 'mix_hijk'
                 # The prompts are either (subj single, subj comp, cls single, cls comp) or
                 # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filter. 
                 # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
@@ -1369,7 +1368,6 @@ class LatentDiffusion(DDPM):
             # Kept for clarity. 
             elif self.iter_flags['do_ada_prompt_delta_reg'] and not self.iter_flags['do_mix_prompt_distillation']:
                 # Do ada prompt delta loss in this iteration. 
-                extra_info['iter_type'] = 'do_ada_prompt_delta_reg'
                 # c_in2 consists of four types of prompts: 
                 # subj_single, subj_comp, cls_single, cls_comp.
                 c_in2                   = delta_prompts
@@ -1379,7 +1377,6 @@ class LatentDiffusion(DDPM):
                 extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
             else:
                 # do_normal_recon or do_unet_distill.
-                extra_info['iter_type'] = 'recon_distill'
                 c_in2                   = captions
                 # Use the original "captions" prompts and embeddings.
                 # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
@@ -1442,8 +1439,6 @@ class LatentDiffusion(DDPM):
             extra_info['c_static_emb_1b']        = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
                                                                         *c_static_emb.shape[1:])
                                 
-            extra_info['iter_type'] = 'normal_recon'
-
             cond = (c_static_emb, c_in, extra_info)
             ##### End of normal_recon without static delta loss iters. #####
 
@@ -1534,7 +1529,8 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, t, noise, c_static_emb, c_in, extra_info):
         #print(c_in)
         # Back up the original condition for future reference.
-        cond = (c_static_emb, c_in, extra_info)
+        # cond may be modified in compositional iterations, but orig_cond is not.
+        orig_cond = cond = (c_static_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
@@ -1557,9 +1553,7 @@ class LatentDiffusion(DDPM):
         # mix some of the subject embeddings into the class embeddings for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
         # posing too strong regularizations to the subject embeddings.
-        k_cls_scale_layerwise_range = [1.0, 0.8]
-        # Slightly less (compared with the settings below) subject embeddings mixed into v.
-        v_cls_scale_layerwise_range = [1.0, 0.7]
+        CLS_MIX_SCALES_LAYERWISE_RANGE = [1.0, 0.8]
 
         if self.iter_flags['is_compos_iter']:
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
@@ -1696,8 +1690,6 @@ class LatentDiffusion(DDPM):
                     # Since subj comp and subj single have the same placeholder_indices,
                     # We don't need to update placeholder2indices of text_prompt_adhoc_info.
                     c_in2 = subj_comp_prompts * self.num_candidate_comp_teachers + cls_comp_prompts * self.num_candidate_comp_teachers
-                    # Back up cond as cond_orig. Replace cond with the cond for the twin comp sets.
-                    cond_orig = cond
                     cond = (c_static_emb2, c_in2, extra_info)
 
                     # Instances are arranged as: 
@@ -1773,19 +1765,18 @@ class LatentDiffusion(DDPM):
             # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
             # so subj indices of the second-half batch are the repetitions of the 
             # original extra_info['placeholder2indices_1b'].
-            c_static_emb_vk = \
-                mix_static_vk_embeddings(cond[0], all_subj_indices_1b[1], 
-                                         self.training_percent,
-                                         t_frac = t_frac, 
-                                         use_layerwise_embedding = self.use_layerwise_embedding,
-                                         N_CA_LAYERS = self.N_CA_LAYERS,
-                                         K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
-                                         V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
+            c_static_emb_mixed = \
+                mix_static_embeddings(cond[0], all_subj_indices_1b[1], 
+                                      self.training_percent,
+                                      t_frac = t_frac, 
+                                      use_layerwise_embedding = self.use_layerwise_embedding,
+                                      N_CA_LAYERS = self.N_CA_LAYERS,
+                                      CLS_MIX_SCALES_LAYERWISE_RANGE=CLS_MIX_SCALES_LAYERWISE_RANGE)
           
-            # Update cond[0] to c_static_emb_vk, to prepare for future reference.
+            # Update cond[0] to c_static_emb_mixed, to prepare for future reference.
             # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
             # with compositional prompts in the 'do_comp_teacher_filter' branch.
-            cond = (c_static_emb_vk, cond[1], extra_info)
+            cond = (c_static_emb_mixed, cond[1], extra_info)
 
         # It's a RECON iter.
         else:
@@ -2133,27 +2124,26 @@ class LatentDiffusion(DDPM):
                     log_image_colors[best_cand_idx + self.num_candidate_comp_teachers] = 3
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
-                    # Mix embeddings to get c_static_emb_orig_vk for cond_orig.
-                    # Do mixing on saved cond_orig instead of the updated "cond".
-                    # cond_orig is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
+                    # Mix embeddings to get c_static_emb_orig_mix for orig_cond.
+                    # Do mixing on saved orig_cond instead of the updated "cond".
+                    # orig_cond is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
                     # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
-                    # So we use cond_orig.
+                    # So we use orig_cond.
                     # Embedding mixing is always applied to the subject indices in every instance in the 
                     # second half-batch (class instances) only, 
                     # and the first half-batch (subject instances) is not affected.
                     # So providing all_subj_indices_1b[1] is enough. 
                     # No need to repeat it to be the same size as the first half-batch.                     
-                    c_static_emb_orig_vk = \
-                        mix_static_vk_embeddings(cond_orig[0], all_subj_indices_1b[1], 
-                                                 self.training_percent,
-                                                 t_frac = t_frac, 
-                                                 use_layerwise_embedding = self.use_layerwise_embedding,
-                                                 N_CA_LAYERS = self.N_CA_LAYERS,
-                                                 K_CLS_SCALE_LAYERWISE_RANGE=k_cls_scale_layerwise_range,
-                                                 V_CLS_SCALE_LAYERWISE_RANGE=v_cls_scale_layerwise_range)
+                    c_static_emb_orig_mix = \
+                        mix_static_embeddings(orig_cond[0], all_subj_indices_1b[1], 
+                                              self.training_percent,
+                                              t_frac = t_frac, 
+                                              use_layerwise_embedding = self.use_layerwise_embedding,
+                                              N_CA_LAYERS = self.N_CA_LAYERS,
+                                              CLS_MIX_SCALES_LAYERWISE_RANGE=CLS_MIX_SCALES_LAYERWISE_RANGE)
 
                     # Update c_static_emb.
-                    cond_orig_qv = (c_static_emb_orig_vk, cond_orig[1], extra_info)
+                    orig_cond_mix = (c_static_emb_orig_mix, orig_cond[1], extra_info)
 
                     # This branch implies a compositional distillation iter.
                     extra_info['img_mask']  = None
@@ -2181,7 +2171,7 @@ class LatentDiffusion(DDPM):
                     # to be used to initialize the next reuse_init comp iteration.
                     # student prompts are subject prompts.  
                     model_output, x_recon = \
-                        self.guided_denoise(x_start_sel, noise_sel, t_sel, cond_orig_qv, 
+                        self.guided_denoise(x_start_sel, noise_sel, t_sel, orig_cond_mix, 
                                             text_prompt_adhoc_info=text_prompt_adhoc_info,
                                             unet_has_grad=True, 
                                             do_pixel_recon=True, cfg_scale=cfg_scale)
@@ -2200,7 +2190,7 @@ class LatentDiffusion(DDPM):
                     # Release RAM.
                     del model_output, x_recon
 
-                    # We cannot simply use cond_orig[1], as they are (subj single, subj comp, mix single, mix comp).
+                    # We cannot simply use orig_cond[1], as they are (subj single, subj comp, mix single, mix comp).
                     # mix single = class single, but under some settings, maybe mix comp = subj comp.
                     # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
                     # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
@@ -2212,7 +2202,7 @@ class LatentDiffusion(DDPM):
                     # NOTE: do_comp_teacher_filter implies not reuse_init_conds. So we always need to cache the inits.
                     self.cached_inits[self.batch_1st_subject_name] = \
                         {   'x_start':                x_recon_sel_rep, 
-                            'delta_prompts':          cond_orig[2]['delta_prompts'],
+                            'delta_prompts':          orig_cond[2]['delta_prompts'],
                             't':                      t_sel,
                             # reuse_init_conds implies a compositional iter. So img_mask is always None.
                             'img_mask':               None,   

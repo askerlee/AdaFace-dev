@@ -1604,16 +1604,15 @@ def gen_emb_mixer(BS, subj_indices_1b_N, CLS_SCALE_LAYERWISE_RANGE, device, use_
     return emb_v_mixer, emb_k_or_v_layers_cls_mix_scales
 
 # t_frac is a float scalar. 
-def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N, 
-                             training_percent,
-                             t_frac=1.0, 
-                             use_layerwise_embedding=True,
-                             N_CA_LAYERS=16, 
-                             K_CLS_SCALE_LAYERWISE_RANGE=[1.0, 1.0],
-                             V_CLS_SCALE_LAYERWISE_RANGE=[1.0, 0.7],
-                             # 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24
-                             sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-                             ):
+def mix_static_embeddings(c_static_emb, subj_indices_1b_N, 
+                          training_percent,
+                          t_frac=1.0, 
+                          use_layerwise_embedding=True,
+                          N_CA_LAYERS=16, 
+                          CLS_MIX_SCALES_LAYERWISE_RANGE=[1.0, 0.8],
+                          # 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24
+                          sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+                          ):
     
     subj_emb, cls_emb = c_static_emb.chunk(2)
     BS = subj_emb.shape[0] // N_CA_LAYERS
@@ -1627,23 +1626,12 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
         breakpoint()
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
 
-    emb_v_mixer, emb_v_layers_cls_mix_scales = \
-        gen_emb_mixer(BS, subj_indices_1b_N, V_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
+    emb_mixer, emb_layers_cls_mix_scales = \
+        gen_emb_mixer(BS, subj_indices_1b_N, CLS_MIX_SCALES_LAYERWISE_RANGE, c_static_emb.device,
                       use_layerwise_embedding, N_CA_LAYERS, sync_layer_indices)
-    # Part of subject embedding is mixed into mix_emb_v. 
-    # Proportions of cls_emb into mix_emb_v are specified by emb_v_layers_cls_mix_scales.
-    mix_emb_v = emb_v_mixer(cls_emb, subj_emb, c1_mix_scale=emb_v_layers_cls_mix_scales.view(-1))
-
-    emb_k_mixer, emb_k_layers_cls_mix_scales = \
-        gen_emb_mixer(BS, subj_indices_1b_N, K_CLS_SCALE_LAYERWISE_RANGE, c_static_emb.device,
-                        use_layerwise_embedding, N_CA_LAYERS, sync_layer_indices)
-    # Part of subject embedding is mixed into mix k embedding.
-    # Proportions of cls_emb into mix_emb_k are specified by emb_k_layers_cls_mix_scales.
-    mix_emb_k = emb_k_mixer(cls_emb, subj_emb, c1_mix_scale=emb_k_layers_cls_mix_scales.view(-1))
-
-    # The first  half of mix_emb_all_layers will be used as V in cross attention layers.
-    # The second half of mix_emb_all_layers will be used as K in cross attention layers.
-    mix_emb_all_layers = torch.cat([mix_emb_v, mix_emb_k], dim=1)
+    # Part of subject embedding is mixed into mix_emb_all_layers. 
+    # Proportions of cls_emb into mix_emb_v are specified by emb_layers_cls_mix_scales.
+    mix_emb_all_layers = emb_mixer(cls_emb, subj_emb, c1_mix_scale=emb_layers_cls_mix_scales.view(-1))
 
     PROMPT_MIX_GRAD_SCALE = 0.05
     grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
@@ -1654,11 +1642,6 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
     # Scaling the gradient will improve compositionality but reduce face similarity.
     mix_emb_all_layers   = grad_scaler(mix_emb_all_layers)
 
-    # This copy of subj_emb will be simply 
-    # repeated at the token dimension to match the token number of the mixed (concatenated) 
-    # mix_emb embeddings.
-    subj_emb2   = subj_emb.repeat(1, 2, 1)
-    
     # Only mix sync_layer_indices layers.
     if use_layerwise_embedding:
         # sync_layer_indices = [4, 5, 6, 7, 8, 9, 10] #, 11, 12, 13]
@@ -1685,30 +1668,25 @@ def mix_static_vk_embeddings(c_static_emb, subj_indices_1b_N,
         # Use most of the layers of embeddings in subj_comp_emb2, but 
         # replace sync_layer_indices layers with those from mix_emb_all_layers.
         # Do not assign with sync_layers as indices, which destroys the computation graph.
-        mix_emb   =   subj_emb2          * layer_mask \
+        mix_emb   =   subj_emb           * layer_mask \
                     + mix_emb_all_layers * (1 - layer_mask)
         
     else:
         # There is only one layer of embeddings.
         mix_emb   = mix_emb_all_layers
 
-    # c_static_emb_vk is the static embeddings of the prompts used in losses other than 
+    # c_static_emb_mixed is the static embeddings of the prompts used in losses other than 
     # the static delta loss, e.g., used to estimate the ada embeddings.
     # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
     # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
-    # c_static_emb_vk: [64, 154, 768]
-    # c_static_emb_vk will be added with the ada embeddings to form the 
+    # c_static_emb_mixed: [64, 154, 768]
+    # c_static_emb_mixed will be added with the ada embeddings to form the 
     # conditioning embeddings in the U-Net.
     # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
     # image generation and computing compositional mix loss.
-    c_static_emb_vk = torch.cat([ subj_emb2, mix_emb ], dim=0)
+    c_static_emb_mixed = torch.cat([ subj_emb, mix_emb ], dim=0)
 
-    # emb_v_mixer will be used later to mix ada embeddings in UNet.
-    # extra_info['emb_v_mixer']                   = emb_v_mixer
-    # extra_info['emb_v_layers_cls_mix_scales']  = emb_v_layers_cls_mix_scales
-    
-    return c_static_emb_vk 
-    #, emb_v_mixer, emb_v_layers_cls_mix_scales, emb_k_mixer, emb_k_layers_cls_mix_scales
+    return c_static_emb_mixed 
 
 def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []

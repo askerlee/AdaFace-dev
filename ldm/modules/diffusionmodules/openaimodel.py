@@ -845,9 +845,7 @@ class UNetModel(nn.Module):
         emb = self.time_embed(t_emb)
 
         use_layerwise_context       = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
-        iter_type                   = extra_info.get('iter_type', 'recon_distill')   if extra_info is not None else 'recon_distill'
         capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
-        placeholder2indices         = extra_info.get('placeholder2indices', None)    if extra_info is not None else None
         img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
         debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
@@ -862,7 +860,7 @@ class UNetModel(nn.Module):
         def get_layer_context(layer_idx):
             # print(h.shape)
             if not use_layerwise_context:
-                return context, None, None
+                return context
 
             # skipped_layers: 0, 3, 6, 9, 10, 11, 13, 14, 15
             # 25 layers, among which 16 layers are conditioned.
@@ -870,34 +868,19 @@ class UNetModel(nn.Module):
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
             # Simply return None, as the context is not used anyway.
             if layer_idx not in layer_idx2ca_layer_idx:
-                return None, None, None
+                return None
             
             emb_idx = layer_idx2ca_layer_idx[layer_idx]
-            layer_static_context = context[emb_idx]
+            layer_context = context[emb_idx]
 
-            if iter_type == 'mix_hijk':
-                # cls embeddings have been distribute_embedding_to_M_tokens_by_dict() in 
-                # LatentDiffusion.forward() in ddpm.py. So no need to call it again here.
-                # layer_static_context is v, k concatenated. Separate it into v and k.
-                layer_static_context_v, layer_static_context_k = \
-                            layer_static_context.chunk(2, dim=1)
-                if layer_static_context_v.shape[1] < 77:
-                    breakpoint()
-            else:
-                layer_static_context_k = layer_static_context_v = layer_static_context
-
-            layer_context = (layer_static_context_v, layer_static_context_k)
-
-            # placeholder2indices is passed from extra_info, which was obtained when generating static embeddings.
-            # Return placeholder2indices to cross attention layers for conv attn computation.
-            return layer_context, placeholder2indices
+            return layer_context
 
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
         ca_flags_stack = []
         
         if capture_distill_attn or debug_attn:
-            # If iter_type == 'mix_hijk', save attention matrices and output features for distillation.
+            # Save attention matrices and output features for distillation.
             distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
             distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_attn_vars': True}, 
                                                                 ca_layer_indices = distill_layer_indices)

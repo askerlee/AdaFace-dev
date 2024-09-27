@@ -177,17 +177,10 @@ class CrossAttention(nn.Module):
 
         if callable(context):
             # Call context() to get the real context.
-            context, placeholder2indices = context()
-        else:
-            placeholder2indices = None
+            context = context()
 
-        if isinstance(context, (list, tuple)):
-            v_context, k_context  = context
-        else:
-            v_context = k_context = context
-
-        k = self.to_k(k_context)            
-        v = self.to_v(v_context)
+        k = self.to_k(context)            
+        v = self.to_v(context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h).contiguous(), (q, k, v))
         sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
