@@ -55,10 +55,8 @@ class DDPM(pl.LightningModule):
                  linear_end=2e-2,
                  cosine_s=8e-3,
                  given_betas=None,
-                 original_elbo_weight=0.,
                  unfreeze_unet=False,
                  unet_lr=0.,
-                 v_posterior=0.,  # weight for choosing posterior variance as sigma = (1-v) * beta_tilde + v * beta
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='Prodigy',
                  grad_clip=0.5,
@@ -109,7 +107,6 @@ class DDPM(pl.LightningModule):
 
         self.synced_rng    = np.random.default_rng(12345)
         self.sync_thread   = threading.Thread(target=self.sync_rng_async)
-        self.sync_thread.start()
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
@@ -177,8 +174,6 @@ class DDPM(pl.LightningModule):
 
         self.training_percent = 0.
         
-        self.v_posterior = v_posterior
-        self.original_elbo_weight = original_elbo_weight
         self.unfreeze_unet = unfreeze_unet
         self.unet_lr = unet_lr
 
@@ -221,8 +216,7 @@ class DDPM(pl.LightningModule):
         self.register_buffer('sqrt_recipm1_alphas_cumprod', to_torch(np.sqrt(1. / alphas_cumprod - 1)))
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
-        posterior_variance = (1 - self.v_posterior) * betas * (1. - alphas_cumprod_prev) / (
-                    1. - alphas_cumprod) + self.v_posterior * betas
+        posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
         # above: equal to 1. / (1. / (1. - alpha_cumprod_tm1) + alpha_t / beta_t)
         self.register_buffer('posterior_variance', to_torch(posterior_variance))
         # below: log calculation clipped because the posterior variance is 0 at the beginning of the diffusion chain
@@ -251,11 +245,10 @@ class DDPM(pl.LightningModule):
             rng_state = self.synced_rng.bit_generator.state['state']['state']
             increment = self.synced_rng.bit_generator.state['state']['inc']
             # Split two 128-bit integers into a [2, 2] 64-bit tensor
-            state_tensor  = pack_uint128s_to_tensor(rng_state, increment)
+            state_tensor  = pack_uint128s_to_tensor(self.device, rng_state, increment)
             state_tensor2 = self.sync_value(state_tensor)
             # Unpack the [2, 2] 64-bit tensor into two 128-bit integers
             rng_state, increment = unpack_tensor_to_uint128s(state_tensor2)
-            rng_state = state_tensor2[0].item() + (state_tensor2[1].item() << 64)
             # Update the RNG state
             self.synced_rng.bit_generator.state['state']['state'] = rng_state
             self.synced_rng.bit_generator.state['state']['inc']   = increment
@@ -373,6 +366,9 @@ class DDPM(pl.LightningModule):
         raise NotImplementedError("shared_step() is not implemented in DDPM.")
 
     def training_step(self, batch, batch_idx):
+        if not self.sync_thread.is_alive():
+            self.sync_thread.start()        
+
         self.init_iteration_flags()
         self.training_percent = self.global_step / self.trainer.max_steps
 

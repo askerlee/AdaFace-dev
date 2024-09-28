@@ -278,6 +278,8 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
+    parser.add_argument("--apex", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use apex")
     return parser
 
 def nondefault_trainer_args(opt):
@@ -385,7 +387,8 @@ class DataModuleFromConfig(pl.LightningDataModule):
         return DataLoader(self.datasets["train"], batch_size=self.batch_size,
                           shuffle=shuffle, sampler=sampler,
                           num_workers=self.num_workers, 
-                          worker_init_fn=init_fn, drop_last=True)
+                          worker_init_fn=init_fn, drop_last=True,
+                          pin_memory=False)
 
     def _test_dataloader(self, shuffle=False):
         if self.use_worker_init_fn:
@@ -856,6 +859,12 @@ if __name__ == "__main__":
         trainer_kwargs["log_every_n_steps"] = 10
         trainer_kwargs["profiler"] = opt.profiler
 
+        if opt.apex:
+            trainer_kwargs["amp_backend"]   = "apex"
+            trainer_kwargs["amp_level"]     = "O3"
+        else:
+            trainer_kwargs["precision"]     = opt.precision
+        
         if hasattr(trainer_opt, 'grad_clip'):
             trainer_kwargs["gradient_clip_val"] = trainer_opt.grad_clip
         
