@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torch.distributed as dist
 import os
 import numpy as np
 import pytorch_lightning as pl
@@ -20,7 +20,8 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         calc_elastic_matching_loss, SequentialLR2, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_embeddings, \
                         extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_array, anneal_perturb_embedding
+                        probably_anneal_t, anneal_array, anneal_perturb_embedding, \
+                        pack_uint128s_to_tensor, unpack_tensor_to_uint128s
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -35,7 +36,7 @@ import random
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 import sys
-
+import threading, time
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -106,7 +107,9 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
 
-        self.sync_rng = np.random.default_rng(12345)
+        self.synced_rng             = np.random.default_rng(12345)
+        self.communication_thread   = threading.Thread(target=self.sync_rng_async)
+
         self.use_layerwise_embedding = use_layerwise_embedding
         self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
@@ -134,8 +137,11 @@ class DDPM(pl.LightningModule):
         # never use the compositional prompts as the distillation target of arc2face.
         # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
         # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
-        self.p_unet_distill_uses_comp_prompt        = p_unet_distill_uses_comp_prompt \
-                                                        if self.unet_teacher_types != ['arc2face'] else 0
+        # NOTE: If compositional iterations are enabled, then we don't do unet distillation on the compositional prompts.
+        if self.unet_teacher_types != ['arc2face'] and self.composition_regs_iter_gap <= 0:
+            self.p_unet_distill_uses_comp_prompt = p_unet_distill_uses_comp_prompt
+        else:
+            self.p_unet_distill_uses_comp_prompt = 0
         self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
         self.extra_unet_paths                       = extra_unet_paths
@@ -236,6 +242,31 @@ class DDPM(pl.LightningModule):
         lvlb_weights[0] = lvlb_weights[1]
         self.register_buffer('lvlb_weights', lvlb_weights, persistent=False)
         assert not torch.isnan(self.lvlb_weights).all()
+
+    def sync_rng_async(self):
+        while True:
+            rng_state = self.synced_rng.bit_generator.state['state']['state']
+            increment = self.synced_rng.bit_generator.state['state']['inc']
+            # Split two 128-bit integers into a [2, 2] 64-bit tensor
+            state_tensor  = pack_uint128s_to_tensor(rng_state, increment)
+            state_tensor2 = self.sync_value(state_tensor)
+            # Unpack the [2, 2] 64-bit tensor into two 128-bit integers
+            rng_state, increment = unpack_tensor_to_uint128s(state_tensor2)
+            rng_state = state_tensor2[0].item() + (state_tensor2[1].item() << 64)
+            # Update the RNG state
+            self.synced_rng.bit_generator.state['state']['state'] = rng_state
+            self.synced_rng.bit_generator.state['state']['inc']   = increment
+            # Sleep for a while or wait for a condition before next sync
+            time.sleep(1)
+
+    # Synchronize a scalar value across all distributed processes.
+    def sync_value(self, state_tensor):
+        # Barrier to ensure both processes are synchronized at this point
+        dist.barrier()
+        # Synchronize across all processes (all GPUs/nodes)
+        dist.all_reduce(state_tensor, op=dist.ReduceOp.MAX)
+        # Return the synchronized value
+        return state_tensor       
 
     # create_clip_evaluator() is called in main.py, so that we can specify device as cuda device.
     def create_clip_evaluator(self, device):        
@@ -361,7 +392,7 @@ class DDPM(pl.LightningModule):
         if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0:
             if self.global_step % self.composition_regs_iter_gap == 0:
                 # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
-                reg_type_idx = self.sync_rng.choice(N_CAND_REGS, p=cand_reg_probs)
+                reg_type_idx = self.synced_rng.choice(N_CAND_REGS, p=cand_reg_probs)
                 iter_reg_type     = cand_reg_types[reg_type_idx]
                 if iter_reg_type == 'do_comp_prompt_distillation':
                     self.iter_flags['do_comp_prompt_distillation']  = True
@@ -376,7 +407,7 @@ class DDPM(pl.LightningModule):
         if not self.iter_flags['do_comp_prompt_distillation']:
             # Synchronize the iter_type across DDP instances to avoid being slowed down 
             # by different iter_types (different iter durations).
-            if self.p_unet_distill_iter > 0 and self.sync_rng.random() < self.p_unet_distill_iter:
+            if self.p_unet_distill_iter > 0 and self.synced_rng.random() < self.p_unet_distill_iter:
                 self.iter_flags['do_unet_distill']  = True
                 self.iter_flags['do_normal_recon']  = False
                 # Disable do_static_prompt_delta_reg during unet distillation.
@@ -1071,7 +1102,7 @@ class LatentDiffusion(DDPM):
             p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
 
             # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
-            num_denoising_steps = self.sync_rng.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+            num_denoising_steps = self.synced_rng.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.

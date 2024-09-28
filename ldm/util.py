@@ -88,6 +88,24 @@ def default(val, d):
         return val
     return d() if isfunction(d) else d
 
+def pack_uint128s_to_tensor(*args):
+    uint64s = []
+
+    for i in range(len(args)):
+            low_64  = args[i]         & 0xFFFFFFFFFFFFFFFF  # Lower 64 bits
+            high_64 = (args[i] >> 64) & 0xFFFFFFFFFFFFFFFF  # Upper 64 bits
+            uint64s.append(torch.tensor([low_64, high_64], dtype=torch.uint64))
+
+    # uint64s: [N, 2]
+    uint64s = torch.stack(uint64s)
+    return uint64s
+
+def unpack_tensor_to_uint128s(uint64s):
+    uint128s = []
+    for i in range(uint64s.shape[0]):
+        int128 = uint64s[i, 0].item() + (uint64s[i, 1].item() << 64)
+        uint128s.append(int128)
+    return uint128s
 
 def mean_flat(tensor):
     """
