@@ -107,8 +107,9 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
 
-        self.synced_rng             = np.random.default_rng(12345)
-        self.communication_thread   = threading.Thread(target=self.sync_rng_async)
+        self.synced_rng    = np.random.default_rng(12345)
+        self.sync_thread   = threading.Thread(target=self.sync_rng_async)
+        self.sync_thread.start()
 
         self.use_layerwise_embedding = use_layerwise_embedding
         self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
@@ -244,6 +245,8 @@ class DDPM(pl.LightningModule):
         assert not torch.isnan(self.lvlb_weights).all()
 
     def sync_rng_async(self):
+        print("Starting the async RNG synchronization thread...")
+
         while True:
             rng_state = self.synced_rng.bit_generator.state['state']['state']
             increment = self.synced_rng.bit_generator.state['state']['inc']
