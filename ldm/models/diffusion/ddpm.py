@@ -65,14 +65,15 @@ class DDPM(pl.LightningModule):
                  use_layerwise_embedding=True,
                  pass_one_layer_embedding_to_clip=True,
                  composition_regs_iter_gap=-1,
+                 cls_mix_scales_layerwise_range=[1, 0.8],
+                 do_comp_teacher_filtering=True,
+                 num_candidate_comp_teachers=2,
                  prompt_emb_delta_reg_weight=0.,
                  mix_prompt_distill_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
                  distill_delta_loss_boost=1,
-                 do_comp_teacher_filtering=True,
-                 num_candidate_comp_teachers=2,
                  enable_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -122,7 +123,11 @@ class DDPM(pl.LightningModule):
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_comp_teachers            = num_candidate_comp_teachers
         self.prompt_mix_scheme                      = 'simple_mix'
-        
+        # mix some of the subject embeddings into the class embeddings for faster convergence.
+        # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
+        # posing too strong regularizations to the subject embeddings.
+        self.cls_mix_scales_layerwise_range         = cls_mix_scales_layerwise_range
+
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
@@ -1476,11 +1481,6 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_comp_prompt_distillation']:
             all_subj_indices_2b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                                        self.embedding_manager.subject_string_dict)
-        
-        # mix some of the subject embeddings into the class embeddings for faster convergence.
-        # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
-        # posing too strong regularizations to the subject embeddings.
-        CLS_MIX_SCALES_LAYERWISE_RANGE = [1.0, 0.8]
 
         if self.iter_flags['do_comp_prompt_distillation']:
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
@@ -1697,7 +1697,7 @@ class LatentDiffusion(DDPM):
                                       t_frac = t_frac, 
                                       use_layerwise_embedding = self.use_layerwise_embedding,
                                       N_CA_LAYERS = self.N_CA_LAYERS,
-                                      CLS_MIX_SCALES_LAYERWISE_RANGE=CLS_MIX_SCALES_LAYERWISE_RANGE)
+                                      cls_mix_scales_layerwise_range=self.cls_mix_scales_layerwise_range)
           
             # Update cond[0] to c_static_emb_mixed, to prepare for future reference.
             # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
@@ -2066,7 +2066,7 @@ class LatentDiffusion(DDPM):
                                               t_frac = t_frac, 
                                               use_layerwise_embedding = self.use_layerwise_embedding,
                                               N_CA_LAYERS = self.N_CA_LAYERS,
-                                              CLS_MIX_SCALES_LAYERWISE_RANGE=CLS_MIX_SCALES_LAYERWISE_RANGE)
+                                              cls_mix_scales_layerwise_range=self.cls_mix_scales_layerwise_range)
 
                     # Update c_static_emb.
                     orig_cond_mix = (c_static_emb_orig_mix, orig_cond[1], extra_info)

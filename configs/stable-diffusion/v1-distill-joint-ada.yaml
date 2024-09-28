@@ -60,6 +60,9 @@ model:
     prompt_emb_delta_reg_weight:      1e-5
     # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
     mix_prompt_distill_weight:        1e-4
+    # [1, 0.9]: the proportion of class embeddings in the first/last layer of the mixed embeddings.
+    # Set to [1, 1] to use only class embeddings.
+    cls_mix_scales_layerwise_range:   [1, 1]
     # Apply BN/LN on cross-attn Q and out features for loss computation.
     normalize_ca_q_and_outfeat:       True
     comp_fg_bg_preserve_loss_weight:  1e-3

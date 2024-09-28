@@ -1588,10 +1588,14 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
 
     return c_mix
 
-def gen_emb_mixer(BS, subj_indices_1b_N, CLS_SCALE_LAYERWISE_RANGE, device, use_layerwise_embedding=True,
-                  N_CA_LAYERS=16, sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]):
+def mix_embeddings_layerwise(cls_comp_emb, subj_comp_emb, 
+                             BS, subj_indices_1b_N, 
+                             cls_mix_scales_layerwise_range, 
+                             device, use_layerwise_embedding=True,
+                             N_CA_LAYERS=16, 
+                             sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]):
     
-    CLS_FIRST_LAYER_SCALE, CLS_FINAL_LAYER_SCALE = CLS_SCALE_LAYERWISE_RANGE
+    CLS_FIRST_LAYER_SCALE, CLS_FINAL_LAYER_SCALE = cls_mix_scales_layerwise_range
 
     if use_layerwise_embedding:
         SCALE_STEP = (CLS_FINAL_LAYER_SCALE - CLS_FIRST_LAYER_SCALE) / (len(sync_layer_indices) - 1)
@@ -1602,25 +1606,25 @@ def gen_emb_mixer(BS, subj_indices_1b_N, CLS_SCALE_LAYERWISE_RANGE, device, use_
         # Linearly increase the scale of the subject embeddings from 0.0 to 0.3.
         # [0.    , 0.    , 0.    , 0.    , 0.    , 0.0273, 0.0545, 0.0818,
         #  0.1091, 0.1364, 0.1636, 0.1909, 0.2182, 0.2455, 0.2727, 0.3   ]
-        emb_k_or_v_layers_cls_mix_scales = torch.ones(BS, N_CA_LAYERS, device=device) 
-        emb_k_or_v_layers_cls_mix_scales[:, sync_layer_indices] = \
+        emb_layers_cls_mix_scales = torch.ones(BS, N_CA_LAYERS, device=device) 
+        emb_layers_cls_mix_scales[:, sync_layer_indices] = \
             CLS_FIRST_LAYER_SCALE + torch.arange(0, len(sync_layer_indices), device=device).repeat(BS, 1) * SCALE_STEP
     else:
         # Same scale for all layers.
-        # emb_k_or_v_layers_cls_mix_scales = [0.85, 0.85, ..., 0.85].
+        # emb_layers_cls_mix_scales = [0.85, 0.85, ..., 0.85].
         # i.e., the subject embedding scales are [0.15, 0.15, ..., 0.15].
         AVG_SCALE = (CLS_FIRST_LAYER_SCALE + CLS_FINAL_LAYER_SCALE) / 2
-        emb_k_or_v_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_CA_LAYERS, device=device).repeat(BS, 1)
+        emb_layers_cls_mix_scales = AVG_SCALE * torch.ones(N_CA_LAYERS, device=device).repeat(BS, 1)
 
     # First mix the static embeddings.
     # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_1b_N,
-    # where they are subj_comp_emb * emb_k_or_v_layers_cls_mix_scales + cls_comp_emb * (1 - emb_k_or_v_layers_cls_mix_scales).
+    # where they are subj_comp_emb * emb_layers_cls_mix_scales + cls_comp_emb * (1 - emb_layers_cls_mix_scales).
     # subj_comp_emb, cls_comp_emb, subj_single_emb, cls_single_emb: [16, 77, 768].
     # Each is of a single instance. So only provides subj_indices_1b_N 
     # (multiple token indices of the same instance).
-    # emb_v_mixer will be reused later to mix ada embeddings, so make it a functional.
-    emb_v_mixer = partial(mix_embeddings, 'add', mix_indices=subj_indices_1b_N)
-    return emb_v_mixer, emb_k_or_v_layers_cls_mix_scales
+    mixed_embeddings = mix_embeddings('add', cls_comp_emb, subj_comp_emb, mix_indices=subj_indices_1b_N,
+                                      c1_mix_scale=emb_layers_cls_mix_scales.view(-1))
+    return mixed_embeddings
 
 # t_frac is a float scalar. 
 def mix_static_embeddings(c_static_emb, subj_indices_1b_N, 
@@ -1628,7 +1632,7 @@ def mix_static_embeddings(c_static_emb, subj_indices_1b_N,
                           t_frac=1.0, 
                           use_layerwise_embedding=True,
                           N_CA_LAYERS=16, 
-                          CLS_MIX_SCALES_LAYERWISE_RANGE=[1.0, 0.8],
+                          cls_mix_scales_layerwise_range=[1.0, 0.8],
                           # 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24
                           sync_layer_indices=[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
                           ):
@@ -1645,12 +1649,12 @@ def mix_static_embeddings(c_static_emb, subj_indices_1b_N,
         breakpoint()
     assert 0 - 1e-6 <= training_percent <= 1 + 1e-6
 
-    emb_mixer, emb_layers_cls_mix_scales = \
-        gen_emb_mixer(BS, subj_indices_1b_N, CLS_MIX_SCALES_LAYERWISE_RANGE, c_static_emb.device,
-                      use_layerwise_embedding, N_CA_LAYERS, sync_layer_indices)
-    # Part of subject embedding is mixed into mix_emb_all_layers. 
-    # Proportions of cls_emb into mix_emb_v are specified by emb_layers_cls_mix_scales.
-    mix_emb_all_layers = emb_mixer(cls_emb, subj_emb, c1_mix_scale=emb_layers_cls_mix_scales.view(-1))
+    mixed_emb_all_layers = \
+        mix_embeddings_layerwise(cls_emb, subj_emb, 
+                                 BS, subj_indices_1b_N, 
+                                 cls_mix_scales_layerwise_range, 
+                                 c_static_emb.device,
+                                 use_layerwise_embedding, N_CA_LAYERS, sync_layer_indices)
 
     PROMPT_MIX_GRAD_SCALE = 0.05
     grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
@@ -1659,7 +1663,7 @@ def mix_static_embeddings(c_static_emb, subj_indices_1b_N,
     # dominated by subj_comp_emb,
     # so that mix_comp_emb will produce images similar as subj_comp_emb does.
     # Scaling the gradient will improve compositionality but reduce face similarity.
-    mix_emb_all_layers   = grad_scaler(mix_emb_all_layers)
+    mixed_emb_all_layers = grad_scaler(mixed_emb_all_layers)
 
     # Only mix sync_layer_indices layers.
     if use_layerwise_embedding:
@@ -1667,8 +1671,8 @@ def mix_static_embeddings(c_static_emb, subj_indices_1b_N,
         # 4, 5, 6, 7, 8, 9, 10 correspond to original layer indices 7, 8, 12, 16, 17, 18, 19.
         # (same as used in computing mixing loss)
         # layer_mask: [2, 16, 154, 768]
-        layer_mask = torch.zeros_like(mix_emb_all_layers).reshape(-1, N_CA_LAYERS, *mix_emb_all_layers.shape[1:])
-        # t_frac controls how much mix_emb_all_layers is mixed with subj_comp_emb2 into mix_comp_emb,
+        layer_mask = torch.zeros_like(mixed_emb_all_layers).reshape(-1, N_CA_LAYERS, *mixed_emb_all_layers.shape[1:])
+        # t_frac controls how much mixed_emb_all_layers is mixed with subj_comp_emb2 into mix_comp_emb,
         # and how much mix_single_emb_all_layers is mixed with subj_single_emb2 into mix_single_emb.
 
         # layer_mask[:, sync_layer_indices]: [2, 7, 154, 768]
@@ -1682,17 +1686,17 @@ def mix_static_embeddings(c_static_emb, subj_indices_1b_N,
         # when t=0,   the proportions of subj_emb2 is 1.
         # Essentially, this is doing diffusion w.r.t. subj_emb2 proportions.
         layer_mask[:, sync_layer_indices] = 1 - t_frac.view(-1, 1, 1, 1) * (1 - training_percent * 0.3)
-        layer_mask = layer_mask.reshape(-1, *mix_emb_all_layers.shape[1:])
+        layer_mask = layer_mask.reshape(-1, *mixed_emb_all_layers.shape[1:])
 
         # Use most of the layers of embeddings in subj_comp_emb2, but 
-        # replace sync_layer_indices layers with those from mix_emb_all_layers.
+        # replace sync_layer_indices layers with those from mixed_emb_all_layers.
         # Do not assign with sync_layers as indices, which destroys the computation graph.
-        mix_emb   =   subj_emb           * layer_mask \
-                    + mix_emb_all_layers * (1 - layer_mask)
+        mixed_emb = subj_emb               * layer_mask \
+                    + mixed_emb_all_layers * (1 - layer_mask)
         
     else:
         # There is only one layer of embeddings.
-        mix_emb   = mix_emb_all_layers
+        mixed_emb = mixed_emb_all_layers
 
     # c_static_emb_mixed is the static embeddings of the prompts used in losses other than 
     # the static delta loss, e.g., used to estimate the ada embeddings.
@@ -1703,7 +1707,7 @@ def mix_static_embeddings(c_static_emb, subj_indices_1b_N,
     # conditioning embeddings in the U-Net.
     # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
     # image generation and computing compositional mix loss.
-    c_static_emb_mixed = torch.cat([ subj_emb, mix_emb ], dim=0)
+    c_static_emb_mixed = torch.cat([ subj_emb, mixed_emb ], dim=0)
 
     return c_static_emb_mixed 
 
