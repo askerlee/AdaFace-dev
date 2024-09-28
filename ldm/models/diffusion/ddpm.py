@@ -260,7 +260,7 @@ class DDPM(pl.LightningModule):
             self.synced_rng.bit_generator.state['state']['state'] = rng_state
             self.synced_rng.bit_generator.state['state']['inc']   = increment
             # Sleep for a while or wait for a condition before next sync
-            time.sleep(1)
+            time.sleep(10)
 
     # Synchronize a scalar value across all distributed processes.
     def sync_value(self, state_tensor):
