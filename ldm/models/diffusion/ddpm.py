@@ -64,7 +64,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  use_layerwise_embedding=True,
                  pass_one_layer_embedding_to_clip=True,
-                 composition_regs_iter_gap=-1,
+                 comp_distill_iter_gap=-1,
                  cls_mix_scales_layerwise_range=[1, 0.8],
                  do_comp_teacher_filtering=True,
                  num_candidate_comp_teachers=2,
@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
         self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
         self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
 
-        self.composition_regs_iter_gap              = composition_regs_iter_gap
+        self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_prompt_distill_weight             = comp_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
@@ -141,7 +141,7 @@ class DDPM(pl.LightningModule):
         # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
         # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
         # NOTE: If compositional iterations are enabled, then we don't do unet distillation on the compositional prompts.
-        if self.unet_teacher_types != ['arc2face'] and self.composition_regs_iter_gap <= 0:
+        if self.unet_teacher_types != ['arc2face'] and self.comp_distill_iter_gap <= 0:
             self.p_unet_distill_uses_comp_prompt = p_unet_distill_uses_comp_prompt
         else:
             self.p_unet_distill_uses_comp_prompt = 0
@@ -393,11 +393,10 @@ class DDPM(pl.LightningModule):
 
         # If N_CAND_REGS == 0, then no prompt distillation/regularizations, 
         # and the flags below take the default False value.
-        if N_CAND_REGS > 0 and self.composition_regs_iter_gap > 0:
-            if self.global_step % self.composition_regs_iter_gap == 0:
-                # reg_type_idx = (self.global_step // self.composition_regs_iter_gap) % N_CAND_REGS
-                reg_type_idx = self.synced_rng.choice(N_CAND_REGS, p=cand_reg_probs)
-                iter_reg_type     = cand_reg_types[reg_type_idx]
+        if N_CAND_REGS > 0 and self.comp_distill_iter_gap > 0:
+            if self.global_step % self.comp_distill_iter_gap == 0:
+                reg_type_idx    = self.synced_rng.choice(N_CAND_REGS, p=cand_reg_probs)
+                iter_reg_type   = cand_reg_types[reg_type_idx]
                 if iter_reg_type == 'do_comp_prompt_distillation':
                     self.iter_flags['do_comp_prompt_distillation']  = True
 
@@ -835,14 +834,16 @@ class LatentDiffusion(DDPM):
         self.iter_flags['do_comp_teacher_filter'] = (self.do_comp_teacher_filtering and self.iter_flags['do_comp_prompt_distillation'] \
                                                      and not self.iter_flags['reuse_init_conds'])
 
-        # *_fp prompts are like "a face portrait of ...". They are advantageous over "a photo of ..."
-        # when doing compositional mix regularization on humans/animals.
-        # For objects, even if use_fp_trick = True, 
-        # *_fp prompts are not available in batch, so fp_trick won't be used.
+        # NOTE: *_fp prompts are like "a face portrait of ...". They highlight the face features.
+        # When doing compositional mix regularization on humans/animals they are better.
+        # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
+        # so fp_trick won't be used.
         if self.use_fp_trick and 'subj_prompt_single_fp' in batch:
             if self.iter_flags['do_comp_prompt_distillation'] :
                 p_use_fp_trick = 0.9
-            elif self.iter_flags['do_normal_recon'] and self.composition_regs_iter_gap > 0:
+            # If compositional distillation is enabled, then in normal recon iterations,
+            # we always use the fp_trick, to better reconstructing single-face input images.
+            elif self.iter_flags['do_normal_recon'] and self.comp_distill_iter_gap > 0:
                 p_use_fp_trick = 1
             else:
                 p_use_fp_trick = 0

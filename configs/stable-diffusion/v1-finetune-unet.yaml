@@ -26,7 +26,7 @@ model:
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_comp_teachers:      2
-    composition_regs_iter_gap:        3
+    comp_distill_iter_gap:            3
     unet_teacher_types:               ['unet_ensemble']
     extra_unet_paths:                 ['models/ensemble/sd15-unet', 
                                        'models/ensemble/rv4-unet', 

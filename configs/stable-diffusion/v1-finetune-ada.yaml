@@ -24,7 +24,7 @@ model:
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_comp_teachers:      2
-    composition_regs_iter_gap:        3
+    comp_distill_iter_gap:            3
     unet_teacher_types:               ['arc2face']
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              0.1

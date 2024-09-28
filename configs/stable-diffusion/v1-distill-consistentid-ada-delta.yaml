@@ -24,7 +24,7 @@ model:
     use_fp_trick:                     True
     do_comp_teacher_filtering:        True
     num_candidate_comp_teachers:      2
-    composition_regs_iter_gap:        -1
+    comp_distill_iter_gap:            -1
     unet_teacher_types:               ['consistentID'] #, 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.3, 2.0]
