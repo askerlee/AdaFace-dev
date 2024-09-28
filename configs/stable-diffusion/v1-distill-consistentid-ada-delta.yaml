@@ -46,9 +46,9 @@ model:
     perturb_face_id_embs_std_range:   [0.5, 1]
     distill_delta_loss_boost:           1
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
-    prompt_emb_delta_reg_weight:      1e-5
-    # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
-    mix_prompt_distill_weight:        1e-4
+    prompt_emb_delta_reg_weight:       1e-5
+    # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.
+    comp_prompt_distill_weight:        1e-4
     # Apply BN/LN on cross-attn Q and out features for loss computation.
     normalize_ca_q_and_outfeat:       True
     comp_fg_bg_preserve_loss_weight:  1e-3

@@ -242,7 +242,7 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
-    parser.add_argument("--mix_prompt_distill_weight",
+    parser.add_argument("--comp_prompt_distill_weight",
         type=float, default=argparse.SUPPRESS,
         help="Weight of the mixed prompt distillation loss")
     
@@ -723,12 +723,12 @@ if __name__ == "__main__":
 
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):
-            config.model.params.prompt_emb_delta_reg_weight = opt.prompt_emb_delta_reg_weight
+            config.model.params.prompt_emb_delta_reg_weight     = opt.prompt_emb_delta_reg_weight
 
         if hasattr(opt, 'comp_fg_bg_preserve_loss_weight'):
             config.model.params.comp_fg_bg_preserve_loss_weight = opt.comp_fg_bg_preserve_loss_weight
-        if hasattr(opt, 'mix_prompt_distill_weight'):
-            config.model.params.mix_prompt_distill_weight       = opt.mix_prompt_distill_weight
+        if hasattr(opt, 'comp_prompt_distill_weight'):
+            config.model.params.comp_prompt_distill_weight      = opt.comp_prompt_distill_weight
 
         if hasattr(opt, 'composition_regs_iter_gap'):   
             config.model.params.composition_regs_iter_gap = opt.composition_regs_iter_gap

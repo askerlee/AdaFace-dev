@@ -1937,7 +1937,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_gra
         static_subj_delta   = static_subj_comp_emb  - static_subj_single_emb
         static_cls_delta    = static_cls_comp_emb   - static_cls_single_emb
 
-    loss_static_prompt_delta   = \
+    loss_prompt_emb_delta   = \
         calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
                              emb_mask=prompt_emb_mask_weighted,
                              do_demean_first=True,
@@ -1945,7 +1945,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_gra
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
 
-    return loss_static_prompt_delta
+    return loss_prompt_emb_delta
 
 def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_scale_base_ratio=1, max_scale_base_ratio=2):
     # Setting loss_base to 0 will disable the loss.

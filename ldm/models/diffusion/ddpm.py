@@ -69,7 +69,7 @@ class DDPM(pl.LightningModule):
                  do_comp_teacher_filtering=True,
                  num_candidate_comp_teachers=2,
                  prompt_emb_delta_reg_weight=0.,
-                 mix_prompt_distill_weight=0.,
+                 comp_prompt_distill_weight=1e-4,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
@@ -115,7 +115,7 @@ class DDPM(pl.LightningModule):
 
         self.composition_regs_iter_gap              = composition_regs_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
-        self.mix_prompt_distill_weight              = mix_prompt_distill_weight
+        self.comp_prompt_distill_weight             = comp_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
@@ -162,7 +162,7 @@ class DDPM(pl.LightningModule):
 
         # No matter wheter the scheme is layerwise or not,
         # as long as prompt_emb_delta_reg_weight > 0, do static comp delta reg.
-        self.do_static_prompt_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
+        self.do_prompt_emb_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
         
         self.init_iteration_flags()
 
@@ -356,7 +356,7 @@ class DDPM(pl.LightningModule):
                             'faceless_img_count':           0,
                             'num_denoising_steps':          1,
                             'do_comp_prompt_distillation':  False,
-                            'do_static_prompt_delta_reg':   self.do_static_prompt_delta_reg,
+                            'do_prompt_emb_delta_reg':      self.do_prompt_emb_delta_reg,
                             # 'do_comp_teacher_filter':     False,
                             # 'is_teachable':               False,
                             'unet_distill_uses_comp_prompt': False,
@@ -372,7 +372,7 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         if not self.sync_thread.is_alive():
-            self.sync_thread.start()        
+            pass #self.sync_thread.start()        
 
         self.init_iteration_flags()
         self.training_percent = self.global_step / self.trainer.max_steps
@@ -381,7 +381,7 @@ class DDPM(pl.LightningModule):
         cand_reg_types = []
         cand_reg_probs = []
 
-        if self.mix_prompt_distill_weight > 0:
+        if self.comp_prompt_distill_weight > 0:
             cand_reg_types.append('do_comp_prompt_distillation')
             cand_reg_probs.append(1.)
 
@@ -414,12 +414,12 @@ class DDPM(pl.LightningModule):
             if self.p_unet_distill_iter > 0 and self.synced_rng.random() < self.p_unet_distill_iter:
                 self.iter_flags['do_unet_distill']  = True
                 self.iter_flags['do_normal_recon']  = False
-                # Disable do_static_prompt_delta_reg during unet distillation.
-                self.iter_flags['do_static_prompt_delta_reg'] = False
+                # Disable do_prompt_emb_delta_reg during unet distillation.
+                self.iter_flags['do_prompt_emb_delta_reg'] = False
             else:
                 self.iter_flags['do_normal_recon']  = True
                 self.iter_flags['do_unet_distill']  = False
-                self.iter_flags['do_static_prompt_delta_reg'] = True
+                self.iter_flags['do_prompt_emb_delta_reg'] = True
 
         loss, loss_dict = self.shared_step(batch)
         self.log_dict(loss_dict, prog_bar=True,
@@ -839,10 +839,17 @@ class LatentDiffusion(DDPM):
         # when doing compositional mix regularization on humans/animals.
         # For objects, even if use_fp_trick = True, 
         # *_fp prompts are not available in batch, so fp_trick won't be used.
-        p_use_fp_trick = 0.9
-        self.iter_flags['use_fp_trick'] = self.iter_flags['do_comp_prompt_distillation'] and self.use_fp_trick \
-                                            and 'subj_prompt_single_fp' in batch \
-                                            and random.random() < p_use_fp_trick
+        if self.use_fp_trick and 'subj_prompt_single_fp' in batch:
+            if self.iter_flags['do_comp_prompt_distillation'] :
+                p_use_fp_trick = 0.9
+            elif self.iter_flags['do_normal_recon'] and self.composition_regs_iter_gap > 0:
+                p_use_fp_trick = 1
+            else:
+                p_use_fp_trick = 0
+        else:
+            p_use_fp_trick = 0
+
+        self.iter_flags['use_fp_trick'] = random.random() < p_use_fp_trick
 
         if self.iter_flags['do_comp_prompt_distillation'] and not self.iter_flags['reuse_init_conds'] \
           and self.iter_flags['fg_mask_avail_ratio'] > 0:
@@ -850,7 +857,7 @@ class LatentDiffusion(DDPM):
             # So in all distillation iterations, comp_init_fg_from_training_image percentage will be around 0.5.
             # p_comp_init_fg_from_training_image: 0.8 -> 1.0 over first 25% of the training, 
             # then keep at 1.0.
-            # That is, mix_prompt_distill loss is only enabled at the first 25% of the training 
+            # That is, comp_prompt_distill loss is only enabled at the first 25% of the training 
             # as bootstrapping, then disabled (only keep comp_fg_bg_preserve_loss).
             # if do_comp_prompt_distillation, comp_init_fg_from_training_image is always enabled.
             # It's OK, since when do_zero_shot, we have a large diverse set of training images,
@@ -1024,8 +1031,8 @@ class LatentDiffusion(DDPM):
             if faceless_img_count > 0 and self.iter_flags['do_normal_recon']:
                 self.iter_flags['do_normal_recon'] = False
                 self.iter_flags['do_unet_distill'] = True
-                # Disable do_static_prompt_delta_reg during unet distillation.
-                self.iter_flags['do_static_prompt_delta_reg']  = False
+                # Disable do_prompt_emb_delta_reg during unet distillation.
+                self.iter_flags['do_prompt_emb_delta_reg']  = False
 
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
         # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -1247,7 +1254,7 @@ class LatentDiffusion(DDPM):
                 subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                 cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
         else:
-            # Otherwise, do_static_prompt_delta_reg.
+            # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
@@ -1550,7 +1557,7 @@ class LatentDiffusion(DDPM):
                     x_start.normal_()
 
             if not self.iter_flags['do_comp_prompt_distillation']:
-                # Only do ada delta loss. This only happens on ablation (mix_prompt_distill_weight = 0).
+                # Only do ada delta loss. This only happens on ablation (comp_prompt_distill_weight = 0).
                 # Generate a batch of 4 instances with the same initial x_start, noise and t.
                 # This doubles the batch size to 4, if batch size = 2.
                 x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
@@ -2174,15 +2181,15 @@ class LatentDiffusion(DDPM):
         # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
         prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
 
-        if self.iter_flags['do_static_prompt_delta_reg']:
+        if self.iter_flags['do_prompt_emb_delta_reg']:
             # 'c_static_emb_4b' is the static embedding before mixing.
-            loss_static_prompt_delta = calc_prompt_emb_delta_loss( 
+            loss_prompt_emb_delta = calc_prompt_emb_delta_loss( 
                         extra_info['c_static_emb_4b'], extra_info['prompt_emb_mask'])
 
-            loss_dict.update({f'{prefix}/static_prompt_delta': loss_static_prompt_delta.mean().detach().item() })
+            loss_dict.update({f'{prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
             # prompt_emb_delta_loss_scale == 1 if use Prodigy. prompt_emb_delta_reg_weight is 2e-5.
-            loss += loss_static_prompt_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
+            loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
@@ -2325,9 +2332,9 @@ class LatentDiffusion(DDPM):
             else:
                 ca_outfeat_lns = None
                 
-            # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
+            # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
             # as it should be more accurate (?).
-            # So if loss_comp_fg_bg_preserve is active, then loss_mix_prompt_distill is halved.
+            # So if loss_comp_fg_bg_preserve is active, then loss_comp_prompt_distill is halved.
             # all_subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
             # to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) 
@@ -2354,25 +2361,25 @@ class LatentDiffusion(DDPM):
             # So no need to use a dynamic loss scale.
             subj_attn_norm_distill_loss_scale = 1
 
-            loss_mix_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
+            loss_comp_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
                                         + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                         + loss_feat_delta_align       * feat_delta_align_scale
                                         
-            if loss_mix_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/mix_prompt_distill':  loss_mix_prompt_distill.mean().detach().item() })
+            if loss_comp_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/comp_prompt_distill':  loss_comp_prompt_distill.mean().detach().item() })
 
             if loss_comp_fg_bg_preserve == 0:
-                mix_prompt_distill_loss_scale = 1
+                comp_prompt_distill_loss_scale = 1
             else:
-                # loss_comp_fg_bg_preserve should supercede loss_mix_prompt_distill, 
+                # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
                 # as it should be more accurate (?).
-                # So if loss_comp_fg_bg_preserve is active (>0), then loss_mix_prompt_distill 
+                # So if loss_comp_fg_bg_preserve is active (>0), then loss_comp_prompt_distill 
                 # is discounted to half.
-                mix_prompt_distill_loss_scale = 0.5
+                comp_prompt_distill_loss_scale = 0.5
 
-            # mix_prompt_distill_weight: 1e-4.
-            loss += loss_mix_prompt_distill * mix_prompt_distill_loss_scale \
-                    * self.mix_prompt_distill_weight
+            # comp_prompt_distill_weight: 1e-4.
+            loss += loss_comp_prompt_distill * comp_prompt_distill_loss_scale \
+                    * self.comp_prompt_distill_weight
 
         if torch.isnan(loss):
             print('NaN loss detected.')

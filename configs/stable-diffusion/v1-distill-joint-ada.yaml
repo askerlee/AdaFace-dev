@@ -58,8 +58,8 @@ model:
     distill_delta_loss_boost:           1
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
-    # typical loss_mix_prompt_distill: 0.06, * weight -> 6e-5.
-    mix_prompt_distill_weight:        1e-4
+    # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.
+    comp_prompt_distill_weight:       1e-3
     # [1, 0.9]: the proportion of class embeddings in the first/last layer of the mixed embeddings.
     # Set to [1, 1] to use only class embeddings.
     cls_mix_scales_layerwise_range:   [1, 1]
