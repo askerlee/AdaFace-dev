@@ -256,19 +256,15 @@ class AdaFaceWrapper(nn.Module):
         if prompt is None:
             prompt = ""
 
-        # Replace the subject string 'z' in the prompt with all the placeholder tokens
-        # If there is a word 'a' before the subject string or ',' after, then replace it with 'z'.
-        if re.search(r'\b(a|an|the)\s+' + self.subject_string + r'\b', prompt) is not None:
-            prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', self.all_placeholder_tokens_str, prompt)
-        elif re.search(r'\b' + self.subject_string + r'\b,?', prompt) is not None:
-            prompt = re.sub(r'\b' + self.subject_string + r'\b,?',              self.all_placeholder_tokens_str, prompt)
-        else:    
-            # Prevously, arc2face ada prompts work better if they are prepended to the prompt,
-            # and consistentID ada prompts work better if they are appended to the prompt.
-            # When we do joint training, seems both work better if they are appended to the prompt.
-            # Therefore we simply appended all placeholder_tokens_str's to the prompt.
-            # NOTE: Prepending them hurts compositional prompts.
-            prompt = prompt + self.all_placeholder_tokens_str
+        # Delete the subject_string from the prompt.
+        re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
+        re.sub(r'\b' + self.subject_string + r'\b,?',              "", prompt)
+        # Prevously, arc2face ada prompts work better if they are prepended to the prompt,
+        # and consistentID ada prompts work better if they are appended to the prompt.
+        # When we do joint training, seems both work better if they are appended to the prompt.
+        # Therefore we simply appended all placeholder_tokens_str's to the prompt.
+        # NOTE: Prepending them hurts compositional prompts.
+        prompt = prompt + " " + self.all_placeholder_tokens_str
 
         return prompt
 
