@@ -18,7 +18,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, SequentialLR2, \
-                        distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_static_embeddings, \
+                        distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_cls_subj_embeddings, \
                         extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
                         probably_anneal_t, anneal_array, anneal_perturb_embedding, \
                         pack_uint128s_to_tensor, unpack_tensor_to_uint128s
@@ -62,10 +62,8 @@ class DDPM(pl.LightningModule):
                  grad_clip=0.5,
                  adam_config=None,
                  prodigy_config=None,
-                 use_layerwise_embedding=True,
-                 pass_one_layer_embedding_to_clip=True,
                  comp_distill_iter_gap=-1,
-                 cls_mix_scales_layerwise_range=[1, 0.8],
+                 cls_subj_mix_scale=1,
                  do_comp_teacher_filtering=True,
                  num_candidate_comp_teachers=2,
                  prompt_emb_delta_reg_weight=0.,
@@ -109,10 +107,6 @@ class DDPM(pl.LightningModule):
         self.synced_rng    = np.random.default_rng(12345)
         self.sync_thread   = threading.Thread(target=self.sync_rng_async)
 
-        self.use_layerwise_embedding = use_layerwise_embedding
-        self.pass_one_layer_embedding_to_clip = pass_one_layer_embedding_to_clip
-        self.N_CA_LAYERS = 16 if self.use_layerwise_embedding else 1
-
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_prompt_distill_weight             = comp_prompt_distill_weight
@@ -122,11 +116,10 @@ class DDPM(pl.LightningModule):
         self.distill_delta_loss_boost               = distill_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_comp_teachers            = num_candidate_comp_teachers
-        self.prompt_mix_scheme                      = 'simple_mix'
         # mix some of the subject embeddings into the class embeddings for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
         # posing too strong regularizations to the subject embeddings.
-        self.cls_mix_scales_layerwise_range         = cls_mix_scales_layerwise_range
+        self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
@@ -159,9 +152,6 @@ class DDPM(pl.LightningModule):
         self.comp_init_fg_from_training_image_reuse_count  = 0
 
         self.cached_inits = {}
-
-        # No matter wheter the scheme is layerwise or not,
-        # as long as prompt_emb_delta_reg_weight > 0, do static comp delta reg.
         self.do_prompt_emb_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
         
         self.init_iteration_flags()
@@ -552,7 +542,7 @@ class LatentDiffusion(DDPM):
             device = f"cuda:{self.trainer.strategy.root_device.index}"
             self.create_clip_evaluator(device)
             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-            # uncond_context[0]: [16, 77, 768], as there are 16 cross-attn layers.
+            # uncond_context[0]: [1, 77, 768].
             self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
             # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
             img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
@@ -645,11 +635,8 @@ class LatentDiffusion(DDPM):
         self.embedding_manager.set_image_prompts_and_iter_type(subj_id2img_prompt_embs, clip_bg_features,
                                                                text_conditioning_iter_type)
 
-        # static_prompt_embedding: [B*16, 77, 768]
+        # static_prompt_embedding: [B, 77, 768]
         static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
-        if self.pass_one_layer_embedding_to_clip:
-            # static_prompt_embedding: [B, 1, 768] -> [B*16, 77, 768]
-            static_prompt_embedding = static_prompt_embedding.unsqueeze(1).repeat(1, self.N_CA_LAYERS, 1, 1).reshape(-1, *static_prompt_embedding.shape[1:])
 
         # return_prompt_embs_type: ['text', 'id', 'text_id']. Default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
@@ -677,14 +664,10 @@ class LatentDiffusion(DDPM):
                 # NOTE: It's not the inverse embeddings. return_prompt_embs_type is enabled only 
                 # when we wish to evaluate the original ID2ImgPrompt module.
                 # subj_id2img_prompt_embs: [1, 4, 768] or [1, 16, 768]. 
-                # Need to repeat 16 times for 16 layers, and then BS times for BS instances.
+                # Need to repeat BS times for BS instances.
                 BS_repeat = len(cond_in) // subj_id2img_prompt_embs.shape[0]
-                # subj_id2img_prompt_embs: [1, 4, 768] or [1, 16, 768].
-                # During training, repeat to [BS, 16, 4, 768] => [BS*16, 4, 768].
-                # During inference, repeat. to [BS, 4, 768].
-                # Repeat the static prompt embeddings 16 times to get the layerwise prompts.
-                subj_id2img_prompt_embs = subj_id2img_prompt_embs.unsqueeze(1).repeat(\
-                    BS_repeat, self.N_CA_LAYERS, 1, 1).reshape(-1, *subj_id2img_prompt_embs.shape[1:])
+                # subj_id2img_prompt_embs: [1, 4, 768] or [1, 16, 768] => repeat to [BS, 4/16, 768].
+                subj_id2img_prompt_embs = subj_id2img_prompt_embs.repeat(BS_repeat, 1, 1)
                 
             if return_prompt_embs_type == 'id':
                 # Only return the ID2ImgPrompt embeddings, and discard the text embeddings.
@@ -693,7 +676,7 @@ class LatentDiffusion(DDPM):
                 # NOTE: always postpend the id2img prompts to the end of the static prompts.
                 # Arc2face doesn't care about the order of the prompts. But consistentID only works when
                 # the id2img prompt embeddings are postpended to the end of the static prompt embeddings.
-                # static_prompt_embedding: [BS*16, 81, 768]. 81: 77 + 4.
+                # static_prompt_embedding: [BS, 81, 768]. 81: 77 + 4.
                 static_prompt_embedding = torch.cat([static_prompt_embedding, subj_id2img_prompt_embs], dim=1)
 
         elif self.training:
@@ -707,7 +690,6 @@ class LatentDiffusion(DDPM):
         # Otherwise, inference and not return_prompt_embs_type, we do nothing to the static_prompt_embedding.
 
         extra_info = { 
-                        'use_layerwise_context':         self.use_layerwise_embedding, 
                         'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                         'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                         'is_training':                   self.embedding_manager.training,
@@ -1228,7 +1210,7 @@ class LatentDiffusion(DDPM):
         # (shouldn't happen but just in case).
 
         assert captions is not None
-        # get_text_conditioning(): convert captions to a [16*B, 77, 768] tensor.
+        # get_text_conditioning(): convert captions to a [BS, 77, 768] tensor.
         # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
         # When do_unet_distill and distilling on ConsistentID, we still
         # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
@@ -1267,9 +1249,7 @@ class LatentDiffusion(DDPM):
                         + cls_single_prompts + cls_comp_prompts
         #print(delta_prompts)
         # breakpoint()
-        # c_static_emb: the static embeddings for static delta loss.
-        # [4 * N_EMBEDS, 77, 768], 4 * N_EMBEDS = 4 * ORIG_BS * N_CA_LAYERS,
-        # whose layer dimension (N_CA_LAYERS) is tucked into the batch dimension. 
+        # c_static_emb: the static embeddings for static delta loss [4, 77, 768].
         # delta_prompts: the concatenation of
         # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
         # extra_info: a dict that contains extra info.
@@ -1319,12 +1299,11 @@ class LatentDiffusion(DDPM):
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
         # These embeddings are patched. So combine them back into c_static_emb.
+        # [64, 77, 768].
         c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
                                     cls_single_emb, cls_comp_emb], dim=0)
-        
-        # [64, 77, 768] => [16, 4, 77, 768].
-        extra_info['c_static_emb_4b'] = c_static_emb.reshape(4 * BLOCK_SIZE, self.N_CA_LAYERS, 
-                                                             *c_static_emb.shape[1:])
+        extra_info['c_static_emb_4b'] = c_static_emb
+
         if self.iter_flags['do_comp_prompt_distillation']:
             # c_in = delta_prompts is used to generate ada embeddings.
             # c_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
@@ -1353,10 +1332,9 @@ class LatentDiffusion(DDPM):
             c_static_emb = subj_single_emb
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-            extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
-            extra_info['c_static_emb_1b'] = c_static_emb.reshape(ORIG_BS, self.N_CA_LAYERS, 
-                                                                    *c_static_emb.shape[1:])
-                                    
+            extra_info['placeholder2indices']   = extra_info['placeholder2indices_1b']
+            extra_info['c_static_emb_1b']       = c_static_emb
+
             # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
             # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
             # to do the replacement.
@@ -1605,13 +1583,13 @@ class LatentDiffusion(DDPM):
                     # The two sets are applied on different initial x_start, noise and t (within each half batch).
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
                         c_static_emb.chunk(4)
-                    subj_comp_emb = subj_comp_emb[:BLOCK_SIZE * self.N_CA_LAYERS]
-                    mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE  * self.N_CA_LAYERS]
+                    subj_comp_emb = subj_comp_emb[:BLOCK_SIZE]
+                    mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE]
                     # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
                     # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
                     # So repeat them by num_candidate_comp_teachers times to match the size of x_start.
-                    # subj_comp_emb, mix_comp_emb: [16*BLOCK_SIZE, 77, 768] => [16*BLOCK_SIZE*T, 77, 768].
-                    # c_static_emb2: [32*BLOCK_SIZE*T, 77, 768].
+                    # subj_comp_emb, mix_comp_emb: [BLOCK_SIZE, 77, 768] => [BLOCK_SIZE*T, 77, 768].
+                    # c_static_emb2: [2*BLOCK_SIZE*T, 77, 768].
                     # We don't need to consider NEW_HALF_BS % ORIG_HALF_BS > 0 and truncation, 
                     # since prompts are decoupled with x_start/noise/t and can be simply repeated
                     # by as many times as needed.
@@ -1700,12 +1678,8 @@ class LatentDiffusion(DDPM):
             # so subj indices of the second-half batch are the repetitions of the 
             # original extra_info['placeholder2indices_1b'].
             c_static_emb_mixed = \
-                mix_static_embeddings(cond[0], all_subj_indices_1b[1], 
-                                      self.training_percent,
-                                      t_frac = t_frac, 
-                                      use_layerwise_embedding = self.use_layerwise_embedding,
-                                      N_CA_LAYERS = self.N_CA_LAYERS,
-                                      cls_mix_scales_layerwise_range=self.cls_mix_scales_layerwise_range)
+                mix_cls_subj_embeddings(cond[0], all_subj_indices_1b[1], 
+                                        cls_subj_mix_scale=self.cls_subj_mix_scale)
           
             # Update cond[0] to c_static_emb_mixed, to prepare for future reference.
             # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
@@ -1812,10 +1786,7 @@ class LatentDiffusion(DDPM):
                 # If self.id2img_prompt_encoder_trainable, we still denoise the images with the UNet teacher,
                 # to train the id2img prompt encoder, preventing it from degeneration.
                 # student_prompt_embs is the prompt embedding of the student model.
-                # But if use_layerwise_embedding, then cond[0] has been repeated by N_CA_LAYERS times. 
-                # So we only need to take the first one.
-                # [64, 77, 768] -> [4, 16, 77, 768] -> [4, 77, 768]
-                student_prompt_embs = cond[0].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                student_prompt_embs = cond[0]
                 # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
                 # extra_unet_paths (finetuned unets on the original SD unet); 
                 # in this case they are surely not 'arc2face' or 'consistentID'.
@@ -1856,10 +1827,10 @@ class LatentDiffusion(DDPM):
 
                         elif unet_teacher_type == 'consistentID':
                             global_id_embeds = all_id2img_prompt_embs[i]
-                            # global_id_embeds: [BS, 4, 768]
-                            # [BS*16, 77, 768] -> [BS, 16, 77, 768] -> [BS, 77, 768]
+                            # global_id_embeds: [BS, 4,  768]
+                            # cls_prompt_embs:  [BS, 77, 768]
                             cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
-                            cls_prompt_embs = extra_info[cls_emb_key].reshape(-1, self.N_CA_LAYERS, *(cond[0].shape[1:]))[:, 0]
+                            cls_prompt_embs = extra_info[cls_emb_key]
                             # Always append the ID prompt embeddings to the class (general) prompt embeddings.
                             # teacher_context: [BS, 81, 768]
                             teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
@@ -2069,12 +2040,8 @@ class LatentDiffusion(DDPM):
                     # So providing all_subj_indices_1b[1] is enough. 
                     # No need to repeat it to be the same size as the first half-batch.                     
                     c_static_emb_orig_mix = \
-                        mix_static_embeddings(orig_cond[0], all_subj_indices_1b[1], 
-                                              self.training_percent,
-                                              t_frac = t_frac, 
-                                              use_layerwise_embedding = self.use_layerwise_embedding,
-                                              N_CA_LAYERS = self.N_CA_LAYERS,
-                                              cls_mix_scales_layerwise_range=self.cls_mix_scales_layerwise_range)
+                        mix_cls_subj_embeddings(orig_cond[0], all_subj_indices_1b[1], 
+                                                cls_subj_mix_scale=self.cls_subj_mix_scale)
 
                     # Update c_static_emb.
                     orig_cond_mix = (c_static_emb_orig_mix, orig_cond[1], extra_info)

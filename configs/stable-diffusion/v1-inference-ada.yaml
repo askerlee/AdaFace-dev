@@ -14,7 +14,6 @@ model:
     embedding_manager_trainable: false
     monitor: train/loss
     scale_factor: 0.18215
-    use_layerwise_embedding: True
     p_unet_distill_iter: 0
 
     personalization_config:
@@ -23,7 +22,6 @@ model:
         subject_strings:     ["z"]
         background_strings:  ["y"]
         token2num_vectors:   {'z': 16, 'y': 4}
-        use_layerwise_embedding: True
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

@@ -104,7 +104,6 @@ class FaceID2AdaPrompt(nn.Module):
         self.subj_basis_generator = \
             SubjBasisGenerator(num_id_vecs = self.num_id_vecs,
                                num_static_img_suffix_embs = self.num_static_img_suffix_embs,
-                               num_out_layers = 1,
                                bg_image_embedding_dim = self.clip_embedding_dim, 
                                output_dim = self.output_dim,
                                placeholder_is_bg = False,
@@ -119,9 +118,6 @@ class FaceID2AdaPrompt(nn.Module):
             breakpoint()
 
         ckpt_subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
-        # In the original ckpt, num_out_layers is 16 for layerwise embeddings. 
-        # But we don't do layerwise embeddings here, so we set it to 1.
-        ckpt_subj_basis_generator.num_out_layers    = 1
         ckpt_subj_basis_generator.N_ID              = self.num_id_vecs
         # Since we directly use the subject basis generator object from the ckpt,
         # fixing the number of static image suffix embeddings is much simpler.
@@ -557,15 +553,12 @@ class FaceID2AdaPrompt(nn.Module):
             # img_prompt_embs: [BS, 16/4, 768] -> [1, 16/4, 768].
             img_prompt_embs = img_prompt_embs.mean(dim=0, keepdim=True)
             
-        # adaface_subj_embs: [16/4, 768]. 
-        # adaface_prompt_embs: [1, 77, 768] (not used).
+        # adaface_subj_embs: [BS, 16/4, 768]. 
         adaface_subj_embs = \
             self.subj_basis_generator(img_prompt_embs, clip_features=None, raw_id_embs=None, 
                                       out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
                                       is_face=True, 
                                       enable_static_img_suffix_embs=enable_static_img_suffix_embs)
-        # adaface_subj_embs: [BS, 1, 16, 768] -> [BS, 16, 768]
-        adaface_subj_embs = adaface_subj_embs.squeeze(1)
         # During training,  img_prompt_avg_at_stage is None, and BS >= 1.
         # During inference, img_prompt_avg_at_stage is 'id_emb' or 'img_prompt_emb', and BS == 1.
         if img_prompt_avg_at_stage is not None:

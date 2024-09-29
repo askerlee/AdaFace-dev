@@ -175,10 +175,6 @@ class CrossAttention(nn.Module):
         if not exists(context):
             context = x
 
-        if callable(context):
-            # Call context() to get the real context.
-            context = context()
-
         k = self.to_k(context)            
         v = self.to_v(context)
 

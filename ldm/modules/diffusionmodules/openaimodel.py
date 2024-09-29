@@ -757,7 +757,7 @@ class UNetModel(nn.Module):
                     if layer_idx in ca_layer_indices:
                         # module: SpatialTransformer.
                         # module.transformer_blocks: contains only 1 BasicTransformerBlock 
-                        # that does cross-attention with layer_context in attn2 only.
+                        # that does cross-attention with context in attn2 only.
                         v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                         module[1].transformer_blocks[0].attn2.__dict__[k] = v2
 
@@ -801,7 +801,7 @@ class UNetModel(nn.Module):
                     if layer_idx in trans_layer_indices:
                         # module: SpatialTransformer.
                         # module.transformer_blocks: contains only 1 BasicTransformerBlock 
-                        # that does cross-attention with layer_context in attn2 only.   
+                        # that does cross-attention with context in attn2 only.   
                         v2 = extract_layerwise_value(v, l2ca[layer_idx], v_is_layerwise_array, v_is_layerwise_dict)
                         module[1].transformer_blocks[0].__dict__[k] = v2
                     layer_idx += 1
@@ -844,35 +844,9 @@ class UNetModel(nn.Module):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        use_layerwise_context       = extra_info.get('use_layerwise_context', False) if extra_info is not None else False
         capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
         img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
         debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
-
-        B = x.shape[0]
-
-        if use_layerwise_context:
-            # If use_layerwise_context, then context is static layerwise embeddings.
-            # context: [16*B, N, 768] reshape => [B, 16, N, 768] permute => [16, B, N, 768]
-            context = context.reshape(B, 16, -1, context.shape[-1]).permute(1, 0, 2, 3)
-
-        # Return the static context.
-        def get_layer_context(layer_idx):
-            if not use_layerwise_context:
-                return context
-
-            # skipped_layers: 0, 3, 6, 9, 10, 11, 13, 14, 15
-            # 25 layers, among which 16 layers are conditioned.
-            layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                                       17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
-            # Simply return None, as the context is not used anyway.
-            if layer_idx not in layer_idx2ca_layer_idx:
-                return None
-            
-            emb_idx = layer_idx2ca_layer_idx[layer_idx]
-            layer_context = context[emb_idx]
-
-            return layer_context
 
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
@@ -909,10 +883,9 @@ class UNetModel(nn.Module):
         layer_idx = 0
 
         for module in self.input_blocks:
-            get_layer_idx_context = partial(get_layer_context, layer_idx)
-            # layer_context: [2, 77, 768], conditioning embedding.
+            # context: [4, 77, 768], conditioning embedding.
             # emb: [2, 1280], time embedding.
-            h = module(h, emb, get_layer_idx_context, mask=img_mask)
+            h = module(h, emb, context, mask=img_mask)
             hs.append(h)
 
             if layer_idx in distill_layer_indices:
@@ -923,10 +896,8 @@ class UNetModel(nn.Module):
 
             layer_idx += 1
         
-        get_layer_idx_context = partial(get_layer_context, layer_idx)
-
         # 13 [2, 1280, 8, 8]
-        h = self.middle_block(h, emb, get_layer_idx_context, mask=img_mask)
+        h = self.middle_block(h, emb, context, mask=img_mask)
         if layer_idx in distill_layer_indices:
                 ca_layers_activations[layer_idx]            = self.middle_block[1].transformer_blocks[0].attn2.cached_activations
                 ca_layers_activations[layer_idx]['outfeat'] = h
@@ -948,12 +919,11 @@ class UNetModel(nn.Module):
         # 24 [2, 320,  64, 64]
         
         for module in self.output_blocks:
-            get_layer_idx_context = partial(get_layer_context, layer_idx)
             skip_h = hs.pop()
             h = torch.cat([h, skip_h], dim=1)
 
-            # layer_context: [2, 77, 768], emb: [2, 1280].
-            h = module(h, emb, get_layer_idx_context, mask=img_mask)
+            # emb: [2, 1280].
+            h = module(h, emb, context, mask=img_mask)
             if layer_idx in distill_layer_indices:
                     ca_layers_activations[layer_idx]            = module[1].transformer_blocks[0].attn2.cached_activations
                     ca_layers_activations[layer_idx]['outfeat'] = h

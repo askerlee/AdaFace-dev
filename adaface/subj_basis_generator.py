@@ -555,7 +555,6 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         num_nonface_in_id_vecs={ 'subj': 77, 'bg': 257 },  
         num_id_vecs=16,                             # num_id_vecs: subj: 16. bg: 4.
         num_static_img_suffix_embs: int = 0,        # Number of extra static learnable image embeddings appended to translated ID embeddings.
-        num_out_layers=1,                           # number of layers of output embeddings.
         bg_image_embedding_dim=1024,                # CLIP image hidden layer feature dimension, as per config.json above.
         obj_embedding_dim=384,                      # DINO object feature dimension for objects.
         output_dim=768,                             # CLIP text embedding input dimension.
@@ -570,9 +569,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                          num_static_img_suffix_embs=num_static_img_suffix_embs, img_prompt_dim=output_dim)
 
         self.placeholder_is_bg  = placeholder_is_bg
-        self.num_out_layers     = num_out_layers
-        # subj: 64, bg: 32.
-        self.num_out_embs       = num_out_layers * (self.N_ID + self.N_SFX)
+        self.num_out_embs       = self.N_ID + self.N_SFX
         self.output_dim         = output_dim
         # num_nonface_in_id_vecs should be the number of core ID embs, 16.
         # However, in such case, pos_embs is not used. So it doesn't matter if it's wrongly set.
@@ -628,11 +625,11 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # dim=768, num_bg_encoder_heads=6.
             self.prompt_translator = \
                 CrossAttention(input_dim=output_dim, num_heads=num_bg_encoder_heads, p_dropout=0.05,
-                                identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
-                                q_aware_to_v=False,  v_has_skip=v_has_skip,
-                                num_q=0, # When not q_aware_to_v, num_q is not referenced.
-                                identity_to_out=identity_to_out,
-                                out_has_skip=out_has_skip)
+                               identity_to_q=False, identity_to_k=False, identity_to_v=identity_to_v,
+                               q_aware_to_v=False,  v_has_skip=v_has_skip,
+                               num_q=0, # When not q_aware_to_v, num_q is not referenced.
+                               identity_to_out=identity_to_out,
+                               out_has_skip=out_has_skip)
             
             self.output_scale = output_dim ** -0.5
             
@@ -726,23 +723,18 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # to bg prompt embeddings.
             with torch.set_grad_enabled(self.training):
                 id_embs_out = self.prompt_translator(latent_queries, id_embs)
-            # [BS, 64, 768] -> [BS, 16, 4, 768]
-            id_embs_out      = id_embs_out.reshape(BS, self.num_out_layers, -1, self.output_dim)
+
             adaface_out_embs = id_embs_out * self.output_scale    # * 0.036
         else:
-            # adaface_out_embs: [BS, 16, 768] -> [BS, 1, 16, 768] -> [BS, 16, 16, 768]
-            # For unknown reasons, no need to scale adaface_out_embs if it's subject embeddings.
-            adaface_out_embs = ada_id_embs.unsqueeze(1).repeat(1, self.num_out_layers, 1, 1)
-
             # If out_id_embs_cfg_scale < 1, adaface_out_embs is a mix of adaface_out_embs and pad_embeddings.
             if out_id_embs_cfg_scale != 1:
-                # pad_embeddings: [77, 768] -> [16, 768] -> [1, 1, 16, 768].
+                # pad_embeddings: [77, 768] -> [16, 768] -> [1, 16, 768].
                 # NOTE: Never do cfg on static image suffix embeddings. 
                 # So we take self.N_ID embeddings, instead of self.N_ID + self.N_SFX, 
                 # even if enable_static_img_suffix_embs=True.
-                pad_embeddings = self.pad_embeddings[4:4+self.N_ID].unsqueeze(0).unsqueeze(0).to(adaface_out_embs.device)
-                adaface_out_embs[:, :, :self.N_ID] = adaface_out_embs[:, :, :self.N_ID] * out_id_embs_cfg_scale \
-                                                     + pad_embeddings                   * (1 - out_id_embs_cfg_scale)
+                pad_embeddings = self.pad_embeddings[4:4+self.N_ID].unsqueeze(0).to(adaface_out_embs.device)
+                adaface_out_embs[:, :self.N_ID] = adaface_out_embs[:, :self.N_ID] * out_id_embs_cfg_scale \
+                                                  + pad_embeddings                * (1 - out_id_embs_cfg_scale)
             
         return adaface_out_embs
 
