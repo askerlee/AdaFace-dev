@@ -263,10 +263,10 @@ class AdaFaceWrapper(nn.Module):
         
         # Prevously, arc2face ada prompts work better if they are prepended to the prompt,
         # and consistentID ada prompts work better if they are appended to the prompt.
-        # When we do joint training, seems both work better if they are appended to the prompt.
-        # Therefore we simply append all placeholder_tokens_str's to the prompt.
+        # When we do joint training, seems both work better if they are prepended to the prompt.
+        # Therefore we simply prepended all placeholder_tokens_str's to the prompt.
         for i, placeholder_tokens_str in enumerate(self.placeholder_tokens_strs):
-            prompt = prompt + " " + placeholder_tokens_str
+            prompt = placeholder_tokens_str + " " + prompt
 
         return prompt
 
