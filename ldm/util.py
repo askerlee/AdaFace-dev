@@ -1851,7 +1851,10 @@ def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_gra
     loss_prompt_emb_delta   = \
         calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
                              emb_mask=prompt_emb_mask_weighted,
-                             do_demean_first=False,
+                             # Although the zero-shot subject embedding features are pretty balanced 
+                             # and thus are already centered at each dimension,
+                             # the class embeddings are not. So we still need to do demean.
+                             do_demean_first=True,
                              first_n_dims_to_flatten=2,
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)

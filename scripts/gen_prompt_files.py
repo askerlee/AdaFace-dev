@@ -83,8 +83,6 @@ def parse_args():
     parser.add_argument("--ckpt_sig", dest='ckpt_extra_sig', type=str, default="",
                         help="Extra signature that is part of the checkpoint directory name."
                              " Could be a regular expression.")
-    parser.add_argument("--subj_ckpt_folder_name", type=str, default=argparse.SUPPRESS,
-                        help="Subject model folder name.")
     parser.add_argument("--out_dir_tmpl", type=str, default="samples",
                         help="Template of parent directory to save generated samples")
     parser.add_argument("--scores_csv", type=str, default=None,

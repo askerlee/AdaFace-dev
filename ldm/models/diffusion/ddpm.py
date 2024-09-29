@@ -828,6 +828,8 @@ class LatentDiffusion(DDPM):
             elif self.iter_flags['do_normal_recon'] and self.comp_distill_iter_gap > 0:
                 p_use_fp_trick = 1
             else:
+                # If not doing compositional distillation, then use_fp_trick is disabled on do_normal_recon iterations,
+                # so that the ID embeddings alone are expected to reconstruct the subject portraits.
                 p_use_fp_trick = 0
         else:
             p_use_fp_trick = 0
