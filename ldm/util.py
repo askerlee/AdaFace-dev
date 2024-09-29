@@ -520,11 +520,11 @@ def demean(x, demean_dims=[-1]):
 
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
-# emb_mask: [2, 1, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
+# emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
                          exponent=2, do_demean_first=False,
-                         first_n_dims_to_flatten=3,
+                         first_n_dims_to_flatten=2,
                          ref_grad_scale=0, aim_to_align=True, 
                          margin=0, debug=False):
 
@@ -549,15 +549,17 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # Remove useless tokens, e.g., the placeholder suffix token(s) and padded tokens.
         if emb_mask_i is not None:
             try:
+                # delta_i_flattened_dims_shape: [1, 77, 768]
                 delta_i_flattened_dims_shape = delta_i.shape[:first_n_dims_to_flatten]
+                # truncate_mask: [1, 77].
                 truncate_mask = (emb_mask_i > 0).squeeze(-1).expand(delta_i_flattened_dims_shape)
-                
+                # delta_i: [1, 77, 768] => [58, 768].
                 delta_i       = delta_i[truncate_mask]
                 ref_delta_i   = ref_delta_i[truncate_mask]
                 # Make emb_mask_i have the same shape as delta_i, 
                 # except the last (embedding) dimension for computing the cosine loss.
-                # delta_i: [1, 16, 20, 768]. 
-                # emb_mask_i: [1, 1, 77, 1] => [1, 16, 77] => [1, 16, 20].
+                # delta_i: [1, 20, 768]. 
+                # emb_mask_i: [1, 77, 1] => [1, 77] => [58]
                 # Expanding to same shape is necessary, since the cosine of each embedding has an 
                 # individual weight (no broadcasting happens).
                 emb_mask_i    = emb_mask_i.squeeze(-1).expand(delta_i_flattened_dims_shape)[truncate_mask]
@@ -565,7 +567,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                 breakpoint()
 
         else:
-            # Flatten delta and ref_delta, by tucking the layer and token dimensions into the batch dimension.
+            # Flatten delta and ref_delta, by tucking the token dimensions into the batch dimension.
             # delta_i: [2464, 768], ref_delta_i: [2464, 768]
             delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
             ref_delta_i = ref_delta_i.reshape(delta_i.shape)
@@ -1828,9 +1830,7 @@ def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_gra
         # If a token appears only in the compositional part, 
         # the aggregated mask value is 1. Convert to 0.25.
         # If a token is padding, the aggregated mask value is 0.5. Convert to 0.0625.
-        prompt_emb_mask_weighted = prompt_emb_mask_agg.pow(2) / 4            
-        # prompt_emb_mask_weighted: [1, 77, 1] => [1, 1, 77, 1].
-        prompt_emb_mask_weighted = prompt_emb_mask_weighted.unsqueeze(1)
+        prompt_emb_mask_weighted = prompt_emb_mask_agg.pow(2) / 4
     else:
         prompt_emb_mask_weighted = None
 
@@ -1851,8 +1851,8 @@ def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_gra
     loss_prompt_emb_delta   = \
         calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
                              emb_mask=prompt_emb_mask_weighted,
-                             do_demean_first=True,
-                             first_n_dims_to_flatten=3,
+                             do_demean_first=False,
+                             first_n_dims_to_flatten=2,
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
 

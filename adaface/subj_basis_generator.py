@@ -726,16 +726,17 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
 
             adaface_out_embs = id_embs_out * self.output_scale    # * 0.036
         else:
+            adaface_out_embs = ada_id_embs
             # If out_id_embs_cfg_scale < 1, adaface_out_embs is a mix of adaface_out_embs and pad_embeddings.
             if out_id_embs_cfg_scale != 1:
                 # pad_embeddings: [77, 768] -> [16, 768] -> [1, 16, 768].
                 # NOTE: Never do cfg on static image suffix embeddings. 
                 # So we take self.N_ID embeddings, instead of self.N_ID + self.N_SFX, 
                 # even if enable_static_img_suffix_embs=True.
-                pad_embeddings = self.pad_embeddings[4:4+self.N_ID].unsqueeze(0).to(adaface_out_embs.device)
-                adaface_out_embs[:, :self.N_ID] = adaface_out_embs[:, :self.N_ID] * out_id_embs_cfg_scale \
-                                                  + pad_embeddings                * (1 - out_id_embs_cfg_scale)
-            
+                pad_embeddings = self.pad_embeddings[4:4+self.N_ID].unsqueeze(0).to(ada_id_embs.device)
+                adaface_out_embs[:, :self.N_ID] = ada_id_embs[:, :self.N_ID] * out_id_embs_cfg_scale \
+                                                  + pad_embeddings           * (1 - out_id_embs_cfg_scale)
+
         return adaface_out_embs
 
     def initialize_hidden_state_layer_weights(self, learnable_hidden_state_weights_scheme, device):
