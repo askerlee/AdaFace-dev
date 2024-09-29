@@ -635,8 +635,8 @@ class LatentDiffusion(DDPM):
         self.embedding_manager.set_image_prompts_and_iter_type(subj_id2img_prompt_embs, clip_bg_features,
                                                                text_conditioning_iter_type)
 
-        # static_prompt_embedding: [B, 77, 768]
-        static_prompt_embedding = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
+        # prompt_embeddings: [B, 77, 768]
+        prompt_embeddings = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
 
         # return_prompt_embs_type: ['text', 'id', 'text_id']. Default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
@@ -647,14 +647,14 @@ class LatentDiffusion(DDPM):
             if text_conditioning_iter_type == 'plain_text_iter' and subj_id2img_prompt_embs is None:
                 if return_prompt_embs_type == 'id':
                     # If subj_id2img_prompt_embs is used as standalone negative embeddings,
-                    # then we take the beginning N embeddings of static_prompt_embedding.
-                    subj_id2img_prompt_embs = static_prompt_embedding[:, :self.num_id_vecs, :]
+                    # then we take the beginning N embeddings of prompt_embeddings.
+                    subj_id2img_prompt_embs = prompt_embeddings[:, :self.num_id_vecs, :]
                 else:
                     # If subj_id2img_prompt_embs is to be postpended to the negative embeddings,
-                    # then we take the ending N embeddings of static_prompt_embedding,
+                    # then we take the ending N embeddings of prompt_embeddings,
                     # to avoid two BOS tokens appearing in the same prompt.
-                    subj_id2img_prompt_embs = static_prompt_embedding[:, -self.num_id_vecs:, :]
-                # Since subj_id2img_prompt_embs is taken from a part of static_prompt_embedding,
+                    subj_id2img_prompt_embs = prompt_embeddings[:, -self.num_id_vecs:, :]
+                # Since subj_id2img_prompt_embs is taken from a part of prompt_embeddings,
                 # we don't need to repeat it.
 
             elif subj_id2img_prompt_embs is not None:
@@ -671,23 +671,23 @@ class LatentDiffusion(DDPM):
                 
             if return_prompt_embs_type == 'id':
                 # Only return the ID2ImgPrompt embeddings, and discard the text embeddings.
-                static_prompt_embedding = subj_id2img_prompt_embs
+                prompt_embeddings = subj_id2img_prompt_embs
             elif return_prompt_embs_type == 'text_id':
-                # NOTE: always postpend the id2img prompts to the end of the static prompts.
+                # NOTE: always postpend the id2img prompts to the end of the prompt embeddings
                 # Arc2face doesn't care about the order of the prompts. But consistentID only works when
-                # the id2img prompt embeddings are postpended to the end of the static prompt embeddings.
-                # static_prompt_embedding: [BS, 81, 768]. 81: 77 + 4.
-                static_prompt_embedding = torch.cat([static_prompt_embedding, subj_id2img_prompt_embs], dim=1)
+                # the id2img prompt embeddings are postpended to the end of the prompt embeddings.
+                # prompt_embeddings: [BS, 81, 768]. 81: 77 + 4.
+                prompt_embeddings = torch.cat([prompt_embeddings, subj_id2img_prompt_embs], dim=1)
 
         elif self.training:
             # If cls_delta_string_indices is not empty, then it must be a compositional 
             # distillation iteration, and placeholder_indices only contains the indices of the subject 
             # instances. Whereas cls_delta_string_indices only contains the indices of the
             # class (mix) instances.
-            static_prompt_embedding = merge_cls_token_embeddings(static_prompt_embedding, 
+            prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                                  self.embedding_manager.cls_delta_string_indices)
             
-        # Otherwise, inference and not return_prompt_embs_type, we do nothing to the static_prompt_embedding.
+        # Otherwise, inference and not return_prompt_embs_type, we do nothing to the prompt_embeddings.
 
         extra_info = { 
                         'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
@@ -697,7 +697,7 @@ class LatentDiffusion(DDPM):
                         'capture_distill_attn':          False,
                         }
 
-        c = (static_prompt_embedding, cond_in, extra_info)
+        c = (prompt_embeddings, cond_in, extra_info)
 
         return c
 
@@ -859,7 +859,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_unet_distill']:
             # If do_unet_distill, then only use the background tokens in a small percentage of the iterations.
             # Because for ConsistentID, the background is a bit noisy, but there has been 
-            # 4 static embeddings serving as the background tokens to absorb the background noise.
+            # 4 prompt embeddings serving as the background tokens to absorb the background noise.
             # For Arc2face, the background is simple and we probably don't need to absorb the 
             # background noise with background tokens.
             p_use_background_token  = 0.1
@@ -1244,18 +1244,18 @@ class LatentDiffusion(DDPM):
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
                                     
-        # We still compute the static embeddings of the 4 types of prompts, 
-        # to compute static delta loss. 
+        # We still compute the prompt embeddings of the 4 types of prompts, 
+        # to compute prompt delta loss. 
         # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
         delta_prompts = subj_single_prompts + subj_comp_prompts \
                         + cls_single_prompts + cls_comp_prompts
         #print(delta_prompts)
         # breakpoint()
-        # c_static_emb: the static embeddings for static delta loss [4, 77, 768].
+        # c_prompt_emb: the prompt embeddings for prompt delta loss [4, 77, 768].
         # delta_prompts: the concatenation of
         # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
         # extra_info: a dict that contains extra info.
-        c_static_emb, _, extra_info = \
+        c_prompt_emb, _, extra_info = \
             self.get_text_conditioning(delta_prompts, 
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
@@ -1263,7 +1263,7 @@ class LatentDiffusion(DDPM):
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
 
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
-            c_static_emb.chunk(4)
+            c_prompt_emb.chunk(4)
 
         # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
         # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
@@ -1300,11 +1300,11 @@ class LatentDiffusion(DDPM):
         extra_info['placeholder2indices_1b'] = placeholder2indices_1b
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
-        # These embeddings are patched. So combine them back into c_static_emb.
+        # These embeddings are patched. So combine them back into c_prompt_emb.
         # [64, 77, 768].
-        c_static_emb = torch.cat([subj_single_emb, subj_comp_emb, 
+        c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, 
                                     cls_single_emb, cls_comp_emb], dim=0)
-        extra_info['c_static_emb_4b'] = c_static_emb
+        extra_info['c_prompt_emb_4b'] = c_prompt_emb
 
         if self.iter_flags['do_comp_prompt_distillation']:
             # c_in = delta_prompts is used to generate ada embeddings.
@@ -1331,18 +1331,18 @@ class LatentDiffusion(DDPM):
                 assert captions == subj_comp_prompts
             # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
             # So in this case, subj_single_emb == subj_comp_emb.
-            c_static_emb = subj_single_emb
+            c_prompt_emb = subj_single_emb
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
             extra_info['placeholder2indices']   = extra_info['placeholder2indices_1b']
-            extra_info['c_static_emb_1b']       = c_static_emb
+            extra_info['c_prompt_emb_1b']       = c_prompt_emb
 
-            # extra_info['c_static_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
+            # extra_info['c_prompt_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
             # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
             # to do the replacement.
-            # extra_info['c_static_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
+            # extra_info['c_prompt_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
                                 
-            ##### End of normal_recon with static delta loss iters. #####
+            ##### End of normal_recon with prompt delta loss iters. #####
 
         extra_info['cls_single_prompts'] = cls_single_prompts
         extra_info['cls_single_emb']     = cls_single_emb
@@ -1357,15 +1357,15 @@ class LatentDiffusion(DDPM):
         extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                             cls_single_prompts,  cls_comp_prompts)
 
-        # c_static_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
+        # c_prompt_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts. 
-        # c_static_emb: [64, 77, 768]                    
-        cond = (c_static_emb, c_in, extra_info)
+        # c_prompt_emb: [64, 77, 768]                    
+        cond = (c_prompt_emb, c_in, extra_info)
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        c_static_emb, c_in, extra_info = cond
-        return self.p_losses(x_start, t, noise, c_static_emb, c_in, extra_info)
+        c_prompt_emb, c_in, extra_info = cond
+        return self.p_losses(x_start, t, noise, c_prompt_emb, c_in, extra_info)
 
     # apply_model() is called both during training and inference.
     def apply_model(self, x_noisy, t, cond, return_ids=False):
@@ -1379,7 +1379,7 @@ class LatentDiffusion(DDPM):
             return x_recon
 
     # text_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
-    # Sometimes the prompts changed after generating the static embeddings, 
+    # Sometimes the prompts changed after generating the prompt embeddings, 
     # so in such cases we need to manually specify these data structures. 
     # If they are not provided (None),
     # then the data structures stored in embedding_manager are not updated.
@@ -1446,11 +1446,11 @@ class LatentDiffusion(DDPM):
     # c_in is the textual prompts. 
     # extra_info: a dict that contains various fields. 
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, t, noise, c_static_emb, c_in, extra_info):
+    def p_losses(self, x_start, t, noise, c_prompt_emb, c_in, extra_info):
         #print(c_in)
         # Back up the original condition for future reference.
         # cond may be modified in compositional iterations, but orig_cond is not.
-        orig_cond = cond = (c_static_emb, c_in, extra_info)
+        orig_cond = cond = (c_prompt_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
@@ -1555,7 +1555,7 @@ class LatentDiffusion(DDPM):
                 # If num_candidate_comp_teachers=4, generate a batch of 8 instances in *two* sets, 
                 # each set with *num_candidate_comp_teachers* instances. 
                 # We want to select 1 block of BLOCK_SIZE(=1) instances.
-                # Within each set, we set static prompt embeddings to be the same,
+                # Within each set, we set prompt embeddings to be the same,
                 # but initial x_start, noise and t are different (x_start and t may have repetitions
                 # if ORIG_HALF_BS < num_candidate_comp_teachers).
                 # The corresponding instances across the two sets have the same initial 
@@ -1581,21 +1581,21 @@ class LatentDiffusion(DDPM):
                     noise   = noise[:NEW_HALF_BS].repeat(2, 1, 1, 1)
                     t       = t[:NEW_HALF_BS].repeat(2)
 
-                    # Make two identical sets of c_static_emb2 and c_in (first half batch and second half batch).
+                    # Make two identical sets of c_prompt_emb2 and c_in (first half batch and second half batch).
                     # The two sets are applied on different initial x_start, noise and t (within each half batch).
                     subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
-                        c_static_emb.chunk(4)
+                        c_prompt_emb.chunk(4)
                     subj_comp_emb = subj_comp_emb[:BLOCK_SIZE]
                     mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE]
                     # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
                     # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
                     # So repeat them by num_candidate_comp_teachers times to match the size of x_start.
                     # subj_comp_emb, mix_comp_emb: [BLOCK_SIZE, 77, 768] => [BLOCK_SIZE*T, 77, 768].
-                    # c_static_emb2: [2*BLOCK_SIZE*T, 77, 768].
+                    # c_prompt_emb2: [2*BLOCK_SIZE*T, 77, 768].
                     # We don't need to consider NEW_HALF_BS % ORIG_HALF_BS > 0 and truncation, 
                     # since prompts are decoupled with x_start/noise/t and can be simply repeated
                     # by as many times as needed.
-                    c_static_emb2 = torch.cat([ subj_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1), 
+                    c_prompt_emb2 = torch.cat([ subj_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1), 
                                                  mix_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1) ], dim=0)
                     
                     subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
@@ -1604,7 +1604,7 @@ class LatentDiffusion(DDPM):
                     # Since subj comp and subj single have the same placeholder_indices,
                     # We don't need to update placeholder2indices of text_prompt_adhoc_info.
                     c_in2 = subj_comp_prompts * self.num_candidate_comp_teachers + cls_comp_prompts * self.num_candidate_comp_teachers
-                    cond = (c_static_emb2, c_in2, extra_info)
+                    cond = (c_prompt_emb2, c_in2, extra_info)
 
                     # Instances are arranged as: 
                     # (subj comp 1, ..., subj comp N, mix comp 1, ..., mix comp N).
@@ -1636,7 +1636,7 @@ class LatentDiffusion(DDPM):
 
                 # Not self.iter_flags['do_comp_teacher_filter']. This branch is do_comp_prompt_distillation.
                 # So it's either reuse_init_conds, or not do_comp_teacher_filtering (globally).
-                # In any case, we do not need to change the prompts and static embeddings 
+                # In any case, we do not need to change the prompts and prompt embeddings 
                 # and simply do mix reg.
                 else:
                     if (not self.do_comp_teacher_filtering) and (not self.iter_flags['reuse_init_conds']):
@@ -1664,10 +1664,10 @@ class LatentDiffusion(DDPM):
             
             # This code block is within if self.iter_flags['do_comp_prompt_distillation'].
             # The prompts are either 2-repeat-2 (do_comp_teacher_filter) or 1-repeat-4 (distillation) structure.
-            # Use cond[1] instead of c_static_emb as input, since cond[1] is updated as 2-repeat-2 
-            # in the 'do_comp_teacher_filter' branch. We need to do mixing on the c_static_emb 
+            # Use cond[1] instead of c_prompt_emb as input, since cond[1] is updated as 2-repeat-2 
+            # in the 'do_comp_teacher_filter' branch. We need to do mixing on the c_prompt_emb 
             # to be used for denoising.
-            # In either case, c_static_emb is of (subject embeddings, class embeddings) structure.
+            # In either case, c_prompt_emb is of (subject embeddings, class embeddings) structure.
             # Therefore, we don't need to deal with the two cases separately.
             # No matter whether t is 2-repeat-2 or 1-repeat-4 structure, 
             # t.chunk(2)[0] always corresponds to the first two blocks of instances.
@@ -1679,14 +1679,14 @@ class LatentDiffusion(DDPM):
             # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
             # so subj indices of the second-half batch are the repetitions of the 
             # original extra_info['placeholder2indices_1b'].
-            c_static_emb_mixed = \
+            c_prompt_emb_mixed = \
                 mix_cls_subj_embeddings(cond[0], all_subj_indices_1b[1], 
                                         cls_subj_mix_scale=self.cls_subj_mix_scale)
           
-            # Update cond[0] to c_static_emb_mixed, to prepare for future reference.
+            # Update cond[0] to c_prompt_emb_mixed, to prepare for future reference.
             # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
             # with compositional prompts in the 'do_comp_teacher_filter' branch.
-            cond = (c_static_emb_mixed, cond[1], extra_info)
+            cond = (c_prompt_emb_mixed, cond[1], extra_info)
 
         # It's a RECON iter.
         else:
@@ -2031,7 +2031,7 @@ class LatentDiffusion(DDPM):
                     log_image_colors[best_cand_idx + self.num_candidate_comp_teachers] = 3
 
                     t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
-                    # Mix embeddings to get c_static_emb_orig_mix for orig_cond.
+                    # Mix embeddings to get c_prompt_emb_orig_mix for orig_cond.
                     # Do mixing on saved orig_cond instead of the updated "cond".
                     # orig_cond is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
                     # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
@@ -2041,12 +2041,12 @@ class LatentDiffusion(DDPM):
                     # and the first half-batch (subject instances) is not affected.
                     # So providing all_subj_indices_1b[1] is enough. 
                     # No need to repeat it to be the same size as the first half-batch.                     
-                    c_static_emb_orig_mix = \
+                    c_prompt_emb_orig_mix = \
                         mix_cls_subj_embeddings(orig_cond[0], all_subj_indices_1b[1], 
                                                 cls_subj_mix_scale=self.cls_subj_mix_scale)
 
-                    # Update c_static_emb.
-                    orig_cond_mix = (c_static_emb_orig_mix, orig_cond[1], extra_info)
+                    # Update c_prompt_emb.
+                    orig_cond_mix = (c_prompt_emb_orig_mix, orig_cond[1], extra_info)
 
                     # This branch implies a compositional distillation iter.
                     extra_info['img_mask']  = None
@@ -2152,9 +2152,9 @@ class LatentDiffusion(DDPM):
         prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
 
         if self.iter_flags['do_prompt_emb_delta_reg']:
-            # 'c_static_emb_4b' is the static embedding before mixing.
+            # 'c_prompt_emb_4b' is the prompt embeddings before mixing.
             loss_prompt_emb_delta = calc_prompt_emb_delta_loss( 
-                        extra_info['c_static_emb_4b'], extra_info['prompt_emb_mask'])
+                        extra_info['c_prompt_emb_4b'], extra_info['prompt_emb_mask'])
 
             loss_dict.update({f'{prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
@@ -2988,7 +2988,7 @@ class LatentDiffusion(DDPM):
             loss_layer_fg_bg_comple = \
                 calc_ref_cosine_loss(bg_score, subj_score, 
                                      exponent=2,    
-                                     do_demean_first=False,
+                                     do_demeans=[False, False],
                                      first_n_dims_to_flatten=2, 
                                      ref_grad_scale=fg_grad_scale,
                                      aim_to_align=False,
@@ -3202,7 +3202,7 @@ class LatentDiffusion(DDPM):
             #loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
             loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
                                                                 exponent=2,    
-                                                                do_demean_first=True,
+                                                                do_demeans=[True, True],
                                                                 first_n_dims_to_flatten=1,
                                                                 ref_grad_scale=1,
                                                                 aim_to_align=True)
@@ -3213,7 +3213,7 @@ class LatentDiffusion(DDPM):
                 #loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
                 loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
                                                                     exponent=2,    
-                                                                    do_demean_first=True,
+                                                                    do_demeans=[True, True],
                                                                     first_n_dims_to_flatten=1,
                                                                     ref_grad_scale=1,
                                                                     aim_to_align=True)
@@ -3605,7 +3605,7 @@ class DiffusionWrapper(pl.LightningModule):
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
     def forward(self, x, t, cond):
-        c_static_emb, c_in, extra_info = cond
-        out = self.diffusion_model(x, t, context=c_static_emb, context_in=c_in, extra_info=extra_info)
+        c_prompt_emb, c_in, extra_info = cond
+        out = self.diffusion_model(x, t, context=c_prompt_emb, context_in=c_in, extra_info=extra_info)
 
         return out

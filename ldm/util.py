@@ -458,16 +458,6 @@ def calc_align_coeffs(a, b, on_last_n_dims=1):
 
     return w_optimal
 
-# Normalize a, b to unit vectors, then do orthogonal subtraction.
-# Only used in calc_layer_subj_comp_k_or_v_ortho_loss, to balance the scales of subj and comp embeddings.
-def normalized_ortho_subtract(a, b):
-    a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
-    b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
-    a = a * (a_norm + b_norm) / (a_norm * 2)
-    b = b * (a_norm + b_norm) / (b_norm * 2)
-    diff = ortho_subtract(a, b)
-    return diff
-
 # ortho_subtract(a, b): the residual is orthogonal to b (on the last dimension).
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
@@ -523,7 +513,7 @@ def demean(x, demean_dims=[-1]):
 # emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to discount some tokens.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
-                         exponent=2, do_demean_first=False,
+                         exponent=2, do_demeans=[False, False],
                          first_n_dims_to_flatten=2,
                          ref_grad_scale=0, aim_to_align=True, 
                          margin=0, debug=False):
@@ -586,8 +576,9 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         if debug:
             breakpoint()
 
-        if do_demean_first:
+        if do_demeans[0]:
             delta_i      = demean(delta_i)
+        if do_demeans[1]:
             ref_delta_i2 = demean(ref_delta_i)
         else:
             ref_delta_i2 = ref_delta_i
@@ -651,7 +642,6 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
         feat_base_gs      = feat_base_scaler(feat_base)
 
         # ortho_subtract() is done on the last dimension. 
-        # NOTE: use normalized_ortho_subtract() will reduce performance.
         # Align tgt_delta to src_delta.
         losses_delta_align = {}
         for delta_choice in delta_types:
@@ -667,7 +657,7 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
                 # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
                 loss_delta_align = calc_ref_cosine_loss(tgt_delta, src_delta, 
                                                         exponent=cosine_exponent,
-                                                        do_demean_first=False,
+                                                        do_demeans=[False, False],
                                                         first_n_dims_to_flatten=(feat_base.ndim - 1), 
                                                         ref_grad_scale=1,
                                                         aim_to_align=True)
@@ -943,51 +933,6 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices,
     #    breakpoint()
         
     return prompt_embedding2
-
-# text_embedding: [B, N, D]
-# If text_embedding is static embedding, then num_layers=16, 
-# we need to reshape it to [B0, num_layers, N, D].
-def fix_emb_scale(text_embedding, placeholder_indices, empty_context=None,
-                  num_layers=1, scale_range=(1.0, 1.0), extra_scale=1):
-    if placeholder_indices is None or scale_range == (1.0, 1.0):
-        return text_embedding
-    
-    placeholder_indices_B, placeholder_indices_N = placeholder_indices
-    M = len(torch.unique(placeholder_indices_N))
-    B = text_embedding.shape[0]
-    B0      = B // num_layers
-    B_IND   = len(torch.unique(placeholder_indices_B))
-
-    scale_range = (scale_range[0] * extra_scale, scale_range[1] * extra_scale)
-
-    if B_IND > B0:
-        breakpoint()
-    
-    text_embedding_shape = text_embedding.shape
-
-    # It's possible B_IND < B, i.e., the processed token only appears in some of the prompts.
-    # For example, the subject token only appears in the first half batch of a 
-    # compositional distillation iteration.
-    text_embedding = text_embedding.reshape(B0, num_layers, *text_embedding.shape[1:])
-    scale_mask = torch.ones_like(text_embedding)
-    
-    SCALE_STEP = (scale_range[1] - scale_range[0]) / (num_layers - 1)
-    # Linearly increase the scale of the subject embeddings from 0.5 to 1.5, in 16 steps
-    # [0.5000, 0.5625, 0.6250, 0.6875, 0.7500, 0.8125, 0.8750, 0.9375, 
-    #  1.0000, 1.0625, 1.1250, 1.1875, 1.2500, 1.3125, 1.3750, 1.4375]
-    scales = scale_range[0] + torch.arange(0, num_layers, device=text_embedding.device).reshape(1, -1, 1) * SCALE_STEP
-
-    scale_mask[placeholder_indices_B, :, placeholder_indices_N] = scales
-
-    if empty_context is not None:
-        scaled_text_embedding = text_embedding * scale_mask + empty_context * (1 - scale_mask)
-    else:
-        scaled_text_embedding = text_embedding * scale_mask
-
-    # Change back to the original shape.
-    scaled_text_embedding = scaled_text_embedding.reshape(text_embedding_shape)
-
-    return scaled_text_embedding
 
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
@@ -1589,11 +1534,10 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
 
     return c_mix
 
-def mix_cls_subj_embeddings(c_static_emb, subj_indices_1b_N, cls_subj_mix_scale=0.8):
-    
-    subj_emb, cls_emb = c_static_emb.chunk(2)
+def mix_cls_subj_embeddings(prompt_emb, subj_indices_1b_N, cls_subj_mix_scale=0.8):
+    subj_emb, cls_emb = prompt_emb.chunk(2)
 
-    # First mix the static embeddings.
+    # First mix the prompt embeddings.
     # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_1b_N,
     # where they are subj_comp_emb * cls_subj_mix_scale + cls_comp_emb * (1 - cls_subj_mix_scale).
     # subj_single_emb, cls_single_emb, subj_comp_emb, cls_comp_emb: [1, 77, 768].
@@ -1611,18 +1555,14 @@ def mix_cls_subj_embeddings(c_static_emb, subj_indices_1b_N, cls_subj_mix_scale=
     # Scaling the gradient will improve compositionality but reduce face similarity.
     mixed_emb = grad_scaler(mixed_emb)
 
-    # c_static_emb_mixed is the static embeddings of the prompts used in losses other than 
-    # the static delta loss, e.g., used to estimate the ada embeddings.
-    # If use_ada_embedding, then c_in2 will be fed again to CLIP text encoder to 
-    # get the ada embeddings. Otherwise, c_in2 will be useless and ignored.
-    # c_static_emb_mixed: [4, 77, 768]
-    # c_static_emb_mixed will be added with the ada embeddings to form the 
-    # conditioning embeddings in the U-Net.
+    # prompt_emb_mixed is the prompt embeddings of the prompts used in losses other than 
+    # the prompt delta loss, e.g., used to estimate the ada embeddings.
+    # prompt_emb_mixed: [4, 77, 768]
     # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
     # image generation and computing compositional mix loss.
-    c_static_emb_mixed = torch.cat([ subj_emb, mixed_emb ], dim=0)
+    prompt_emb_mixed = torch.cat([ subj_emb, mixed_emb ], dim=0)
 
-    return c_static_emb_mixed 
+    return prompt_emb_mixed 
 
 def repeat_selected_instances(sel_indices, REPEAT, *args):
     rep_args = []
@@ -1653,63 +1593,6 @@ def extract_first_index_in_each_instance(token_indices):
     token_indices_B_first_only = torch.stack(token_indices_B_first_only, dim=0)
     token_indices_T_first_only = torch.stack(token_indices_T_first_only, dim=0)
     return (token_indices_B_first_only, token_indices_T_first_only)
-
-# cls_subj_indices, cls_comp_indices could be None. 
-# In that case, subj_comp_emb_align is pushed towards 0.
-# margin: 
-def calc_layer_subj_comp_k_or_v_ortho_loss(seq_ks, subj_subj_indices, subj_comp_indices, 
-                                           cls_subj_indices, cls_comp_indices,
-                                           all_token_weights=None, 
-                                           do_demean_first=False, cls_grad_scale=0.05,
-                                           margin=0.6):
-
-    # Put the 4 subject embeddings in the 2nd to last dimension for torch.mm().
-    # The ortho losses on different "instances" are computed separately 
-    # and there's no interaction among them.
-
-    # seq_ks: [B, H, N, D] = [2, 8, 77, 160].
-    # H = 8, number of attention heads. D: 160, number of image tokens.
-    # seq_ks: [B, H, N, D] -> [B, N, H, D] = [2, 77, 8, 160].
-    seq_ks = seq_ks.permute(0, 2, 1, 3)
-
-    # subj_subj_ks, cls_subj_ks: [4,  8, 160] => [1, 4,  8, 160] => [1, 8, 160]
-    # subj_comp_ks, cls_comp_ks: [15, 8, 160] => [1, 15, 8, 160] => [1, 8, 160]
-    subj_subj_ks    = sel_emb_attns_by_indices(seq_ks, subj_subj_indices, 
-                                               all_token_weights=all_token_weights,
-                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
-    subj_comp_ks    = sel_emb_attns_by_indices(seq_ks, subj_comp_indices, 
-                                               all_token_weights=all_token_weights,
-                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
-    cls_subj_ks     = sel_emb_attns_by_indices(seq_ks, cls_subj_indices, 
-                                               all_token_weights=all_token_weights,
-                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
-    cls_comp_ks     = sel_emb_attns_by_indices(seq_ks, cls_comp_indices, 
-                                               all_token_weights=all_token_weights,
-                                               do_sum=False, do_mean=True, do_sqrt_norm=False)
-
-    # The orthogonal projection of subj_subj_ks against subj_comp_ks_sum.
-    # subj_comp_ks_sum will broadcast to the K_fg dimension of subj_subj_ks.
-    subj_comp_emb_diff = normalized_ortho_subtract(subj_subj_ks, subj_comp_ks)
-    # The orthogonal projection of cls_subj_ks against cls_comp_ks_sum.
-    # cls_comp_ks_sum will broadcast to the K_fg dimension of cls_subj_ks_mean.
-    cls_comp_emb_diff  = normalized_ortho_subtract(cls_subj_ks,  cls_comp_ks)
-    # The two orthogonal projections should be aligned. That is, each embedding in subj_subj_ks 
-    # is allowed to vary only along the direction of the orthogonal projections of class embeddings.
-    # Don't compute the ortho loss on dress-type compositions, 
-    # such as "z wearing a santa hat / z that is red", because the attended areas 
-    # largely overlap with the subject, and making them orthogonal will 
-    # hurt their expression in the image (e.g., push the attributes to the background).
-    # Encourage subj_comp_emb_diff and cls_comp_emb_diff to be aligned (dot product -> 1).
-    loss_layer_subj_comp_key_ortho = \
-        calc_ref_cosine_loss(subj_comp_emb_diff, cls_comp_emb_diff, 
-                             batch_mask=None, exponent=2,
-                             do_demean_first=do_demean_first,  # default: False
-                             first_n_dims_to_flatten=2,
-                             ref_grad_scale=cls_grad_scale,
-                             aim_to_align=True,
-                             margin=margin)
-
-    return loss_layer_subj_comp_key_ortho
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
 # indices are applied on the first 2 dims of attn_mat.
@@ -1802,17 +1685,17 @@ def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
     token_indices_half_N2 = torch.cat(indiv_indices_half_N2, dim=0)
     return (token_indices_half_B2, token_indices_half_N2)
 
-# Textual inversion is supported, where static_embeddings is only one embedding.
-# static_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
-# embeddings of static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb. 
-def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_grad_scale=0.05):
-    # static_embeddings contains 4 types of embeddings:
+# Textual inversion is supported, where prompt_embeddings is only one embedding.
+# prompt_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
+# embeddings of subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb. 
+def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_grad_scale=0.05):
+    # prompt_embeddings contains 4 types of embeddings:
     # subj_single, subj_comp, cls_single, cls_comp.
-    # static_embeddings: [4, 16, 77, 768].
+    # prompt_embeddings: [4, 16, 77, 768].
     # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     # Each is [1, 16, 77, 768]
-    static_subj_single_emb, static_subj_comp_emb, static_cls_single_emb, static_cls_comp_emb = \
-            static_embeddings.chunk(4)
+    subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
+            prompt_embeddings.chunk(4)
 
     if prompt_emb_mask is not None:
         # Regularization on padding tokens.
@@ -1835,26 +1718,26 @@ def calc_prompt_emb_delta_loss(static_embeddings, prompt_emb_mask, cls_delta_gra
         prompt_emb_mask_weighted = None
 
     use_ortho_subtract = True
-    # static_cls_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
+    # cls_emb_delta: [1, 16, 77, 768]. Should be a repeat of a tensor of size [1, 1, 77, 768]. 
     # Delta embedding between class single and comp embeddings.
     # by 16 times along dim=1, as cls_prompt_* doesn't contain placeholder_token.
-    # static_subj_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
+    # subj_emb_delta: [1, 16, 77, 768]. Different values for each layer along dim=1.
     # Delta embedding between subject single and comp embeddings.
-    # static_subj_delta / ada_subj_delta should be aligned with cls_delta.
+    # subj_emb_delta / ada_subj_delta should be aligned with cls_delta.
     if use_ortho_subtract:
-        static_subj_delta   = ortho_subtract(static_subj_comp_emb, static_subj_single_emb)
-        static_cls_delta    = ortho_subtract(static_cls_comp_emb,  static_cls_single_emb)
+        subj_emb_delta   = ortho_subtract(subj_comp_emb, subj_single_emb)
+        cls_emb_delta    = ortho_subtract(cls_comp_emb,  cls_single_emb)
     else:
-        static_subj_delta   = static_subj_comp_emb  - static_subj_single_emb
-        static_cls_delta    = static_cls_comp_emb   - static_cls_single_emb
+        subj_emb_delta   = subj_comp_emb  - subj_single_emb
+        cls_emb_delta    = cls_comp_emb   - cls_single_emb
 
     loss_prompt_emb_delta   = \
-        calc_ref_cosine_loss(static_subj_delta, static_cls_delta, 
+        calc_ref_cosine_loss(subj_emb_delta, cls_emb_delta, 
                              emb_mask=prompt_emb_mask_weighted,
                              # Although the zero-shot subject embedding features are pretty balanced 
                              # and thus are already centered at each dimension,
-                             # the class embeddings are not. So we still need to do demean.
-                             do_demean_first=True,
+                             # the class embeddings are not. So we still need to do demean on cls_emb_delta.
+                             do_demeans=[False, True],
                              first_n_dims_to_flatten=2,
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
@@ -2084,10 +1967,10 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     # single features are still updated (although more slowly), to reduce the chance of 
     # generating single images without facial details.
     loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat_gs, 
-                                                exponent=2, do_demean_first=False,
-                                                first_n_dims_to_flatten=2, ref_grad_scale=1)
+                                               exponent=2, do_demeans=[False, False],
+                                               first_n_dims_to_flatten=2, ref_grad_scale=1)
     #loss_mc_ms_fg_match = calc_ref_cosine_loss(mc_recon_ms_fg_feat, ms_fg_feat_gs, 
-    #                                            exponent=2, do_demean_first=False,
+    #                                            exponent=2, do_demeans=[False, False],
     #                                            first_n_dims_to_flatten=2, ref_grad_scale=1)
         
     # fg_mask: [1, 64] => [1, 64, 1].
@@ -2131,7 +2014,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
 
     loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
                                                emb_mask=comp_bg_prob,
-                                               exponent=2, do_demean_first=False,
+                                               exponent=2, do_demeans=[False, False],
                                                first_n_dims_to_flatten=2, 
                                                ref_grad_scale=mix_feat_grad_scale)
     
