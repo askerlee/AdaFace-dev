@@ -107,13 +107,6 @@ per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
 
-# "bike", "person", "ball" are a commonly seen "object" that can appear in various contexts. 
-# So it's a good template object for computing the delta loss.
-# "person" is also used for animals, as their dynamic compositions are highly similar.
-# "mickey", "snoopy", "pikachu" are common cartoon characters.
-# These three words are for 3 broad_classes: 0, 1, 2.
-default_cls_delta_strings = [ "ball", "person", "mickey" ]
-
 single_human_pat = "man|woman|person|boy|girl|child|kid|baby|adult|guy|lady|gentleman|lady|male|female|human"
 single_role_pat  = "cook|chef|waiter|waitress|doctor|nurse|policeman|policewoman|fireman|firewoman|firefighter|teacher|student|professor|driver|pilot|farmer|worker|artist|painter|photographer|dancer|singer|musician|player|athlete|player|biker|cyclist|bicyclist"
 plural_human_pat = "men|women|people|boys|girls|children|kids|babies|adults|guys|ladies|gentlemen|ladies|males|females|humans"
@@ -156,7 +149,6 @@ class PersonalizedBase(Dataset):
                  num_vectors_per_subj_token=1,
                  num_vectors_per_bg_token=1,
                  center_crop=False,
-                 broad_class=1,
                  # If data_roots contain multiple top folders, and multiple subfolders in each top folder, 
                  # and a subject in each subfolder folder, 
                  # then we could provide a list of subject info files in subj_info_filepaths,
@@ -349,15 +341,6 @@ class PersonalizedBase(Dataset):
                             assert subj_name not in subj2attr[k], f"Duplicate subject {k} found in {subj_info_filepaths}!"
                             subj2attr[k][subj_name] = subj2attr_singlefile[k][subj_name]
 
-        if 'broad_classes' not in subj2attr:
-            self.broad_classes  = [ broad_class ] * self.num_subjects
-        else:
-            self.broad_classes  = [ subj2attr['broad_classes'][subject_name] if subject_name in subj2attr['broad_classes'] else broad_class \
-                                    for subject_name in self.subject_names ]
-        # cartoon characters are usually depicted as human-like, so is_animal is True.
-        self.are_animals = [ (broad_class == 1 or broad_class == 2) \
-                              for broad_class in self.broad_classes ]
-
         # NOTE: if do_zero_shot, all subjects share the same subject/background placeholders and embedders.
         self.subject_strings        = [ subject_string ]         * self.num_subjects
         self.background_strings     = [ background_string ]      * self.num_subjects
@@ -380,7 +363,7 @@ class PersonalizedBase(Dataset):
             elif default_cls_delta_string is not None:
                 cls_delta_string = default_cls_delta_string
             else:
-                cls_delta_string = default_cls_delta_strings[broad_class]
+                cls_delta_string = "person"
 
             self.cls_delta_strings.append(cls_delta_string)
 
@@ -654,8 +637,7 @@ class PersonalizedBase(Dataset):
         background_string   = self.background_strings[subject_idx]        
         cls_delta_string    = self.cls_delta_strings[subject_idx]
         cls_bg_delta_string = self.bg_initializer_strings[subject_idx]
-        broad_class         = self.broad_classes[subject_idx]
-        is_animal           = self.are_animals[subject_idx]
+        is_animal           = True
 
         example["subject_name"] = subject_name
 
@@ -695,10 +677,9 @@ class PersonalizedBase(Dataset):
         comp_prompt_tmpl    = template + " " + composition_partial
 
         # "face portrait" trick for humans/animals.
-        if broad_class == 1:
-            fp_prompt_template      = "a face portrait of a {}"
-            single_fp_prompt_tmpl   = fp_prompt_template
-            comp_fp_prompt_tmpl     = single_fp_prompt_tmpl + " " + composition_partial
+        fp_prompt_template      = "a face portrait of a {}"
+        single_fp_prompt_tmpl   = fp_prompt_template
+        comp_fp_prompt_tmpl     = single_fp_prompt_tmpl + " " + composition_partial
 
         example["subj_prompt_single"]   = single_prompt_tmpl.format(subject_string)
         example["cls_prompt_single"]    = single_prompt_tmpl.format( cls_delta_string)
@@ -711,19 +692,18 @@ class PersonalizedBase(Dataset):
             example["cls_prompt_single_bg"]  = single_prompt_tmpl.format( cls_delta_string_with_bg)
             example["cls_prompt_comp_bg"]    = comp_prompt_tmpl.format(   cls_delta_string_with_bg)
 
-        if broad_class == 1:
-            # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
-            # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
-            example["subj_prompt_single_fp"] = single_fp_prompt_tmpl.format(subject_string)
-            example["subj_prompt_comp_fp"]   = comp_fp_prompt_tmpl.format(  subject_string)
-            example["cls_prompt_single_fp"]  = single_fp_prompt_tmpl.format( cls_delta_string)
-            example["cls_prompt_comp_fp"]    = comp_fp_prompt_tmpl.format(   cls_delta_string)
+        # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
+        # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
+        example["subj_prompt_single_fp"] = single_fp_prompt_tmpl.format(subject_string)
+        example["subj_prompt_comp_fp"]   = comp_fp_prompt_tmpl.format(  subject_string)
+        example["cls_prompt_single_fp"]  = single_fp_prompt_tmpl.format( cls_delta_string)
+        example["cls_prompt_comp_fp"]    = comp_fp_prompt_tmpl.format(   cls_delta_string)
 
-            if bg_suffix:
-                example["subj_prompt_single_fp_bg"] = single_fp_prompt_tmpl.format(subject_string_with_bg)
-                example["subj_prompt_comp_fp_bg"]   = comp_fp_prompt_tmpl.format(  subject_string_with_bg)
-                example["cls_prompt_single_fp_bg"]  = single_fp_prompt_tmpl.format( cls_delta_string_with_bg)
-                example["cls_prompt_comp_fp_bg"]    = comp_fp_prompt_tmpl.format(   cls_delta_string_with_bg)
+        if bg_suffix:
+            example["subj_prompt_single_fp_bg"] = single_fp_prompt_tmpl.format(subject_string_with_bg)
+            example["subj_prompt_comp_fp_bg"]   = comp_fp_prompt_tmpl.format(  subject_string_with_bg)
+            example["cls_prompt_single_fp_bg"]  = single_fp_prompt_tmpl.format( cls_delta_string_with_bg)
+            example["cls_prompt_comp_fp_bg"]    = comp_fp_prompt_tmpl.format(   cls_delta_string_with_bg)
 
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.

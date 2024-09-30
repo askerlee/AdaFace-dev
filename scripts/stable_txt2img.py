@@ -224,8 +224,8 @@ def parse_args():
                         help="Evaluate BLIP-diffusion models")
     parser.add_argument("--cls_string", type=str, default=None,
                         help="Subject class name. Only requires for --eval_blip")
-    parser.add_argument("--diffusers", action="store_true", 
-                        help="Uses the diffusers implementation")
+    parser.add_argument("--diffusers", type=str2bool, const=True, nargs="?", default=True,
+                        help="Use the diffusers implementation which is faster than the original LDM")
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],

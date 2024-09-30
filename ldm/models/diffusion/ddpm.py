@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.unet_distill_delta_loss_boost               = unet_distill_delta_loss_boost
+        self.unet_distill_delta_loss_boost          = unet_distill_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_comp_teachers            = num_candidate_comp_teachers
         # mix some of the subject embeddings into the class embeddings for faster convergence.

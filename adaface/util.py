@@ -178,8 +178,11 @@ class UNetEnsemble(nn.Module):
 
         if unet_weights is None:
             unet_weights = [1.] * len(self.unets)
-        if len(self.unets) != len(unet_weights):
+        elif len(self.unets) < len(unet_weights):
+            unet_weights = unet_weights[:len(self.unets)]
+        elif len(self.unets) > len(unet_weights):
             breakpoint()
+            
         unet_weights = torch.tensor(unet_weights, dtype=torch_dtype)
         unet_weights = unet_weights / unet_weights.sum()
         self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)

@@ -43,14 +43,14 @@ def parse_args():
     parser.add_argument("--z_suffix_type", type=str, default='', 
                         help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
-    parser.add_argument("--use_fp_trick", type=str, default=None,
+    parser.add_argument("--use_fp_trick_str", type=str, default=None,
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
     # prompt_suffix: usually reduces the similarity.
     parser.add_argument("--prompt_suffix", type=str, default="",
                         help="suffix to append to the end of each prompt")
-    parser.add_argument("--n_samples", type=int, default=-1, 
+    parser.add_argument("--n_samples", type=int, default=argparse.SUPPRESS, 
                         help="number of samples to generate for each test case")
     parser.add_argument("--bs", type=int, default=-1, 
                         help="batch size")
@@ -86,17 +86,18 @@ if __name__ == "__main__":
 
     outdir = args.out_dir_tmpl + "-" + args.method[:3]
     os.makedirs(outdir, exist_ok=True)
+    subject_type2file_path = {}
 
     for subject_type in ('man', 'woman', 'person'):
-        if args.n_samples == -1:
+        if not hasattr(args, 'n_samples'):
             args.n_samples = 4
-        if args.use_fp_trick is None:
+        if args.use_fp_trick_str is None:
             if args.method == 'adaface':
                 fp_trick_string = "face portrait"
             elif args.method == 'pulid':
                 fp_trick_string = "portrait"
         else:
-            fp_trick_string = args.use_fp_trick
+            fp_trick_string = args.use_fp_trick_str
 
         print(f"Generating samples for {subject_type}: ")
 
@@ -116,7 +117,7 @@ if __name__ == "__main__":
 
         prompt_list, class_prompt_list = \
             format_prompt_list(args.subject_string, z_prefix, z_suffix, subject_type, 
-                               broad_class=1, prompt_set_name=args.prompt_set_name, 
+                               prompt_set_name=args.prompt_set_name, 
                                fp_trick_string=fp_trick_string)
         prompt_filepath = f"{outdir}/{subject_type}-prompts-{args.prompt_set_name}-{fp_trick_string.replace(' ', '-')}.txt"
         PROMPTS = open(prompt_filepath, "w")
@@ -140,115 +141,108 @@ if __name__ == "__main__":
             PROMPTS.write( "\t".join([str(args.n_samples), indiv_subdir, prompt, class_prompt]) + "\n" )
 
         PROMPTS.close()
-
+        subject_type2file_path[subject_type] = prompt_filepath
         print(f"{len(prompt_list)} prompts saved to {prompt_filepath}")
         continue
 
     if args.gen_prompt_set_only:
+        print(subject_type2file_path)
         exit(0)
 
     if args.subjfile is not None:
         subj_info, subj2attr = parse_subject_file(args.subjfile)
-        subjects, class_names, broad_classes = \
-                subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes']
+        subjects, subj_types = subj_info['subjects'], subj_info['subj_types']
+        subject_indices      = list(range(len(subjects)))
 
-    cls_delta_strings = subj_info['cls_delta_strings']
+        range_indices = parse_range_str(args.range)
+        if range_indices is not None:
+            subject_indices = [ subject_indices[i] for i in range_indices ]
 
-    subject_indices = list(range(len(subjects)))
+        if args.scores_csv is None:
+            args.scores_csv = f"{args.method}-{args.range}.csv"
 
-    range_indices = parse_range_str(args.range)
-    if range_indices is not None:
-        subject_indices = [ subject_indices[i] for i in range_indices ]
+        # Ty to create scores_csv file. If it already exists, make it empty.
+        SCORES_CSV_FILE = open(args.scores_csv, "w")
+        SCORES_CSV_FILE.close()
 
-    if args.scores_csv is None:
-        args.scores_csv = f"{args.method}-{args.range}.csv"
+        for subject_idx in subject_indices:
+            subject_name    = subjects[subject_idx]
+            subj_type       = subj_types[subject_idx]
 
-    # Ty to create scores_csv file. If it already exists, make it empty.
-    SCORES_CSV_FILE = open(args.scores_csv, "w")
-    SCORES_CSV_FILE.close()
+            print(subject_name, ":")
 
-    for subject_idx in subject_indices:
-        subject_name        = subjects[subject_idx]
-        class_name          = class_names[subject_idx]
-        broad_class         = broad_classes[subject_idx]
-        cls_delta_string    = cls_delta_strings[subject_idx]
-
-        print(subject_name, ":")
-
-        command_line = f"python3 -m scripts.stable_txt2img --outdir {outdir}"
-        
-        if args.prompt is None:
-            print(f"{len(prompt_list)} prompts saved to {prompt_filepath}")
-            # Since we use a prompt file, we don't need to specify --n_samples.
-            command_line += f" --from_file {prompt_filepath}"
-        else:
-            # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
-            # Note only the last prompt/class_prompt will be used. 
-            command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
-            command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_prompt}\""
-
-        if args.scores_csv is not None:
-            command_line += f" --scores_csv {args.scores_csv}"
-
-        if hasattr(args, 'neg_prompt'):
-            command_line += f" --neg_prompt \"{args.neg_prompt}\""
-        elif hasattr(args, 'use_pre_neg_prompt'):
-            command_line += f" --use_pre_neg_prompt 1"
-
-        if not hasattr(args, 'compare_with_pardir') and 'data_folder' in subj_info:
-            args.compare_with_pardir = subj_info['data_folder'][0]
-
-        if args.compare_with_pardir:
-            # Do evaluation on authenticity/composition.
-            subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
-            command_line += f" --compare_with {subject_gt_dir} --calc_face_sim"
-
-            if isinstance(args.ref_images, (list, tuple)):
-                args.ref_images = " ".join(args.ref_images)
-            elif args.ref_images is None:
-                command_line += f" --ref_images {subject_gt_dir}"
+            command_line = f"python3 -m scripts.stable_txt2img --outdir {outdir}"
+            
+            if args.prompt is None:
+                print(f"{len(prompt_list)} prompts saved to {prompt_filepath}")
+                # Since we use a prompt file, we don't need to specify --n_samples.
+                command_line += f" --prompt_file {prompt_filepath}"
             else:
-                command_line += f" --ref_images {args.ref_images}"
-                        
-        if args.n_rows > 0:
-            command_line += f" --n_rows {args.n_rows}"
-        
-        if args.diffusers:
-            command_line += f" --diffusers"     
-        command_line += f" --method {args.method}"
+                # Do not use a prompt file, but specify --n_samples, --prompt, and --indiv_subdir.
+                # Note only the last prompt/class_prompt will be used. 
+                command_line += f" --n_samples {args.n_samples} --indiv_subdir {indiv_subdir}"
+                command_line += f" --prompt \"{prompt}\" --class_prompt \"{class_prompt}\""
 
-        print(command_line)
-        if not args.dryrun:
-            os.system(command_line)
+            if args.scores_csv is not None:
+                command_line += f" --scores_csv {args.scores_csv}"
 
-    if args.scores_csv is not None and not args.dryrun:
-        if not os.path.exists(args.scores_csv):
-            print(f"Error: {args.scores_csv} not found.")
-            exit(0)
+            if hasattr(args, 'neg_prompt'):
+                command_line += f" --neg_prompt \"{args.neg_prompt}\""
+            elif hasattr(args, 'use_pre_neg_prompt'):
+                command_line += f" --use_pre_neg_prompt 1"
 
-        print(f"Scores are saved to {args.scores_csv}")
-        # Read the scores and print the average.
-        csv_reader = csv.reader(open(args.scores_csv))
-        scores = []
-        for row in csv_reader:
-            emb_sig, sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = row
-            print(f"{emb_sig}:\t{sims_face_avg}\t{sims_img_avg}\t{sims_text_avg}\t{sims_dino_avg}\t{except_img_percent}")
+            if not hasattr(args, 'compare_with_pardir') and 'data_folder' in subj_info:
+                args.compare_with_pardir = subj_info['data_folder'][0]
 
-            sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = \
-                float(sims_face_avg), float(sims_img_avg), float(sims_text_avg), float(sims_dino_avg), float(except_img_percent)
-            scores.append( [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent] )
+            if args.compare_with_pardir:
+                # Do evaluation on authenticity/composition.
+                subject_gt_dir = os.path.join(args.compare_with_pardir, subject_name)
+                command_line += f" --compare_with {subject_gt_dir} --calc_face_sim"
 
-        if len(scores) == 0:
-            print(f"Error: no scores found in {args.scores_csv}.")
-        else:
-            scores = np.array(scores)
-            sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores[:, 1:], axis=0)
-            if np.sum(scores[:, 0] > 0) > 0:
-                # Skip 0 face similarity scores, as they are probably not on humans.
-                sims_face_avg = np.mean(scores[:, 0][scores[:, 0] > 0])
+                if isinstance(args.ref_images, (list, tuple)):
+                    args.ref_images = " ".join(args.ref_images)
+                elif args.ref_images is None:
+                    command_line += f" --ref_images {subject_gt_dir}"
+                else:
+                    command_line += f" --ref_images {args.ref_images}"
+                            
+            if args.n_rows > 0:
+                command_line += f" --n_rows {args.n_rows}"
+   
+            command_line += f" --method {args.method}"
+
+            print(command_line)
+            if not args.dryrun:
+                os.system(command_line)
+
+        if args.scores_csv is not None and not args.dryrun:
+            if not os.path.exists(args.scores_csv):
+                print(f"Error: {args.scores_csv} not found.")
+                exit(0)
+
+            print(f"Scores are saved to {args.scores_csv}")
+            # Read the scores and print the average.
+            csv_reader = csv.reader(open(args.scores_csv))
+            scores = []
+            for row in csv_reader:
+                emb_sig, sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = row
+                print(f"{emb_sig}:\t{sims_face_avg}\t{sims_img_avg}\t{sims_text_avg}\t{sims_dino_avg}\t{except_img_percent}")
+
+                sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = \
+                    float(sims_face_avg), float(sims_img_avg), float(sims_text_avg), float(sims_dino_avg), float(except_img_percent)
+                scores.append( [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent] )
+
+            if len(scores) == 0:
+                print(f"Error: no scores found in {args.scores_csv}.")
             else:
-                sims_face_avg = 0
+                scores = np.array(scores)
+                sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent = np.mean(scores[:, 1:], axis=0)
+                if np.sum(scores[:, 0] > 0) > 0:
+                    # Skip 0 face similarity scores, as they are probably not on humans.
+                    sims_face_avg = np.mean(scores[:, 0][scores[:, 0] > 0])
+                else:
+                    sims_face_avg = 0
 
-            print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
-            print(f"Face exception: {except_img_percent*100:.1f}%")
+                print(f"All subjects mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
+                print(f"Face exception: {except_img_percent*100:.1f}%")
 

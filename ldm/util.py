@@ -300,7 +300,7 @@ def split_string(input_string):
     substrings = [ s.strip('"') for s in substrings ]
     return substrings
 
-# The most important variables: "subjects", "class_names", "broad_classes"
+# The most important variables: "subjects", "subj_types", "data_folder"
 def parse_subject_file(subject_file_path):
     subj_info = {}
     subj2attr = {}
@@ -316,10 +316,7 @@ def parse_subject_file(subject_file_path):
                 if mat is not None:
                     var_name = mat.group(1)
                     substrings = split_string(mat.group(2))
-                    if re.match("broad_classes|are_faces", var_name):
-                        values = [ int(s) for s in substrings ]
-                    else:
-                        values = substrings
+                    values = substrings
 
                     if len(values) == 1 and values[0].startswith("$"):
                         # e.g., set -g cls_strings    $cls_delta_strings
@@ -329,17 +326,12 @@ def parse_subject_file(subject_file_path):
                 else:
                     breakpoint()
 
-    for var_name in [ "subjects", "class_names", "cls_delta_strings", "data_folder" ]:
+    for var_name in [ "subjects", "subj_types", "data_folder" ]:
         if var_name not in subj_info:
             print("Variable %s is not defined in %s" %(var_name, subject_file_path))
             breakpoint()
 
-    if 'broad_classes' not in subj_info:
-        # By default, all subjects are humans/animals, unless specified in the subject file.
-        subj_info['broad_classes'] = [ 1 for _ in subj_info['subjects'] ]
-
-    for var_name in [ "class_names", "cls_delta_strings", 
-                      "bg_init_strings", "broad_classes", "are_faces" ]:
+    for var_name in [ "subj_types" ]:
         if var_name in subj_info:
             subj2attr[var_name] = {}
             if len(subj_info[var_name]) != len(subj_info['subjects']):
