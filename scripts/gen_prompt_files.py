@@ -77,12 +77,13 @@ def parse_args():
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
 
-    args = parser.parse_args()
-    return args, parser
+    args, unknown_args = parser.parse_known_args()
+    return args, unknown_args
 
 if __name__ == "__main__":
     
-    args, argparser = parse_args()
+    args, unknown_args = parse_args()
+    print("Unknown args:", unknown_args)
 
     outdir = args.out_dir_tmpl + "-" + args.method[:3]
     os.makedirs(outdir, exist_ok=True)
@@ -157,7 +158,9 @@ if __name__ == "__main__":
         range_indices = parse_range_str(args.range)
         if range_indices is not None:
             subject_indices = [ subject_indices[i] for i in range_indices ]
-
+        else:
+            args.range = f"1-{len(subjects)}"
+            
         if args.scores_csv is None:
             args.scores_csv = f"{args.method}-{args.range}.csv"
 
@@ -168,6 +171,7 @@ if __name__ == "__main__":
         for subject_idx in subject_indices:
             subject_name    = subjects[subject_idx]
             subj_type       = subj_types[subject_idx]
+            prompt_filepath = subject_type2file_path[subj_type]
 
             print(subject_name, ":")
 
@@ -209,7 +213,9 @@ if __name__ == "__main__":
             if args.n_rows > 0:
                 command_line += f" --n_rows {args.n_rows}"
    
-            command_line += f" --method {args.method}"
+            command_line += f" --method {args.method} --subj_name {subject_name}"
+            # Append all unknown args.
+            command_line += " " + " ".join(unknown_args)
 
             print(command_line)
             if not args.dryrun:

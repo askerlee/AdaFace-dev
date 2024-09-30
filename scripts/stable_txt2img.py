@@ -228,7 +228,7 @@ def parse_args():
                         help="Use the diffusers implementation which is faster than the original LDM")
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
-    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", required=True)
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
@@ -437,6 +437,9 @@ def main(opt):
     else:
         SCORES_CSV = None
 
+    if opt.compare_with is None:
+        opt.compare_with = opt.ref_images
+
     batch_size = opt.n_samples if opt.bs == -1 else opt.bs
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
     if not opt.prompt_file:
@@ -501,8 +504,6 @@ def main(opt):
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
 
-    if opt.compare_with is None:
-        opt.compare_with = opt.ref_images
     if opt.compare_with:
         clip_evator, dino_evator = init_evaluators(-1)
         all_sims_img, all_sims_text, all_sims_dino = [], [], []
