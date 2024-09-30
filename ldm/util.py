@@ -300,7 +300,7 @@ def split_string(input_string):
     substrings = [ s.strip('"') for s in substrings ]
     return substrings
 
-# The most important variables: "subjects", "class_names", "broad_classes", "sel_set"
+# The most important variables: "subjects", "class_names", "broad_classes"
 def parse_subject_file(subject_file_path):
     subj_info = {}
     subj2attr = {}
@@ -318,8 +318,6 @@ def parse_subject_file(subject_file_path):
                     substrings = split_string(mat.group(2))
                     if re.match("broad_classes|are_faces", var_name):
                         values = [ int(s) for s in substrings ]
-                    elif var_name == 'sel_set':
-                        values = [ int(s) - 1 for s in substrings ]
                     else:
                         values = substrings
 
@@ -351,10 +349,6 @@ def parse_subject_file(subject_file_path):
             for i in range(len(subj_info['subjects'])):
                 subj_name = subj_info['subjects'][i]
                 subj2attr[var_name][subj_name] = subj_info[var_name][i]
-            
-    if 'sel_set' not in subj_info:
-        # 'sel_set' is not defined in the subject file. So select all subjects.
-        subj_info['sel_set'] = list(range(len(subj_info['subjects'])))
 
     # The most important variables: "subjects", "cls_delta_strings", "data_folder", "class_names"
     return subj_info, subj2attr

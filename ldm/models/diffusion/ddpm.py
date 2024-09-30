@@ -71,7 +71,7 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 distill_delta_loss_boost=1,
+                 unet_distill_delta_loss_boost=1,
                  enable_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.distill_delta_loss_boost               = distill_delta_loss_boost
+        self.unet_distill_delta_loss_boost               = unet_distill_delta_loss_boost
         self.do_comp_teacher_filtering              = do_comp_teacher_filtering
         self.num_candidate_comp_teachers            = num_candidate_comp_teachers
         # mix some of the subject embeddings into the class embeddings for faster convergence.
@@ -822,7 +822,7 @@ class LatentDiffusion(DDPM):
         # so fp_trick won't be used.
         if self.use_fp_trick and 'subj_prompt_single_fp' in batch:
             if self.iter_flags['do_comp_prompt_distillation'] :
-                p_use_fp_trick = 0.9
+                p_use_fp_trick = 0.7
             # If compositional distillation is enabled, then in normal recon iterations,
             # we always use the fp_trick, to better reconstructing single-face input images.
             elif self.iter_flags['do_normal_recon'] and self.comp_distill_iter_gap > 0:
@@ -1776,8 +1776,7 @@ class LatentDiffusion(DDPM):
                                                        img_mask, fg_mask, batch_have_fg_mask,
                                                        bg_pixel_weight,
                                                        x_start.shape[0], loss_dict, prefix)
-                loss += loss_fg_bg_contrast
-                loss += loss_recon
+                loss += loss_recon + loss_fg_bg_contrast
                 v_loss_recon = loss_recon.mean().detach().item()
                 loss_dict.update({f'{prefix}/loss_recon': v_loss_recon})
                 print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
@@ -1864,9 +1863,10 @@ class LatentDiffusion(DDPM):
                 # targets: replaced as the reconstructed x0 by the teacher UNet.
                 # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND * half_batch unet_teacher predicted noises (of different ts).
                 # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
-                # NOTE: .detach() is necessary, as here unet_teacher_noise_preds is used as the target of the 
-                # student prediction, and we don't want the gradient to flow back to the teacher UNet.
-                targets = [ pred.detach() for pred in unet_teacher_noise_preds ]
+                # NOTE: detach() is not necessary, as the gradient is usually disabled by
+                # "with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable)" statement,
+                # unless id2img_prompt_encoder_trainable.
+                targets = unet_teacher_noise_preds
 
                 # The outputs of the remaining denoising steps will be appended to model_outputs.
                 model_outputs = []
@@ -1915,8 +1915,8 @@ class LatentDiffusion(DDPM):
                         model_outputs.append(model_output)
                         ts.append(t)
 
-                loss_recons = []
-                loss_distill_deltas = []
+                losses_unet_distill = []
+                losses_unet_distill_delta = []
                 print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
 
                 for s in range(len(model_outputs)):
@@ -1940,10 +1940,10 @@ class LatentDiffusion(DDPM):
                         bg_pixel_weight = 0
 
                     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-                    loss_recon, _ = self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                                         img_mask, fg_mask, 
-                                                         fg_pixel_weight=1,
-                                                         bg_pixel_weight=bg_pixel_weight)
+                    loss_unet_distill, _ = \
+                        self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                             img_mask, fg_mask, fg_pixel_weight=1,
+                                             bg_pixel_weight=bg_pixel_weight)
 
                     # The first ID embedding in the batch is intact,
                     # and the remaining ID embeddings are the first added with noise.
@@ -1951,8 +1951,8 @@ class LatentDiffusion(DDPM):
                     # so as to highlight their differences caused by the noise.
                     # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
                     # Therefore, targets == unet_teacher_noise_preds.
-                    # We can set distill_delta_loss_boost = 0 to disable the delta distillation loss.
-                    if self.iter_flags['perturb_face_id_embs'] and self.distill_delta_loss_boost > 0:
+                    # We can set unet_distill_delta_loss_boost = 0 to disable the delta distillation loss.
+                    if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
                         # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
                         # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
                         # So we can contrast the first instance with the remaining instances.
@@ -1965,35 +1965,37 @@ class LatentDiffusion(DDPM):
                         # If we want to ignore noisy signals in the background due to randomness, 
                         # we can set bg_pixel_weight = 0.1.
                         delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
-                        loss_distill_delta, _ = self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                                     delta_img_mask, fg_mask=delta_fg_mask, 
-                                                                     fg_pixel_weight=1, bg_pixel_weight=1)
+                        loss_unet_distill_delta, _ = \
+                            self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
+                                                 delta_img_mask, fg_mask=delta_fg_mask, 
+                                                 fg_pixel_weight=1, bg_pixel_weight=1)
                     else:
-                        loss_distill_delta = torch.tensor(0, device=loss_recon.device)
+                        loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
 
-                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_recon.item():.4f}, {loss_distill_delta.item():.4f}")
-                    loss_recons.append(loss_recon)
-                    loss_distill_deltas.append(loss_distill_delta)
+                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
+                    losses_unet_distill.append(loss_unet_distill)
+                    losses_unet_distill_delta.append(loss_unet_distill_delta)
 
-                # If num_denoising_steps > 1, most loss_recon are usually 0.001~0.005, but sometimes there are a few large loss_recon.
-                # In order not to dilute the large loss_recon, we don't divide by num_denoising_steps.
+                # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
+                # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.
-                loss_recon = sum(loss_recons) / np.sqrt(num_denoising_steps)
-                loss += loss_recon
-                v_loss_recon = loss_recon.mean().detach().item()
+                loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
+                loss += loss_unet_distill
+                v_loss_unet_distill = loss_unet_distill.mean().detach().item()
                 if not self.iter_flags['do_unet_distill']:
                     # If not do_unet_distill, then this is a normal_recon iter 
                     # with id2img_prompt_encoder_trainable. 
                     # Otherwise, we shouldn't reach here.
                     assert self.id2img_prompt_encoder_trainable
-                    loss_dict.update({f'{prefix}/loss_recon':   v_loss_recon})
+                    # NOTE: loss_unet_distill is loss_recon only when id2img_prompt_encoder_trainable.
+                    loss_dict.update({f'{prefix}/loss_recon':        v_loss_unet_distill})
                 else:
-                    loss_dict.update({f'{prefix}/loss_distill': v_loss_recon})
+                    loss_dict.update({f'{prefix}/loss_unet_distill': v_loss_unet_distill})
 
                 if self.iter_flags['perturb_face_id_embs']:
-                    loss_distill_delta = sum(loss_distill_deltas) / np.sqrt(num_denoising_steps)
-                    loss_dict.update({f'{prefix}/loss_distill_delta': loss_distill_delta.mean().detach().item()})
-                    loss += loss_distill_delta * self.distill_delta_loss_boost
+                    loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
+                    loss += loss_unet_distill_delta * self.unet_distill_delta_loss_boost
+                    loss_dict.update({f'{prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
 
         ###### begin of preparation for do_comp_prompt_distillation ######
         # do_comp_prompt_distillation <=> calc_clip_loss. But we keep this redundancy for possible flexibility.

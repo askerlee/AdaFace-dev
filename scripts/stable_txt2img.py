@@ -124,7 +124,7 @@ def parse_args():
         type=int,
         default=4,
         help="How many samples to produce for each given prompt. " 
-             "Usually used if prompts are not loaded from a file (--from_file not specified)",
+             "Usually used if prompts are not loaded from a file (--prompt_file not specified)",
     )
     parser.add_argument("--bs", type=int, default=-1, 
                         help="batch size. If -1, use n_samples") 
@@ -141,7 +141,7 @@ def parse_args():
         help="Conditional guidance scale",
     )
     parser.add_argument(
-        "--from_file",
+        "--prompt_file",
         type=str,
         help="if specified, load prompts from this file",
     )
@@ -154,7 +154,7 @@ def parse_args():
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
+        default="models/sar/sar.safetensors",
         help="path to checkpoint of model",
     )    
     parser.add_argument(
@@ -171,18 +171,6 @@ def parse_args():
         default="autocast"
     )
 
-    parser.add_argument(
-        "--embedding_paths", 
-        nargs="*", 
-        type=str, default=None,
-        help="One or more paths to pre-trained embedding manager checkpoints")
-
-    # No preview
-    parser.add_argument(
-        "--no_preview",
-        action='store_true',
-        help="do not preview the image",
-    )
     parser.add_argument("--calc_face_sim", action="store_true",
                         help="If specified, assume the generated samples are human faces, "
                              "and compute face similarities with the groundtruth")
@@ -240,8 +228,7 @@ def parse_args():
                         choices=["adaface", "pulid"])
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
-    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
-                        default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", required=True)
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
@@ -322,9 +309,9 @@ def main(opt):
     ref_images = [ np.array(Image.open(ref_image_path)) for ref_image_path in ref_image_paths ]
 
     if opt.adaface_ckpt_paths is not None:
-        opt.subj_model_path = opt.adaface_ckpt_paths[0]
+        first_subj_model_path = opt.adaface_ckpt_paths[0]
     else:
-        opt.subj_model_path = "uninitialized"
+        first_subj_model_path = "uninitialized"
 
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
@@ -404,7 +391,7 @@ def main(opt):
                 from pulid.utils import resize_numpy_image_long
                 from pulid import attention_processor as attention
 
-                opt.subj_model_path = ""
+                first_subj_model_path = ""
                 pipeline = PuLIDPipeline(device=device)
                 
                 attention.NUM_ZERO = 8
@@ -438,7 +425,7 @@ def main(opt):
             cond_subjects = [txt_preprocess["eval"](cond_subject)]
             tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
             negative_prompt = predefined_negative_prompt
-            opt.subj_model_path = ""
+            first_subj_model_path = ""
 
     os.makedirs(opt.outdir, exist_ok=True)
 
@@ -450,7 +437,7 @@ def main(opt):
 
     batch_size = opt.n_samples if opt.bs == -1 else opt.bs
     n_rows = opt.n_rows if opt.n_rows > 0 else batch_size
-    if not opt.from_file:
+    if not opt.prompt_file:
         assert opt.prompt is not None
         prompt = opt.prompt
         all_prompts = [prompt] * opt.n_samples
@@ -468,33 +455,33 @@ def main(opt):
         if opt.compare_with:
             assert opt.class_prompt is not None, "Must specify --class_prompt when calculating CLIP similarities."
 
-        batched_class_long_prompts = [ opt.class_prompt ] * len(batched_prompts)
+        batched_class_prompts = [ opt.class_prompt ] * len(batched_prompts)
 
     else:
-        print(f"Reading prompts from {opt.from_file}")
-        with open(opt.from_file, "r") as f:
+        print(f"Reading prompts from {opt.prompt_file}")
+        with open(opt.prompt_file, "r") as f:
             # splitlines() will remove the trailing newline. So no need to strip().
             lines = f.read().splitlines()
             indiv_subdirs_prompts = [ line.split("\t") for line in lines ]
-            n_repeats, indiv_subdirs, all_prompts, class_long_prompts, class_short_prompts \
+            n_repeats, indiv_subdirs, all_prompts, class_prompts \
                     = zip(*indiv_subdirs_prompts)
             # Repeat each prompt n_repeats times, and split into batches of size batch_size.
             # If there's remainder after chunks, the last chunk will be shorter than batch_size.
 
             batched_prompts = []
             batched_subdirs = []
-            batched_class_long_prompts = []
+            batched_class_prompts = []
 
             # Repeat each prompt n_repeats times.
             for i, prompt in enumerate(all_prompts):
                 n_repeat = int(n_repeats[i])
                 # If in this line, n_repeat is larger than batch_size, we need to split it 
                 # into n_batches > 1 batches. These batches share the same indiv_subdir,
-                # class_long_prompt.
+                # class_prompt.
                 # So no need to repeat them in advance. Just append n_batches copies of them 
-                # to batched_subdirs and batched_class_long_prompts respectively below.
+                # to batched_subdirs and batched_class_prompts respectively below.
                 indiv_subdir = indiv_subdirs[i]
-                class_long_prompt = class_long_prompts[i]
+                class_prompt = class_prompts[i]
                 # The number of prompts in batched_prompts has to match the number of samples.
                 # So we need to repeat the prompt by n_repeat times.
                 prompts_repeated = [prompt] * n_repeat
@@ -507,7 +494,7 @@ def main(opt):
                     batched_prompts.append(prompts_repeated[start_idx:end_idx])
 
                 batched_subdirs.extend([indiv_subdir] * n_batches)
-                batched_class_long_prompts.extend([class_long_prompt] * n_batches)
+                batched_class_prompts.extend([class_prompt] * n_batches)
 
             # Append None to the end of batched_subdirs, for indiv_subdir change detection.
             batched_subdirs.append(None)
@@ -668,8 +655,10 @@ def main(opt):
                             x_samples_ddim.append(samples[0])
 
                     if not opt.skip_save:
-                        indiv_subdir = batched_subdirs[p_i]
-                        class_long_prompt = batched_class_long_prompts[p_i]
+                        # "{subj_name}" is a placeholder in indiv_subdir for the subject name. 
+                        # We instantiate it with the actual subject name by.
+                        indiv_subdir = batched_subdirs[p_i].format(subj_name=opt.subj_name)
+                        class_prompt = batched_class_prompts[p_i]
                         sample_dir = os.path.join(opt.outdir, indiv_subdir)
                         os.makedirs(sample_dir, exist_ok=True)                            
 
@@ -706,7 +695,7 @@ def main(opt):
                                 sim_img, sim_text, sim_dino = \
                                     compare_folders(clip_evator, dino_evator, 
                                                     opt.compare_with, sample_dir, 
-                                                    class_long_prompt, len(prompts))
+                                                    class_prompt, len(prompts))
 
                                 all_sims_img.append(sim_img.item())
                                 all_sims_text.append(sim_text.item())
@@ -737,34 +726,30 @@ def main(opt):
                         first_compared_folder = first_compared_folder[:-1]
                     subj_gt_folder_name = os.path.basename(first_compared_folder)
 
-                if opt.method == "adaface":
-                    subjfolder_mat = re.search(r"([^\/]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+).*-(\d+)\.pt", opt.subj_model_path)
-                    if subjfolder_mat:
-                        date_sig = subjfolder_mat.group(2)
-                        # subjname_method: gabrielleunion-ada or zero3-ada
-                        subjname_method = subjfolder_mat.group(3)
-                    else:
-                        date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
-                        subjname_method = 'unknown'
+                subj_name_sig = opt.subj_name
 
-                    iter_mat = re.search(r"(\d+[a-z]?).(pt|safetensors)", opt.subj_model_path)
-                    if iter_mat is not None:
-                        iter_sig = iter_mat.group(1)
-                    else:
-                        iter_sig = "unknown"
+                subjfolder_mat = re.search(r"([^\/]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+).*-(\d+)\.pt", first_subj_model_path)
+                if subjfolder_mat:
+                    date_sig = subjfolder_mat.group(2)
                 else:
-                    subjname_method = opt.method
-
                     date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
-                    iter_sig = opt.method
+
+                iter_mat = re.search(r"(\d+[a-z]?).(pt|safetensors)", first_subj_model_path)
+                if iter_mat is not None:
+                    iter_sig = iter_mat.group(1)
+                else:
+                    iter_sig = "unknown"
+
+                date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
+                iter_sig = opt.method
 
                 if opt.main_unet_path:
                     unet_mat = re.search(r"(\d+).(pt|safetensors)", opt.main_unet_path)
                     unet_sig = "unet-" + unet_mat.group(1)
-                    subjname_method += "-" + unet_sig
+                    subj_name_sig += "-" + unet_sig
 
                 # all-ada => all-ada-gabrielleunion
-                subjname_method += "-" + subj_gt_folder_name
+                subj_name_sig += "-" + subj_gt_folder_name
 
                 if isinstance(opt.scale, (list, tuple)):
                     scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
@@ -776,29 +761,27 @@ def main(opt):
                     experiment_sig += "-" + opt.bb_type
                 experiment_sig += "-" + ",".join(opt.adaface_encoder_types)
 
-                # Use the first prompt of the current chunk from opt.from_file as the saved file name.
-                if opt.from_file:
+                # Use the first prompt of the current chunk from opt.prompt_file as the saved file name.
+                if opt.prompt_file:
                     prompt = prompts[0]
                 # Otherwise, use the prompt passed by the command line.
                 prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
-                grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}.jpg')
+                grid_filepath = os.path.join(opt.outdir, f'{subj_name_sig}-{prompt_sig}-{experiment_sig}.jpg')
                 if os.path.exists(grid_filepath):
                     grid_count = 2
-                    grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
+                    grid_filepath = os.path.join(opt.outdir, f'{subj_name_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
                     while os.path.exists(grid_filepath):
                         grid_count += 1
-                        grid_filepath = os.path.join(opt.outdir, f'{subjname_method}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
+                        grid_filepath = os.path.join(opt.outdir, f'{subj_name_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
                 img = save_grid(all_samples, None, grid_filepath, nrow=n_rows)
                 
             toc = time.time()
         
-
-
     if not opt.skip_grid:
         print(f"Your samples are at: \n{grid_filepath}")
-        if not (opt.no_preview or opt.from_file or opt.compare_with):
-            os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
+        #if not (opt.no_preview or opt.prompt_file or opt.compare_with):
+        #    os.spawnvp(os.P_NOWAIT, "gpicview", [ "gpicview", os.path.abspath(grid_filepath) ])
     else:
         print(f"Your samples are at: \n{opt.outdir}")
 
@@ -817,13 +800,13 @@ def main(opt):
 
         print(f"All samples mean face/image/text/dino sim: {sims_face_avg:.3f} {sims_img_avg:.3f} {sims_text_avg:.3f} {sims_dino_avg:.3f}")
         if SCORES_CSV is not None:
-            subjfolder_mat = re.search(r"([a-zA-Z0-9_]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", opt.subj_model_path)
+            subjfolder_mat = re.search(r"([a-zA-Z0-9_]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+)", first_subj_model_path)
             if subjfolder_mat:
                 emb_sig  = subjfolder_mat.group(1) + subjfolder_mat.group(2)
             else:
                 emb_sig  = opt.method
 
-            emb_sig = subjname_method + "-" + emb_sig
+            emb_sig = subj_name_sig + "-" + emb_sig
 
             scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
             scores   = [ f"{score:.4f}" for score in scores ]

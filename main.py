@@ -238,6 +238,8 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
+    parser.add_argument("--unet_distill_delta_loss_boost", type=float, default=argparse.SUPPRESS,
+                        help="Boost factor for the UNet distillation delta loss (Set to 0 to disable)")
 
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -245,11 +247,11 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--comp_prompt_distill_weight",
         type=float, default=argparse.SUPPRESS,
         help="Weight of the mixed prompt distillation loss")
-    
+        
     parser.add_argument("--comp_fg_bg_preserve_loss_weight",
         type=float, default=argparse.SUPPRESS,
         help="Weight of the composition foreground-background preservation loss")
-    
+
     parser.add_argument("--rand_scale_range",
                         type=float, nargs=2, 
                         default=[0.7, 1.0],
@@ -259,8 +261,6 @@ def get_parser(**parser_kwargs):
                         type=int, default=argparse.SUPPRESS,
                         help="Gaps between iterations for composition regularization. "
                              "Set to -1 to disable for ablation.")
-    parser.add_argument("--broad_class", type=int, default=1,
-                        help="Whether the subject is a human/animal, object or cartoon (0: object, 1: human/animal, 2: cartoon)")
     # nargs="?" and const=True: --use_fp_trick or --use_fp_trick True or --use_fp_trick 1 
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
@@ -643,8 +643,6 @@ if __name__ == "__main__":
 
         # common_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix   = opt.common_placeholder_prefix
-        # broad_class
-        config.data.params.train.params.broad_class                 = opt.broad_class
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
         config.data.params.train.params.num_vectors_per_subj_token  = \
             opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_id2ada_prompt_encoder_types
@@ -693,6 +691,8 @@ if __name__ == "__main__":
             config.model.params.p_unet_teacher_uses_cfg         = opt.p_unet_teacher_uses_cfg
         if hasattr(opt, 'unet_teacher_cfg_scale_range'):
             config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
+        if hasattr(opt, 'unet_distill_delta_loss_boost'):
+            config.model.params.unet_distill_delta_loss_boost   = opt.unet_distill_delta_loss_boost
 
         if hasattr(opt, 'extra_unet_paths'):
             config.model.params.extra_unet_paths             = opt.extra_unet_paths
@@ -729,7 +729,6 @@ if __name__ == "__main__":
             config.model.params.comp_fg_bg_preserve_loss_weight = opt.comp_fg_bg_preserve_loss_weight
         if hasattr(opt, 'comp_prompt_distill_weight'):
             config.model.params.comp_prompt_distill_weight      = opt.comp_prompt_distill_weight
-
         if hasattr(opt, 'comp_distill_iter_gap'):   
             config.model.params.comp_distill_iter_gap = opt.comp_distill_iter_gap
 
