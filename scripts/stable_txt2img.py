@@ -749,9 +749,6 @@ def main(opt):
                     unet_sig = "unet-" + unet_mat.group(1)
                     subj_name_method_sig += "-" + unet_sig
 
-                # all-ada => all-ada-gabrielleunion
-                subj_name_method_sig += "-" + subj_gt_folder_name
-
                 if isinstance(opt.scale, (list, tuple)):
                     scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
                 else:
