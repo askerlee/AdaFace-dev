@@ -106,7 +106,6 @@ if __name__ == "__main__":
         else:
             fp_trick_string = None
 
-
         print(f"Generating samples for {subject_type}: ")
 
         if args.z_prefix_type is None:

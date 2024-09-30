@@ -728,7 +728,7 @@ def main(opt):
                         first_compared_folder = first_compared_folder[:-1]
                     subj_gt_folder_name = os.path.basename(first_compared_folder)
 
-                subj_name_sig = opt.subj_name
+                subj_name_method_sig = opt.subj_name + "-" + opt.method
 
                 subjfolder_mat = re.search(r"([^\/]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+).*-(\d+)\.pt", first_subj_model_path)
                 if subjfolder_mat:
@@ -743,15 +743,14 @@ def main(opt):
                     iter_sig = "unknown"
 
                 date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
-                iter_sig = opt.method
 
                 if opt.main_unet_path:
                     unet_mat = re.search(r"(\d+).(pt|safetensors)", opt.main_unet_path)
                     unet_sig = "unet-" + unet_mat.group(1)
-                    subj_name_sig += "-" + unet_sig
+                    subj_name_method_sig += "-" + unet_sig
 
                 # all-ada => all-ada-gabrielleunion
-                subj_name_sig += "-" + subj_gt_folder_name
+                subj_name_method_sig += "-" + subj_gt_folder_name
 
                 if isinstance(opt.scale, (list, tuple)):
                     scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
@@ -768,13 +767,13 @@ def main(opt):
                     prompt = prompts[0]
                 # Otherwise, use the prompt passed by the command line.
                 prompt_sig = prompt.replace(" ", "-")[:40]  # Cut too long prompt
-                grid_filepath = os.path.join(opt.outdir, f'{subj_name_sig}-{prompt_sig}-{experiment_sig}.jpg')
+                grid_filepath = os.path.join(opt.outdir, f'{subj_name_method_sig}-{prompt_sig}-{experiment_sig}.jpg')
                 if os.path.exists(grid_filepath):
                     grid_count = 2
-                    grid_filepath = os.path.join(opt.outdir, f'{subj_name_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
+                    grid_filepath = os.path.join(opt.outdir, f'{subj_name_method_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
                     while os.path.exists(grid_filepath):
                         grid_count += 1
-                        grid_filepath = os.path.join(opt.outdir, f'{subj_name_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
+                        grid_filepath = os.path.join(opt.outdir, f'{subj_name_method_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
                 img = save_grid(all_samples, None, grid_filepath, nrow=n_rows)
                 
@@ -808,7 +807,7 @@ def main(opt):
             else:
                 emb_sig  = opt.method
 
-            emb_sig = subj_name_sig + "-" + emb_sig
+            emb_sig = subj_name_method_sig + "-" + emb_sig
 
             scores   = [sims_face_avg, sims_img_avg, sims_text_avg, sims_dino_avg, except_img_percent]
             scores   = [ f"{score:.4f}" for score in scores ]
