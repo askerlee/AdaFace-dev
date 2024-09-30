@@ -824,9 +824,11 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_prompt_distillation'] :
                 p_use_fp_trick = 0.7
             # If compositional distillation is enabled, then in normal recon iterations,
-            # we always use the fp_trick, to better reconstructing single-face input images.
+            # we use the fp_trick most of the time, to better reconstructing single-face input images.
+            # However, we still keep 20% of the do_normal_recon iterations to not use the fp_trick,
+            # to encourage a bias towards larger facial areas in the output images.
             elif self.iter_flags['do_normal_recon'] and self.comp_distill_iter_gap > 0:
-                p_use_fp_trick = 1
+                p_use_fp_trick = 0.8
             else:
                 # If not doing compositional distillation, then use_fp_trick is disabled on do_normal_recon iterations,
                 # so that the ID embeddings alone are expected to reconstruct the subject portraits.
@@ -904,6 +906,13 @@ class LatentDiffusion(DDPM):
             SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
             CLS_PROMPT_COMP    = 'cls_prompt_comp'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single'
+
+        # In 50% of the use_fp_trick iterations, we replace "face portrait" with "portrait",
+        # to reduce the model's reliance on the magic words "face portrait".
+        if self.iter_flags['use_fp_trick'] and random.random() < 0.5:
+            for prompt_set_name in [SUBJ_PROMPT_SINGLE, SUBJ_PROMPT_COMP, CLS_PROMPT_SINGLE, CLS_PROMPT_COMP]:
+                prompt_set = batch[prompt_set_name]
+                prompt_set = [ prompt.replace("face portrait", "portrait") for prompt in prompt_set ]
 
         captions = subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
         cls_single_prompts  = batch[CLS_PROMPT_SINGLE]

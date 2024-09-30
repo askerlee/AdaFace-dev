@@ -151,7 +151,7 @@ with gr.Blocks(css=css) as demo:
                 remove_and_reupload = gr.ClearButton(value="Remove and upload subject images", components=img_files, size="sm")
 
             prompt = gr.Dropdown(label="Prompt",
-                       info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance_face'.",
+                       info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
                        value=None,
                        allow_custom_value=True,
                        filterable=False,

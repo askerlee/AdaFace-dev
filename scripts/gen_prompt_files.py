@@ -20,13 +20,6 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--subject_string", type=str, default="z", 
                         help="Subject placeholder string that represents the subject in prompts")
-    parser.add_argument("--num_vectors_per_subj_token",
-                        type=int, default=argparse.SUPPRESS,
-                        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-    parser.add_argument("--num_vectors_per_bg_token",
-                        type=int, default=4,
-                        help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
- 
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
                         help="Reference image for zero-shot learning. If not specified, use subject_gt_dir.")
 
@@ -50,7 +43,7 @@ def parse_args():
     parser.add_argument("--z_suffix_type", type=str, default='', 
                         help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
-    parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--use_fp_trick", type=str, default=None,
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
@@ -91,20 +84,19 @@ if __name__ == "__main__":
     
     args, argparser = parse_args()
 
-    args.orig_placeholder = args.subject_string
     outdir = args.out_dir_tmpl + "-" + args.method[:3]
     os.makedirs(outdir, exist_ok=True)
 
     for subject_type in ('man', 'woman', 'person'):
         if args.n_samples == -1:
             args.n_samples = 4
-        if args.use_fp_trick:
+        if args.use_fp_trick is None:
             if args.method == 'adaface':
                 fp_trick_string = "face portrait"
             elif args.method == 'pulid':
                 fp_trick_string = "portrait"
         else:
-            fp_trick_string = None
+            fp_trick_string = args.use_fp_trick
 
         print(f"Generating samples for {subject_type}: ")
 
@@ -126,7 +118,7 @@ if __name__ == "__main__":
             format_prompt_list(args.subject_string, z_prefix, z_suffix, subject_type, 
                                broad_class=1, prompt_set_name=args.prompt_set_name, 
                                fp_trick_string=fp_trick_string)
-        prompt_filepath = f"{outdir}/{subject_type}-prompts-{args.prompt_set_name}-{args.num_vectors_per_subj_token}.txt"
+        prompt_filepath = f"{outdir}/{subject_type}-prompts-{args.prompt_set_name}-{fp_trick_string.replace(' ', '-')}.txt"
         PROMPTS = open(prompt_filepath, "w")
 
         for prompt, class_prompt in zip(prompt_list, class_prompt_list):
@@ -159,7 +151,6 @@ if __name__ == "__main__":
         subj_info, subj2attr = parse_subject_file(args.subjfile)
         subjects, class_names, broad_classes = \
                 subj_info['subjects'], subj_info['class_names'], subj_info['broad_classes']
-
 
     cls_delta_strings = subj_info['cls_delta_strings']
 
@@ -198,11 +189,6 @@ if __name__ == "__main__":
 
         if args.scores_csv is not None:
             command_line += f" --scores_csv {args.scores_csv}"
-
-        if hasattr(args, 'num_vectors_per_subj_token'):
-            command_line += f" --subject_string {args.orig_placeholder} --num_vectors_per_subj_token {args.num_vectors_per_subj_token}"
-        if hasattr(args, 'num_vectors_per_bg_token'):
-            command_line += f" --background_string {args.background_string} --num_vectors_per_bg_token {args.num_vectors_per_bg_token}"
 
         if hasattr(args, 'neg_prompt'):
             command_line += f" --neg_prompt \"{args.neg_prompt}\""
