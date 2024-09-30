@@ -616,6 +616,7 @@ def main(opt):
                             x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale, batch_size, verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []
+                            # Remove the subject string 'z' from the prompt.
                             prompt = re.sub(rf"a\s+{opt.subject_string},? ", "", prompts[0])
                             print("pulid:", prompt)
                             for bi in range(batch_size):

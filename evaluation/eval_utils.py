@@ -503,9 +503,9 @@ def format_prompt_list(subject_string, z_prefix, z_suffix,
     subject_string = z_prefix + subject_string
     z_prefix = ""
     if fp_trick_string:
-        # Prepend ", face portrait," to z_suffix to make sure the subject is always expressed.
+        # Prepend ", face portrait, " to z_suffix to make sure the subject is always expressed.
         # There's a space after z_suffix in the prompt, so no need to add a space here.
-        z_suffix = ", " + fp_trick_string + "," + z_suffix
+        z_suffix = ", " + fp_trick_string + ", " + z_suffix
     
     if class_name in subject_string:
         class_name = ""
