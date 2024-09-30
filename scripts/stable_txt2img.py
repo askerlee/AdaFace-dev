@@ -741,8 +741,6 @@ def main(opt):
                 else:
                     iter_sig = "unknown"
 
-                date_sig = time.strftime("%Y-%m-%dT%H-%M-%S", time.localtime())
-
                 if opt.main_unet_path:
                     unet_mat = re.search(r"(\d+).(pt|safetensors)", opt.main_unet_path)
                     unet_sig = "unet-" + unet_mat.group(1)
