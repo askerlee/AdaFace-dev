@@ -726,9 +726,8 @@ def main(opt):
                     first_compared_folder = opt.compare_with[0]
                     if first_compared_folder.endswith("/") or first_compared_folder.endswith("\\"):
                         first_compared_folder = first_compared_folder[:-1]
-                    subj_gt_folder_name = os.path.basename(first_compared_folder)
 
-                subj_name_method_sig = opt.subj_name + "-" + opt.method
+                subj_name_method_sig = opt.subj_name + "-" + opt.method[:3]
 
                 subjfolder_mat = re.search(r"([^\/]+)(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})_([^\/]+).*-(\d+)\.pt", first_subj_model_path)
                 if subjfolder_mat:
