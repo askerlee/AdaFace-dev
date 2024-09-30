@@ -180,6 +180,8 @@ def parse_args():
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use.')
     #parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
 
+    parser.add_argument("--subj_name", type=str, default="unknown", 
+                        help="Subject name for the output images")
     parser.add_argument("--compare_with", type=str, nargs='+', default=None,
                         help="A list of reference images/folders, used to evaluate the similarity of generated samples")    
     parser.add_argument("--class_prompt", type=str, default=None,
@@ -198,7 +200,7 @@ def parse_args():
                         help="Background placeholder string used in prompts to denote the background in training images.")
                     
     parser.add_argument("--num_vectors_per_subj_token",
-                        type=int, default=16,
+                        type=int, default=20,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
     parser.add_argument("--num_vectors_per_bg_token",
                         type=int, default=4,
