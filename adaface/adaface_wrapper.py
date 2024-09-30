@@ -305,7 +305,7 @@ class AdaFaceWrapper(nn.Module):
         
         prompt = self.update_prompt(prompt)
         if verbose:
-            print(f"Prompt: {prompt}")
+            print(f"Subject prompt: {prompt}")
 
         # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
         # So we manually move it to GPU here.

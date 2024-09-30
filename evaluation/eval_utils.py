@@ -11,7 +11,7 @@ from PIL import Image
 import cv2
 import time
 
-from evaluation.clip_eval import ImageDirEvaluator
+from evaluation.clip_eval import CLIPImagesEvaluator
 from evaluation.dino_eval import DINOEvaluator
 from evaluation.community_prompts import community_prompt_list
 from insightface.app import FaceAnalysis
@@ -38,7 +38,7 @@ def init_evaluators(gpu_id):
         device = 'cpu'
     else:
         device = f'cuda:{gpu_id}'
-    clip_evator = ImageDirEvaluator(device)
+    clip_evator = CLIPImagesEvaluator(device)
     dino_evator = DINOEvaluator(device)
     return clip_evator, dino_evator
 
@@ -83,7 +83,7 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
     gt_images = torch.stack(gt_images, axis=0)
     sample_images = [torch.from_numpy(sample_data_loader[i]["image"]).permute(2, 0, 1) for i in sample_range]
     sample_images = torch.stack(sample_images, axis=0)
-    print(f"prompt: {prompt}")
+    print(f"Class prompt: {prompt}")
     #sample_image_paths = [sample_data_loader[i]["image_path"] for i in sample_range]
     #print("Sampel paths:", sample_image_paths)
 
