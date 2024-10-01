@@ -19,7 +19,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         calc_elastic_matching_loss, SequentialLR2, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_cls_subj_embeddings, \
                         repeat_selected_instances, halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_array, anneal_perturb_embedding, count_optimized_params \
+                        probably_anneal_t, anneal_perturb_embedding, count_optimized_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -1017,11 +1017,10 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_unet_distill']:
             # Gradually increase the chance of taking 5 or 7 denoising steps.
-            p_num_denoising_steps = anneal_array(training_percent=self.training_percent,
-                                                 final_percent=0.5,
-                                                 begin_array=[0.4, 0.3, 0.2, 0.1], 
-                                                 end_array  =[0.4, 0.3, 0.2, 0.1],
-                                                )
+            p_num_denoising_steps    = [0.2, 0.2, 0.3, 0.3]
+            # cand_num_denoising_steps will be truncated if p_num_denoising_steps is shorter.
+            # Since there are 4 elements in p_num_denoising_steps, 
+            # the truncated cand_num_denoising_steps is [1, 2, 3, 5].
             cand_num_denoising_steps = [1, 2, 3, 5, 7]
             # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 3, 5].
             cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
@@ -1029,7 +1028,7 @@ class LatentDiffusion(DDPM):
             p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
             p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
 
-            # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
+            # num_denoising_steps: 1, 2, 3, 5, among which 3 and 5 are selected with bigger chances.
             num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
