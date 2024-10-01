@@ -15,13 +15,13 @@ model:
     image_size:       64
     channels:         4
     # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
-    embedding_manager_trainable: True
-    monitor:                     train/loss
+    embedding_manager_trainable:      True
+    monitor:                          train/loss
     scale_factor:                     0.18215
     unfreeze_unet:                    False
     unet_lr:                          0.0
     use_fp_trick:                     True
-    do_comp_teacher_filtering:        True
+    do_comp_teacher_filtering:        False
     num_candidate_comp_teachers:      2
     comp_distill_iter_gap:            -1  # Change to 4 when unet distillation plateaus.
     unet_teacher_types:               ['consistentID', 'arc2face']

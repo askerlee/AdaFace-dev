@@ -139,7 +139,7 @@ class CLIPEvaluator(object):
         else:
             raise NotImplementedError
 
-class ImageDirEvaluator(CLIPEvaluator):
+class CLIPImagesEvaluator(CLIPEvaluator):
     def __init__(self, device, clip_model='ViT-B/32') -> None:
         super().__init__(device, clip_model)
 
