@@ -25,7 +25,7 @@ class CLIPEvaluator(object):
         ])
 
     def tokenize(self, strings: list) -> torch.Tensor:
-        inputs = self.processor(text=strings, return_tensors="pt", padding=True, truncation=True).to('cpu')
+        inputs = self.processor(text=strings, return_tensors="pt", padding=True, truncation=True, is_split_into_words=True).to(self.device)
         return inputs.input_ids
 
     @torch.no_grad()
@@ -40,7 +40,7 @@ class CLIPEvaluator(object):
         return image_features
 
     def get_text_features(self, text: str, norm: bool = True, get_token_emb: bool = False) -> torch.Tensor:
-        tokens = self.tokenize([text], is_split_into_words=True)  # Tokenize the input text
+        tokens = self.tokenize([text])  # Tokenize the input text
 
         if get_token_emb:
             # Token embeddings are not exposed directly in Hugging Face's CLIP, so this part would need to be implemented differently.

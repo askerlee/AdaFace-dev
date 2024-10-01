@@ -2483,8 +2483,10 @@ class LatentDiffusion(DDPM):
 
         # Instances are arranged as: 
         # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
-        losses_clip_subj_comp, losses_clip_mix_comp \
-            = losses_clip_comp.chunk(2)
+        try:
+            losses_clip_subj_comp, losses_clip_mix_comp = losses_clip_comp.chunk(2)
+        except:
+            breakpoint()
 
         loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
 
