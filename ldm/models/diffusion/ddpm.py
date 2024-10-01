@@ -2479,15 +2479,11 @@ class LatentDiffusion(DDPM):
             clip_images = self.decode_first_stage(clip_images_code)
             losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   
                                                                                  clip_images,  
-                                                                                 reduction='diag')
+                                                                                 reduction='none')
 
         # Instances are arranged as: 
         # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
-        try:
-            losses_clip_subj_comp, losses_clip_mix_comp = losses_clip_comp.chunk(2)
-        except:
-            breakpoint()
-
+        losses_clip_subj_comp, losses_clip_mix_comp = losses_clip_comp[0].chunk(2)
         loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
 
         if not self.iter_flags['reuse_init_conds']:
