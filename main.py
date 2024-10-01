@@ -597,6 +597,17 @@ if __name__ == "__main__":
     #torch.backends.cudnn.benchmark = False
     torch.backends.cuda.matmul.allow_tf32 = True
 
+    '''    
+    [rank1]: torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.50 GiB. 
+    GPU 1 has a total capacity of 47.41 GiB of which 270.69 MiB is free. Including non-PyTorch memory, 
+    this process has 47.10 GiB memory in use. Of the allocated memory 33.18 GiB is allocated by PyTorch, 
+    and 13.19 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try 
+    setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  
+    See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+    '''
+    
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'expandable_segments'
+
     try:
         # init and save configs
         configs = [OmegaConf.load(cfg) for cfg in opt.base]
