@@ -1882,21 +1882,21 @@ class LatentDiffusion(DDPM):
 
                 for s in range(num_denoising_steps):
                     # Predict the noise with t2 (a set of earlier t).
-                    # unet_teacher_pred_x0 is the unet_teacher predicted images, 
-                    # used to seed the second denoising step. But using it will cut off the gradient flow.
-                    pred_x0 = unet_teacher_x_starts[s].to(x_start.dtype)
+                    # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
+                    # used to seed the second denoising step. 
+                    x_start_s = unet_teacher_x_starts[s].to(x_start.dtype)
                     # noise2, t2 are the s-th noise/t used to by unet_teacher.
                     noise2  = unet_teacher_noises[s].to(x_start.dtype)
                     t2      = ts[s]
 
-                    # Here pred_x0 is used as x_start.
+                    # Here x_start_s is used as x_start.
                     # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
                     # ** DO make sure unet_teacher() was called before guided_denoise() below. **
                     # We need to make the student's CFG scale consistent with the teacher UNet's.
                     # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
                     # and the cfg_scale is not used in guided_denoise().
                     model_output2, x_recon2 = \
-                        self.guided_denoise(pred_x0, noise2, t2, cond, 
+                        self.guided_denoise(x_start_s, noise2, t2, cond, 
                                             text_prompt_adhoc_info=text_prompt_adhoc_info,
                                             unet_has_grad=True, do_pixel_recon=True, 
                                             cfg_scale=self.unet_teacher.cfg_scale)
