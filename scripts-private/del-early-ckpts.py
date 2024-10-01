@@ -25,7 +25,7 @@ def find_largest_checkpoint(folder_path):
     for iteration, filename in checkpoints:
         if iteration != largest_iteration:
             file_path = os.path.join(folder_path, filename)
-            #os.remove(file_path)
+            os.remove(file_path)
             print(f"Deleted: {file_path}")
     
     print(f"Kept:    {os.path.join(folder_path, largest_checkpoint)}")
