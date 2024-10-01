@@ -1864,12 +1864,13 @@ class LatentDiffusion(DDPM):
                         teacher_contexts = teacher_contexts[0]
 
                 with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
-                    unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, ts = \
+                    unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
                         self.unet_teacher(self, x_start, noise, t, teacher_contexts, num_denoising_steps=num_denoising_steps)
                 
                 # **Objective 2**: Align student noise predictions with teacher noise predictions.
                 # targets: replaced as the reconstructed x0 by the teacher UNet.
-                # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND * half_batch unet_teacher predicted noises (of different ts).
+                # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND 
+                # unet_teacher predicted noises (of different ts).
                 # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
                 # NOTE: detach() is not necessary, as the gradient is usually disabled by
                 # "with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable)" statement,
@@ -1878,16 +1879,16 @@ class LatentDiffusion(DDPM):
 
                 # The outputs of the remaining denoising steps will be appended to model_outputs.
                 model_outputs = []
-                recon_images = []
+                #all_recon_images = []
 
                 for s in range(num_denoising_steps):
-                    # Predict the noise with t2 (a set of earlier t).
+                    # Predict the noise with t_s (a set of earlier t).
                     # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
                     # used to seed the second denoising step. 
                     x_start_s = unet_teacher_x_starts[s].to(x_start.dtype)
-                    # noise2, t2 are the s-th noise/t used to by unet_teacher.
-                    noise2  = unet_teacher_noises[s].to(x_start.dtype)
-                    t2      = ts[s]
+                    # noise_t, t_s are the s-th noise/t used to by unet_teacher.
+                    noise_t   = unet_teacher_noises[s].to(x_start.dtype)
+                    t_s       = all_t[s]
 
                     # Here x_start_s is used as x_start.
                     # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
@@ -1895,13 +1896,18 @@ class LatentDiffusion(DDPM):
                     # We need to make the student's CFG scale consistent with the teacher UNet's.
                     # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
                     # and the cfg_scale is not used in guided_denoise().
-                    model_output2, x_recon2 = \
-                        self.guided_denoise(x_start_s, noise2, t2, cond, 
+                    model_output_s, x_recon_s = \
+                        self.guided_denoise(x_start_s, noise_t, t_s, cond, 
                                             text_prompt_adhoc_info=text_prompt_adhoc_info,
                                             unet_has_grad=True, do_pixel_recon=True, 
                                             cfg_scale=self.unet_teacher.cfg_scale)
-                    model_outputs.append(model_output2)
-                    recon_image = self.decode_first_stage(x_recon2)
+                    model_outputs.append(model_output_s)
+
+                    recon_images_s = self.decode_first_stage(x_recon_s)
+                    # log_image_colors are all 0: no box to be drawn on the images in cache_and_log_generations().
+                    log_image_colors = torch.zeros(recon_images_s.shape[0], dtype=int, device=x_start.device)
+                    if self.trainer.is_global_zero == 0:
+                        self.cache_and_log_generations(recon_images_s, log_image_colors)
 
                 # If id2img_prompt_encoder_trainable, then we also have
                 # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
@@ -1913,7 +1919,7 @@ class LatentDiffusion(DDPM):
                         # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
                         model_outputs   += unet_teacher_noise_preds
                         targets         += unet_teacher_noises
-                        ts              += ts
+                        all_t           += all_t
                     else:
                         # Otherwise, use the original image target. 
                         # gt_target == added noise.
@@ -1921,7 +1927,8 @@ class LatentDiffusion(DDPM):
                         # **Objective 4**: Align student noise predictions with ground truth noises.
                         targets.append(gt_target)
                         model_outputs.append(model_output)
-                        ts.append(t)
+                        # From here on, all_t is only used for printing.
+                        all_t.append(t)
 
                 losses_unet_distill = []
                 losses_unet_distill_delta = []
@@ -1980,7 +1987,7 @@ class LatentDiffusion(DDPM):
                     else:
                         loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
 
-                    print(f"Rank {self.trainer.global_rank} Step {s}: {ts[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
+                    print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
                     losses_unet_distill.append(loss_unet_distill)
                     losses_unet_distill_delta.append(loss_unet_distill_delta)
 

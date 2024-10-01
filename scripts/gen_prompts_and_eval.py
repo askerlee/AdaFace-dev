@@ -33,8 +33,6 @@ def parse_args():
                         help="Prompt to use for generating samples, using {} for subject_string (default: None)")
     parser.add_argument("--neg_prompt", type=str, default=argparse.SUPPRESS,
                         help="Negative prompt to use for generating samples (default: None)")
-    parser.add_argument("--use_pre_neg_prompt", type=str2bool, const=True, default=argparse.SUPPRESS, 
-                        nargs="?", help="use predefined negative prompts")
 
     # Possible z_prefix_type: '' (none), 'class_name', or any user-specified string.
     parser.add_argument("--z_prefix_type", type=str, default='',
@@ -120,7 +118,8 @@ if __name__ == "__main__":
             format_prompt_list(args.subject_string, z_prefix, z_suffix, subject_type, 
                                prompt_set_name=args.prompt_set_name, 
                                fp_trick_string=fp_trick_string)
-        prompt_filepath = f"{outdir}/{subject_type}-prompts-{args.prompt_set_name}-{fp_trick_string.replace(' ', '-')}.txt"
+        z_suffix = "-" + z_suffix if len(z_suffix) > 0 else z_suffix
+        prompt_filepath = f"{outdir}/{subject_type}{z_suffix}-prompts-{args.prompt_set_name}-{fp_trick_string.replace(' ', '-')}.txt"
         PROMPTS = open(prompt_filepath, "w")
 
         for prompt, class_prompt in zip(prompt_list, class_prompt_list):
@@ -192,8 +191,6 @@ if __name__ == "__main__":
 
             if hasattr(args, 'neg_prompt'):
                 command_line += f" --neg_prompt \"{args.neg_prompt}\""
-            elif hasattr(args, 'use_pre_neg_prompt'):
-                command_line += f" --use_pre_neg_prompt 1"
 
             if not hasattr(args, 'compare_with_pardir') and 'data_folder' in subj_info:
                 args.compare_with_pardir = subj_info['data_folder'][0]
