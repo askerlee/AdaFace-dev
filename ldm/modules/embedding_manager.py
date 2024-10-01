@@ -61,6 +61,7 @@ class EmbeddingManager(nn.Module):
             id2ada_prompt_encoder_types=['arc2face'],
             id2img_prompt_encoder_trainable=False,
             to_load_id2img_learnable_modules=False,
+            freeze_bg_subj_basis_generator=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             cls_delta_string='person',
             cls_delta_token_weights=None,
@@ -236,10 +237,9 @@ class EmbeddingManager(nn.Module):
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
 
+        self.freeze_bg_subj_basis_generator = freeze_bg_subj_basis_generator
         if adaface_ckpt_paths is not None:
-            # TODO: fix this Ad-hoc solution to handle the incosistent bg subj basis generator 
-            # weight sizes in the ckpt.
-            self.load(adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=True)
+            self.load(adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=False)
 
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
                               subj_name_to_cls_delta_string, 
@@ -662,6 +662,10 @@ class EmbeddingManager(nn.Module):
                             print(f"Missing keys: {ret.missing_keys}")
                         if ret is not None and len(ret.unexpected_keys) > 0:
                             print(f"Unexpected keys: {ret.unexpected_keys}")
+                    if self.freeze_bg_subj_basis_generator:
+                        for param in self.string_to_subj_basis_generator_dict[km].parameters():
+                            param.requires_grad = False
+
                 # Since we load fg SubjBasisGenerators through id2ada_prompt_encoder, we skip loading them here.
                 else:
                     continue

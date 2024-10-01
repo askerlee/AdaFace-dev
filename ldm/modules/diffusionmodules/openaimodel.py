@@ -844,22 +844,22 @@ class UNetModel(nn.Module):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        capture_distill_attn        = extra_info.get('capture_distill_attn', False)  if extra_info is not None else False
-        img_mask                    = extra_info.get('img_mask', None)               if extra_info is not None else None
-        debug_attn                  = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
+        capture_ca_layers_activations   = extra_info.get('capture_ca_layers_activations', False)  if extra_info is not None else False
+        img_mask                        = extra_info.get('img_mask', None)               if extra_info is not None else None
+        debug_attn                      = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.
         ca_flags_stack = []
         
-        if capture_distill_attn or debug_attn:
+        if capture_ca_layers_activations or debug_attn:
             # Save attention matrices and output features for distillation.
-            distill_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-            distill_old_ca_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_attn_vars': True}, 
-                                                                ca_layer_indices = distill_layer_indices)
-            ca_flags_stack.append([ distill_old_ca_flags, distill_layer_indices, None, None ])
+            captured_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+            capture_ca_old_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_attn_vars': True}, 
+                                                                ca_layer_indices = captured_layer_indices)
+            ca_flags_stack.append([ capture_ca_old_flags, captured_layer_indices, None, None ])
         else:
-            distill_layer_indices = []
+            captured_layer_indices = []
 
         if self.num_classes is not None:
             assert y.shape == (x.shape[0],)
@@ -888,7 +888,7 @@ class UNetModel(nn.Module):
             h = module(h, emb, context, mask=img_mask)
             hs.append(h)
 
-            if layer_idx in distill_layer_indices:
+            if layer_idx in captured_layer_indices:
                     ca_layers_activations[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_activations
                     ca_layers_activations[layer_idx]['outfeat'] = h
                     # Release RAM.
@@ -898,7 +898,7 @@ class UNetModel(nn.Module):
         
         # 13 [2, 1280, 8, 8]
         h = self.middle_block(h, emb, context, mask=img_mask)
-        if layer_idx in distill_layer_indices:
+        if layer_idx in captured_layer_indices:
                 ca_layers_activations[layer_idx]            = self.middle_block[1].transformer_blocks[0].attn2.cached_activations
                 ca_layers_activations[layer_idx]['outfeat'] = h
                 # Release RAM.
@@ -924,7 +924,7 @@ class UNetModel(nn.Module):
 
             # emb: [2, 1280].
             h = module(h, emb, context, mask=img_mask)
-            if layer_idx in distill_layer_indices:
+            if layer_idx in captured_layer_indices:
                     ca_layers_activations[layer_idx]            = module[1].transformer_blocks[0].attn2.cached_activations
                     ca_layers_activations[layer_idx]['outfeat'] = h
                     # Release RAM.

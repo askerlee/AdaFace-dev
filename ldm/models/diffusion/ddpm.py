@@ -621,8 +621,8 @@ class LatentDiffusion(DDPM):
                         'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                         'is_training':                   self.embedding_manager.training,
                         # Will set to True in p_losses() if in compositional iterations.
-                        'capture_distill_attn':          False,
-                        }
+                        'capture_ca_layers_activations':  False,
+                     }
 
         c = (prompt_embeddings, cond_in, extra_info)
 
@@ -1315,10 +1315,9 @@ class LatentDiffusion(DDPM):
     # do_pixel_recon: return denoised images for CLIP evaluation. 
     # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
     # This is not used for the iter_type 'do_normal_recon'.
-    # unet_has_grad: when returning do_pixel_recon (e.g. to select the better instance by smaller clip loss), 
-    # to speed up, no BP is done on these instances, so unet_has_grad=False.
+    # unet_has_grad: 'all', 'none', 'subject-half'.
     def guided_denoise(self, x_start, noise, t, cond, text_prompt_adhoc_info, 
-                       unet_has_grad=True, do_pixel_recon=False, cfg_scale=-1):
+                       unet_has_grad='all', do_pixel_recon=False, cfg_scale=-1):
         
         self.embedding_manager.set_prompt_adhoc_info(text_prompt_adhoc_info)
 
@@ -1328,8 +1327,33 @@ class LatentDiffusion(DDPM):
         # if not unet_has_grad, we save RAM by not storing the computation graph.
         # if unet_has_grad, we don't have to take care of embedding_manager.force_grad.
         # Subject embeddings will naturally have gradients.
-        with torch.set_grad_enabled(unet_has_grad):
+        if unet_has_grad == 'none':
+            with torch.no_grad():
+                model_output = self.apply_model(x_noisy, t, cond)
+        elif unet_has_grad == 'all':
             model_output = self.apply_model(x_noisy, t, cond)
+        elif unet_has_grad == 'subject-half':
+            # Split x_noisy, t, cond into two halves.
+            x_noisy_1, x_noisy_2 = x_noisy.chunk(2)
+            t_1, t_2 = t.chunk(2)
+            c_prompt_emb, c_in, extra_info = cond
+            c_prompt_emb_1, c_prompt_emb_2 = c_prompt_emb.chunk(2)
+            c_in_1, c_in_2 = c_in[:len(x_noisy_1)], c_in[len(x_noisy_1):]
+            extra_info_1, extra_info_2 = extra_info, copy.copy(extra_info)
+            model_output_1 = self.apply_model(x_noisy_1, t_1, (c_prompt_emb_1, c_in_1, extra_info_1))
+            with torch.no_grad():
+                model_output_2 = self.apply_model(x_noisy_2, t_2, (c_prompt_emb_2, c_in_2, extra_info_2))
+
+            model_output = torch.cat([model_output_1, model_output_2], dim=0)
+            if extra_info['capture_ca_layers_activations']:
+                # Concatenate the two attention weights.
+                for layer_idx in extra_info_1['ca_layers_activations'].keys():
+                    for k in extra_info_1['ca_layers_activations'][layer_idx].keys():
+                        extra_info_1['ca_layers_activations'][layer_idx][k] = \
+                            torch.cat([extra_info_1['ca_layers_activations'][layer_idx][k], 
+                                       extra_info_2['ca_layers_activations'][layer_idx][k]], dim=0)
+        else:
+            breakpoint()
 
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
@@ -1342,7 +1366,7 @@ class LatentDiffusion(DDPM):
                 # which don't contain placeholder tokens.
                 self.embedding_manager.clear_prompt_adhoc_info()
                 # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-                # By default, 'capture_distill_attn' = False in a generated text context, 
+                # By default, 'capture_ca_layers_activations' = False in a generated text context, 
                 # including uncond_context. So we don't need to set it in self.uncond_context explicitly.                
                 uncond_emb  = self.uncond_context[0].repeat(x_noisy.shape[0], 1, 1)
                 uncond_c_in = self.uncond_context[1] * x_noisy.shape[0]
@@ -1449,7 +1473,7 @@ class LatentDiffusion(DDPM):
                 # Fresh compositional iter. May do teacher filtering.
                 # In a fresh compositional iter, t is set to be at the last 20% of the timesteps.
                 # Randomly choose t from the largest 200 timesteps, to match the completely noisy x_start.
-                t_tail = torch.randint(int(self.num_timesteps * 0.8), int(self.num_timesteps * 1), 
+                t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, 
                                        (x_start.shape[0],), device=x_start.device)
                 t = t_tail
 
@@ -1533,7 +1557,7 @@ class LatentDiffusion(DDPM):
         # the original images don't play a role (even if comp_init_fg_from_training_image,
         # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
         extra_info['img_mask']  = None if self.iter_flags['do_comp_prompt_distillation'] else img_mask
-        extra_info['capture_distill_attn'] = True
+        extra_info['capture_ca_layers_activations'] = True
 
         # img_mask is also used when computing Ada embeddings in embedding_manager.
         # So we pass img_mask to embedding_manager here.
@@ -1544,13 +1568,17 @@ class LatentDiffusion(DDPM):
                                    # In compositional iterations, img_mask is always None.
                                    'img_mask':              extra_info['img_mask'],
                                    'prompt_emb_mask':       prompt_emb_mask }
-        
+        if self.iter_flags['do_comp_prompt_distillation']:
+            unet_has_grad = 'subject-half'
+        else:
+            unet_has_grad = 'all'
+
         # cfg_scale: classifier-free guidance scale for do_pixel_recon.
         if not self.iter_flags['do_unet_distill']:
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    unet_has_grad=True, 
+                                    unet_has_grad=unet_has_grad, 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is enabled only when do_comp_prompt_distillation.
                                     # This is to cache the denoised images as future initialization.
@@ -1558,19 +1586,25 @@ class LatentDiffusion(DDPM):
                                     cfg_scale=cfg_scale)
 
         if self.iter_flags['do_comp_prompt_distillation']:
-            # x_recon to be cached for a future iteration with a smaller t.
+            if self.trainer.is_global_zero == 0:
+                # log_image_colors are all 0: no box to be drawn on the images in cache_and_log_generations().
+                log_image_colors = torch.zeros(recon_images_s.shape[0], dtype=int, device=x_start.device)
+                self.cache_and_log_generations(x_recon, log_image_colors)
+
+            # x_recon will be cached for a future iteration with a smaller t.
             # Note the 4 types of prompts have to be the same as this iter, 
             # since this x_recon was denoised under this cond.
             # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
             # the subject half is better at subject authenticity (but may be worse on composition).            
             x_recon2 = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
             # model_output and x_recon are not used for comp prompt distillation loss computation.
+            # Only the captured attention matrics are used.
             del model_output, x_recon
 
         # Otherwise, do_unet_distill == True, 
         # later we will call guided_denoise() multiple times to get the multi-step denoising results.
 
-        extra_info['capture_distill_attn'] = False
+        extra_info['capture_ca_layers_activations'] = False
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1719,7 +1753,7 @@ class LatentDiffusion(DDPM):
                     model_output_s, x_recon_s = \
                         self.guided_denoise(x_start_s, noise_t, t_s, cond, 
                                             text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                            unet_has_grad=True, do_pixel_recon=True, 
+                                            unet_has_grad='all', do_pixel_recon=True, 
                                             cfg_scale=self.unet_teacher.cfg_scale)
                     model_outputs.append(model_output_s)
 
