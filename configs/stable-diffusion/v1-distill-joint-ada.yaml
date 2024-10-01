@@ -53,7 +53,7 @@ model:
     # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6]. 
     # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
     perturb_face_id_embs_std_range:   [0.3, 0.6]
-    unet_distill_delta_loss_boost:    1
+    unet_distill_delta_loss_boost:    0
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.
