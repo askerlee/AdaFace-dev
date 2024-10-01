@@ -225,15 +225,15 @@ def get_parser(**parser_kwargs):
                         choices=["arc2face","consistentID", "unet_ensemble"], 
                         help="Type(s) of the UNet teacher. Multiple values imply unet_ensemble. "
                              "If 'unet_ensemble' is specified, this should be the only value, and "
-                             "the types of unets are specified with --extra_unet_paths.")
+                             "the types of unets are specified with --extra_unet_dirpaths.")
     parser.add_argument("--p_unet_teacher_uses_cfg", type=float, default=argparse.SUPPRESS,
                         help="The probability that the UNet teacher (as well as the student) uses the classifier-free guidance")    
     parser.add_argument("--unet_teacher_cfg_scale_range", type=float, nargs=2, default=argparse.SUPPRESS,
                         help="Range of the scale of the classifier-free guidance")
     parser.add_argument("--num_static_img_suffix_embs", type=int, default=4,
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
-    # --extra_unet_paths and --unet_weights are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
-    parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
+    # --extra_unet_dirpaths and --unet_weights are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
+    parser.add_argument("--extra_unet_dirpaths", type=str, nargs="*", 
                         default=argparse.SUPPRESS, 
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
@@ -694,8 +694,8 @@ if __name__ == "__main__":
         if hasattr(opt, 'unet_distill_delta_loss_boost'):
             config.model.params.unet_distill_delta_loss_boost   = opt.unet_distill_delta_loss_boost
 
-        if hasattr(opt, 'extra_unet_paths'):
-            config.model.params.extra_unet_paths             = opt.extra_unet_paths
+        if hasattr(opt, 'extra_unet_dirpaths'):
+            config.model.params.extra_unet_dirpaths             = opt.extra_unet_dirpaths
         if hasattr(opt, 'unet_weights'):
             # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights                 = opt.unet_weights

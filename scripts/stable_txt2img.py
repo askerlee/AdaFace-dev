@@ -239,9 +239,9 @@ def parse_args():
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
-    parser.add_argument("--main_unet_path", type=str, default=None,
+    parser.add_argument("--main_unet_filepath", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
-    parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
+    parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", 
                         default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
@@ -377,7 +377,7 @@ def main(opt):
                                           opt.enabled_encoders,
                                           opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
                                           unet_types=None,
-                                          main_unet_path=opt.main_unet_path, extra_unet_paths=opt.extra_unet_paths, 
+                                          main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
                                           unet_weights=opt.unet_weights, 
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
@@ -743,10 +743,9 @@ def main(opt):
                 else:
                     iter_sig = "unknown"
 
-                if opt.main_unet_path:
-                    unet_mat = re.search(r"(\d+).(pt|safetensors)", opt.main_unet_path)
-                    unet_sig = "unet-" + unet_mat.group(1)
-                    subj_name_method_sig += "-" + unet_sig
+                if opt.main_unet_filepath:
+                    unet_pardir = os.path.basename(os.path.dirname(opt.main_unet_filepath))
+                    subj_name_method_sig += "-" + unet_pardir
 
                 if isinstance(opt.scale, (list, tuple)):
                     scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])

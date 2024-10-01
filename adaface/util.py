@@ -153,7 +153,7 @@ def pad_image_obj_to_square(image_obj, new_size=-1):
 
 class UNetEnsemble(nn.Module):
     # The first unet is the unet already loaded in a pipeline.
-    def __init__(self, unets, unet_types, extra_unet_paths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
+    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
         super().__init__()
 
         self.unets = nn.ModuleList()
@@ -171,8 +171,8 @@ class UNetEnsemble(nn.Module):
                     breakpoint()
                 self.unets.append(unet)
 
-        if extra_unet_paths is not None:
-            for unet_path in extra_unet_paths:
+        if extra_unet_dirpaths is not None:
+            for unet_path in extra_unet_dirpaths:
                 unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
                 self.unets.append(unet.to(device=device))
 

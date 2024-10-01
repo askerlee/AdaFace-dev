@@ -26,7 +26,7 @@ class AdaFaceWrapper(nn.Module):
                  enabled_encoders=None,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
-                 main_unet_path=None, unet_types=None, extra_unet_paths=None, unet_weights=None,
+                 main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "img2img", "text2img3", "flux", or None. 
@@ -46,9 +46,9 @@ class AdaFaceWrapper(nn.Module):
         self.num_inference_steps = num_inference_steps
         self.use_840k_vae = use_840k_vae
         self.use_ds_text_encoder = use_ds_text_encoder
-        self.main_unet_path = main_unet_path
+        self.main_unet_filepath = main_unet_filepath
         self.unet_types = unet_types
-        self.extra_unet_paths = extra_unet_paths
+        self.extra_unet_dirpaths = extra_unet_dirpaths
         self.unet_weights = unet_weights
         self.device = device
         self.is_training = is_training
@@ -130,17 +130,17 @@ class AdaFaceWrapper(nn.Module):
                     safety_checker=None
                 )
         
-        if self.main_unet_path is not None:
-            print(f"Replacing the UNet with the UNet from {self.main_unet_path}.")
-            ret = pipeline.unet.load_state_dict(self.load_unet_from_file(self.main_unet_path, device='cpu'))
+        if self.main_unet_filepath is not None:
+            print(f"Replacing the UNet with the UNet from {self.main_unet_filepath}.")
+            ret = pipeline.unet.load_state_dict(self.load_unet_from_file(self.main_unet_filepath, device='cpu'))
             if len(ret.missing_keys) > 0:
                 print(f"Missing keys: {ret.missing_keys}")
             if len(ret.unexpected_keys) > 0:
                 print(f"Unexpected keys: {ret.unexpected_keys}")
 
         if (self.unet_types is not None and len(self.unet_types) > 0) \
-          or (self.extra_unet_paths is not None and len(self.extra_unet_paths) > 0):
-            unet_ensemble = UNetEnsemble([pipeline.unet], self.unet_types, self.extra_unet_paths, self.unet_weights,
+          or (self.extra_unet_dirpaths is not None and len(self.extra_unet_dirpaths) > 0):
+            unet_ensemble = UNetEnsemble([pipeline.unet], self.unet_types, self.extra_unet_dirpaths, self.unet_weights,
                                          device=self.device, torch_dtype=torch.float16)
             pipeline.unet = unet_ensemble
 
@@ -283,7 +283,6 @@ class AdaFaceWrapper(nn.Module):
                     avg_at_stage=avg_at_stage,
                     perturb_at_stage=perturb_at_stage,
                     perturb_std=perturb_std,
-                    id2img_prompt_encoder_trainable=False,
                     enable_static_img_suffix_embs=False)
         
         if all_adaface_subj_embs is None:

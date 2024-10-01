@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0.1,
                  id2img_prompt_encoder_trainable=False,
                  id2img_prompt_encoder_lr_ratio=0.001,
-                 extra_unet_paths=None,
+                 extra_unet_dirpaths=None,
                  unet_weights=None,
                  p_gen_id2img_rand_id=0.4,
                  p_perturb_face_id_embs=0.6,
@@ -140,7 +140,7 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = 0
         self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
-        self.extra_unet_paths                       = extra_unet_paths
+        self.extra_unet_dirpaths                       = extra_unet_dirpaths
         self.unet_weights                           = unet_weights
         
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
@@ -476,12 +476,12 @@ class LatentDiffusion(DDPM):
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.p_unet_distill_iter > 0 and self.unet_teacher_types is not None:
-            # device, extra_unet_paths and unet_weights are only used 
+            # device, extra_unet_dirpaths and unet_weights are only used 
             # when unet_teacher_types == 'unet_ensemble' or unet_teacher_types contains multiple values.
             self.unet_teacher = create_unet_teacher(self.unet_teacher_types, 
                                                     device='cpu',
                                                     unets=None,
-                                                    extra_unet_paths=self.extra_unet_paths,
+                                                    extra_unet_dirpaths=self.extra_unet_dirpaths,
                                                     unet_weights=self.unet_weights,
                                                     p_uses_cfg=self.p_unet_teacher_uses_cfg,
                                                     cfg_scale_range=self.unet_teacher_cfg_scale_range)
@@ -1680,7 +1680,6 @@ class LatentDiffusion(DDPM):
             # Therefore, we don't need to deal with the two cases separately.
             # No matter whether t is 2-repeat-2 or 1-repeat-4 structure, 
             # t.chunk(2)[0] always corresponds to the first two blocks of instances.
-            t_frac = t.chunk(2)[0] / self.num_timesteps
             # Embedding mixing is always applied to the subject indices in every instance in the 
             # second half-batch (class instances) only, 
             # and the first half-batch (subject instances) is not affected.
@@ -1798,7 +1797,7 @@ class LatentDiffusion(DDPM):
                 # student_prompt_embs is the prompt embedding of the student model.
                 student_prompt_embs = cond[0]
                 # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
-                # extra_unet_paths (finetuned unets on the original SD unet); 
+                # extra_unet_dirpaths (finetuned unets on the original SD unet); 
                 # in this case they are surely not 'arc2face' or 'consistentID'.
                 # The same student_prompt_embs is used by all unet_teachers.
                 if self.unet_teacher_types == ['unet_ensemble']:
@@ -1865,7 +1864,7 @@ class LatentDiffusion(DDPM):
                         teacher_contexts = teacher_contexts[0]
 
                 with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
-                    unet_teacher_noise_preds, unet_teacher_pred_x0s, unet_teacher_noises, ts = \
+                    unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, ts = \
                         self.unet_teacher(self, x_start, noise, t, teacher_contexts, num_denoising_steps=num_denoising_steps)
                 
                 # **Objective 2**: Align student noise predictions with teacher noise predictions.
@@ -1879,19 +1878,18 @@ class LatentDiffusion(DDPM):
 
                 # The outputs of the remaining denoising steps will be appended to model_outputs.
                 model_outputs = []
+                recon_images = []
 
                 for s in range(num_denoising_steps):
-                    # Predict the noise of the half-batch with t2 (a set of earlier t).
-                    # unet_teacher_pred_x0 is the first half-batch of the unet_teacher predicted images, 
+                    # Predict the noise with t2 (a set of earlier t).
+                    # unet_teacher_pred_x0 is the unet_teacher predicted images, 
                     # used to seed the second denoising step. But using it will cut off the gradient flow.
-                    pred_x0 = unet_teacher_pred_x0s[s-1].to(x_start.dtype)
-                    # noise2, t2 are the s-th half-batch of noise/t used to by unet_teacher.
+                    pred_x0 = unet_teacher_x_starts[s].to(x_start.dtype)
+                    # noise2, t2 are the s-th noise/t used to by unet_teacher.
                     noise2  = unet_teacher_noises[s].to(x_start.dtype)
                     t2      = ts[s]
 
                     # Here pred_x0 is used as x_start.
-                    # text_prompt_adhoc_info['img_mask'] needs no update, as the current batch is still a half-batch,
-                    # and the 'image_mask' is also for a half-batch.
                     # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
                     # ** DO make sure unet_teacher() was called before guided_denoise() below. **
                     # We need to make the student's CFG scale consistent with the teacher UNet's.
@@ -1900,9 +1898,10 @@ class LatentDiffusion(DDPM):
                     model_output2, x_recon2 = \
                         self.guided_denoise(pred_x0, noise2, t2, cond, 
                                             text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                            unet_has_grad=True, do_pixel_recon=False, 
+                                            unet_has_grad=True, do_pixel_recon=True, 
                                             cfg_scale=self.unet_teacher.cfg_scale)
                     model_outputs.append(model_output2)
+                    recon_image = self.decode_first_stage(x_recon2)
 
                 # If id2img_prompt_encoder_trainable, then we also have
                 # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
@@ -2041,7 +2040,6 @@ class LatentDiffusion(DDPM):
                     log_image_colors[best_cand_idx] = 3
                     log_image_colors[best_cand_idx + self.num_candidate_comp_teachers] = 3
 
-                    t_frac      = t_sel.chunk(2)[0] / self.num_timesteps
                     # Mix embeddings to get c_prompt_emb_orig_mix for orig_cond.
                     # Do mixing on saved orig_cond instead of the updated "cond".
                     # orig_cond is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).

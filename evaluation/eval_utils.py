@@ -503,13 +503,16 @@ def format_prompt_list(subject_string, z_prefix, z_suffix,
     subject_string = z_prefix + subject_string
     z_prefix = ""
     if fp_trick_string:
+        fp_trick_string = ", " + fp_trick_string
         # Prepend ", face portrait, " to z_suffix to make sure the subject is always expressed.
         # There's a space after z_suffix in the prompt, so no need to add a space here.
-        z_suffix = ", " + fp_trick_string + ", " + z_suffix
-    
+        z_suffix = fp_trick_string + ", " + z_suffix                
+    else:
+        fp_trick_string = ""
+
     if class_name in subject_string:
         class_name = ""
 
-    prompt_list      = [ prompt.format(z_prefix, subject_string,  z_suffix) for prompt in orig_prompt_list ]
-    orig_prompt_list = [ prompt.format(z_prefix, class_name,      "")       for prompt in orig_prompt_list ]
+    prompt_list      = [ prompt.format(z_prefix, subject_string,  z_suffix)         for prompt in orig_prompt_list ]
+    orig_prompt_list = [ prompt.format(z_prefix, class_name,      fp_trick_string)  for prompt in orig_prompt_list ]
     return prompt_list, orig_prompt_list

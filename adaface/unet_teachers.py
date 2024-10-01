@@ -14,7 +14,7 @@ def create_unet_teacher(teacher_type, device, **kwargs):
     if teacher_type == "arc2face":
         return Arc2FaceTeacher(**kwargs)
     elif teacher_type == "unet_ensemble":
-        # unet, extra_unet_paths and unet_weights are passed in kwargs.
+        # unet, extra_unet_dirpaths and unet_weights are passed in kwargs.
         # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
         # arc2face embeddings.
         # The first (optional) ctor param of UNetEnsembleTeacher is an instantiated unet, 
@@ -149,9 +149,7 @@ class UNetTeacher(pl.LightningModule):
                     noise = torch.randn_like(pred_x0)
                     noises.append(noise)
 
-        # Remove the original x_start from pred_x0s.
-        pred_x0s = x_starts[1:]
-        return noise_preds, pred_x0s, noises, ts
+        return noise_preds, x_starts, noises, ts
 
 class Arc2FaceTeacher(UNetTeacher):
     def __init__(self, **kwargs):
@@ -165,10 +163,10 @@ class Arc2FaceTeacher(UNetTeacher):
 
 class UNetEnsembleTeacher(UNetTeacher):
     # unet_weights are not model weights, but scalar weights for individual unets.
-    def __init__(self, unets, unet_types, extra_unet_paths, unet_weights, device, **kwargs):
+    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights, device, **kwargs):
         super().__init__(**kwargs)
         self.name = "unet_ensemble"
-        self.unet = UNetEnsemble(unets, unet_types, extra_unet_paths, unet_weights, device)
+        self.unet = UNetEnsemble(unets, unet_types, extra_unet_dirpaths, unet_weights, device)
 
 class ConsistentIDTeacher(UNetTeacher):
     def __init__(self, base_model_path="models/ensemble/sd15-dste8-vae.safetensors", **kwargs):

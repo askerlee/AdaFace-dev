@@ -52,9 +52,9 @@ def parse_args():
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
-    parser.add_argument("--main_unet_path", type=str, default=None,
+    parser.add_argument("--main_unet_filepath", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
-    parser.add_argument("--extra_unet_paths", type=str, nargs="*", 
+    parser.add_argument("--extra_unet_dirpaths", type=str, nargs="*", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     print(f"Using device {args.device}")
 
     if args.pipeline not in ["text2img", "img2img"]:
-        args.extra_unet_paths = None
+        args.extra_unet_dirpaths = None
         args.unet_weights = None
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
@@ -102,8 +102,8 @@ if __name__ == "__main__":
                              args.adaface_encoder_cfg_scales, 
                              args.subject_string, args.num_inference_steps,
                              unet_types=None,
-                             main_unet_path=args.main_unet_path,
-                             extra_unet_paths=args.extra_unet_paths,
+                             main_unet_filepath=args.main_unet_filepath,
+                             extra_unet_dirpaths=args.extra_unet_dirpaths,
                              unet_weights=args.unet_weights, device=args.device)
 
     if not args.randface:

@@ -27,14 +27,14 @@ model:
     num_candidate_comp_teachers:      2
     comp_distill_iter_gap:            3
     unet_teacher_types:               ['unet_ensemble']
-    extra_unet_paths:                 ['models/ensemble/sd15-unet', 
+    extra_unet_dirpaths:                 ['models/ensemble/sd15-unet', 
                                        'models/ensemble/rv4-unet', 
                                        'models/ensemble/ar18-unet']
     unet_weights:                     [4.0, 2.0, 1.0]
     # The percentage of unet_distill_iter among do_normal_recon iters.
     p_unet_distill_iter:              1
     # Actual values are set in main.py.
-    extra_unet_paths:                 []
+    extra_unet_dirpaths:                 []
     unet_weights:                     [1.0]
 
     # typical delta reg loss: 0.85, * weight -> 1.7e-4

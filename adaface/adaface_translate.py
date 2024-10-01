@@ -34,7 +34,7 @@ def parse_args():
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")    
-    parser.add_argument('--extra_unet_paths', type=str, nargs="*", 
+    parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", 
                         default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
@@ -94,7 +94,7 @@ if __name__ == "__main__":
                              args.adaface_encoder_cfg_scales, 
                              args.subject_string, args.num_inference_steps,
                              unet_types=None,
-                             extra_unet_paths=args.extra_unet_paths, unet_weights=args.unet_weights, 
+                             extra_unet_dirpaths=args.extra_unet_dirpaths, unet_weights=args.unet_weights, 
                              device=args.device)
 
     in_folder = args.in_folder
