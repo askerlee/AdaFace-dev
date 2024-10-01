@@ -19,7 +19,7 @@ from ldm.util import    exists, default, count_params, instantiate_from_config, 
                         calc_elastic_matching_loss, SequentialLR2, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_cls_subj_embeddings, \
                         repeat_selected_instances, halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_array, anneal_perturb_embedding \
+                        probably_anneal_t, anneal_array, anneal_perturb_embedding, count_optimized_params \
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -1588,7 +1588,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_comp_prompt_distillation']:
             if self.trainer.is_global_zero == 0:
                 # log_image_colors are all 0: no box to be drawn on the images in cache_and_log_generations().
-                log_image_colors = torch.zeros(recon_images_s.shape[0], dtype=int, device=x_start.device)
+                log_image_colors = torch.zeros(x_recon.shape[0], dtype=int, device=x_start.device)
                 self.cache_and_log_generations(x_recon, log_image_colors)
 
             # x_recon will be cached for a future iteration with a smaller t.
@@ -3087,6 +3087,8 @@ class LatentDiffusion(DDPM):
             # unet_lr: default 2e-6 set in finetune-unet.yaml.
             opt_params_with_lrs += [ {"params": model_params, "lr": self.unet_lr} ]
 
+        count_optimized_params(opt_params_with_lrs)
+        
         if 'Prodigy' not in self.optimizer_type:
             opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                  betas=self.adam_config.betas)
@@ -3181,7 +3183,8 @@ class LatentDiffusion(DDPM):
                             'scheduler': scheduler,
                             'interval': 'step', # No need to specify in config yaml.
                             'frequency': 1
-                        }} ]
+                        }} 
+                     ]
 
         return optimizers
 

@@ -663,6 +663,9 @@ class EmbeddingManager(nn.Module):
                         if ret is not None and len(ret.unexpected_keys) > 0:
                             print(f"Unexpected keys: {ret.unexpected_keys}")
                     if self.freeze_bg_subj_basis_generator:
+                        # If we freeze the bg SubjBasisGenerator, the count of trainable parameters change from
+                        # 375202566 to 371453958, a reduction of 3743608 parameters, or 15MB. Considering the optimizer
+                        # saves m and v for each parameter, the reduction in memory is 15*3 = 45MB.
                         for param in self.string_to_subj_basis_generator_dict[km].parameters():
                             param.requires_grad = False
 

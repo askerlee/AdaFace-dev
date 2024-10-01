@@ -854,7 +854,7 @@ class UNetModel(nn.Module):
         
         if capture_ca_layers_activations or debug_attn:
             # Save attention matrices and output features for distillation.
-            captured_layer_indices = [7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+            captured_layer_indices = [12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
             capture_ca_old_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_attn_vars': True}, 
                                                                 ca_layer_indices = captured_layer_indices)
             ca_flags_stack.append([ capture_ca_old_flags, captured_layer_indices, None, None ])
@@ -889,7 +889,7 @@ class UNetModel(nn.Module):
             hs.append(h)
 
             if layer_idx in captured_layer_indices:
-                    ca_layers_activations[layer_idx]        = module[1].transformer_blocks[0].attn2.cached_activations
+                    ca_layers_activations[layer_idx]            = module[1].transformer_blocks[0].attn2.cached_activations
                     ca_layers_activations[layer_idx]['outfeat'] = h
                     # Release RAM.
                     module[1].transformer_blocks[0].attn2.cached_activations = None

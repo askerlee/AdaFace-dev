@@ -108,6 +108,18 @@ def unpack_tensor_to_uint128s(int64s):
         uint128s.append(int128)
     return uint128s
 
+# Count the number of trainable parameters per parameter group
+def count_optimized_params(param_groups):
+    num_total_params = 0
+    for i, param_group in enumerate(param_groups):
+        num_group_params = 0
+        for param in param_group['params']:
+            if param.requires_grad:
+                num_group_params += param.numel()  # Count the number of parameters
+        num_total_params += num_group_params
+        print(f"Param group {i}: {num_group_params} trainable parameters")
+    print(f"Total trainable parameters: {num_total_params}")
+
 def mean_flat(tensor):
     """
     https://github.com/openai/guided-diffusion/blob/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924/guided_diffusion/nn.py#L86
