@@ -1848,6 +1848,10 @@ class LatentDiffusion(DDPM):
                     losses_unet_distill.append(loss_unet_distill)
                     losses_unet_distill_delta.append(loss_unet_distill_delta)
 
+                    # Try hard to release memory after each step. But since they are part of the computation graph,
+                    # doing so may not have any effect :(
+                    model_outputs[s], targets[s] = None, None
+
                 # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
                 # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
                 # Instead, only increase the normalizer sub-linearly.
@@ -1871,6 +1875,10 @@ class LatentDiffusion(DDPM):
 
         ###### begin of preparation for do_comp_prompt_distillation ######
         if self.enable_reuse_init_conds and self.iter_flags['do_comp_prompt_distillation']:
+            # The cache uses a chunk of RAM, which is not so small.
+            # x_recon2, fg_mask, filtered_fg_mask are all [4, 4, 64, 64].
+            # Each entry takes 4 * 4 * 64 * 64 * 4 * 3 bytes = 786K bytes.
+            # The total size of the cache is about 786K * 100 = 78MB.
             # We cannot simply use orig_cond[1], as they are (subj single, subj comp, mix single, mix comp).
             # mix single = class single, but under some settings, maybe mix comp = subj comp.
             # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.

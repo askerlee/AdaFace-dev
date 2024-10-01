@@ -1,14 +1,11 @@
 from abc import abstractmethod
-from functools import partial
 import math
-from typing import Iterable
-from ldm.util import distribute_embedding_to_M_tokens_by_dict, extract_layerwise_value
+from ldm.util import extract_layerwise_value
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import random
 
 from ldm.modules.diffusionmodules.util import (
     checkpoint,
