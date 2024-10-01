@@ -1587,9 +1587,10 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_comp_prompt_distillation']:
             if self.trainer.is_global_zero == 0:
+                recon_images = self.decode_first_stage(x_recon)
                 # log_image_colors are all 0: no box to be drawn on the images in cache_and_log_generations().
-                log_image_colors = torch.zeros(x_recon.shape[0], dtype=int, device=x_start.device)
-                self.cache_and_log_generations(x_recon, log_image_colors)
+                log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
+                self.cache_and_log_generations(recon_images, log_image_colors)
 
             # x_recon will be cached for a future iteration with a smaller t.
             # Note the 4 types of prompts have to be the same as this iter, 
@@ -2775,7 +2776,8 @@ class LatentDiffusion(DDPM):
         loss_layers_bg_xlayer_consist = []
 
         for unet_layer_idx, unet_attn_score in ca_attnscores.items():
-            if (unet_layer_idx not in attn_align_layer_weights):
+            if (unet_layer_idx not in attn_align_layer_weights) \
+                or (attn_align_xlayer_maps[unet_layer_idx] not in ca_attnscores):
                 continue
 
             # [2, 8, 256, 77] => [2, 77, 8, 256]
@@ -3088,7 +3090,7 @@ class LatentDiffusion(DDPM):
             opt_params_with_lrs += [ {"params": model_params, "lr": self.unet_lr} ]
 
         count_optimized_params(opt_params_with_lrs)
-        
+
         if 'Prodigy' not in self.optimizer_type:
             opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                  betas=self.adam_config.betas)
