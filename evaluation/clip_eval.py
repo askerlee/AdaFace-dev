@@ -1,53 +1,62 @@
-# import clip
+import clip
 import torch
+import torch.nn.functional as F
 from torchvision import transforms
-from transformers import CLIPProcessor, CLIPModel
-import torch
-from torchvision import transforms
+
+from ldm.models.diffusion.ddim import DDIMSampler
 
 class CLIPEvaluator(object):
-    def __init__(self, device, clip_model_name='openai/clip-vit-base-patch32') -> None:
+    def __init__(self, device, clip_model='ViT-B/32') -> None:
         self.device = device
+        self.model, clip_preprocess = clip.load(clip_model, device='cpu')
+        # First put both the text encoder and visual encoder on CPU.
+        # Then put the visual encoder on GPU. In effect, 
+        # it puts the text encoder on CPU and the visual encoder on GPU, to avoid OOM.
+        # We assume self.device is a GPU from the beginning, and won't be updated through .cuda().
+        self.model.visual.to(device)
 
-        # Load the CLIP model and processor from Hugging Face
-        self.model = CLIPModel.from_pretrained(clip_model_name).to(device)
-        # The CLIPProcessor wraps CLIPImageProcessor and CLIPTokenizer 
-        # into a single instance to both encode the text and prepare the images. 
-        self.processor = CLIPProcessor.from_pretrained(clip_model_name)
+        self.clip_preprocess = clip_preprocess
 
-        # Define custom preprocessing pipeline to match the given transforms
-        self.preprocess = transforms.Compose([
-            transforms.Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0]),  # Un-normalize from [-1.0, 1.0] to [0, 1]
-            transforms.Resize(224),  # Resize to 224x224
-            transforms.CenterCrop(224),  # Center crop to 224x224
-            transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073),
-                                 std=(0.26862954, 0.26130258, 0.27577711))  # Normalization to match CLIP's input
-        ])
+        # preprocessing: (input_image + 1) / 2
+        self.preprocess = transforms.Compose([transforms.Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0])] + # Un-normalize from [-1.0, 1.0] (generator output) to [0, 1].
+                                              clip_preprocess.transforms[:2] +                                      # to match CLIP input scale assumptions
+                                              clip_preprocess.transforms[4:])                                       # + skip convert PIL to tensor
 
-    def tokenize(self, strings: list) -> torch.Tensor:
-        inputs = self.processor(text=strings, return_tensors="pt", padding=True, truncation=True, is_split_into_words=True).to(self.device)
-        return inputs.input_ids
+        '''
+        preprocess:
+        Compose(
+            Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0])
+            Resize(size=224, interpolation=bicubic, max_size=None, antialias=None)
+            CenterCrop(size=(224, 224))
+            Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
+        )
+        [[1, 1, 1]] => [[1.93, 2.07, 2.15]]
+        '''
 
+    def tokenize(self, strings: list):
+        return clip.tokenize(strings, truncate=True).to('cpu')
+        
     @torch.no_grad()
-    def encode_text(self, tokens: torch.Tensor) -> torch.Tensor:
-        text_features = self.model.get_text_features(input_ids=tokens)
-        return text_features
+    def encode_text(self, tokens: list) -> torch.Tensor:
+        return self.model.encode_text(tokens)
 
     def encode_images(self, images: torch.Tensor) -> torch.Tensor:
-        images = self.preprocess(images).to(self.device)  # Apply custom preprocessing
-        # pixel_values = images.unsqueeze(0)  # Ensure the image is in the right format (batch size, channels, height, width)
-        image_features = self.model.get_image_features(pixel_values=images)
-        return image_features
+        images = self.preprocess(images).to(self.device)
+        return self.model.encode_image(images)
 
     def get_text_features(self, text: str, norm: bool = True, get_token_emb: bool = False) -> torch.Tensor:
-        tokens = self.tokenize([text])  # Tokenize the input text
+
+        tokens = clip.tokenize(text, truncate=True).to('cpu')
 
         if get_token_emb:
-            # Token embeddings are not exposed directly in Hugging Face's CLIP, so this part would need to be implemented differently.
-            raise NotImplementedError("Token embeddings are not exposed directly in Hugging Face's CLIPModel.")
+            text_features = self.model.token_embedding(tokens).detach()
+            # tokens, is_valid_text: [1, 77].
+            is_valid_text = (tokens != 0) & (tokens != 49406) & (tokens != 49407)
+            # text_features: [1, 77, 768] => [n, 768]
+            text_features = text_features[is_valid_text]
         else:
+            # tokens: [1, 77]. text_features: [1, 768].
             text_features = self.encode_text(tokens).detach()
-
         if norm:
             text_features /= text_features.norm(dim=-1, keepdim=True)
 
@@ -55,9 +64,9 @@ class CLIPEvaluator(object):
 
     def get_image_features(self, img: torch.Tensor, norm: bool = True) -> torch.Tensor:
         image_features = self.encode_images(img)
-
+        
         if norm:
-            image_features /= image_features.norm(dim=-1, keepdim=True)
+            image_features /= image_features.clone().norm(dim=-1, keepdim=True)
 
         return image_features
 
@@ -130,9 +139,9 @@ class CLIPEvaluator(object):
         else:
             raise NotImplementedError
 
-class CLIPImagesEvaluator(CLIPEvaluator):
-    def __init__(self, device) -> None:
-        super().__init__(device)
+class ImageDirEvaluator(CLIPEvaluator):
+    def __init__(self, device, clip_model='ViT-B/32') -> None:
+        super().__init__(device, clip_model)
 
     def evaluate(self, gen_samples, ref_images, target_text):
 
