@@ -1473,7 +1473,7 @@ class LatentDiffusion(DDPM):
                 t = torch.minimum(t_mid, t_upperbound)
             else:
                 # Fresh compositional iter. May do teacher filtering.
-                # In a fresh compositional iter, t is set to be at the last 20% of the timesteps.
+                # In a fresh compositional iter, t is set to be at the tail (largest, most noisy) 20% of the timesteps.
                 # Randomly choose t from the largest 200 timesteps, to match the completely noisy x_start.
                 t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, 
                                        (x_start.shape[0],), device=x_start.device)
@@ -1541,10 +1541,10 @@ class LatentDiffusion(DDPM):
             # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
             cfg_scale = -1
 
-            # Increase t slightly by (1, 1.3) to increase noise amount and make the denoising more challenging,
+            # Increase t slightly by (1.1, 1.4) to increase noise amount and make the denoising more challenging,
             # with smaller prob to keep the original t.
-            t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1, 1.3), 
-                                    keep_prob_range=(0.4, 0.2))
+            t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1.1, 1.4), 
+                                  keep_prob_range=(0.3, 0.1))
             if self.iter_flags['num_denoising_steps'] > 1:
                 # Take a weighted average of t and 1000, to shift t to larger values, 
                 # so that the 2nd-6th denoising steps fall in more reasonable ranges.
