@@ -33,6 +33,7 @@ model:
     # we use the unet teacher's output as the target (do_unet_distill).
     # at the other 50%, we use the original image as the target (do_normal_recon).
     p_unet_distill_iter:              0.5
+    enable_reuse_init_conds:          False
     # Even if setting id2img_prompt_encoder_trainable to True, 
     # the performance is only slightly differ.
     id2img_prompt_encoder_trainable:  False

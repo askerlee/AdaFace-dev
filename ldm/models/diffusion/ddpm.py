@@ -67,6 +67,7 @@ class DDPM(pl.LightningModule):
                  fg_bg_xlayer_consist_loss_weight=0.,
                  unet_distill_delta_loss_boost=1,
                  enable_background_token=True,
+                 enable_reuse_init_conds=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -110,6 +111,7 @@ class DDPM(pl.LightningModule):
         # posing too strong regularizations to the subject embeddings.
         self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
+        self.enable_reuse_init_conds                = enable_reuse_init_conds
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
@@ -730,7 +732,7 @@ class LatentDiffusion(DDPM):
         # we can still use the cached inits. But in order to avoid these subjects from the mix subject folder dominating 
         # the reuse_init_conds iterations (we will always find such subjects in the cache, but if the subject is not from the mix folder,
         # the chance of finding the subject in the cache is much lower), we set p_reuse_init_conds = 0.25.
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.enable_reuse_init_conds and self.iter_flags['do_comp_prompt_distillation']:
             p_reuse_init_conds = 0.25 if self.batch_1st_subject_is_in_mix_subj_folder else 1
         else:
             p_reuse_init_conds = 0
@@ -1868,7 +1870,7 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
 
         ###### begin of preparation for do_comp_prompt_distillation ######
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.enable_reuse_init_conds and self.iter_flags['do_comp_prompt_distillation']:
             # We cannot simply use orig_cond[1], as they are (subj single, subj comp, mix single, mix comp).
             # mix single = class single, but under some settings, maybe mix comp = subj comp.
             # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
