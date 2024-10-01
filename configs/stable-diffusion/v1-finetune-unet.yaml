@@ -23,8 +23,6 @@ model:
     # But Prodigy will ignore any unet_lr setting.
     unet_lr: 1e-6
     use_fp_trick:                     True
-    do_comp_teacher_filtering:        True
-    num_candidate_comp_teachers:      2
     comp_distill_iter_gap:            3
     unet_teacher_types:               ['unet_ensemble']
     extra_unet_dirpaths:                 ['models/ensemble/sd15-unet', 

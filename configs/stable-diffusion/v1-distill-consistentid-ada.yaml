@@ -21,8 +21,6 @@ model:
     unfreeze_unet: False
     unet_lr: 0.0
     use_fp_trick:                     True
-    do_comp_teacher_filtering:        True
-    num_candidate_comp_teachers:      2
     comp_distill_iter_gap:            -1
     unet_teacher_types:               ['consistentID']
     # The percentage of unet_distill_iter among do_normal_recon iters.

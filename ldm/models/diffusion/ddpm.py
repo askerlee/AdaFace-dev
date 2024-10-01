@@ -64,8 +64,6 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
                  cls_subj_mix_scale=1,
-                 do_comp_teacher_filtering=True,
-                 num_candidate_comp_teachers=2,
                  prompt_emb_delta_reg_weight=0.,
                  comp_prompt_distill_weight=1e-4,
                  comp_fg_bg_preserve_loss_weight=0.,
@@ -114,8 +112,6 @@ class DDPM(pl.LightningModule):
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         self.unet_distill_delta_loss_boost          = unet_distill_delta_loss_boost
-        self.do_comp_teacher_filtering              = do_comp_teacher_filtering
-        self.num_candidate_comp_teachers            = num_candidate_comp_teachers
         # mix some of the subject embeddings into the class embeddings for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
         # posing too strong regularizations to the subject embeddings.
@@ -259,19 +255,6 @@ class DDPM(pl.LightningModule):
         # Return the synchronized value
         return state_tensor       
 
-    # create_clip_evaluator() is called in main.py, so that we can specify device as cuda device.
-    def create_clip_evaluator(self, device):
-        if self.do_comp_teacher_filtering:
-            self.clip_evaluator = CLIPEvaluator(device=device)
-            for param in self.clip_evaluator.model.parameters():
-                param.requires_grad = False
-
-        self.num_total_teacher_filter_iters = 0
-        self.num_teachable_iters = 0
-        # A tiny number to avoid division by zero.
-        self.num_total_reuse_filter_iters = 0.001
-        self.num_reuse_teachable_iters = 0
-
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
         if path.endswith(".ckpt"):
             sd = torch.load(path, map_location="cpu")
@@ -348,8 +331,6 @@ class DDPM(pl.LightningModule):
                             'num_denoising_steps':          1,
                             'do_comp_prompt_distillation':  False,
                             'do_prompt_emb_delta_reg':      self.do_prompt_emb_delta_reg,
-                            'do_comp_teacher_filtering':    False,
-                            # 'is_teachable':               False,
                             'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
                             'use_fp_trick':                 False,
@@ -391,9 +372,6 @@ class DDPM(pl.LightningModule):
                 if iter_reg_type == 'do_comp_prompt_distillation':
                     self.iter_flags['do_comp_prompt_distillation']  = True
 
-                # Always calculate clip loss during comp reg iterations, even if self.iter_flags['do_comp_teacher_filtering'] is False.
-                # This is to monitor how well the model performs on compositionality.
-                self.iter_flags['calc_clip_loss']   = self.do_comp_teacher_filtering
                 self.iter_flags['do_normal_recon']  = False
                 self.iter_flags['do_unet_distill']  = False
 
@@ -540,8 +518,8 @@ class LatentDiffusion(DDPM):
             # Make the behavior deterministic for debugging purposes.
             # In normal runs, disable this statement.
             #random.seed(10000)
-            device = f"cuda:{self.trainer.strategy.root_device.index}"
-            self.create_clip_evaluator(device)
+            self.num_teachable_iters = 0
+            self.num_reuse_teachable_iters = 0
             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
             # uncond_context[0]: [1, 77, 768].
             self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
@@ -810,12 +788,6 @@ class LatentDiffusion(DDPM):
             p_reuse_init_conds = 0
         self.iter_flags['reuse_init_conds']  = self.batch_1st_subject_name in self.cached_inits \
                                                 and random.random() < p_reuse_init_conds
-
-        # do_comp_teacher_filtering: If not reuse_init_conds and do_comp_teacher_filtering, then we choose the better instance 
-        # between the two in the batch, if it's above the usable threshold.
-        # do_comp_teacher_filtering and reuse_init_conds are mutually exclusive.
-        self.iter_flags['do_comp_teacher_filtering'] = (self.do_comp_teacher_filtering and self.iter_flags['do_comp_prompt_distillation'] \
-                                                        and not self.iter_flags['reuse_init_conds'])
 
         # NOTE: *_fp prompts are like "a face portrait of ...". They highlight the face features.
         # When doing compositional mix regularization on humans/animals they are better.
@@ -1325,8 +1297,7 @@ class LatentDiffusion(DDPM):
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
             # are manually mixed into their embeddings.
             c_in = delta_prompts
-            # The prompts are either (subj single, subj comp, cls single, cls comp) or
-            # (subj comp, subj comp, cls comp, cls comp) if do_comp_teacher_filtering. 
+            # The prompts are either (subj single, subj comp, cls single, cls comp).
             # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
         else:
@@ -1547,125 +1518,28 @@ class LatentDiffusion(DDPM):
                 else:
                     x_start.normal_()
 
-            # First iteration of a two-iteration do_comp_prompt_distillation.
-            # If num_candidate_comp_teachers=4, generate a batch of 8 instances in *two* sets, 
-            # each set with *num_candidate_comp_teachers* instances. 
-            # We want to select 1 block of BLOCK_SIZE(=1) instances.
-            # Within each set, we set prompt embeddings to be the same,
-            # but initial x_start, noise and t are different (x_start and t may have repetitions
-            # if ORIG_HALF_BS < num_candidate_comp_teachers).
-            # The corresponding instances across the two sets have the same initial 
-            # x_start, noise and t, but different prompt embeddings (subj vs. mix).
-            # Then do a no_grad generation, find the best teachable set (if any) and pass to 
-            # a with_grad generation for distillation loss computation.
-            # If no teachable instances are found, skip the with_grad generation and the distillation loss.
-            # Note x_start[0] = x_start[2] != x_start[1] = x_start[3].
-            # That means, instances are arranged as: 
-            # (subj comp 1, ..., subj comp N, mix comp 1, ..., mix comp N).
-            # If BS=3, then N = self.num_candidate_comp_teachers = 3 or 6.
-            # If batch size = 3 and N = 6, then we quadruple the batch size to 12
-            # (6 subj comp, 6 mix comp).
-            if self.iter_flags['do_comp_teacher_filtering']:
-                NEW_HALF_BS  = self.num_candidate_comp_teachers * BLOCK_SIZE
-                assert NEW_HALF_BS <= x_start.shape[0], \
-                    f"NEW_HALF_BS {NEW_HALF_BS} should be no larger than the batch size {x_start.shape[0]}."
-                # Repeat twice to get a FULL BATCH consisting of two sets of instances.
-                x_start = x_start[:NEW_HALF_BS].repeat(2, 1, 1, 1)
-                # noise and t are repeated in the same way as x_start for two sets. 
-                # Set 1 is for two subj comp instances, set 2 is for two mix comp instances.
-                # Noise and t are different between the two instances within one set.
-                noise   = noise[:NEW_HALF_BS].repeat(2, 1, 1, 1)
-                t       = t[:NEW_HALF_BS].repeat(2)
+            x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+            # If reuse_init_conds, prev_t is already 1-repeat-4, and 
+            # x_start is denoised from a 1-repeat-4 x_start in the previous iteration 
+            # (precisely speaking, a 1-repeat-2 x_start that's repeated again to 
+            # approximate a 1-repeat-4 x_start).
+            # But noise, t are not 1-repeat-4. 
+            # So we still need to make them 1-repeat-4.
+            noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+            t       = t[:BLOCK_SIZE].repeat(4)
 
-                # Make two identical sets of c_prompt_emb2 and c_in (first half batch and second half batch).
-                # The two sets are applied on different initial x_start, noise and t (within each half batch).
-                subj_single_emb, subj_comp_emb, mix_single_emb, mix_comp_emb = \
-                    c_prompt_emb.chunk(4)
-                subj_comp_emb = subj_comp_emb[:BLOCK_SIZE]
-                mix_comp_emb  = mix_comp_emb[:BLOCK_SIZE]
-                # Only keep *_comp_emb, but repeat them to form 2x or 3x comp sets.
-                # subj_comp_emb, mix_comp_emb: each contains BLOCK_SIZE instances (truncated in forward()). 
-                # So repeat them by num_candidate_comp_teachers times to match the size of x_start.
-                # subj_comp_emb, mix_comp_emb: [BLOCK_SIZE, 77, 768] => [BLOCK_SIZE*T, 77, 768].
-                # c_prompt_emb2: [2*BLOCK_SIZE*T, 77, 768].
-                # We don't need to consider NEW_HALF_BS % ORIG_HALF_BS > 0 and truncation, 
-                # since prompts are decoupled with x_start/noise/t and can be simply repeated
-                # by as many times as needed.
-                c_prompt_emb2 = torch.cat([ subj_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1), 
-                                                mix_comp_emb.repeat(self.num_candidate_comp_teachers, 1, 1) ], dim=0)
-                
-                subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
-                    chunk_list(c_in, 4)
-                # We change the prompts to be twin structure: (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
-                # Since subj comp and subj single have the same placeholder_indices,
-                # We don't need to update placeholder2indices of text_prompt_adhoc_info.
-                c_in2 = subj_comp_prompts * self.num_candidate_comp_teachers + cls_comp_prompts * self.num_candidate_comp_teachers
-                cond = (c_prompt_emb2, c_in2, extra_info)
+            # Update masks to be a 1-repeat-4 structure.
+            img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
+                repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
+            self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
-                # Instances are arranged as: 
-                # (subj comp 1, ..., subj comp N, mix comp 1, ..., mix comp N).
-                # So we need to repeat all placeholder_indices_1b by N times.
-                # We have to reinitialize placeholder2indices2. It originally points to placeholder2indices. 
-                # Without reinitialization, the following code will rewrite the contents of placeholder2indices.
-                placeholder2indices2 = {}
-                for k in placeholder2indices:
-                    placeholder2indices2[k], _ = extend_indices_B_by_n_times(extra_info['placeholder2indices_1b'][k],
-                                                                                self.num_candidate_comp_teachers,
-                                                                                block_offset=BLOCK_SIZE)
-                
-                subj_single_emb_mask, subj_comp_emb_mask, cls_single_emb_mask, cls_comp_emb_mask = \
-                    chunk_list(prompt_emb_mask, 4)
-                subj_comp_emb_mask = subj_comp_emb_mask[:BLOCK_SIZE]
-                cls_comp_emb_mask  = cls_comp_emb_mask[:BLOCK_SIZE]
-                # prompt_emb_mask2: [4 or 6, 77, 1]
-                prompt_emb_mask2 = \
-                    torch.cat( [subj_comp_emb_mask.repeat(self.num_candidate_comp_teachers, 1, 1),
-                                    cls_comp_emb_mask.repeat(self.num_candidate_comp_teachers, 1, 1)], dim=0)
-
-                # Update masks to be a b-fold * 2 structure.
-                # Before repeating, img_mask, fg_mask, batch_have_fg_mask should all 
-                # have a batch size of 2*BLOCK_SIZE. So repeat_selected_instances() 
-                # won't discard part of them, but simply repeat them twice.
-                img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                    repeat_selected_instances(slice(0, NEW_HALF_BS), 2, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
-                self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
-
-            # Not self.iter_flags['do_comp_teacher_filtering']. This branch is do_comp_prompt_distillation.
-            # So it's either reuse_init_conds, or not do_comp_teacher_filtering (globally).
-            # In any case, we do not need to change the prompts and prompt embeddings.
-            else:
-                if (not self.do_comp_teacher_filtering) and (not self.iter_flags['reuse_init_conds']):
-                    # Usually we shouldn't go here, as do_comp_teacher_filtering is always True.
-                    x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-
-                # If reuse_init_conds, prev_t is already 1-repeat-4, and 
-                # x_start is denoised from a 1-repeat-4 x_start in the previous iteration 
-                # (precisely speaking, a 1-repeat-2 x_start that's repeated again to 
-                # approximate a 1-repeat-4 x_start).
-                # But noise, t are not 1-repeat-4. 
-                # So we still need to make them 1-repeat-4.
-                noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-                t       = t[:BLOCK_SIZE].repeat(4)
-
-                # Update masks to be a 1-repeat-4 structure.
-                img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                    repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
-                self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
-
-                # If reuse_init_conds: then use cached x_start and cond. 
-                # cond already has the 4-type structure. No change to cond here.
-                # NOTE: cond is mainly determined by the prompts c_in. Since c_in is inherited from
-                # the previous iteration, cond is also almost the same.
-        
-            # This code block is within if self.iter_flags['do_comp_prompt_distillation'].
-            # The prompts are either 2-repeat-2 (do_comp_teacher_filtering) or 1-repeat-4 (distillation) structure.
-            # Use cond[1] instead of c_prompt_emb as input, since cond[1] is updated as 2-repeat-2 
-            # in the 'do_comp_teacher_filtering' branch. We need to do mixing on the c_prompt_emb 
-            # to be used for denoising.
-            # In either case, c_prompt_emb is of (subject embeddings, class embeddings) structure.
-            # Therefore, we don't need to deal with the two cases separately.
-            # No matter whether t is 2-repeat-2 or 1-repeat-4 structure, 
-            # t.chunk(2)[0] always corresponds to the first two blocks of instances.
+            # If reuse_init_conds: then use cached x_start and cond. 
+            # cond already has the 4-type structure. No change to cond here.
+            # NOTE: cond is mainly determined by the prompts c_in. Since c_in is inherited from
+            # the previous iteration, cond is also almost the same.
+    
+            # This code block is within self.iter_flags['do_comp_prompt_distillation'].
+            # The prompts are of 1-repeat-4 (distillation) structure.
             # Embedding mixing is always applied to the subject indices in every instance in the 
             # second half-batch (class instances) only, 
             # and the first half-batch (subject instances) is not affected.
@@ -1674,13 +1548,11 @@ class LatentDiffusion(DDPM):
             # so subj indices of the second-half batch are the repetitions of the 
             # original extra_info['placeholder2indices_1b'].
             c_prompt_emb_mixed = \
-                mix_cls_subj_embeddings(cond[0], all_subj_indices_1b[1], 
+                mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
                                         cls_subj_mix_scale=self.cls_subj_mix_scale)
           
             # Update cond[0] to c_prompt_emb_mixed, to prepare for future reference.
-            # Use cond[1] instead of c_in as part of the tuple, since cond[1] is updated 
-            # with compositional prompts in the 'do_comp_teacher_filtering' branch.
-            cond = (c_prompt_emb_mixed, cond[1], extra_info)
+            cond = (c_prompt_emb_mixed, c_in, extra_info)
 
         # recon or unet_distill iterations.
         else:
@@ -1700,8 +1572,7 @@ class LatentDiffusion(DDPM):
 
             # No need to update masks in recon iters.
 
-        extra_info['capture_distill_attn'] = not self.iter_flags['do_comp_teacher_filtering']
-
+        extra_info['capture_distill_attn'] = True
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -1717,7 +1588,6 @@ class LatentDiffusion(DDPM):
         # can freely compose any contents.
         text_prompt_adhoc_info = { 'placeholder2indices':    placeholder2indices2,
                                    # In compositional iterations, img_mask is always None.
-                                   # No need to consider whether do_comp_teacher_filtering or not.
                                    'img_mask':         extra_info['img_mask'],
                                    'prompt_emb_mask':  prompt_emb_mask2 }
         
@@ -1728,11 +1598,13 @@ class LatentDiffusion(DDPM):
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    unet_has_grad=not self.iter_flags['do_comp_teacher_filtering'], 
+                                    unet_has_grad=True, 
                                     # Reconstruct the images at the pixel level for CLIP loss.
-                                    # do_pixel_recon is not used for the iter_type 'do_normal_recon'.
-                                    do_pixel_recon=self.iter_flags['calc_clip_loss'],
+                                    # do_pixel_recon is enabled only when do_comp_prompt_distillation.
+                                    # This is to cache the denoised images as future initialization.
+                                    do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
                                     cfg_scale=cfg_scale)
+
         # Otherwise, do_unet_distill == True, 
         # later we will call guided_denoise() multiple times to get the multi-step denoising results.
 
@@ -2000,152 +1872,31 @@ class LatentDiffusion(DDPM):
 
         ###### begin of preparation for do_comp_prompt_distillation ######
         if self.iter_flags['do_comp_prompt_distillation']:
-            '''
-            self.iter_flags['do_comp_teacher_filtering'] = (self.do_comp_teacher_filtering and self.iter_flags['do_comp_prompt_distillation'] \
-                                                            and not self.iter_flags['reuse_init_conds'])
-            '''
-            if self.iter_flags['do_comp_teacher_filtering']:
-                # losses are stored in loss_dict and are not returned.
-                clip_images, are_insts_teachable, best_cand_idx, log_image_colors = \
-                        self.calc_clip_losses(x_recon, extra_info, loss_dict, prefix)
-                
-                self.iter_flags['is_teachable'] = are_insts_teachable.any()
-
-                # Only do distillation if at least one of teacher instances is teachable.
-                # self.iter_flags['do_comp_teacher_filtering'] implies not reuse_init_conds.
-                if self.iter_flags['is_teachable']:
-                    # No need the intermediates of the twin-comp instances. Release them to save RAM.
-                    # Cannot release the intermediates outside the "if" branch, as the intermediates
-                    # will be used in a reuse_init_conds iter.
-                    self.release_plosses_intermediates(locals())
-
-                    # Choose the x_start, noise, and t of the better candidate. 
-                    # Repeat 4 times and use them as the condition to do denoising again.
-                    # x_start[0] == x_start[2], x_start[1] == x_start[3].
-                    # BUG: code below assumes BLOCK_SIZE = 1. To be strict, we should choose
-                    # the best candidate *block* instead of *instance*. 
-                    # But it will make it quite complicated to update the corresponding subject indices.
-                    # If BLOCK_SIZE = 1, the subject indices are the same as the original ones,
-                    # so we can still use the old all_subj_indices_1b.
-                    x_start_sel = x_start[[best_cand_idx]].repeat(4, 1, 1, 1)
-                    noise_sel   = noise[[best_cand_idx]].repeat(4, 1, 1, 1)
-                    # t[0] == t[1], t[2] == t[3]. t: [952, 851, 952, 851]
-                    t_sel       = t[best_cand_idx].repeat(4)
-                    # Mark the best candidate with a purple box, although it's in the first iteration.
-                    log_image_colors[best_cand_idx] = 3
-                    log_image_colors[best_cand_idx + self.num_candidate_comp_teachers] = 3
-
-                    # Mix embeddings to get c_prompt_emb_orig_mix for orig_cond.
-                    # Do mixing on saved orig_cond instead of the updated "cond".
-                    # orig_cond is the 4-type prompt embeddings (subj single, subj comp, mix single, mix comp).
-                    # but cond  has been re-organized as (subj comp, subj comp, mix comp, mix comp). 
-                    # So we use orig_cond.
-                    # Embedding mixing is always applied to the subject indices in every instance in the 
-                    # second half-batch (class instances) only, 
-                    # and the first half-batch (subject instances) is not affected.
-                    # So providing all_subj_indices_1b[1] is enough. 
-                    # No need to repeat it to be the same size as the first half-batch.                     
-                    c_prompt_emb_orig_mix = \
-                        mix_cls_subj_embeddings(orig_cond[0], all_subj_indices_1b[1], 
-                                                cls_subj_mix_scale=self.cls_subj_mix_scale)
-
-                    # Update c_prompt_emb.
-                    orig_cond_mix = (c_prompt_emb_orig_mix, orig_cond[1], extra_info)
-
-                    # This branch implies a compositional distillation iter.
-                    extra_info['img_mask']  = None
-                    extra_info['capture_distill_attn'] = True
-
-                    # BUG: code here assumes BLOCK_SIZE = 1. To be strict, we should choose
-                    # the best candidate *block* instead of *instance*. 
-                    # But it will make it quite complicated to update the corresponding subject indices.
-                    # If BLOCK_SIZE = 1, the subject indices are the same as the original ones,
-                    # so we can still use the old placeholder2indices_2b.
-                    # Otherwise, we need to update placeholder2indices_2b to correspond to the selected
-                    # best candidate block.
-                    text_prompt_adhoc_info = { 'placeholder2indices':  extra_info['placeholder2indices_2b'],
-                                               'img_mask':             None,
-                                               'prompt_emb_mask':      extra_info['prompt_emb_mask'] }
-
-                    # unet_has_grad has to be enabled here. Here is the actual place where the computation graph 
-                    # on mix reg and ada embeddings is generated for the delta loss. 
-                    # (The previous call to guided_denoise() didn't enable gradients, 
-                    # as it's only used to filter a teacher.)
-                    # If unet_has_grad=False, the gradients of the ada delta loss
-                    # couldn't pass through UNet, reducing the performance.
-                    # do_pixel_recon=True: return denoised images x_recon. If cfg_scale > 1, 
-                    # do classifier-free guidance, so that x_recon are better instances
-                    # to be used to initialize the next reuse_init comp iteration.
-                    # student prompts are subject prompts.  
-                    model_output, x_recon = \
-                        self.guided_denoise(x_start_sel, noise_sel, t_sel, orig_cond_mix, 
-                                            text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                            unet_has_grad=True, 
-                                            do_pixel_recon=True, cfg_scale=cfg_scale)
-
-                    # Update masks according to x_start_sel. Select the masks corresponding to 
-                    # the better candidate, indexed by [best_cand_idx] (Keep it as a list).
-                    img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
-                        repeat_selected_instances([best_cand_idx], 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
-                    self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
-                    # Cache x_recon for the next iteration with a smaller t.
-                    # Note the 4 types of prompts have to be the same as this iter, 
-                    # since this x_recon was denoised under this cond.
-                    # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
-                    # the subject half is better at subject authenticity (but may be worse on composition).
-                    x_recon_sel_rep = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
-                    # Release RAM.
-                    del model_output, x_recon
-
-                    # We cannot simply use orig_cond[1], as they are (subj single, subj comp, mix single, mix comp).
-                    # mix single = class single, but under some settings, maybe mix comp = subj comp.
-                    # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
-                    # x_recon_sel_rep doesn't have the 1-repeat-4 structure, instead a 
-                    # 1-repeat-2 structure that's repeated twice.
-                    # But it approximates a 1-repeat-4 structure, so the distillation should still work.
-                    # NOTE: no need to update masks to correspond to x_recon_sel_rep, as x_recon_sel_rep
-                    # is half-repeat-2 of (the reconstructed images of) x_start_sel. 
-                    # Doing half-repeat-2 on masks won't change them, as they are 1-repeat-4.
-                    # NOTE: self.iter_flags['do_comp_teacher_filtering'] implies not reuse_init_conds. 
-                    # So we always need to cache the inits.
-                    self.cached_inits[self.batch_1st_subject_name] = \
-                        {   'x_start':                x_recon_sel_rep, 
-                            'delta_prompts':          orig_cond[2]['delta_prompts'],
-                            't':                      t_sel,
-                            # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                            'img_mask':               None,   
-                            'fg_mask':                fg_mask,
-                            'batch_have_fg_mask':     batch_have_fg_mask,
-                            'filtered_fg_mask':       filtered_fg_mask,
-                            'use_background_token':   self.iter_flags['use_background_token'],
-                            'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                            # We reuse init conds only in compositional iters.
-                            # We don't need to cache other flags, such as do_unet_distill,
-                            # as they are only applicable to recon iters. 
-                            'clip_bg_features':       self.iter_flags['clip_bg_features'],
-                            'id2img_prompt_embs':     self.iter_flags['id2img_prompt_embs'],
-                            'image_unnorm':           self.iter_flags['image_unnorm'],
-                        }
-                    if len(self.cached_inits) > 100:
-                        # Delete a random element in the dict to save RAM.
-                        del self.cached_inits[random.choice(list(self.cached_inits.keys()))]
-
-                if self.trainer.is_global_zero == 0:
-                    self.cache_and_log_generations(clip_images, log_image_colors)
-            
-            else:
-                # Not self.iter_flags['do_comp_teacher_filtering'], nor reuse_init_conds. 
-                # So only one possibility: not self.do_comp_teacher_filtering.
-                # The teacher instance is always teachable as teacher filtering is disabled.
-                self.iter_flags['is_teachable'] = True
-                # Since not self.iter_flags['do_comp_teacher_filtering']/reuse_init_conds, log_image_colors are all 0,
-                # i.e., no box to be drawn on the images in cache_and_log_generations().
-                log_image_colors = torch.zeros(x_start.shape[0], dtype=int, device=x_start.device)
-
-        else:
-            # Not a compositional iter. Distillation won't be done in this iter, so is_teachable = False.
-            self.iter_flags['is_teachable'] = False
-        ###### end of preparation for do_comp_prompt_distillation ######
+            # We cannot simply use orig_cond[1], as they are (subj single, subj comp, mix single, mix comp).
+            # mix single = class single, but under some settings, maybe mix comp = subj comp.
+            # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
+            self.cached_inits[self.batch_1st_subject_name] = \
+            {   
+                'x_start':                x_recon.detach(), 
+                'delta_prompts':          orig_cond[2]['delta_prompts'],
+                't':                      t,
+                # reuse_init_conds implies a compositional iter. So img_mask is always None.
+                'img_mask':               None,   
+                'fg_mask':                fg_mask,
+                'batch_have_fg_mask':     batch_have_fg_mask,
+                'filtered_fg_mask':       filtered_fg_mask,
+                'use_background_token':   self.iter_flags['use_background_token'],
+                'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
+                # We reuse init conds only in compositional iters.
+                # We don't need to cache other flags, such as do_unet_distill,
+                # as they are only applicable to recon iters. 
+                'clip_bg_features':       self.iter_flags['clip_bg_features'],
+                'id2img_prompt_embs':     self.iter_flags['id2img_prompt_embs'],
+                'image_unnorm':           self.iter_flags['image_unnorm'],
+            }
+            if len(self.cached_inits) > 100:
+                # Delete a random element in the dict to save RAM.
+                del self.cached_inits[random.choice(list(self.cached_inits.keys()))]
 
         # The Prodigy optimizer seems to suppress the embeddings too much, 
         # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
@@ -2163,8 +1914,7 @@ class LatentDiffusion(DDPM):
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
         if self.fg_bg_xlayer_consist_loss_weight > 0 \
-          and ( self.iter_flags['do_normal_recon']  \
-                or (self.iter_flags['do_comp_prompt_distillation'] and self.iter_flags['is_teachable']) ):
+          and ( self.iter_flags['do_normal_recon']  or self.iter_flags['do_comp_prompt_distillation'] ):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 
             # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
@@ -2188,7 +1938,7 @@ class LatentDiffusion(DDPM):
             loss += (loss_fg_xlayer_consist * fg_xlayer_consist_loss_scale + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
 
-        if self.iter_flags['do_comp_prompt_distillation'] and self.iter_flags['is_teachable']:
+        if self.iter_flags['do_comp_prompt_distillation']:
             # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
             # It contains the 12 specified cross-attention layers of UNet.
             # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
@@ -2248,13 +1998,7 @@ class LatentDiffusion(DDPM):
                 # mix single - mix comp matching loss is less important, so scale it down.
                 ms_mc_fg_match_loss_scale = 0.1
                 comp_subj_bg_attn_suppress_loss_scale = 0.02
-                sc_mc_bg_match_loss_scale_base = 2
-                sc_mc_bg_match_loss_base = 0.2 
-                sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match,
-                                                                sc_mc_bg_match_loss_base,
-                                                                sc_mc_bg_match_loss_scale_base,
-                                                                min_scale_base_ratio=1,
-                                                                max_scale_base_ratio=3)
+                sc_mc_bg_match_loss_scale = 1
                 
                 # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
                 loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
@@ -2440,121 +2184,6 @@ class LatentDiffusion(DDPM):
 
         return loss_recon, loss_recon_pixels
     
-    def calc_clip_losses(self, x_recon, extra_info, loss_dict, prefix):
-        # Images generated both under subj_comp_prompts and cls_comp_prompts 
-        # are subject to the CLIP text-image matching evaluation.
-        # If self.iter_flags['do_comp_teacher_filtering'] (implying do_comp_prompt_distillation), 
-        # the batch is (subj_comp_emb, subj_comp_emb, mix_comp_emb,  mix_comp_emb).
-        # So cls_comp_prompts is used to compute the CLIP text-image matching loss on
-        # images guided by the subject or mixed embeddings.
-        if self.iter_flags['do_comp_teacher_filtering']:
-            #del extra_info['ca_layers_activations']
-            clip_images_code  = x_recon
-            # 4 sets of cls_comp_prompts for (subj comp 1, subj comp 2, mix comp 1, mix comp 2).                
-            clip_prompts_comp = extra_info['cls_comp_prompts'] * self.num_candidate_comp_teachers * 2
-        else:
-            # Either self.iter_flags['reuse_init_conds'], or a pure ada delta loss iter.
-            # A batch of either type has the (subj_single, subj_comp, mix_single, mix_comp) structure.
-            # Only evaluate the CLIP loss on the comp images. 
-            # So the batch size of clip_images_code is halved.
-            # If teachable, the whole batch of x_recon is still used for distillation.
-            x_recon_subj_single, x_recon_subj_comp, x_recon_mix_single, x_recon_mix_comp = \
-                x_recon.chunk(4)
-            clip_images_code = torch.cat([x_recon_subj_comp, x_recon_mix_comp], dim=0)
-            clip_prompts_comp = extra_info['cls_comp_prompts'] * 2
-
-        # Use CLIP loss as a metric to evaluate the compositionality of the generated images 
-        # and do distillation selectively.
-        # DO NOT use CLIP loss to optimize the model. It will hurt the performance.
-        with torch.no_grad():
-            clip_images = self.decode_first_stage(clip_images_code)
-            losses_clip_comp   = 0.5 - self.clip_evaluator.txt_to_img_similarity(clip_prompts_comp,   
-                                                                                 clip_images,  
-                                                                                 reduction='none')
-
-        # Instances are arranged as: 
-        # (subj comp 1, subj comp 2, mix comp 1, mix comp 2).
-        losses_clip_subj_comp, losses_clip_mix_comp = losses_clip_comp[0].chunk(2)
-        loss_diffs_subj_mix = losses_clip_subj_comp - losses_clip_mix_comp
-
-        if not self.iter_flags['reuse_init_conds']:
-            loss_dict.update({f'{prefix}/loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
-            loss_dict.update({f'{prefix}/loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
-        else:
-            loss_dict.update({f'{prefix}/reuse_loss_clip_subj_comp': losses_clip_subj_comp.mean().detach().item() })
-            loss_dict.update({f'{prefix}/reuse_loss_clip_cls_comp':  losses_clip_mix_comp.mean().detach().item() })
-
-        # If reuse_init_conds, we still check whether the instances are teachable.
-        # But it's not called teacher filtering, as there's only one teacher. If it's not teachable,
-        # then we skip the distillation loss.
-        if self.iter_flags['do_comp_teacher_filtering'] or self.iter_flags['reuse_init_conds']:
-            # Discard instances that seem to be too far from the text 
-            # (it may be a bit premature to make this decision now, as the images are only denoised once).
-            # 0.35/0.006: 30%-40% instances will meet these thresholds.
-            # 0.33/0.008: 15% instances will meet these thresholds.
-            clip_loss_thres         = 0.28
-            cls_subj_clip_margin    = 0.002
-
-            # are_insts_teachable: The teacher instances are only teachable if both 
-            # the teacher and student are qualified (<= clip_loss_thres), 
-            # and the compositional clip loss is smaller than the student.
-            # If the student is qualified (<= clip_loss_thres), and the 
-            # teacher is teachable, then the teacher is also qualified, 
-            # as it has to have a smaller loss to be teachable. 
-            # So only need to check losses_clip_subj_comp against clip_loss_thres.
-            # Old version: are_insts_teachable = (losses_clip_subj_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
-            # This is unreasonable as we shouldn't filter on losses_clip_subj_comp. On the contrary,
-            # the worse the student is, the more benefit it will get from the teacher.
-            are_insts_teachable = (losses_clip_mix_comp <= clip_loss_thres) & (loss_diffs_subj_mix > cls_subj_clip_margin)
-            # print(losses_clip_subj_comp, losses_clip_mix_comp)
-            # If any of the two instances is teachable, we consider it as a teachable iteration,
-            # and select the better one (with larger loss diff) to teach.
-            self.iter_flags['is_teachable']  = are_insts_teachable.sum() > 0
-
-            # best_cand_idx: max of diffs among teachable instances.
-            # text-image better aligned -> smaller clip loss.
-            # For a 4-instance batch to be teachable, subj comp instances should have larger clip loss
-            # than mix comp instances. So loss_diffs_subj_mix should be positive, and the larger, 
-            # the more teachable. Therefore we find the argmax of loss_diffs_subj_mix.
-            # Sometimes the max among loss_diffs_subj_mix is not teachable (> clip_loss_thres),
-            # so we set the loss_diffs_subj_mix of non-teachable instances to be a very large 
-            # negative number, so that non-teachable instances will never be selected as the best candidate.
-            loss_diffs_subj_mix[~are_insts_teachable] = -1e4
-            best_cand_idx = torch.argmax(loss_diffs_subj_mix).item()
-
-            self.num_total_teacher_filter_iters += 1
-            self.num_teachable_iters += int(self.iter_flags['is_teachable'])
-            teachable_frac = self.num_teachable_iters / self.num_total_teacher_filter_iters
-            loss_dict.update({f'{prefix}/teachable_frac': teachable_frac})
-            self.num_total_reuse_filter_iters += int(self.iter_flags['reuse_init_conds'])
-            self.num_reuse_teachable_iters += int(self.iter_flags['reuse_init_conds'] and self.iter_flags['is_teachable'])
-            reuse_teachable_frac = self.num_reuse_teachable_iters / self.num_total_reuse_filter_iters 
-            loss_dict.update({f'{prefix}/reuse_teachable_frac': reuse_teachable_frac})
-
-        else:
-            are_insts_teachable = torch.ones_like(losses_clip_subj_comp, dtype=torch.bool)
-            best_cand_idx = 0
-
-        # Number of filtered pairs is half of the batch size. 
-        # Repeat to match the number of instances in the batch.
-        # log_image_colors: take values in {0, 1, 2, 3}, 
-        # i.e., no box, green, red, purple boxes respectively.
-        # 0 no box: not teachable; 
-        # 1 green:  teachable in the first iter and not reused yet 
-        # (because it's not in the second iter yet).
-        # 2 red:    teachable in the first iter but not in the second iter; 
-        # 3 purple: teachable in both iters.
-        # If self.iter_flags['do_comp_teacher_filtering'] and an instance is teachable, then in the log image file, 
-        # log_image_flag = 1, so the instance has a green bounary box in the logged image.
-        # log_image_colors: 3 * 2. [subj comp * 3, mix comp * 3]
-        log_image_colors = are_insts_teachable.repeat(2).int()
-        if self.iter_flags['reuse_init_conds']:
-            # If reuse_init_conds and an instance is teachable, then in the log image file,
-            # log_image_flag = 3, so the instance has a purple bounary box in the logged image.
-            log_image_colors += 2
-
-        return clip_images, are_insts_teachable, best_cand_idx, log_image_colors
-
     def calc_prompt_mix_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
@@ -3268,7 +2897,6 @@ class LatentDiffusion(DDPM):
 
         loss_layers_comp_single_map_align      = []
         loss_layers_sc_ss_fg_match             = []
-        loss_layers_mc_ms_fg_match             = []
         loss_layers_sc_mc_bg_match             = []
 
         loss_layers_comp_subj_bg_attn_suppress = []
@@ -3388,7 +3016,7 @@ class LatentDiffusion(DDPM):
         loss_comp_single_map_align      = normalized_sum(loss_layers_comp_single_map_align)
         loss_sc_ss_fg_match             = normalized_sum(loss_layers_sc_ss_fg_match)
         # loss_mc_ms_fg_match is disabled for efficiency.
-        loss_mc_ms_fg_match             = 0 # normalized_sum(loss_layers_mc_ms_fg_match)
+        loss_mc_ms_fg_match             = 0
         loss_sc_mc_bg_match             = normalized_sum(loss_layers_sc_mc_bg_match)
         loss_comp_subj_bg_attn_suppress = normalized_sum(loss_layers_comp_subj_bg_attn_suppress)
         loss_comp_mix_bg_attn_suppress  = normalized_sum(loss_layers_comp_mix_bg_attn_suppress)
