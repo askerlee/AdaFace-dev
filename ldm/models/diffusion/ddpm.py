@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributed as dist
 import os
 import numpy as np
 import pytorch_lightning as pl
@@ -12,20 +11,18 @@ from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
 
 from ldm.util import    exists, default, count_params, instantiate_from_config, disabled_train, \
-                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_dyn_loss_scale, \
-                        save_grid, chunk_list, normalize_dict_values, normalized_sum, masked_mean, \
+                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
+                        save_grid, normalize_dict_values, normalized_sum, masked_mean, \
                         join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
                         sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
                         calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
                         calc_elastic_matching_loss, SequentialLR2, \
                         distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_cls_subj_embeddings, \
-                        extend_indices_B_by_n_times, repeat_selected_instances, halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_array, anneal_perturb_embedding, \
-                        pack_uint128s_to_tensor, unpack_tensor_to_uint128s
+                        repeat_selected_instances, halve_token_indices, double_token_indices, \
+                        probably_anneal_t, anneal_array, anneal_perturb_embedding \
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from evaluation.clip_eval import CLIPEvaluator
 from ldm.prodigy import Prodigy
 
 from adaface.unet_teachers import create_unet_teacher
@@ -36,7 +33,6 @@ import random
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 import sys
-import threading, time
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -102,9 +98,6 @@ class DDPM(pl.LightningModule):
         self.image_size = image_size  # try conv?
         self.channels = channels
 
-        self.synced_rng    = np.random.default_rng(12345)
-        self.sync_thread   = threading.Thread(target=self.sync_rng_async)
-
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_prompt_distill_weight             = comp_prompt_distill_weight
@@ -164,7 +157,8 @@ class DDPM(pl.LightningModule):
             self.prodigy_config = prodigy_config
 
         self.training_percent = 0.
-        
+        self.non_comp_iter_counter = 0
+
         self.unfreeze_unet = unfreeze_unet
         self.unet_lr = unet_lr
 
@@ -228,32 +222,6 @@ class DDPM(pl.LightningModule):
         lvlb_weights[0] = lvlb_weights[1]
         self.register_buffer('lvlb_weights', lvlb_weights, persistent=False)
         assert not torch.isnan(self.lvlb_weights).all()
-
-    def sync_rng_async(self):
-        print("Starting the async RNG synchronization thread...")
-
-        while True:
-            rng_state = self.synced_rng.bit_generator.state['state']['state']
-            increment = self.synced_rng.bit_generator.state['state']['inc']
-            # Split two 128-bit integers into a [2, 2] 64-bit tensor
-            state_tensor  = pack_uint128s_to_tensor(self.device, rng_state, increment)
-            state_tensor2 = self.sync_value(state_tensor)
-            # Unpack the [2, 2] 64-bit tensor into two 128-bit integers
-            rng_state, increment = unpack_tensor_to_uint128s(state_tensor2)
-            # Update the RNG state
-            self.synced_rng.bit_generator.state['state']['state'] = rng_state
-            self.synced_rng.bit_generator.state['state']['inc']   = increment
-            # Sleep for a while or wait for a condition before next sync
-            time.sleep(10)
-
-    # Synchronize a scalar value across all distributed processes.
-    def sync_value(self, state_tensor):
-        # Barrier to ensure both processes are synchronized at this point
-        dist.barrier()
-        # Synchronize across all processes (all GPUs/nodes)
-        dist.all_reduce(state_tensor, op=dist.ReduceOp.MAX)
-        # Return the synchronized value
-        return state_tensor       
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
         if path.endswith(".ckpt"):
@@ -330,7 +298,7 @@ class DDPM(pl.LightningModule):
                             'faceless_img_count':           0,
                             'num_denoising_steps':          1,
                             'do_comp_prompt_distillation':  False,
-                            'do_prompt_emb_delta_reg':      self.do_prompt_emb_delta_reg,
+                            'do_prompt_emb_delta_reg':      False,
                             'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
                             'use_fp_trick':                 False,
@@ -343,51 +311,31 @@ class DDPM(pl.LightningModule):
         raise NotImplementedError("shared_step() is not implemented in DDPM.")
 
     def training_step(self, batch, batch_idx):
-        if not self.sync_thread.is_alive():
-            pass #self.sync_thread.start()        
-
         self.init_iteration_flags()
         self.training_percent = self.global_step / self.trainer.max_steps
-
-        # How many regularizations are done intermittently during the training iterations?
-        cand_reg_types = []
-        cand_reg_probs = []
-
-        if self.comp_prompt_distill_weight > 0:
-            cand_reg_types.append('do_comp_prompt_distillation')
-            cand_reg_probs.append(1.)
-
+        
         # NOTE: No need to have standalone ada prompt delta reg, 
         # since each prompt mix reg iter will also do ada prompt delta reg.
 
-        N_CAND_REGS = len(cand_reg_types)
-        cand_reg_probs = np.array(cand_reg_probs) / np.sum(cand_reg_probs)
-
         # If N_CAND_REGS == 0, then no prompt distillation/regularizations, 
         # and the flags below take the default False value.
-        if N_CAND_REGS > 0 and self.comp_distill_iter_gap > 0:
-            if self.global_step % self.comp_distill_iter_gap == 0:
-                reg_type_idx    = self.synced_rng.choice(N_CAND_REGS, p=cand_reg_probs)
-                iter_reg_type   = cand_reg_types[reg_type_idx]
-                if iter_reg_type == 'do_comp_prompt_distillation':
-                    self.iter_flags['do_comp_prompt_distillation']  = True
-
+        if self.comp_distill_iter_gap > 0 and self.global_step % self.comp_distill_iter_gap == 0:
+            self.iter_flags['do_comp_prompt_distillation']  = True
+            self.iter_flags['do_normal_recon']              = False
+            self.iter_flags['do_unet_distill']              = False
+            self.iter_flags['do_prompt_emb_delta_reg']      = self.do_prompt_emb_delta_reg
+        else:
+            self.iter_flags['do_comp_prompt_distillation']  = False
+            self.non_comp_iter_counter += 1
+            if self.non_comp_iter_counter % 2 == 0:
                 self.iter_flags['do_normal_recon']  = False
-                self.iter_flags['do_unet_distill']  = False
-
-        # By default, do_comp_prompt_distillation == False.
-        if not self.iter_flags['do_comp_prompt_distillation']:
-            # Synchronize the iter_type across DDP instances to avoid being slowed down 
-            # by different iter_types (different iter durations).
-            if self.p_unet_distill_iter > 0 and self.synced_rng.random() < self.p_unet_distill_iter:
                 self.iter_flags['do_unet_distill']  = True
-                self.iter_flags['do_normal_recon']  = False
                 # Disable do_prompt_emb_delta_reg during unet distillation.
                 self.iter_flags['do_prompt_emb_delta_reg'] = False
             else:
                 self.iter_flags['do_normal_recon']  = True
                 self.iter_flags['do_unet_distill']  = False
-                self.iter_flags['do_prompt_emb_delta_reg'] = True
+                self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
 
         loss, loss_dict = self.shared_step(batch)
         self.log_dict(loss_dict, prog_bar=True,
@@ -1080,7 +1028,7 @@ class LatentDiffusion(DDPM):
             p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
 
             # num_denoising_steps: 1, 3, 5, 7, among which 5 and 7 are selected with bigger chances.
-            num_denoising_steps = self.synced_rng.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+            num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
@@ -1285,7 +1233,7 @@ class LatentDiffusion(DDPM):
         # These embeddings are patched. So combine them back into c_prompt_emb.
         # [64, 77, 768].
         c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, 
-                                    cls_single_emb, cls_comp_emb], dim=0)
+                                  cls_single_emb,  cls_comp_emb], dim=0)
         extra_info['c_prompt_emb_4b'] = c_prompt_emb
 
         if self.iter_flags['do_comp_prompt_distillation']:
@@ -1394,6 +1342,8 @@ class LatentDiffusion(DDPM):
                 # which don't contain placeholder tokens.
                 self.embedding_manager.clear_prompt_adhoc_info()
                 # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                # By default, 'capture_distill_attn' = False in a generated text context, 
+                # including uncond_context. So we don't need to set it in self.uncond_context explicitly.                
                 uncond_emb  = self.uncond_context[0].repeat(x_noisy.shape[0], 1, 1)
                 uncond_c_in = self.uncond_context[1] * x_noisy.shape[0]
                 uncond_context = (uncond_emb, uncond_c_in, self.uncond_context[2])
@@ -1437,8 +1387,8 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
 
-        placeholder2indices2  = placeholder2indices   = extra_info['placeholder2indices']
-        prompt_emb_mask2      = prompt_emb_mask       = extra_info['prompt_emb_mask']
+        placeholder2indices   = extra_info['placeholder2indices']
+        prompt_emb_mask       = extra_info['prompt_emb_mask']
         # all_subj_indices, all_bg_indices are used to extract the attention weights
         # of the subject and background tokens for the attention loss computation.
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
@@ -1458,9 +1408,12 @@ class LatentDiffusion(DDPM):
             # We need to compute CLIP scores for teacher filtering.
             # CFG is for guidance to denoise images, which are input to CLIP.
             cfg_scale = 5
-            
+            print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation")
+
             # Only reuse_init_conds if do_comp_prompt_distillation.
             if self.iter_flags['reuse_init_conds']:
+                print(f"Rank {self.trainer.global_rank}: reuse_init_conds")
+
                 # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
                 # cond is already organized as (subj single, subj comp, mix single, mix comp). 
                 # No need to manipulate.
@@ -1557,6 +1510,7 @@ class LatentDiffusion(DDPM):
         # recon or unet_distill iterations.
         else:
             assert self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']
+
             BLOCK_SIZE = x_start.shape[0]
             # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
             cfg_scale = -1
@@ -1572,7 +1526,6 @@ class LatentDiffusion(DDPM):
 
             # No need to update masks in recon iters.
 
-        extra_info['capture_distill_attn'] = True
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -1580,20 +1533,19 @@ class LatentDiffusion(DDPM):
         # the original images don't play a role (even if comp_init_fg_from_training_image,
         # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
         extra_info['img_mask']  = None if self.iter_flags['do_comp_prompt_distillation'] else img_mask
+        extra_info['capture_distill_attn'] = True
 
         # img_mask is also used when computing Ada embeddings in embedding_manager.
         # So we pass img_mask to embedding_manager here.
         # Do not consider mask on compositional distillation iterations, 
         # as in such iters, the original pixels (out of the fg_mask) do not matter and 
         # can freely compose any contents.
-        text_prompt_adhoc_info = { 'placeholder2indices':    placeholder2indices2,
+        text_prompt_adhoc_info = { 'placeholder2indices':   placeholder2indices,
                                    # In compositional iterations, img_mask is always None.
-                                   'img_mask':         extra_info['img_mask'],
-                                   'prompt_emb_mask':  prompt_emb_mask2 }
+                                   'img_mask':              extra_info['img_mask'],
+                                   'prompt_emb_mask':       prompt_emb_mask }
         
-        # cfg_scale: classifier-free guidance scale.
-        # By default, 'capture_distill_attn' = False in a generated text context, 
-        # including uncond_context generation. So we don't need to set it in self.uncond_context explicitly.
+        # cfg_scale: classifier-free guidance scale for do_pixel_recon.
         if not self.iter_flags['do_unet_distill']:
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
@@ -1604,6 +1556,16 @@ class LatentDiffusion(DDPM):
                                     # This is to cache the denoised images as future initialization.
                                     do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
                                     cfg_scale=cfg_scale)
+
+        if self.iter_flags['do_comp_prompt_distillation']:
+            # x_recon to be cached for a future iteration with a smaller t.
+            # Note the 4 types of prompts have to be the same as this iter, 
+            # since this x_recon was denoised under this cond.
+            # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
+            # the subject half is better at subject authenticity (but may be worse on composition).            
+            x_recon2 = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
+            # model_output and x_recon are not used for comp prompt distillation loss computation.
+            del model_output, x_recon
 
         # Otherwise, do_unet_distill == True, 
         # later we will call guided_denoise() multiple times to get the multi-step denoising results.
@@ -1877,7 +1839,7 @@ class LatentDiffusion(DDPM):
             # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
             self.cached_inits[self.batch_1st_subject_name] = \
             {   
-                'x_start':                x_recon.detach(), 
+                'x_start':                x_recon2, 
                 'delta_prompts':          orig_cond[2]['delta_prompts'],
                 't':                      t,
                 # reuse_init_conds implies a compositional iter. So img_mask is always None.
