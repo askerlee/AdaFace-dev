@@ -563,6 +563,15 @@ class LatentDiffusion(DDPM):
         # prompt_embeddings: [B, 77, 768]
         prompt_embeddings = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
 
+        if self.training:
+            # If cls_delta_string_indices is not empty, then it must be a compositional 
+            # distillation iteration, and placeholder_indices only contains the indices of the subject 
+            # instances. Whereas cls_delta_string_indices only contains the indices of the
+            # class (mix) instances.
+            # NOTE: 
+            prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
+                                                           self.embedding_manager.cls_delta_string_indices)
+            
         # return_prompt_embs_type: ['text', 'id', 'text_id']. Default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         if return_prompt_embs_type in ['id', 'text_id']:
@@ -604,22 +613,13 @@ class LatentDiffusion(DDPM):
                 # prompt_embeddings: [BS, 81, 768]. 81: 77 + 4.
                 prompt_embeddings = torch.cat([prompt_embeddings, subj_id2img_prompt_embs], dim=1)
 
-        elif self.training:
-            # If cls_delta_string_indices is not empty, then it must be a compositional 
-            # distillation iteration, and placeholder_indices only contains the indices of the subject 
-            # instances. Whereas cls_delta_string_indices only contains the indices of the
-            # class (mix) instances.
-            # NOTE: 
-            prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
-                                                           self.embedding_manager.cls_delta_string_indices)
-            
-        # Otherwise, inference and not return_prompt_embs_type, we do nothing to the prompt_embeddings.
+        # Otherwise, inference and no special return_prompt_embs_type, we do nothing to the prompt_embeddings.
 
+        # 'placeholder2indices' and 'prompt_emb_mask' are cached to be used in forward() and p_losses().
         extra_info = { 
                         'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                         'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
-                        'is_training':                   self.embedding_manager.training,
-                        # Will set to True in p_losses() if in compositional iterations.
+                        # Will be updated to True in p_losses() when in compositional iterations.
                         'capture_ca_layers_activations':  False,
                      }
 
@@ -1360,10 +1360,12 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
 
-        placeholder2indices   = extra_info['placeholder2indices']
-        prompt_emb_mask       = extra_info['prompt_emb_mask']
+        placeholder2indices = extra_info['placeholder2indices']
+        prompt_emb_mask     = extra_info['prompt_emb_mask']
         # all_subj_indices, all_bg_indices are used to extract the attention weights
         # of the subject and background tokens for the attention loss computation.
+        # join_dict_of_indices_with_key_filter(): separate the indices of the subject tokens from those of 
+        # the background tokens, using subject_string_dict and background_string_dict as the filters, separately.
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.subject_string_dict)
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
@@ -1436,8 +1438,7 @@ class LatentDiffusion(DDPM):
           
             # Update cond[0] to c_prompt_emb_mixed, to prepare for future reference.
             cond = (c_prompt_emb_mixed, c_in, extra_info)
-            print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n",
-                  c_in)
+            # print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n", c_in)
             
         # recon or unet_distill iterations.
         else:

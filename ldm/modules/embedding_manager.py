@@ -91,8 +91,8 @@ class EmbeddingManager(nn.Module):
             self.background_strings = []
 
         self.background_string_dict = { s: True for s in self.background_strings }
-        self.placeholder_strings    = list(subject_strings) + self.background_strings
         self.subject_string_dict    = { s: True for s in self.subject_strings }
+        self.placeholder_strings    = list(subject_strings) + self.background_strings
 
         self.set_training_perturb_specs(training_begin_perturb_std_range, 
                                         training_end_perturb_std_range,
@@ -464,34 +464,6 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text, tokenized_text
 
-    # extend_placeholders() should only be called during inference, 
-    # or after the model has been initialized.
-    def extend_placeholders(self, new_subject_strings, new_background_strings, 
-                            num_vectors_per_subj_token, num_vectors_per_bg_token):
-        added_placeholders = []
-
-        if new_subject_strings is not None:
-            for k in new_subject_strings:
-                if k is None or k in self.subject_strings:
-                    continue
-                self.subject_strings.append(k)
-                self.subject_string_dict[k] = True
-                self.placeholder_strings.append(k)
-                self.token2num_vectors[k] = num_vectors_per_subj_token
-                added_placeholders.append(k)
-                print(f"Added new subject string: {k}->num_vectors_per_subj_token={num_vectors_per_subj_token}.")
-
-        if new_background_strings is not None:
-            for k in new_background_strings:
-                if k is None or k in self.background_strings:
-                    continue
-                self.background_strings.append(k)
-                self.background_string_dict[k] = True
-                self.placeholder_strings.append(k)
-                self.token2num_vectors[k] = num_vectors_per_bg_token
-                added_placeholders.append(k)
-                print(f"Added new background string: {k}->num_vectors_per_subj_token={num_vectors_per_bg_token}.")
-    
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
     # If 'validation' is present in the config file,

@@ -317,36 +317,26 @@ def main(opt):
 
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
-        config.model.params.personalization_config.params.token2num_vectors = {} 
-        config.model.params.personalization_config.params.cls_delta_string = 'person'
+        config.model.params.personalization_config.params.cls_delta_string   = 'person'
+        config.model.params.personalization_config.params.subject_strings    = [opt.subject_string]
+        config.model.params.personalization_config.params.background_strings = [opt.background_string]
+        config.model.params.personalization_config.params.token2num_vectors  = {} 
 
-        if hasattr(opt, 'num_vectors_per_subj_token'):
-            # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
-            config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
-            opt.loading_token2num_vectors_from_ckpt = False
-        if hasattr(opt, 'num_vectors_per_bg_token'):
-            # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
-            config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
-        config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
+        # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
+        config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
+        # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
+        config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
+        config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = False
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.id2ada_prompt_encoder_types = opt.adaface_encoder_types
 
-        opt.adaface_encoder_types = opt.adaface_encoder_types[:1]
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
-            model.embedding_manager.load(opt.adaface_ckpt_paths)
+            model.embedding_manager.load(opt.adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=True)
             model.embedding_manager.eval()
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
         model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
-        model.embedding_manager.extend_placeholders([opt.subject_string], [opt.background_string],
-                                                    opt.num_vectors_per_subj_token, opt.num_vectors_per_bg_token)
-
-        if hasattr(opt, 'num_vectors_per_subj_token'):
-            ckpt_num_vectors_per_subj_token = model.embedding_manager.token2num_vectors[opt.subject_string]
-            if ckpt_num_vectors_per_subj_token != opt.num_vectors_per_subj_token:
-                print(f"WARN: Number of vectors per token mismatch: command line {opt.num_vectors_per_subj_token} != ckpt {ckpt_num_vectors_per_subj_token}.")
-
         model.embedding_manager.curr_subj_is_face = opt.calc_face_sim
         
         model  = model.to(device)
