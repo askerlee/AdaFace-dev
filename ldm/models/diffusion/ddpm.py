@@ -1377,9 +1377,6 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
             BLOCK_SIZE = 1
-            # CFG is for classifier-free guidance to denoise x_start or x_recon 
-            # that are to be saved for inspection.
-            cfg_scale = 5
 
             # Compositional iter.
             # In a compositional iter, t is set to be at the tail (largest, most noisy) 20% of the timesteps.
@@ -1440,8 +1437,6 @@ class LatentDiffusion(DDPM):
         # recon or unet_distill iterations.
         else:
             BLOCK_SIZE = x_start.shape[0]
-            # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
-            cfg_scale = -1
 
             # Increase t slightly by (1.1, 1.4) to increase noise amount and make the denoising more challenging,
             # with smaller prob to keep the original t.
@@ -1452,7 +1447,7 @@ class LatentDiffusion(DDPM):
                 # so that the 2nd-6th denoising steps fall in more reasonable ranges.
                 t = (4 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (3 + self.iter_flags['num_denoising_steps'])
 
-            # No need to update masks in recon iters.
+            # No need to update masks in recon iters, as x_start is not changed.
 
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1469,27 +1464,21 @@ class LatentDiffusion(DDPM):
         # as in such iters, the original pixels (out of the fg_mask) do not matter and 
         # can freely compose any contents.
         text_prompt_adhoc_info = { 'placeholder2indices':   placeholder2indices,
-                                   # In compositional iterations, img_mask is always None.
-                                   'img_mask':              extra_info['img_mask'],
                                    'prompt_emb_mask':       prompt_emb_mask }
-        if self.iter_flags['do_comp_prompt_distillation']:
-            unet_has_grad = 'subject-half'
-        else:
-            unet_has_grad = 'all'
 
-        # cfg_scale: classifier-free guidance scale for do_pixel_recon.
-        if not self.iter_flags['do_unet_distill']:
+        if self.iter_flags['do_comp_prompt_distillation']:
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    unet_has_grad=unet_has_grad, 
+                                    unet_has_grad='subject-half', 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is enabled only when do_comp_prompt_distillation.
                                     # This is to cache the denoised images as future initialization.
                                     do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
-                                    cfg_scale=cfg_scale)
+                                    # CFG is for classifier-free guidance to denoise x_start or x_recon 
+                                    # that are to be saved for inspection.
+                                    cfg_scale=5)
 
-        if self.iter_flags['do_comp_prompt_distillation']:
             # The four instances in iter_flags['image_unnorm'] are different,
             # but only the first one is in use. So we only log the first one.
             # input_image: torch.uint8, 0~255, [1, 512, 512, 3] -> [1, 3, 512, 512].
@@ -1528,6 +1517,19 @@ class LatentDiffusion(DDPM):
         loss = 0
                                 
         if self.iter_flags['do_normal_recon']:
+            # cfg_scale: classifier-free guidance scale for do_pixel_recon.
+            model_output, x_recon = \
+                self.guided_denoise(x_start, noise, t, cond, 
+                                    text_prompt_adhoc_info=text_prompt_adhoc_info,
+                                    unet_has_grad='all', 
+                                    # Reconstruct the images at the pixel level for CLIP loss.
+                                    # do_pixel_recon is enabled only when do_comp_prompt_distillation.
+                                    # This is to cache the denoised images as future initialization.
+                                    do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
+                                    # Do not use cfg_scale for normal recon iterations. Only do recon 
+                                    # using the positive prompt.
+                                    cfg_scale=-1)
+
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
             if not self.iter_flags['use_background_token']:
@@ -1713,7 +1715,7 @@ class LatentDiffusion(DDPM):
     
     def calc_unet_distill_loss(self, x_start, noise, t, cond, extra_info, 
                                text_prompt_adhoc_info, img_mask, fg_mask):
-        # num_denoising_steps > 1 implies do_unet_distill.
+        # num_denoising_steps > 1 implies do_unet_distill, but not vice versa.
         num_denoising_steps = self.iter_flags['num_denoising_steps']
         # student_prompt_embs is the prompt embedding of the student model.
         student_prompt_embs = cond[0]
@@ -1829,7 +1831,7 @@ class LatentDiffusion(DDPM):
 
             losses_unet_distill = []
             losses_unet_distill_delta = []
-            
+
         print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
 
         for s in range(len(model_outputs)):
