@@ -664,7 +664,7 @@ class LatentDiffusion(DDPM):
 
     # output: -1 ~ 1.
     @torch.no_grad()
-    def decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    def decode_first_stage(self, z, predict_cids=False):
         if predict_cids:
             if z.dim() == 4:
                 z = torch.argmax(z.exp(), dim=1).long()
@@ -676,7 +676,7 @@ class LatentDiffusion(DDPM):
 
     # same as decode_first_stage() but without torch.no_grad() decorator
     # output: -1 ~ 1.
-    def differentiable_decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    def decode_first_stage_with_grad(self, z, predict_cids=False):
         if predict_cids:
             if z.dim() == 4:
                 z = torch.argmax(z.exp(), dim=1).long()
