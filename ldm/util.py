@@ -1112,7 +1112,19 @@ def calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
         avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
 
         return init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding
-          
+
+def list_np_images_to_4d_tensor(list_np, dtype=np.uint8):
+    tensors = []
+    for ar in list_np:
+        ts = torch.tensor(ar, dtype=dtype)
+        if ts.ndim == 3:
+            ts = ts.unsqueeze(0)
+        tensors.append(ts)
+    # We have made sure that each tensor has a batch dimension. 
+    # So we use cat instead of stack.
+    ts = torch.cat(tensors, dim=0)
+    return ts
+
 # samples:   a (B, C, H, W) tensor.
 # img_flags: a tensor of (B,) ints.
 # samples should be between [0, 255] (uint8).
