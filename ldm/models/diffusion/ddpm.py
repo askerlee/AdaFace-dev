@@ -76,7 +76,6 @@ class DDPM(pl.LightningModule):
                  p_unet_teacher_uses_cfg=0,
                  unet_teacher_cfg_scale_range=[1.5, 3],
                  p_unet_distill_uses_comp_prompt=0.1,
-                 id2img_prompt_encoder_trainable=False,
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_dirpaths=None,
                  unet_weights=None,
@@ -127,7 +126,6 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = p_unet_distill_uses_comp_prompt
         else:
             self.p_unet_distill_uses_comp_prompt = 0
-        self.id2img_prompt_encoder_trainable        = id2img_prompt_encoder_trainable
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
         self.extra_unet_dirpaths                       = extra_unet_dirpaths
         self.unet_weights                           = unet_weights
@@ -444,7 +442,6 @@ class LatentDiffusion(DDPM):
             for param in self.model.parameters():
                 param.requires_grad = False
 
-        personalization_config.params.id2img_prompt_encoder_trainable = self.id2img_prompt_encoder_trainable
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
         if self.embedding_manager_trainable:
             # embedding_manager contains subj_basis_generator, which is based on extended CLIP image encoder,
@@ -533,8 +530,7 @@ class LatentDiffusion(DDPM):
     # 'text_id': concatenate the text embeddings with the ID2ImgPrompt embeddings.
     # 'id' or 'text_id' are used when we want to evaluate the original ID2ImgPrompt module.
     def get_text_conditioning(self, cond_in, subj_id2img_prompt_embs=None, clip_bg_features=None, 
-                              randomize_clip_weights=False, 
-                              return_prompt_embs_type='text', 
+                              randomize_clip_weights=False, return_prompt_embs_type='text', 
                               text_conditioning_iter_type=None):
         # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
         # each prompt in c is encoded as [1, 77, 768].
@@ -567,8 +563,7 @@ class LatentDiffusion(DDPM):
             # If cls_delta_string_indices is not empty, then it must be a compositional 
             # distillation iteration, and placeholder_indices only contains the indices of the subject 
             # instances. Whereas cls_delta_string_indices only contains the indices of the
-            # class (mix) instances.
-            # NOTE: 
+            # class instances. Therefore, cls_delta_string_indices is used here.
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                            self.embedding_manager.cls_delta_string_indices)
             
@@ -723,8 +718,9 @@ class LatentDiffusion(DDPM):
         self.batch_1st_subject_name  = batch['subject_name'][0]
         self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
-        # NOTE: *_fp prompts are like "a face portrait of ...". They highlight the face features.
-        # When doing compositional mix regularization on humans/animals they are better.
+        # NOTE: *_fp prompts are like "a face portrait of ..." or "a portrait of ...". 
+        # They highlight the face features compared to the normal prompts.
+        # When doing compositional distillation on humans/animals they are a little bit better.
         # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
         # so fp_trick won't be used.
         if self.use_fp_trick and 'subj_prompt_single_fp' in batch:
@@ -774,6 +770,8 @@ class LatentDiffusion(DDPM):
         else:
             breakpoint()
 
+        # enable_background_token is True, as long as background token is specified in 
+        # the command line of train.py.
         self.iter_flags['use_background_token'] = self.enable_background_token \
                                                     and random.random() < p_use_background_token
 
@@ -932,8 +930,7 @@ class LatentDiffusion(DDPM):
         # If it's consistentID or jointIDs, neg_prompt_embs is not None.
         results = self.embedding_manager.id2ada_prompt_encoder.get_batched_img_prompt_embs(
                     images.shape[0], init_id_embs=face_id_embs, 
-                    pre_clip_features=zs_clip_fgbg_features, 
-                    id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable)
+                    pre_clip_features=zs_clip_fgbg_features)
                     
         # id2img_prompt_embs, id2img_neg_prompt_embs: [4, 21, 768]
         # If UNet teacher is not consistentID, then id2img_neg_prompt_embs == None.
@@ -1531,9 +1528,9 @@ class LatentDiffusion(DDPM):
         loss = 0
                                 
         if self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']:
-            # If not do_unet_distill, then there's only 1 objective:
+            # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
-            if not self.iter_flags['do_unet_distill'] and not self.id2img_prompt_encoder_trainable:
+            if self.iter_flags['do_normal_recon']:
                 if not self.iter_flags['use_background_token']:
                     # bg loss is almost completely ignored. But giving it a little weight may help suppress 
                     # subj embeddings' contribution to the background (serving as a contrast to the fg).
@@ -1553,233 +1550,19 @@ class LatentDiffusion(DDPM):
                 v_loss_recon = loss_recon.mean().detach().item()
                 loss_dict.update({f'{prefix}/loss_recon': v_loss_recon})
                 print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
-            # do_unet_distill or id2img_prompt_encoder_trainable.
-            else:
-                # num_denoising_steps > 1 implies do_unet_distill.
-                num_denoising_steps = self.iter_flags['num_denoising_steps']
-                # If self.id2img_prompt_encoder_trainable, we still denoise the images with the UNet teacher,
-                # to train the id2img prompt encoder, preventing it from degeneration.
-                # student_prompt_embs is the prompt embedding of the student model.
-                student_prompt_embs = cond[0]
-                # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
-                # extra_unet_dirpaths (finetuned unets on the original SD unet); 
-                # in this case they are surely not 'arc2face' or 'consistentID'.
-                # The same student_prompt_embs is used by all unet_teachers.
-                if self.unet_teacher_types == ['unet_ensemble']:
-                    teacher_contexts = [student_prompt_embs]
-                else:
-                    teacher_contexts = []
-                    encoders_num_id_vecs = self.iter_flags['encoders_num_id_vecs']
-                    # If id2ada_prompt_encoder.name == 'jointIDs',         then encoders_num_id_vecs is not None.
-                    # Otherwise, id2ada_prompt_encoder is a single encoder, and encoders_num_id_vecs is None.
-                    if encoders_num_id_vecs is not None:
-                        all_id2img_prompt_embs      = self.iter_flags['id2img_prompt_embs'].split(encoders_num_id_vecs, dim=1)
-                        all_id2img_neg_prompt_embs  = self.iter_flags['id2img_neg_prompt_embs'].split(encoders_num_id_vecs, dim=1)
-                    else:
-                        # Single FaceID2AdaPrompt encoder. No need to split id2img_prompt_embs/id2img_neg_prompt_embs.
-                        all_id2img_prompt_embs      = [ self.iter_flags['id2img_prompt_embs'] ]
-                        all_id2img_neg_prompt_embs  = [ self.iter_flags['id2img_neg_prompt_embs'] ]
+            elif self.iter_flags['do_unet_distill']:
+                loss_unet_distill, loss_unet_distill_delta = \
+                    self.calc_unet_distill_loss(x_start, noise, t, cond, model_output, gt_target,
+                                                extra_info, text_prompt_adhoc_info, img_mask, fg_mask, 
+                                                loss_dict, prefix)
 
-                    for i, unet_teacher_type in enumerate(self.unet_teacher_types):
-                        if unet_teacher_type not in ['arc2face', 'consistentID']:
-                            breakpoint()
-                        if unet_teacher_type == 'arc2face':
-                            # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
-                            img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(x_start.shape[0], 1, 1)
-                            # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
-                            teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[i]], dim=1)
-
-                            if self.p_unet_teacher_uses_cfg > 0:
-                                # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
-                                # to the teacher.
-                                # self.uncond_context is a tuple of (uncond_embs, uncond_c_in, extra_info).
-                                # Truncate the uncond_embs to the same length as teacher_context.
-                                LEN_POS_PROMPT = teacher_context.shape[1]
-                                teacher_neg_context = self.uncond_context[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
-                                # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
-                                teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
-
-                        elif unet_teacher_type == 'consistentID':
-                            global_id_embeds = all_id2img_prompt_embs[i]
-                            # global_id_embeds: [BS, 4,  768]
-                            # cls_prompt_embs:  [BS, 77, 768]
-                            cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
-                            cls_prompt_embs = extra_info[cls_emb_key]
-                            # Always append the ID prompt embeddings to the class (general) prompt embeddings.
-                            # teacher_context: [BS, 81, 768]
-                            teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
-                            if self.p_unet_teacher_uses_cfg > 0:
-                                # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
-                                # to the teacher.
-                                global_neg_id_embs = all_id2img_neg_prompt_embs[i]
-                                # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-                                # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
-                                cls_neg_prompt_embs = self.uncond_context[0][:1].repeat(teacher_context.shape[0], 1, 1)
-                                # teacher_neg_context: [BS, 81, 768]
-                                teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
-                                # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
-                                # This is kind of arbitrary (we can also concate them on dim 1), 
-                                # since we always chunk(2) on the same dimension to restore the two parts.
-                                teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
-
-                        teacher_contexts.append(teacher_context)
-                    # If there's only one teacher, then self.unet_teacher is not a UNetEnsembleTeacher.
-                    # So we dereference the list.
-                    if len(teacher_contexts) == 1:
-                        teacher_contexts = teacher_contexts[0]
-
-                with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable):
-                    unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
-                        self.unet_teacher(self, x_start, noise, t, teacher_contexts, num_denoising_steps=num_denoising_steps)
-                
-                # **Objective 2**: Align student noise predictions with teacher noise predictions.
-                # targets: replaced as the reconstructed x0 by the teacher UNet.
-                # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND 
-                # unet_teacher predicted noises (of different ts).
-                # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
-                # NOTE: detach() is not necessary, as the gradient is usually disabled by
-                # "with torch.set_grad_enabled(self.id2img_prompt_encoder_trainable)" statement,
-                # unless id2img_prompt_encoder_trainable.
-                targets = unet_teacher_noise_preds
-
-                # The outputs of the remaining denoising steps will be appended to model_outputs.
-                model_outputs = []
-                #all_recon_images = []
-
-                for s in range(num_denoising_steps):
-                    # Predict the noise with t_s (a set of earlier t).
-                    # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
-                    # used to seed the second denoising step. 
-                    x_start_s = unet_teacher_x_starts[s].to(x_start.dtype)
-                    # noise_t, t_s are the s-th noise/t used to by unet_teacher.
-                    noise_t   = unet_teacher_noises[s].to(x_start.dtype)
-                    t_s       = all_t[s]
-
-                    # Here x_start_s is used as x_start.
-                    # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
-                    # ** DO make sure unet_teacher() was called before guided_denoise() below. **
-                    # We need to make the student's CFG scale consistent with the teacher UNet's.
-                    # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
-                    # and the cfg_scale is not used in guided_denoise().
-                    model_output_s, x_recon_s = \
-                        self.guided_denoise(x_start_s, noise_t, t_s, cond, 
-                                            text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                            unet_has_grad='all', do_pixel_recon=True, 
-                                            cfg_scale=self.unet_teacher.cfg_scale)
-                    model_outputs.append(model_output_s)
-
-                    recon_images_s = self.decode_first_stage(x_recon_s)
-                    # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-                    # all of them are 2, indicating red.
-                    log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * 2
-                    self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
-
-                # If id2img_prompt_encoder_trainable, then we also have
-                # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
-                if self.id2img_prompt_encoder_trainable:
-                    if self.iter_flags['do_unet_distill']:
-                        # If do_unet_distill == True at the same time, then probably num_denoising_steps > 1.
-                        # Each of the unet_teacher_noise_preds should aling with unet_teacher_noises, the multi-step noises
-                        # added to the x_start during self.unet_teacher().
-                        # NOTE: .detach() cannot be used here, as we want the gradient to flow back to the teacher UNet.
-                        model_outputs   += unet_teacher_noise_preds
-                        targets         += unet_teacher_noises
-                        all_t           += all_t
-                    else:
-                        # Otherwise, use the original image target. 
-                        # gt_target == added noise.
-                        # In this case, always num_denoising_steps = 1, initialized in init_iteration_flags().
-                        # **Objective 4**: Align student noise predictions with ground truth noises.
-                        targets.append(gt_target)
-                        model_outputs.append(model_output)
-                        # From here on, all_t is only used for printing.
-                        all_t.append(t)
-
-                losses_unet_distill = []
-                losses_unet_distill_delta = []
-                print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
-
-                for s in range(len(model_outputs)):
-                    try:
-                        model_output, target = model_outputs[s], targets[s]
-                    except:
-                        breakpoint()
-
-                    # If we use the original image (noise) as target, and still wish to keep the original background
-                    # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
-                    # Therefore, bg_pixel_weight = 0.1.
-                    if not self.iter_flags['do_unet_distill']:
-                        bg_pixel_weight = 0.1
-                    # If we use comp_prompt as condition, then the background is compositional, and 
-                    # we want to do recon on the whole image. But considering background is not perfect, 
-                    # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
-                    elif self.iter_flags['unet_distill_uses_comp_prompt']:
-                        bg_pixel_weight = 0.5
-                    else:
-                        # unet_teacher_type == ['arc2face'] or ['consistentID'] or ['consistentID', 'arc2face'].
-                        bg_pixel_weight = 0
-
-                    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-                    loss_unet_distill, _ = \
-                        self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                             img_mask, fg_mask, fg_pixel_weight=1,
-                                             bg_pixel_weight=bg_pixel_weight)
-
-                    # The first ID embedding in the batch is intact,
-                    # and the remaining ID embeddings are the first added with noise.
-                    # So we can contrast the first instance with the remaining instances,
-                    # so as to highlight their differences caused by the noise.
-                    # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
-                    # Therefore, targets == unet_teacher_noise_preds.
-                    # We can set unet_distill_delta_loss_boost = 0 to disable the delta distillation loss.
-                    if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
-                        # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
-                        # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
-                        # So we can contrast the first instance with the remaining instances.
-                        delta_output    = model_output[1:] - model_output[:1]
-                        delta_target    = target[1:]       - target[:1]
-                        delta_img_mask  = img_mask[1:] if img_mask is not None else None
-                        # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
-                        # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
-                        # equivalent to setting delta_fg_mask = None.
-                        # If we want to ignore noisy signals in the background due to randomness, 
-                        # we can set bg_pixel_weight = 0.1.
-                        delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
-                        loss_unet_distill_delta, _ = \
-                            self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                 delta_img_mask, fg_mask=delta_fg_mask, 
-                                                 fg_pixel_weight=1, bg_pixel_weight=1)
-                    else:
-                        loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
-
-                    print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
-                    losses_unet_distill.append(loss_unet_distill)
-                    losses_unet_distill_delta.append(loss_unet_distill_delta)
-
-                    # Try hard to release memory after each step. But since they are part of the computation graph,
-                    # doing so may not have any effect :(
-                    model_outputs[s], targets[s] = None, None
-
-                # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
-                # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
-                # Instead, only increase the normalizer sub-linearly.
-                loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
-                loss += loss_unet_distill
                 v_loss_unet_distill = loss_unet_distill.mean().detach().item()
-                if not self.iter_flags['do_unet_distill']:
-                    # If not do_unet_distill, then this is a normal_recon iter 
-                    # with id2img_prompt_encoder_trainable. 
-                    # Otherwise, we shouldn't reach here.
-                    assert self.id2img_prompt_encoder_trainable
-                    # NOTE: loss_unet_distill is loss_recon only when id2img_prompt_encoder_trainable.
-                    loss_dict.update({f'{prefix}/loss_recon':        v_loss_unet_distill})
-                else:
-                    loss_dict.update({f'{prefix}/loss_unet_distill': v_loss_unet_distill})
+                loss_dict.update({f'{prefix}/loss_unet_distill': v_loss_unet_distill})
+                loss += loss_unet_distill
 
-                if self.iter_flags['perturb_face_id_embs']:
-                    loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
-                    loss += loss_unet_distill_delta * self.unet_distill_delta_loss_boost
+                if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
                     loss_dict.update({f'{prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
+                    loss += loss_unet_distill_delta * self.unet_distill_delta_loss_boost
 
         ###### begin of preparation for do_comp_prompt_distillation ######
         # The Prodigy optimizer seems to suppress the embeddings too much, 
@@ -1908,7 +1691,7 @@ class LatentDiffusion(DDPM):
             feat_delta_align_scale = 0.5
             if self.normalize_ca_q_and_outfeat:
                 # Normalize ca_outfeat at 50% chance.
-                normalize_ca_outfeat = random.random() < 0.5 #draw_annealed_bool(self.training_percent, 0.5, (0.5, 0.5))
+                normalize_ca_outfeat = random.random() < 0.5
             else:
                 normalize_ca_outfeat = False
 
@@ -2059,6 +1842,199 @@ class LatentDiffusion(DDPM):
 
         return loss_recon, loss_recon_pixels
     
+    def calc_unet_distill_loss(self, x_start, noise, t, cond, model_output, gt_target,
+                               extra_info, text_prompt_adhoc_info, img_mask, fg_mask, loss_dict, prefix):
+        # num_denoising_steps > 1 implies do_unet_distill.
+        num_denoising_steps = self.iter_flags['num_denoising_steps']
+        # student_prompt_embs is the prompt embedding of the student model.
+        student_prompt_embs = cond[0]
+        # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
+        # extra_unet_dirpaths (finetuned unets on the original SD unet); 
+        # in this case they are surely not 'arc2face' or 'consistentID'.
+        # The same student_prompt_embs is used by all unet_teachers.
+        if self.unet_teacher_types == ['unet_ensemble']:
+            teacher_contexts = [student_prompt_embs]
+        else:
+            teacher_contexts = []
+            encoders_num_id_vecs = self.iter_flags['encoders_num_id_vecs']
+            # If id2ada_prompt_encoder.name == 'jointIDs',         then encoders_num_id_vecs is not None.
+            # Otherwise, id2ada_prompt_encoder is a single encoder, and encoders_num_id_vecs is None.
+            if encoders_num_id_vecs is not None:
+                all_id2img_prompt_embs      = self.iter_flags['id2img_prompt_embs'].split(encoders_num_id_vecs, dim=1)
+                all_id2img_neg_prompt_embs  = self.iter_flags['id2img_neg_prompt_embs'].split(encoders_num_id_vecs, dim=1)
+            else:
+                # Single FaceID2AdaPrompt encoder. No need to split id2img_prompt_embs/id2img_neg_prompt_embs.
+                all_id2img_prompt_embs      = [ self.iter_flags['id2img_prompt_embs'] ]
+                all_id2img_neg_prompt_embs  = [ self.iter_flags['id2img_neg_prompt_embs'] ]
+
+            for i, unet_teacher_type in enumerate(self.unet_teacher_types):
+                if unet_teacher_type not in ['arc2face', 'consistentID']:
+                    breakpoint()
+                if unet_teacher_type == 'arc2face':
+                    # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
+                    img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(x_start.shape[0], 1, 1)
+                    # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
+                    teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[i]], dim=1)
+
+                    if self.p_unet_teacher_uses_cfg > 0:
+                        # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
+                        # to the teacher.
+                        # self.uncond_context is a tuple of (uncond_embs, uncond_c_in, extra_info).
+                        # Truncate the uncond_embs to the same length as teacher_context.
+                        LEN_POS_PROMPT = teacher_context.shape[1]
+                        teacher_neg_context = self.uncond_context[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
+                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
+
+                elif unet_teacher_type == 'consistentID':
+                    global_id_embeds = all_id2img_prompt_embs[i]
+                    # global_id_embeds: [BS, 4,  768]
+                    # cls_prompt_embs:  [BS, 77, 768]
+                    cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
+                    cls_prompt_embs = extra_info[cls_emb_key]
+                    # Always append the ID prompt embeddings to the class (general) prompt embeddings.
+                    # teacher_context: [BS, 81, 768]
+                    teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
+                    if self.p_unet_teacher_uses_cfg > 0:
+                        # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
+                        # to the teacher.
+                        global_neg_id_embs = all_id2img_neg_prompt_embs[i]
+                        # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                        # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
+                        cls_neg_prompt_embs = self.uncond_context[0][:1].repeat(teacher_context.shape[0], 1, 1)
+                        # teacher_neg_context: [BS, 81, 768]
+                        teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
+                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                        # This is kind of arbitrary (we can also concate them on dim 1), 
+                        # since we always chunk(2) on the same dimension to restore the two parts.
+                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
+
+                teacher_contexts.append(teacher_context)
+            # If there's only one teacher, then self.unet_teacher is not a UNetEnsembleTeacher.
+            # So we dereference the list.
+            if len(teacher_contexts) == 1:
+                teacher_contexts = teacher_contexts[0]
+
+        with torch.no_grad():
+            unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
+                self.unet_teacher(self, x_start, noise, t, teacher_contexts, num_denoising_steps=num_denoising_steps)
+        
+        # **Objective 2**: Align student noise predictions with teacher noise predictions.
+        # targets: replaced as the reconstructed x0 by the teacher UNet.
+        # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND 
+        # unet_teacher predicted noises (of different ts).
+        # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
+        targets = unet_teacher_noise_preds
+
+        # The outputs of the remaining denoising steps will be appended to model_outputs.
+        model_outputs = []
+        #all_recon_images = []
+
+        for s in range(num_denoising_steps):
+            # Predict the noise with t_s (a set of earlier t).
+            # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
+            # used to seed the second denoising step. 
+            x_start_s = unet_teacher_x_starts[s].to(x_start.dtype)
+            # noise_t, t_s are the s-th noise/t used to by unet_teacher.
+            noise_t   = unet_teacher_noises[s].to(x_start.dtype)
+            t_s       = all_t[s]
+
+            # Here x_start_s is used as x_start.
+            # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
+            # ** DO make sure unet_teacher() was called before guided_denoise() below. **
+            # We need to make the student's CFG scale consistent with the teacher UNet's.
+            # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
+            # and the cfg_scale is not used in guided_denoise().
+            model_output_s, x_recon_s = \
+                self.guided_denoise(x_start_s, noise_t, t_s, cond, 
+                                    text_prompt_adhoc_info=text_prompt_adhoc_info,
+                                    unet_has_grad='all', do_pixel_recon=True, 
+                                    cfg_scale=self.unet_teacher.cfg_scale)
+            model_outputs.append(model_output_s)
+
+            recon_images_s = self.decode_first_stage(x_recon_s)
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # all of them are 2, indicating red.
+            log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * 2
+            self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
+
+            losses_unet_distill = []
+            losses_unet_distill_delta = []
+            print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
+
+            for s in range(len(model_outputs)):
+                try:
+                    model_output, target = model_outputs[s], targets[s]
+                except:
+                    breakpoint()
+
+                # If we use the original image (noise) as target, and still wish to keep the original background
+                # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
+                # Therefore, bg_pixel_weight = 0.1.
+                if not self.iter_flags['do_unet_distill']:
+                    bg_pixel_weight = 0.1
+                # If we use comp_prompt as condition, then the background is compositional, and 
+                # we want to do recon on the whole image. But considering background is not perfect, 
+                # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
+                elif self.iter_flags['unet_distill_uses_comp_prompt']:
+                    bg_pixel_weight = 0.5
+                else:
+                    # unet_teacher_type == ['arc2face'] or ['consistentID'] or ['consistentID', 'arc2face'].
+                    bg_pixel_weight = 0
+
+                # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+                loss_unet_distill, _ = \
+                    self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                            img_mask, fg_mask, fg_pixel_weight=1,
+                                            bg_pixel_weight=bg_pixel_weight)
+
+                # The first ID embedding in the batch is intact,
+                # and the remaining ID embeddings are the first added with noise.
+                # So we can contrast the first instance with the remaining instances,
+                # so as to highlight their differences caused by the noise.
+                # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
+                # Therefore, targets == unet_teacher_noise_preds.
+                # We can set unet_distill_delta_loss_boost = 0 to disable the delta distillation loss.
+                if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
+                    # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
+                    # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
+                    # So we can contrast the first instance with the remaining instances.
+                    delta_output    = model_output[1:] - model_output[:1]
+                    delta_target    = target[1:]       - target[:1]
+                    delta_img_mask  = img_mask[1:] if img_mask is not None else None
+                    # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
+                    # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
+                    # equivalent to setting delta_fg_mask = None.
+                    # If we want to ignore noisy signals in the background due to randomness, 
+                    # we can set bg_pixel_weight = 0.1.
+                    delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
+                    loss_unet_distill_delta, _ = \
+                        self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
+                                                delta_img_mask, fg_mask=delta_fg_mask, 
+                                                fg_pixel_weight=1, bg_pixel_weight=1)
+                else:
+                    loss_unet_distill_delta = 0
+
+                print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
+                losses_unet_distill.append(loss_unet_distill)
+                losses_unet_distill_delta.append(loss_unet_distill_delta)
+
+                # Try hard to release memory after each step. But since they are part of the computation graph,
+                # doing so may not have any effect :(
+                model_outputs[s], targets[s] = None, None
+
+            # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
+            # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
+            # Instead, only increase the normalizer sub-linearly.
+            loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
+
+            if self.iter_flags['perturb_face_id_embs']:
+                loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
+            else:
+                loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
+
+        return loss_unet_distill, loss_unet_distill_delta
+
     def calc_prompt_mix_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
@@ -2982,13 +2958,6 @@ class LatentDiffusion(DDPM):
             embedding_params = self.embedding_manager.optimized_parameters()
             embedding_params_with_lrs = [ {'params': embedding_params, 'lr': lr} ]
             opt_params_with_lrs += embedding_params_with_lrs
-
-        if self.id2img_prompt_encoder_trainable:
-            id2img_prompt_encoder_learnable_modules = self.embedding_manager.id2ada_prompt_encoder.get_id2img_learnable_modules()
-            id2img_prompt_encoder_params_with_lrs = [ {'params': module.parameters(), 
-                                                       'lr': lr * self.id2img_prompt_encoder_lr_ratio } 
-                                                        for module in id2img_prompt_encoder_learnable_modules ]
-            opt_params_with_lrs += id2img_prompt_encoder_params_with_lrs
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_unet: 

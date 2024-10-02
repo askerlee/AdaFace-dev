@@ -61,8 +61,6 @@ class FaceID2AdaPrompt(nn.Module):
         # -1: use the default scale for the adaface encoder type.
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
-        # to_load_id2img_learnable_modules is ignored, i.e., id2img_learnable_modules are never loaded.
-        # self.to_load_id2img_learnable_modules = kwargs.get('to_load_id2img_learnable_modules', False)
         self.is_training                    = kwargs.get('is_training', False)
         # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
         # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
@@ -157,14 +155,6 @@ class FaceID2AdaPrompt(nn.Module):
 
         self.subj_basis_generator.freeze_prompt2token_proj()
 
-        '''
-        if 'id2img_prompt_encoder_learnable_modules' in ckpt:
-            if self.to_load_id2img_learnable_modules:
-                self.load_id2img_learnable_modules(ckpt['id2img_prompt_encoder_learnable_modules'])
-            else:
-                print(f'ID2ImgPrompt encoder learnable modules in {adaface_ckpt_path} are not loaded.')
-        '''
-        
     @torch.no_grad()
     def get_clip_neg_features(self, BS):
         if self.clip_neg_features is None:
@@ -369,7 +359,7 @@ class FaceID2AdaPrompt(nn.Module):
                             avg_at_stage=None,     # id_emb, img_prompt_emb, or None.
                             perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                             perturb_std=0.0, 
-                            id2img_prompt_encoder_trainable=False, verbose=False):
+                            verbose=False):
         face_image_count = 0
         device = self.clip_image_encoder.device
         clip_neg_features = self.get_clip_neg_features(BS=id_batch_size)
@@ -428,7 +418,7 @@ class FaceID2AdaPrompt(nn.Module):
         faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 
         # pos_prompt_embs, neg_prompt_embs: [BS, 77, 768] or [BS, 22, 768].
-        with torch.set_grad_enabled(id2img_prompt_encoder_trainable):
+        with torch.no_grad():
             pos_prompt_embs  = \
                 self.map_init_id_to_img_prompt_embs(faceid_embeds, clip_fgbg_features,
                                                     called_for_neg_img_prompt=False)
@@ -457,7 +447,7 @@ class FaceID2AdaPrompt(nn.Module):
 
         if self.gen_neg_img_prompt:
             # Never perturb the negative prompt embeddings.
-            with torch.set_grad_enabled(id2img_prompt_encoder_trainable):
+            with torch.no_grad():
                 neg_prompt_embs = \
                     self.map_init_id_to_img_prompt_embs(torch.zeros_like(faceid_embeds),
                                                         clip_neg_features,
@@ -473,8 +463,7 @@ class FaceID2AdaPrompt(nn.Module):
     # It is a wrapper of get_img_prompt_embs() which is convenient for batched training.
     # If init_id_embs is None, generate random face embeddings [BS, 512].
     # Returns faceid_embeds, id2img_prompt_emb.
-    def get_batched_img_prompt_embs(self, batch_size, init_id_embs, pre_clip_features, 
-                                    id2img_prompt_encoder_trainable=False):
+    def get_batched_img_prompt_embs(self, batch_size, init_id_embs, pre_clip_features):
         # pos_prompt_embs, neg_prompt_embs are generated without gradient computation.
         # So we don't need to worry that the teacher model weights are updated.
         return self.get_img_prompt_embs(init_id_embs=init_id_embs,
@@ -488,7 +477,6 @@ class FaceID2AdaPrompt(nn.Module):
                                         # We always assume the instances belong to different subjects. 
                                         # So never average the embeddings across instances. 
                                         avg_at_stage=None, 
-                                        id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                                         verbose=False)
 
     # If img_prompt_embs is provided, we use it directly.
@@ -504,8 +492,7 @@ class FaceID2AdaPrompt(nn.Module):
                                     return_zero_embs_for_dropped_encoders=True,
                                     avg_at_stage='id_emb', # id_emb, img_prompt_emb, or None.
                                     perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
-                                    perturb_std=0, id2img_prompt_encoder_trainable=False,
-                                    enable_static_img_suffix_embs=False):
+                                    perturb_std=0, enable_static_img_suffix_embs=False):
         if (avg_at_stage is None) or avg_at_stage.lower() == 'none':
             img_prompt_avg_at_stage = None
         else:
@@ -542,7 +529,6 @@ class FaceID2AdaPrompt(nn.Module):
                     perturb_at_stage=perturb_at_stage,
                     perturb_std=perturb_std, 
                     avg_at_stage=img_prompt_avg_at_stage,
-                    id2img_prompt_encoder_trainable=id2img_prompt_encoder_trainable,
                     verbose=True)
             
             if face_image_count == 0:

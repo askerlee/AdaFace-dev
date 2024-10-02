@@ -59,8 +59,6 @@ class EmbeddingManager(nn.Module):
             training_end_perturb_std_range=None,
             training_perturb_prob=None,
             id2ada_prompt_encoder_types=['arc2face'],
-            id2img_prompt_encoder_trainable=False,
-            to_load_id2img_learnable_modules=False,
             freeze_bg_subj_basis_generator=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             cls_delta_string='person',
@@ -146,9 +144,6 @@ class EmbeddingManager(nn.Module):
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
                                          is_training=True)
         
-        self.id2img_prompt_encoder_trainable    = id2img_prompt_encoder_trainable
-        self.to_load_id2img_learnable_modules   = to_load_id2img_learnable_modules
-
         if self.cls_delta_string is not None:
             self.cls_delta_tokens = self.get_tokens_for_string(cls_delta_string)
             if cls_delta_token_weights is None:
@@ -399,7 +394,6 @@ class EmbeddingManager(nn.Module):
                                           # could be shorter than self.token2num_vectors[placeholder_string].
                                           return_zero_embs_for_dropped_encoders=False,
                                           avg_at_stage=None,
-                                          id2img_prompt_encoder_trainable=self.id2img_prompt_encoder_trainable,
                                           enable_static_img_suffix_embs=enable_static_img_suffix_embs,
                                         )
                 # adaface_subj_embs should never be None, since we have made sure that not all encoders are dropped out,
@@ -583,10 +577,6 @@ class EmbeddingManager(nn.Module):
                         "ca_outfeat_lns":                       self.ca_outfeat_lns,
                      }
         
-        if self.id2img_prompt_encoder_trainable:
-            id2img_learnable_modules = self.id2ada_prompt_encoder.get_id2img_learnable_modules()
-            saved_dict["id2img_prompt_encoder_learnable_modules"] = [ module.state_dict() for module in id2img_learnable_modules ]
-
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
