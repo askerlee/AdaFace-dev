@@ -1527,47 +1527,40 @@ class LatentDiffusion(DDPM):
 
         loss = 0
                                 
-        if self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']:
+        if self.iter_flags['do_normal_recon']:
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
-            if self.iter_flags['do_normal_recon']:
-                if not self.iter_flags['use_background_token']:
-                    # bg loss is almost completely ignored. But giving it a little weight may help suppress 
-                    # subj embeddings' contribution to the background (serving as a contrast to the fg).
-                    bg_pixel_weight = 0 #0.01
-                else:
-                    # use_background_token == True. bg loss is somewhat discounted.
-                    # p_use_background_token = 0.1 if do_unet_distill. 
-                    bg_pixel_weight = 0.1
-                                    
-                loss_fg_bg_contrast, loss_recon = \
-                    self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
-                                                       all_subj_indices, all_bg_indices,
-                                                       img_mask, fg_mask, batch_have_fg_mask,
-                                                       bg_pixel_weight,
-                                                       x_start.shape[0], loss_dict, prefix)
-                loss += loss_recon + loss_fg_bg_contrast
-                v_loss_recon = loss_recon.mean().detach().item()
-                loss_dict.update({f'{prefix}/loss_recon': v_loss_recon})
-                print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
-            elif self.iter_flags['do_unet_distill']:
-                loss_unet_distill, loss_unet_distill_delta = \
-                    self.calc_unet_distill_loss(x_start, noise, t, cond, model_output, gt_target,
-                                                extra_info, text_prompt_adhoc_info, img_mask, fg_mask, 
-                                                loss_dict, prefix)
+            if not self.iter_flags['use_background_token']:
+                # bg loss is almost completely ignored. But giving it a little weight may help suppress 
+                # subj embeddings' contribution to the background (serving as a contrast to the fg).
+                bg_pixel_weight = 0 #0.01
+            else:
+                # use_background_token == True. bg loss is somewhat discounted.
+                # p_use_background_token = 0.1 if do_unet_distill. 
+                bg_pixel_weight = 0.1
+                                
+            loss_fg_bg_contrast, loss_recon = \
+                self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
+                                                    all_subj_indices, all_bg_indices,
+                                                    img_mask, fg_mask, batch_have_fg_mask,
+                                                    bg_pixel_weight,
+                                                    x_start.shape[0], loss_dict, prefix)
+            loss += loss_recon + loss_fg_bg_contrast
+            v_loss_recon = loss_recon.mean().detach().item()
+            loss_dict.update({f'{prefix}/loss_recon': v_loss_recon})
+            print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
+        elif self.iter_flags['do_unet_distill']:
+            loss_unet_distill, loss_unet_distill_delta = \
+                self.calc_unet_distill_loss(x_start, noise, t, cond, extra_info, 
+                                            text_prompt_adhoc_info, img_mask, fg_mask)
 
-                v_loss_unet_distill = loss_unet_distill.mean().detach().item()
-                loss_dict.update({f'{prefix}/loss_unet_distill': v_loss_unet_distill})
-                loss += loss_unet_distill
+            v_loss_unet_distill = loss_unet_distill.mean().detach().item()
+            loss_dict.update({f'{prefix}/loss_unet_distill': v_loss_unet_distill})
+            loss += loss_unet_distill
 
-                if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
-                    loss_dict.update({f'{prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
-                    loss += loss_unet_distill_delta * self.unet_distill_delta_loss_boost
-
-        ###### begin of preparation for do_comp_prompt_distillation ######
-        # The Prodigy optimizer seems to suppress the embeddings too much, 
-        # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
-        prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
+            if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
+                loss_dict.update({f'{prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
+                loss += loss_unet_distill_delta * self.unet_distill_delta_loss_boost
 
         if self.iter_flags['do_prompt_emb_delta_reg']:
             # 'c_prompt_emb_4b' is the prompt embeddings before mixing.
@@ -1576,7 +1569,10 @@ class LatentDiffusion(DDPM):
 
             loss_dict.update({f'{prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
-            # prompt_emb_delta_loss_scale == 1 if use Prodigy. prompt_emb_delta_reg_weight is 2e-5.
+            # The Prodigy optimizer seems to suppress the embeddings too much, 
+            # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
+            prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
+            # prompt_emb_delta_reg_weight: 1e-5.
             loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
         # fg_bg_xlayer_consist_loss_weight == 5e-5. 
@@ -1605,153 +1601,26 @@ class LatentDiffusion(DDPM):
             loss += (loss_fg_xlayer_consist * fg_xlayer_consist_loss_scale + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
 
+        ###### begin of do_comp_prompt_distillation ######
         if self.iter_flags['do_comp_prompt_distillation']:
-            # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
-            # It contains the 12 specified cross-attention layers of UNet.
-            # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
-            # Similar are ca_attns and ca_attnscores.
-            ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
-
-            # NOTE: loss_comp_fg_bg_preserve is applied only when this 
-            # iteration is teachable, because at such iterations the unet gradient is enabled.
-            # If comp_init_fg_from_training_image, then we need to preserve the fg/bg areas.
-            # Although fg_mask_avail_ratio > 0 when comp_init_fg_from_training_image,
-            # fg_mask_avail_ratio may have been updated after doing teacher filtering 
-            # (since x_start has been filtered, masks are also filtered accordingly, 
-            # and the same as to fg_mask_avail_ratio). So we need to check it here.
-            # comp_fg_bg_preserve_loss_weight: 1e-3
-            if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0 \
-              and self.comp_fg_bg_preserve_loss_weight > 0:
-                # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-                # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
-                # the background in the training images, which is not desirable.
-                # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
-                # excluding the instance from the fg_bg_preserve_loss.
-                if self.normalize_ca_q_and_outfeat:
-                    ca_q_bns = self.embedding_manager.ca_q_bns
-                    ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
-                else:
-                    ca_q_bns = None
-                    ca_outfeat_lns = None
-
-                loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
-                loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
-                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
-                                                      extra_info['ca_layers_activations']['q'],
-                                                      ca_q_bns,
-                                                      extra_info['ca_layers_activations']['attnscore'], 
-                                                      filtered_fg_mask, batch_have_fg_mask,
-                                                      all_subj_indices_1b, BLOCK_SIZE)
-                
-                if loss_comp_subj_bg_attn_suppress > 0:
-                    loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })
-                # comp_mix_bg_attn_suppress is not optimized, and only recorded for monitoring.
-                if loss_comp_mix_bg_attn_suppress > 0:
-                    loss_dict.update({f'{prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach().item() })
-                if loss_comp_single_map_align > 0:
-                    loss_dict.update({f'{prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach().item() })
-                if loss_sc_ss_fg_match > 0:
-                    loss_dict.update({f'{prefix}/sc_ss_fg_match': loss_sc_ss_fg_match.mean().detach().item() })
-                if loss_mc_ms_fg_match > 0:
-                    loss_dict.update({f'{prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach().item() })
-                if loss_sc_mc_bg_match > 0:
-                    loss_dict.update({f'{prefix}/sc_mc_bg_match': loss_sc_mc_bg_match.mean().detach().item() })
-
-                elastic_matching_loss_scale = 1
-                # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
-                # But this loss is always very small, so no need to scale it up.
-                comp_single_map_align_loss_scale = 1
-                # mix single - mix comp matching loss is less important, so scale it down.
-                ms_mc_fg_match_loss_scale = 0.1
-                comp_subj_bg_attn_suppress_loss_scale = 0.02
-                sc_mc_bg_match_loss_scale = 1
-                
-                # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
-                loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
-                                           + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
-                                                + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
-                                              * elastic_matching_loss_scale \
-                                           + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
-                                              * comp_subj_bg_attn_suppress_loss_scale
-                
+            loss_comp_prompt_distill, loss_comp_fg_bg_preserve = \
+                self.calc_comp_prompt_distill_loss(extra_info, filtered_fg_mask, batch_have_fg_mask, 
+                                                   all_subj_indices_1b, all_subj_indices_2b, 
+                                                   BLOCK_SIZE, loss_dict, prefix)
+            
+            if loss_comp_prompt_distill > 0:
+                loss_dict.update({f'{prefix}/comp_prompt_distill':  loss_comp_prompt_distill.mean().detach().item() })
+            # loss_comp_fg_bg_preserve = 0 if comp_init_fg_from_training_image and there's a valid fg_mask.
+            if loss_comp_fg_bg_preserve > 0:
                 loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
                 # Keep track of the number of iterations that use comp_init_fg_from_training_image.
                 self.comp_init_fg_from_training_image_count += 1
-                
                 comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.global_step + 1)
                 loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
-            else:
-                loss_comp_fg_bg_preserve = 0
 
-            comp_fg_bg_preserve_loss_scale = 0.5
-
-            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
-                    * comp_fg_bg_preserve_loss_scale
-
-            feat_delta_align_scale = 0.5
-            if self.normalize_ca_q_and_outfeat:
-                # Normalize ca_outfeat at 50% chance.
-                normalize_ca_outfeat = random.random() < 0.5
-            else:
-                normalize_ca_outfeat = False
-
-            # normalize_ca_outfeat is enabled 50% of the time.
-            if normalize_ca_outfeat:
-                ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
-                # If using LN, feat delta is around 5x smaller. So we scale it up to 
-                # match the scale of not using LN.
-                feat_delta_align_scale *= 5
-            else:
-                ca_outfeat_lns = None
-                
-            # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
-            # as it should be more accurate (?).
-            # So if loss_comp_fg_bg_preserve is active, then loss_comp_prompt_distill is halved.
-            # all_subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
-            # to index subj single and subj comp embeddings.
-            # The indices will be shifted along the batch dimension (size doubled) 
-            # within calc_prompt_mix_loss() to index all the 4 blocks.
-            loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
-                = self.calc_prompt_mix_loss(ca_outfeats, ca_outfeat_lns,
-                                            extra_info['ca_layers_activations']['attnscore'], 
-                                            all_subj_indices_2b, BLOCK_SIZE)
-
-            if loss_feat_delta_align > 0:
-                loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
-            if loss_subj_attn_delta_align > 0:
-                loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach().item() })
-            if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
-
-            # loss_subj_attn_delta_align_* use L2 losses, 
-            # so no need to use dynamic loss scale.
-            # TODO: check if we need to totally disable loss_subj_attn_delta_align, by setting its scale to 0.
-            subj_attn_delta_align_loss_scale = 0.1
-            # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
- 
-            # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
-            # So no need to use a dynamic loss scale.
-            subj_attn_norm_distill_loss_scale = 1
-
-            loss_comp_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
-                                        + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                        + loss_feat_delta_align       * feat_delta_align_scale
-                                        
-            if loss_comp_prompt_distill > 0:
-                loss_dict.update({f'{prefix}/comp_prompt_distill':  loss_comp_prompt_distill.mean().detach().item() })
-
-            if loss_comp_fg_bg_preserve == 0:
-                comp_prompt_distill_loss_scale = 1
-            else:
-                # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
-                # as it should be more accurate (?).
-                # So if loss_comp_fg_bg_preserve is active (>0), then loss_comp_prompt_distill 
-                # is discounted to half.
-                comp_prompt_distill_loss_scale = 0.5
-
-            # comp_prompt_distill_weight: 1e-4.
-            loss += loss_comp_prompt_distill * comp_prompt_distill_loss_scale \
-                    * self.comp_prompt_distill_weight
+            # comp_fg_bg_preserve_loss_weight: 1e-3
+            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
+            loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
 
         if torch.isnan(loss):
             print('NaN loss detected.')
@@ -1842,8 +1711,8 @@ class LatentDiffusion(DDPM):
 
         return loss_recon, loss_recon_pixels
     
-    def calc_unet_distill_loss(self, x_start, noise, t, cond, model_output, gt_target,
-                               extra_info, text_prompt_adhoc_info, img_mask, fg_mask, loss_dict, prefix):
+    def calc_unet_distill_loss(self, x_start, noise, t, cond, extra_info, 
+                               text_prompt_adhoc_info, img_mask, fg_mask):
         # num_denoising_steps > 1 implies do_unet_distill.
         num_denoising_steps = self.iter_flags['num_denoising_steps']
         # student_prompt_embs is the prompt embedding of the student model.
@@ -1960,81 +1829,203 @@ class LatentDiffusion(DDPM):
 
             losses_unet_distill = []
             losses_unet_distill_delta = []
-            print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
+            
+        print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
 
-            for s in range(len(model_outputs)):
-                try:
-                    model_output, target = model_outputs[s], targets[s]
-                except:
-                    breakpoint()
+        for s in range(len(model_outputs)):
+            try:
+                model_output, target = model_outputs[s], targets[s]
+            except:
+                breakpoint()
 
-                # If we use the original image (noise) as target, and still wish to keep the original background
-                # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
-                # Therefore, bg_pixel_weight = 0.1.
-                if not self.iter_flags['do_unet_distill']:
-                    bg_pixel_weight = 0.1
-                # If we use comp_prompt as condition, then the background is compositional, and 
-                # we want to do recon on the whole image. But considering background is not perfect, 
-                # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
-                elif self.iter_flags['unet_distill_uses_comp_prompt']:
-                    bg_pixel_weight = 0.5
-                else:
-                    # unet_teacher_type == ['arc2face'] or ['consistentID'] or ['consistentID', 'arc2face'].
-                    bg_pixel_weight = 0
+            # If we use the original image (noise) as target, and still wish to keep the original background
+            # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
+            # Therefore, bg_pixel_weight = 0.1.
+            if not self.iter_flags['do_unet_distill']:
+                bg_pixel_weight = 0.1
+            # If we use comp_prompt as condition, then the background is compositional, and 
+            # we want to do recon on the whole image. But considering background is not perfect, 
+            # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
+            elif self.iter_flags['unet_distill_uses_comp_prompt']:
+                bg_pixel_weight = 0.5
+            else:
+                # unet_teacher_type == ['arc2face'] or ['consistentID'] or ['consistentID', 'arc2face'].
+                bg_pixel_weight = 0
 
-                # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-                loss_unet_distill, _ = \
-                    self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                            img_mask, fg_mask, fg_pixel_weight=1,
-                                            bg_pixel_weight=bg_pixel_weight)
+            # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+            loss_unet_distill, _ = \
+                self.calc_recon_loss(model_output, target.to(model_output.dtype), 
+                                        img_mask, fg_mask, fg_pixel_weight=1,
+                                        bg_pixel_weight=bg_pixel_weight)
 
-                # The first ID embedding in the batch is intact,
-                # and the remaining ID embeddings are the first added with noise.
-                # So we can contrast the first instance with the remaining instances,
-                # so as to highlight their differences caused by the noise.
-                # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
-                # Therefore, targets == unet_teacher_noise_preds.
-                # We can set unet_distill_delta_loss_boost = 0 to disable the delta distillation loss.
-                if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
-                    # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
-                    # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
-                    # So we can contrast the first instance with the remaining instances.
-                    delta_output    = model_output[1:] - model_output[:1]
-                    delta_target    = target[1:]       - target[:1]
-                    delta_img_mask  = img_mask[1:] if img_mask is not None else None
-                    # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
-                    # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
-                    # equivalent to setting delta_fg_mask = None.
-                    # If we want to ignore noisy signals in the background due to randomness, 
-                    # we can set bg_pixel_weight = 0.1.
-                    delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
-                    loss_unet_distill_delta, _ = \
-                        self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                                delta_img_mask, fg_mask=delta_fg_mask, 
-                                                fg_pixel_weight=1, bg_pixel_weight=1)
-                else:
-                    loss_unet_distill_delta = 0
-
-                print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
-                losses_unet_distill.append(loss_unet_distill)
-                losses_unet_distill_delta.append(loss_unet_distill_delta)
-
-                # Try hard to release memory after each step. But since they are part of the computation graph,
-                # doing so may not have any effect :(
-                model_outputs[s], targets[s] = None, None
-
-            # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
-            # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
-            # Instead, only increase the normalizer sub-linearly.
-            loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
-
-            if self.iter_flags['perturb_face_id_embs']:
-                loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
+            # The first ID embedding in the batch is intact,
+            # and the remaining ID embeddings are the first added with noise.
+            # So we can contrast the first instance with the remaining instances,
+            # so as to highlight their differences caused by the noise.
+            # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
+            # Therefore, targets == unet_teacher_noise_preds.
+            # We can set unet_distill_delta_loss_boost = 0 to disable the delta distillation loss.
+            if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
+                # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
+                # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
+                # So we can contrast the first instance with the remaining instances.
+                delta_output    = model_output[1:] - model_output[:1]
+                delta_target    = target[1:]       - target[:1]
+                delta_img_mask  = img_mask[1:] if img_mask is not None else None
+                # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
+                # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
+                # equivalent to setting delta_fg_mask = None.
+                # If we want to ignore noisy signals in the background due to randomness, 
+                # we can set bg_pixel_weight = 0.1.
+                delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
+                loss_unet_distill_delta, _ = \
+                    self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
+                                            delta_img_mask, fg_mask=delta_fg_mask, 
+                                            fg_pixel_weight=1, bg_pixel_weight=1)
             else:
                 loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
 
+            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
+            losses_unet_distill.append(loss_unet_distill)
+            losses_unet_distill_delta.append(loss_unet_distill_delta)
+
+            # Try hard to release memory after each step. But since they are part of the computation graph,
+            # doing so may not have any effect :(
+            model_outputs[s], targets[s] = None, None
+
+        # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
+        # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
+        # Instead, only increase the normalizer sub-linearly.
+        loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
+
+        if self.iter_flags['perturb_face_id_embs']:
+            loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
+        else:
+            loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
+
         return loss_unet_distill, loss_unet_distill_delta
 
+    def calc_comp_prompt_distill_loss(self, extra_info, filtered_fg_mask, batch_have_fg_mask,
+                                      all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, prefix):
+        # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
+        # It contains the 12 specified cross-attention layers of UNet.
+        # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
+        # Similar are ca_attns and ca_attnscores.
+        ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
+
+        # NOTE: loss_comp_fg_bg_preserve is applied only when this 
+        # iteration is teachable, because at such iterations the unet gradient is enabled.
+        # If comp_init_fg_from_training_image, then we need to preserve the fg/bg areas.
+        # Although fg_mask_avail_ratio > 0 when comp_init_fg_from_training_image,
+        # fg_mask_avail_ratio may have been updated after doing teacher filtering 
+        # (since x_start has been filtered, masks are also filtered accordingly, 
+        # and the same as to fg_mask_avail_ratio). So we need to check it here.
+        if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+            # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+            # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
+            # the background in the training images, which is not desirable.
+            # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
+            # excluding the instance from the fg_bg_preserve_loss.
+            if self.normalize_ca_q_and_outfeat:
+                ca_q_bns = self.embedding_manager.ca_q_bns
+                ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
+            else:
+                ca_q_bns = None
+                ca_outfeat_lns = None
+
+            loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
+            loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
+                = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
+                                                    extra_info['ca_layers_activations']['q'],
+                                                    ca_q_bns,
+                                                    extra_info['ca_layers_activations']['attnscore'], 
+                                                    filtered_fg_mask, batch_have_fg_mask,
+                                                    all_subj_indices_1b, BLOCK_SIZE)
+            
+            if loss_comp_subj_bg_attn_suppress > 0:
+                loss_dict.update({f'{prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })
+            # comp_mix_bg_attn_suppress is not optimized, and only recorded for monitoring.
+            if loss_comp_mix_bg_attn_suppress > 0:
+                loss_dict.update({f'{prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach().item() })
+            if loss_comp_single_map_align > 0:
+                loss_dict.update({f'{prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach().item() })
+            if loss_sc_ss_fg_match > 0:
+                loss_dict.update({f'{prefix}/sc_ss_fg_match': loss_sc_ss_fg_match.mean().detach().item() })
+            if loss_mc_ms_fg_match > 0:
+                loss_dict.update({f'{prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach().item() })
+            if loss_sc_mc_bg_match > 0:
+                loss_dict.update({f'{prefix}/sc_mc_bg_match': loss_sc_mc_bg_match.mean().detach().item() })
+
+            elastic_matching_loss_scale = 1
+            # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
+            # But this loss is always very small, so no need to scale it up.
+            comp_single_map_align_loss_scale = 1
+            # mix single - mix comp matching loss is less important, so scale it down.
+            ms_mc_fg_match_loss_scale = 0.1
+            comp_subj_bg_attn_suppress_loss_scale = 0.02
+            sc_mc_bg_match_loss_scale = 1
+            
+            # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
+            loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
+                                        + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
+                                            + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
+                                            * elastic_matching_loss_scale \
+                                        + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
+                                            * comp_subj_bg_attn_suppress_loss_scale
+        else:
+            loss_comp_fg_bg_preserve = 0
+
+        feat_delta_align_scale = 0.5
+        if self.normalize_ca_q_and_outfeat:
+            # Normalize ca_outfeat at 50% chance.
+            normalize_ca_outfeat = random.random() < 0.5
+        else:
+            normalize_ca_outfeat = False
+
+        # normalize_ca_outfeat is enabled 50% of the time.
+        if normalize_ca_outfeat:
+            ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
+            # If using LN, feat delta is around 5x smaller. So we scale it up to 
+            # match the scale of not using LN.
+            feat_delta_align_scale *= 5
+        else:
+            ca_outfeat_lns = None
+            
+        # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
+        # as it should be more accurate (?).
+        # So if loss_comp_fg_bg_preserve is active, then loss_comp_prompt_distill is halved.
+        # all_subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
+        # to index subj single and subj comp embeddings.
+        # The indices will be shifted along the batch dimension (size doubled) 
+        # within calc_prompt_mix_loss() to index all the 4 blocks.
+        loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
+            = self.calc_prompt_mix_loss(ca_outfeats, ca_outfeat_lns,
+                                        extra_info['ca_layers_activations']['attnscore'], 
+                                        all_subj_indices_2b, BLOCK_SIZE)
+
+        if loss_feat_delta_align > 0:
+            loss_dict.update({f'{prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
+        if loss_subj_attn_delta_align > 0:
+            loss_dict.update({f'{prefix}/subj_attn_delta_align':   loss_subj_attn_delta_align.mean().detach().item() })
+        if loss_subj_attn_norm_distill > 0:
+            loss_dict.update({f'{prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
+
+        # loss_subj_attn_delta_align_* use L2 losses, 
+        # so no need to use dynamic loss scale.
+        # TODO: check if we need to totally disable loss_subj_attn_delta_align, by setting its scale to 0.
+        subj_attn_delta_align_loss_scale = 0.1
+        # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
+
+        # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
+        # So no need to use a dynamic loss scale.
+        subj_attn_norm_distill_loss_scale = 1
+
+        loss_comp_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
+                                    + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                    + loss_feat_delta_align       * feat_delta_align_scale
+        
+        return loss_comp_prompt_distill, loss_comp_fg_bg_preserve
+                   
     def calc_prompt_mix_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
