@@ -889,39 +889,39 @@ def scan_cls_delta_strings(tokenized_text, placeholder_indices_1st,
 
     return cls_delta_string_indices
 
-def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices, 
-                               subj_name_to_cls_delta_token_weights=None):
+def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices):
+    # No cls delta strings found in the prompt.
     if cls_delta_string_indices is None or len(cls_delta_string_indices) == 0:
         return prompt_embedding
 
-    device = prompt_embedding.device
-    # cls_delta_string_indices is a list of tuples, each tuple is
-    # (batch_i, start_N, num_cls_delta_tokens, subj_name).
+    # cls_delta_string_indices is a list of tuples, each tuple being
+    # (batch_i, start_index_N, M=num_cls_delta_tokens, subj_name).
     # Sort first by batch index, then by start index. So that the index offsets within each instance will
     # add up correctly as we process all cls_delta_string_indices tuples within the current instance.
     # subj_name is used to look up the cls delta weights.
     cls_delta_string_indices = sorted(cls_delta_string_indices, key=lambda x: (x[0], x[1]))
+    # batch_i2offset is used for multiple cls delta tokens in the same instance.
+    # It records the offset of the embeddings of the next cls delta token in the current instance.
     batch_i2offset = {}
 
     prompt_embedding2 = prompt_embedding.clone()
     occurred_subj_names = {}
 
+    # Scan prompt_embedding to find the cls delta tokens, and combine them to 1 token.
     for batch_i, start_index_N, M, subj_name in cls_delta_string_indices:
         i_off = batch_i2offset.get(batch_i, 0)
         # cls_delta_embeddings: [M, 768].
         cls_delta_embeddings = prompt_embedding[batch_i, start_index_N:start_index_N+M]
-        if subj_name_to_cls_delta_token_weights is not None:
-            # cls_delta_token_weights: [M] -> [M, 1].
-            cls_delta_token_weights = subj_name_to_cls_delta_token_weights[subj_name].unsqueeze(1).to(device)
-        else:
-            cls_delta_token_weights = torch.ones(M, 1, device=device)
         # avg_cls_delta_embedding: [768].
-        avg_cls_delta_embedding = (cls_delta_embeddings * cls_delta_token_weights).sum(dim=0)
-        prompt_embedding2[batch_i, start_index_N-i_off] = avg_cls_delta_embedding
-        # NOTE: Our purpose is to combine all the cls delta tokens to 1 token, so that
+        cls_delta_embedding_sum = cls_delta_embeddings.sum(dim=0)
+        prompt_embedding2[batch_i, start_index_N-i_off] = cls_delta_embedding_sum
+        # We combine all the cls delta tokens to 1 token cls_delta_embedding_sum, so that
         # their positions align with the subject tokens in the first half of the batch.
         # To do so, we move the embeddings (except the EOS) after the last cls delta token to the left,
         # overwriting the rest M-1 cls delta embeddings.
+        # NOTE: if there are multiple subject tokens (e.g., 28 tokens), then only the first subject token
+        # is aligned with the cls_delta_embedding_sum. 
+        # The rest 27 tokens are aligned with the embeddings of ", ".
         prompt_embedding2[batch_i, start_index_N+1-i_off:-(M+i_off)] = prompt_embedding[batch_i, start_index_N+M:-1]
         batch_i2offset[batch_i] = i_off + M - 1
         occurred_subj_names[subj_name] = \
@@ -1803,20 +1803,24 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
 # At scaled background, fill new x_start with random values (100% noise). 
 # At scaled foreground, fill new x_start with noised scaled x_start. 
 def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                       training_percent, base_scale_range=(0.7, 1.0),
+                                       training_percent, base_scale_range=(0.8, 1.0),
                                        fg_noise_anneal_mean_range=(0.1, 0.5)):
     x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
     fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
     # print(fg_mask_percent)
+    # print(fg_mask_percent)
     base_scale_range_lb, base_scale_range_ub = base_scale_range
 
-    if fg_mask_percent > 0.1:
-        # If fg areas are larger (>= 1/10 of the whole image), then scale down
+    # Since our input images are portrait photos, the foreground areas are usually quite large,
+    # between 0.2~0.5.
+    if fg_mask_percent > 0.2:
+        # If fg areas are larger (>= 0.1 of the whole image), then scale down
         # more aggressively, to avoid it dominating the whole image.
-        # Don't take extra_scale linearly to this ratio, which will make human
-        # faces (usually taking around 20%-40%) too small.
-        # Example: fg_mask_percent = 0.2, extra_scale = 0.5 ** 0.35 = 0.78.
-        extra_scale = math.pow(0.1 / fg_mask_percent.item(), 0.35)
+        # But don't take extra_scale linearly to this ratio, which will make human
+        # faces (usually around 20%-50%) too small.
+        # fg_mask_percent = 0.3, extra_scale = (2/3) ** 0.35 = 0.87 => face ratio = 0.3 * 0.87 = 0.261.
+        # fg_mask_percent = 0.5, extra_scale = (2/5) ** 0.35 = 0.73 => face ratio = 0.5 * 0.73 = 0.365.
+        extra_scale = math.pow(0.2 / fg_mask_percent.item(), 0.35)
         scale_range_lb = base_scale_range_lb * extra_scale
         # scale_range_ub is at least 0.5.
         scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
