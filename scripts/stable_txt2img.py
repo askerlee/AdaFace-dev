@@ -682,9 +682,10 @@ def main(opt):
                                 x_sample.save(sample_file_path)
                                 # Convert x_sample to a torch tensor with a compatible shape.
                                 # H, W, C => C, H, W
-                                x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1).float() / 255.
+                                x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1)
 
                         if opt.eval_blip or opt.diffusers:
+                            # x_samples_ddim: [batch_size, C, H, W]
                             x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
 
                         if opt.compare_with:
@@ -770,8 +771,9 @@ def main(opt):
                         grid_count += 1
                         grid_filepath = os.path.join(opt.outdir, f'{subj_name_method_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
-                all_samples_ts = list_np_images_to_4d_tensor(all_samples)
-                img = save_grid(all_samples_ts, None, grid_filepath, nrow=n_rows)
+                # all_samples is a list of 4D tensors [batch_size, C, H, W]
+                all_samples_cat = torch.cat(all_samples, 0)
+                img = save_grid(all_samples_cat, None, grid_filepath, nrow=n_rows)
                 
             toc = time.time()
         
