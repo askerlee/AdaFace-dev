@@ -1,5 +1,6 @@
 import numpy as np
-
+from torch.optim.lr_scheduler import SequentialLR
+from bisect import bisect_right
 
 class LambdaWarmUpCosineScheduler:
     """
@@ -96,3 +97,21 @@ class LambdaLinearScheduler(LambdaWarmUpCosineScheduler2):
             self.last_f = f
             return f
 
+# Add option 'start_from_epoch_0' to SequentialLR which resets the 
+# scheduler counter to 0 at the start of each milestone.
+class SequentialLR2(SequentialLR):
+    def step(self):
+        self.last_epoch += 1
+        idx = bisect_right(self._milestones, self.last_epoch)
+        scheduler = self._schedulers[idx]
+        if idx > 0 and self._milestones[idx - 1] == self.last_epoch:
+            if scheduler.__dict__.get('start_from_epoch_0', True):
+                scheduler.step(0)
+            else:
+                print(f"Skip setting epoch to 0 for the scheduler {type(scheduler)}.")
+                scheduler.step()
+                print(f"last_epoch = {self.last_epoch}, LR = {scheduler.get_last_lr()}")
+        else:
+            scheduler.step()
+
+        self._last_lr = scheduler.get_last_lr()

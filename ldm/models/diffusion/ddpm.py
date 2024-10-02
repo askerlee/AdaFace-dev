@@ -6,20 +6,20 @@ import numpy as np
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR, ConstantLR, PolynomialLR, \
                                      CosineAnnealingWarmRestarts, CyclicLR
+from ldm.modules.lr_scheduler import SequentialLR2
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
 
-from ldm.util import    exists, default, count_params, instantiate_from_config, disabled_train, \
-                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, \
+from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
+                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_ref_cosine_loss, \
+                        calc_delta_alignment_loss, calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
                         save_grid, normalize_dict_values, normalized_sum, masked_mean, \
-                        join_dict_of_indices_with_key_filter, init_x_with_fg_from_training_image, \
-                        sel_emb_attns_by_indices, convert_attn_to_spatial_weight, resize_mask_for_feat_or_attn, \
-                        calc_ref_cosine_loss, calc_delta_alignment_loss, calc_prompt_emb_delta_loss, \
-                        calc_elastic_matching_loss, SequentialLR2, \
-                        distribute_embedding_to_M_tokens_by_dict, merge_cls_token_embeddings, mix_cls_subj_embeddings, \
-                        repeat_selected_instances, halve_token_indices, double_token_indices, \
-                        probably_anneal_t, anneal_perturb_embedding, count_optimized_params
+                        init_x_with_fg_from_training_image, resize_mask_for_feat_or_attn, convert_attn_to_spatial_weight, \
+                        sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
+                        join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
+                        double_token_indices, merge_cls_token_embeddings, mix_cls_subj_embeddings, anneal_perturb_embedding, \
+                        probably_anneal_t, count_optimized_params, count_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -609,6 +609,7 @@ class LatentDiffusion(DDPM):
             # distillation iteration, and placeholder_indices only contains the indices of the subject 
             # instances. Whereas cls_delta_string_indices only contains the indices of the
             # class (mix) instances.
+            # NOTE: 
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                                  self.embedding_manager.cls_delta_string_indices)
             
@@ -1178,7 +1179,7 @@ class LatentDiffusion(DDPM):
         # treat the indices as if they are always in the same instance.
         # len(ph_indices_1b_N): embedding number of the subject token.
         cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb, placeholder2indices_1b)
-        cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb, placeholder2indices_1b)
+        cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,   placeholder2indices_1b)
         
         extra_info['placeholder2indices_1b'] = placeholder2indices_1b
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
