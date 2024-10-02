@@ -611,7 +611,7 @@ class LatentDiffusion(DDPM):
             # class (mix) instances.
             # NOTE: 
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
-                                                                 self.embedding_manager.cls_delta_string_indices)
+                                                           self.embedding_manager.cls_delta_string_indices)
             
         # Otherwise, inference and not return_prompt_embs_type, we do nothing to the prompt_embeddings.
 
@@ -1357,9 +1357,7 @@ class LatentDiffusion(DDPM):
     # ANCHOR[id=p_losses]
     def p_losses(self, x_start, t, noise, c_prompt_emb, c_in, extra_info):
         #print(c_in)
-        # Back up the original condition for future reference.
-        # cond may be modified in compositional iterations, but orig_cond is not.
-        orig_cond = cond = (c_prompt_emb, c_in, extra_info)
+        cond = (c_prompt_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
@@ -1381,17 +1379,17 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_comp_prompt_distillation']:
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
-            # We can't afford BLOCK_SIZE=2 as it will double the memory usage.
+            # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
             BLOCK_SIZE = 1
-            # We need to compute CLIP scores for teacher filtering.
-            # CFG is for guidance to denoise images, which are input to CLIP.
+            # CFG is for classifier-free guidance to denoise x_start or x_recon 
+            # that are to be saved for inspection.
             cfg_scale = 5
-            print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation")
 
-            # Fresh compositional iter. May do teacher filtering.
-            # In a fresh compositional iter, t is set to be at the tail (largest, most noisy) 20% of the timesteps.
-            # Randomly choose t from the largest 200 timesteps, to match the completely noisy x_start.
-            t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, 
+            # Compositional iter.
+            # In a compositional iter, t is set to be at the tail (largest, most noisy) 20% of the timesteps.
+            # Randomly choose t from the largest 500 timesteps, to be statistically 
+            # similar to the completely noisy x_start.
+            t_tail = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
                                     (x_start.shape[0],), device=x_start.device)
             t = t_tail
 
@@ -1403,17 +1401,21 @@ class LatentDiffusion(DDPM):
                 # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                 filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
                 # If do zero-shot, then don't add extra noise to the foreground.
-                fg_noise_anneal_mean_range = (0.3, 0.6)
+                fg_noise_anneal_mean_range = (0.3, 0.3) #(0.3, 0.6)
+                # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
+                # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
                 x_start, fg_mask, filtered_fg_mask = \
                     init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                                        self.training_percent,
-                                                        base_scale_range=(0.7, 1.0),
-                                                        fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
+                                                       self.training_percent,
+                                                       base_scale_range=(0.8, 1.0),
+                                                       fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
 
             else:
+                # We have to use random noise for x_start, as the training images 
+                # are not used for initialization.
                 x_start.normal_()
 
-            # Make the 4 instances in x_start the same.
+            # Make the 4 instances in x_start, noise and t the same.
             x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
             noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
             t       = t[:BLOCK_SIZE].repeat(4)
@@ -1432,17 +1434,16 @@ class LatentDiffusion(DDPM):
             # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
             # so subj indices of the second-half batch are the repetitions of the 
             # original extra_info['placeholder2indices_1b'].
-            c_prompt_emb_mixed = \
-                mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
-                                        cls_subj_mix_scale=self.cls_subj_mix_scale)
+            c_prompt_emb_mixed = mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
+                                                         cls_subj_mix_scale=self.cls_subj_mix_scale)
           
             # Update cond[0] to c_prompt_emb_mixed, to prepare for future reference.
             cond = (c_prompt_emb_mixed, c_in, extra_info)
-
+            print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n",
+                  c_in)
+            
         # recon or unet_distill iterations.
         else:
-            assert self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']
-
             BLOCK_SIZE = x_start.shape[0]
             # Do not use cfg_scale for normal recon iterations. Only do recon using the positive prompt.
             cfg_scale = -1
@@ -1509,12 +1510,6 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
-            # x_recon will be cached for a future iteration with a smaller t.
-            # Note the 4 types of prompts have to be the same as this iter, 
-            # since this x_recon was denoised under this cond.
-            # Use the subject half of the batch, chunk(2)[0], instead of the mix half, chunk(2)[1], as 
-            # the subject half is better at subject authenticity (but may be worse on composition).            
-            x_recon2 = x_recon.detach().chunk(2)[0].repeat(2, 1, 1, 1)
             # model_output and x_recon are not used for comp prompt distillation loss computation.
             # Only the captured attention matrics are used.
             del model_output, x_recon

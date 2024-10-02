@@ -14,7 +14,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import save_grid, load_model_from_config
+from ldm.util import save_grid, list_np_images_to_4d_tensor, load_model_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                   init_evaluators, set_tf_gpu
@@ -557,7 +557,7 @@ def main(opt):
     with torch.no_grad():
         with precision_scope("cuda"):
             tic = time.time()
-            all_samples = list()
+            all_samples = []
             sample_count = 0
             prompt_block_count = len(batched_prompts)
             for n in trange(opt.n_repeat, desc="Sampling"):
@@ -682,9 +682,10 @@ def main(opt):
                                 x_sample.save(sample_file_path)
                                 # Convert x_sample to a torch tensor with a compatible shape.
                                 # H, W, C => C, H, W
-                                x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1).float() / 255.
+                                x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1)
 
                         if opt.eval_blip or opt.diffusers:
+                            # x_samples_ddim: [batch_size, C, H, W]
                             x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
 
                         if opt.compare_with:
@@ -770,7 +771,9 @@ def main(opt):
                         grid_count += 1
                         grid_filepath = os.path.join(opt.outdir, f'{subj_name_method_sig}-{prompt_sig}-{experiment_sig}-{grid_count}.jpg')
 
-                img = save_grid(all_samples, None, grid_filepath, nrow=n_rows)
+                # all_samples is a list of 4D tensors [batch_size, C, H, W]
+                all_samples_cat = torch.cat(all_samples, 0)
+                img = save_grid(all_samples_cat, None, grid_filepath, nrow=n_rows)
                 
             toc = time.time()
         
