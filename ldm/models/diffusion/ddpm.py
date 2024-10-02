@@ -1456,7 +1456,6 @@ class LatentDiffusion(DDPM):
         # the original images don't play a role (even if comp_init_fg_from_training_image,
         # we still don't consider the actual pixels out of the subject areas, so img_mask doesn't matter).
         extra_info['img_mask']  = None if self.iter_flags['do_comp_prompt_distillation'] else img_mask
-        extra_info['capture_ca_layers_activations'] = True
 
         # img_mask is also used when computing Ada embeddings in embedding_manager.
         # So we pass img_mask to embedding_manager here.
@@ -1467,6 +1466,8 @@ class LatentDiffusion(DDPM):
                                    'prompt_emb_mask':       prompt_emb_mask }
 
         if self.iter_flags['do_comp_prompt_distillation']:
+            extra_info['capture_ca_layers_activations'] = True
+
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
@@ -1478,6 +1479,8 @@ class LatentDiffusion(DDPM):
                                     # CFG is for classifier-free guidance to denoise x_start or x_recon 
                                     # that are to be saved for inspection.
                                     cfg_scale=5)
+
+            extra_info['capture_ca_layers_activations'] = False
 
             # The four instances in iter_flags['image_unnorm'] are different,
             # but only the first one is in use. So we only log the first one.
@@ -1498,11 +1501,6 @@ class LatentDiffusion(DDPM):
             # Only the captured attention matrics are used.
             del model_output, x_recon
 
-        # Otherwise, do_unet_distill == True, 
-        # later we will call guided_denoise() multiple times to get the multi-step denoising results.
-
-        extra_info['capture_ca_layers_activations'] = False
-
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
 
@@ -1516,8 +1514,9 @@ class LatentDiffusion(DDPM):
 
         loss = 0
                                 
-        if self.iter_flags['do_normal_recon']:
-            # cfg_scale: classifier-free guidance scale for do_pixel_recon.
+        if self.iter_flags['do_normal_recon']:            
+            extra_info['capture_ca_layers_activations'] = True
+
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
@@ -1529,6 +1528,8 @@ class LatentDiffusion(DDPM):
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
                                     cfg_scale=-1)
+
+            extra_info['capture_ca_layers_activations'] = False
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -1860,6 +1861,9 @@ class LatentDiffusion(DDPM):
                                         img_mask, fg_mask, fg_pixel_weight=1,
                                         bg_pixel_weight=bg_pixel_weight)
 
+            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}",
+                  end='')
+            
             # The first ID embedding in the batch is intact,
             # and the remaining ID embeddings are the first added with noise.
             # So we can contrast the first instance with the remaining instances,
@@ -1884,10 +1888,12 @@ class LatentDiffusion(DDPM):
                     self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
                                             delta_img_mask, fg_mask=delta_fg_mask, 
                                             fg_pixel_weight=1, bg_pixel_weight=1)
+                print(f", {loss_unet_distill_delta.item():.4f}")
+                                            
             else:
-                loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
+                loss_unet_distill_delta = 0
+                print()
 
-            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}, {loss_unet_distill_delta.item():.4f}")
             losses_unet_distill.append(loss_unet_distill)
             losses_unet_distill_delta.append(loss_unet_distill_delta)
 
@@ -1900,7 +1906,7 @@ class LatentDiffusion(DDPM):
         # Instead, only increase the normalizer sub-linearly.
         loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
 
-        if self.iter_flags['perturb_face_id_embs']:
+        if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
             loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
         else:
             loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
