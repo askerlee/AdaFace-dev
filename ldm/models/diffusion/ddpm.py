@@ -1486,12 +1486,12 @@ class LatentDiffusion(DDPM):
                     # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
                     filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
                     # If do zero-shot, then don't add extra noise to the foreground.
-                    fg_noise_anneal_mean_range = (0.1, 0.4)
+                    fg_noise_anneal_mean_range = (0.3, 0.6)
                     x_start, fg_mask, filtered_fg_mask = \
                         init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                                            self.training_percent,
-                                                            base_scale_range=(0.7, 1.0),
-                                                            fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
+                                                           self.training_percent,
+                                                           base_scale_range=(0.7, 1.0),
+                                                           fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
 
                 else:
                     x_start.normal_()
