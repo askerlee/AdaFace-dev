@@ -763,13 +763,7 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_comp_prompt_distillation'] and not self.iter_flags['reuse_init_conds'] \
           and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # Slightly larger than 0.5, since comp_init_fg_from_training_image is disabled under reuse_init_conds.
-            # So in all distillation iterations, comp_init_fg_from_training_image percentage will be around 0.5.
-            # p_comp_init_fg_from_training_image: 0.8 -> 1.0 over first 25% of the training, 
-            # then keep at 1.0.
-            # That is, comp_prompt_distill loss is only enabled at the first 25% of the training 
-            # as bootstrapping, then disabled (only keep comp_fg_bg_preserve_loss).
-            # if do_comp_prompt_distillation, comp_init_fg_from_training_image is always enabled.
+            # If do_comp_prompt_distillation, comp_init_fg_from_training_image is always enabled.
             # It's OK, since when do_zero_shot, we have a large diverse set of training images,
             # and always initializing from training images won't lead to overfitting.
             p_comp_init_fg_from_training_image = 1
