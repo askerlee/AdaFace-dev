@@ -1113,30 +1113,12 @@ def calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
 
         return init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding
           
-# samples:   a list of (B, C, H, W) tensors.
-# img_flags: a list of (B,) ints.
-# If not do_normalize, samples should be between [0, 1] (float types) or [0, 255] (uint8).
-# If do_normalize, samples should be between [-1, 1] (raw output from SD decode_first_stage()).
-def save_grid(samples, img_flags, grid_filepath, nrow, do_normalize=False):
-    if isinstance(samples[0], np.ndarray):
-        samples = [ torch.from_numpy(e) for e in samples ]
-
-    # grid is a 4D tensor: (B, C, H, W)
-    if not isinstance(samples, torch.Tensor):
-        grid = torch.cat(samples, 0)
-    else:
-        grid = samples
-    # img_flags is a 1D tensor: (B,)
-    if img_flags is not None and not isinstance(img_flags, torch.Tensor):
-        img_flags = torch.cat(img_flags, 0)
-
-    if grid.dtype != torch.uint8:
-        if do_normalize:
-            grid = torch.clamp((grid + 1.0) / 2.0, min=0.0, max=1.0)
-        grid = (255. * grid).to(torch.uint8)
-
+# samples:   a (B, C, H, W) tensor.
+# img_flags: a tensor of (B,) ints.
+# samples should be between [0, 255] (uint8).
+def save_grid(samples, img_flags, grid_filepath, nrow):
     # img_box indicates the whole image region.
-    img_box = torch.tensor([0, 0, grid.shape[2], grid.shape[3]]).unsqueeze(0)
+    img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
 
     colors = [ None, 'green', 'red', 'purple' ]
     if img_flags is not None:
@@ -1144,12 +1126,12 @@ def save_grid(samples, img_flags, grid_filepath, nrow, do_normalize=False):
         for i, img_flag in enumerate(img_flags):
             if img_flag > 0:
                 # Draw a 4-pixel wide green bounding box around the image.
-                grid[i] = draw_bounding_boxes(grid[i], img_box, colors=colors[img_flag], width=12)
+                samples[i] = draw_bounding_boxes(samples[i], img_box, colors=colors[img_flag], width=12)
 
-    # grid is a 3D np array: (C, H2, W2)
-    grid = make_grid(grid, nrow=nrow).cpu().numpy()
-    # grid is transposed to: (H2, W2, C)
-    grid_img = Image.fromarray(grid.transpose([1, 2, 0]))
+    # grid_samples is a 3D np array: (C, H2, W2)
+    grid_samples = make_grid(samples, nrow=nrow).cpu().numpy()
+    # samples is transposed to: (H2, W2, C)
+    grid_img = Image.fromarray(grid_samples.transpose([1, 2, 0]))
     if grid_filepath is not None:
         grid_img.save(grid_filepath)
     

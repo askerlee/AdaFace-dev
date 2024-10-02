@@ -67,7 +67,6 @@ class DDPM(pl.LightningModule):
                  fg_bg_xlayer_consist_loss_weight=0.,
                  unet_distill_delta_loss_boost=1,
                  enable_background_token=True,
-                 enable_reuse_init_conds=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -111,7 +110,6 @@ class DDPM(pl.LightningModule):
         # posing too strong regularizations to the subject embeddings.
         self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
-        self.enable_reuse_init_conds                = enable_reuse_init_conds
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
@@ -139,8 +137,7 @@ class DDPM(pl.LightningModule):
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.max_num_denoising_steps                = max_num_denoising_steps
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
-        self.comp_init_fg_from_training_image_fresh_count  = 0
-        self.comp_init_fg_from_training_image_reuse_count  = 0
+        self.comp_init_fg_from_training_image_count  = 0
 
         self.cached_inits = {}
         self.do_prompt_emb_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
@@ -304,7 +301,6 @@ class DDPM(pl.LightningModule):
                             'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
                             'use_fp_trick':                 False,
-                            'reuse_init_conds':             False,
                             'comp_init_fg_from_training_image': False,
                           }
         
@@ -726,19 +722,6 @@ class LatentDiffusion(DDPM):
         self.batch_1st_subject_name  = batch['subject_name'][0]
         self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
-        # If cached_inits is available (self.batch_1st_subject_name in self.cached_inits), 
-        # cached_inits are only used if do_comp_prompt_distillation = True.
-        # Even if the batch subjects are from a mix subject folder, since we have cached the subject ID embs and other features,
-        # we can still use the cached inits. But in order to avoid these subjects from the mix subject folder dominating 
-        # the reuse_init_conds iterations (we will always find such subjects in the cache, but if the subject is not from the mix folder,
-        # the chance of finding the subject in the cache is much lower), we set p_reuse_init_conds = 0.25.
-        if self.enable_reuse_init_conds and self.iter_flags['do_comp_prompt_distillation']:
-            p_reuse_init_conds = 0.25 if self.batch_1st_subject_is_in_mix_subj_folder else 1
-        else:
-            p_reuse_init_conds = 0
-        self.iter_flags['reuse_init_conds']  = self.batch_1st_subject_name in self.cached_inits \
-                                                and random.random() < p_reuse_init_conds
-
         # NOTE: *_fp prompts are like "a face portrait of ...". They highlight the face features.
         # When doing compositional mix regularization on humans/animals they are better.
         # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
@@ -761,8 +744,7 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_fp_trick'] = random.random() < p_use_fp_trick
 
-        if self.iter_flags['do_comp_prompt_distillation'] and not self.iter_flags['reuse_init_conds'] \
-          and self.iter_flags['fg_mask_avail_ratio'] > 0:
+        if self.iter_flags['do_comp_prompt_distillation'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # If do_comp_prompt_distillation, comp_init_fg_from_training_image is always enabled.
             # It's OK, since when do_zero_shot, we have a large diverse set of training images,
             # and always initializing from training images won't lead to overfitting.
@@ -770,8 +752,6 @@ class LatentDiffusion(DDPM):
         else:
             p_comp_init_fg_from_training_image = 0
 
-        # If reuse_init_conds, comp_init_fg_from_training_image may be set to True later
-        # if the previous iteration has comp_init_fg_from_training_image = True.
         self.iter_flags['comp_init_fg_from_training_image'] \
             = random.random() < p_comp_init_fg_from_training_image
         
@@ -1094,21 +1074,6 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['clip_bg_features']  = None
 
-        # reuse_init_conds, discard the prompts offered in shared_step().
-        if self.iter_flags['reuse_init_conds']:
-            cached_inits = self.cached_inits[self.batch_1st_subject_name]
-            # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-            self.iter_flags['delta_prompts']            = cached_inits['delta_prompts']
-            self.iter_flags['img_mask']                 = cached_inits['img_mask']
-            self.iter_flags['fg_mask']                  = cached_inits['fg_mask']
-            self.iter_flags['batch_have_fg_mask']       = cached_inits['batch_have_fg_mask']
-            self.iter_flags['filtered_fg_mask']         = cached_inits['filtered_fg_mask']
-            self.iter_flags['use_background_token']     = cached_inits['use_background_token']
-            self.iter_flags['comp_init_fg_from_training_image']   = cached_inits['comp_init_fg_from_training_image']
-            self.iter_flags['clip_bg_features']         = cached_inits['clip_bg_features']
-            self.iter_flags['id2img_prompt_embs']       = cached_inits['id2img_prompt_embs']
-            self.iter_flags['image_unnorm']             = cached_inits['image_unnorm']
-
         # In get_text_conditioning(), text_conditioning_iter_type will be set again.
         # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
         # whose behavior depends on the correct text_conditioning_iter_type.
@@ -1142,15 +1107,8 @@ class LatentDiffusion(DDPM):
         # When do_unet_distill and distilling on ConsistentID, we still
         # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
 
-        # reuse_init_conds, discard the prompts offered in shared_step().
-        if self.iter_flags['reuse_init_conds']:
-            # cached_inits['delta_prompts'] is a tuple of 4 lists. No need to split them.
-            delta_prompts = self.cached_inits[self.batch_1st_subject_name]['delta_prompts']
-            # cached_inits will be used in p_losses(), 
-            # so don't delete cached_init[self.batch_1st_subject_name] to False yet.
-        else:
-            # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
-            delta_prompts = self.iter_flags['delta_prompts']
+        # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
+        delta_prompts = self.iter_flags['delta_prompts']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
         #if self.iter_flags['use_background_token']:
@@ -1429,74 +1387,33 @@ class LatentDiffusion(DDPM):
             cfg_scale = 5
             print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation")
 
-            # Only reuse_init_conds if do_comp_prompt_distillation.
-            if self.iter_flags['reuse_init_conds']:
-                print(f"Rank {self.trainer.global_rank}: reuse_init_conds")
+            # Fresh compositional iter. May do teacher filtering.
+            # In a fresh compositional iter, t is set to be at the tail (largest, most noisy) 20% of the timesteps.
+            # Randomly choose t from the largest 200 timesteps, to match the completely noisy x_start.
+            t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, 
+                                    (x_start.shape[0],), device=x_start.device)
+            t = t_tail
 
-                # If self.iter_flags['reuse_init_conds'], we use the cached x_start and cond.
-                # cond is already organized as (subj single, subj comp, mix single, mix comp). 
-                # No need to manipulate.
-                # noise will be kept as the sampled random noise at the beginning of p_losses(). 
-                # NOTE: If reuse_init_conds, and the previous iter has comp_init_fg_from_training_image=True, then 
-                # the current iter will also have comp_init_fg_from_training_image=True. 
-                # But x_start is the denoised result from the previous iteration (noises have been added above), 
-                # so we don't add noise to it again.
-                # x_start already has a BS of 4. No need to slice or repeat it.
-                x_start = self.cached_inits[self.batch_1st_subject_name]['x_start']
-                prev_t  = self.cached_inits[self.batch_1st_subject_name]['t']
-                # Clear cache of batch_1st_subject_name, to avoid the cached inits being used in the next mix iter.
-                del self.cached_inits[self.batch_1st_subject_name]
-                # reuse init iter takes a smaller cfg scale, as in the second denoising step, 
-                # a particular scale tend to make the cfg-denoised mixed images more dissimilar 
-                # to the subject images than in the first denoising step. 
+            if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+                # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+                # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
+                # the background in the training images, which is not desirable.
+                # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
+                # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
+                filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
+                # If do zero-shot, then don't add extra noise to the foreground.
+                fg_noise_anneal_mean_range = (0.3, 0.6)
+                x_start, fg_mask, filtered_fg_mask = \
+                    init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
+                                                        self.training_percent,
+                                                        base_scale_range=(0.7, 1.0),
+                                                        fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
 
-                # x_start is like (s1, s2, c1, c2) (s1, s2 repeated those in the previous distillation iter).
-                # s1 is different from s2, but they are generated from the same initial noise in the 
-                # previous reconstruction. This is desired as a simulation of a multi-step inference process.
-                # Randomly choose t from the middle 400-700 timesteps, 
-                # so as to match the once-denoised x_start.
-                # generate the full batch size of t, but actually only use the first block of BLOCK_SIZE.
-                # This is to make the code consistent with the non-comp case and avoid unnecessary confusion.
-                t_mid = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
-                                      (x_start.shape[0],), device=x_start.device)
-                # t_upperbound: old t - 150. That is, at least 150 steps away from the previous t.
-                t_upperbound = prev_t - int(self.num_timesteps * 0.15)
-                # t should be at least 150 steps away from the previous t, 
-                # so that the noise level is sufficiently different.
-                t = torch.minimum(t_mid, t_upperbound)
             else:
-                # Fresh compositional iter. May do teacher filtering.
-                # In a fresh compositional iter, t is set to be at the tail (largest, most noisy) 20% of the timesteps.
-                # Randomly choose t from the largest 200 timesteps, to match the completely noisy x_start.
-                t_tail = torch.randint(int(self.num_timesteps * 0.8), self.num_timesteps, 
-                                       (x_start.shape[0],), device=x_start.device)
-                t = t_tail
+                x_start.normal_()
 
-                if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-                    # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-                    # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
-                    # the background in the training images, which is not desirable.
-                    # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
-                    # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
-                    filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
-                    # If do zero-shot, then don't add extra noise to the foreground.
-                    fg_noise_anneal_mean_range = (0.3, 0.6)
-                    x_start, fg_mask, filtered_fg_mask = \
-                        init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                                           self.training_percent,
-                                                           base_scale_range=(0.7, 1.0),
-                                                           fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
-
-                else:
-                    x_start.normal_()
-
+            # Make the 4 instances in x_start the same.
             x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-            # If reuse_init_conds, prev_t is already 1-repeat-4, and 
-            # x_start is denoised from a 1-repeat-4 x_start in the previous iteration 
-            # (precisely speaking, a 1-repeat-2 x_start that's repeated again to 
-            # approximate a 1-repeat-4 x_start).
-            # But noise, t are not 1-repeat-4. 
-            # So we still need to make them 1-repeat-4.
             noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
             t       = t[:BLOCK_SIZE].repeat(4)
 
@@ -1504,11 +1421,6 @@ class LatentDiffusion(DDPM):
             img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = \
                 repeat_selected_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
             self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
-
-            # If reuse_init_conds: then use cached x_start and cond. 
-            # cond already has the 4-type structure. No change to cond here.
-            # NOTE: cond is mainly determined by the prompts c_in. Since c_in is inherited from
-            # the previous iteration, cond is also almost the same.
     
             # This code block is within self.iter_flags['do_comp_prompt_distillation'].
             # The prompts are of 1-repeat-4 (distillation) structure.
@@ -1581,11 +1493,20 @@ class LatentDiffusion(DDPM):
                                     cfg_scale=cfg_scale)
 
         if self.iter_flags['do_comp_prompt_distillation']:
-            if self.trainer.is_global_zero == 0:
-                recon_images = self.decode_first_stage(x_recon)
-                # log_image_colors are all 0: no box to be drawn on the images in cache_and_log_generations().
-                log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
-                self.cache_and_log_generations(recon_images, log_image_colors)
+            # The four instances in iter_flags['image_unnorm'] are different,
+            # but only the first one is in use. So we only log the first one.
+            # input_image: torch.uint8, 0~255, [1, 512, 512, 3] -> [1, 3, 512, 512].
+            input_image = self.iter_flags['image_unnorm'][[0]]
+            input_image = input_image.permute(0, 3, 1, 2)
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # All of them are 1, indicating green.
+            log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
+            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=False)
+            recon_images = self.decode_first_stage(x_recon)
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # All of them are 0, indicating no box.
+            log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
+            self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
             # x_recon will be cached for a future iteration with a smaller t.
             # Note the 4 types of prompts have to be the same as this iter, 
@@ -1754,10 +1675,10 @@ class LatentDiffusion(DDPM):
                     model_outputs.append(model_output_s)
 
                     recon_images_s = self.decode_first_stage(x_recon_s)
-                    # log_image_colors are all 0: no box to be drawn on the images in cache_and_log_generations().
-                    log_image_colors = torch.zeros(recon_images_s.shape[0], dtype=int, device=x_start.device)
-                    if self.trainer.is_global_zero == 0:
-                        self.cache_and_log_generations(recon_images_s, log_image_colors)
+                    # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+                    # all of them are 2, indicating red.
+                    log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * 2
+                    self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
                 # If id2img_prompt_encoder_trainable, then we also have
                 # **Objective 3**: Align teacher noise predictions with ground truth noises added during teacher denoising.
@@ -1867,37 +1788,6 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
 
         ###### begin of preparation for do_comp_prompt_distillation ######
-        if self.enable_reuse_init_conds and self.iter_flags['do_comp_prompt_distillation']:
-            # The cache uses a chunk of RAM, which is not so small.
-            # x_recon2, fg_mask, filtered_fg_mask are all [4, 4, 64, 64].
-            # Each entry takes 4 * 4 * 64 * 64 * 4 * 3 bytes = 786K bytes.
-            # The total size of the cache is about 786K * 100 = 78MB.
-            # We cannot simply use orig_cond[1], as they are (subj single, subj comp, mix single, mix comp).
-            # mix single = class single, but under some settings, maybe mix comp = subj comp.
-            # cached_inits[self.batch_1st_subject_name]['x_start'] has a batch size of 4.
-            self.cached_inits[self.batch_1st_subject_name] = \
-            {   
-                'x_start':                x_recon2, 
-                'delta_prompts':          orig_cond[2]['delta_prompts'],
-                't':                      t,
-                # reuse_init_conds implies a compositional iter. So img_mask is always None.
-                'img_mask':               None,   
-                'fg_mask':                fg_mask,
-                'batch_have_fg_mask':     batch_have_fg_mask,
-                'filtered_fg_mask':       filtered_fg_mask,
-                'use_background_token':   self.iter_flags['use_background_token'],
-                'comp_init_fg_from_training_image': self.iter_flags['comp_init_fg_from_training_image'],
-                # We reuse init conds only in compositional iters.
-                # We don't need to cache other flags, such as do_unet_distill,
-                # as they are only applicable to recon iters. 
-                'clip_bg_features':       self.iter_flags['clip_bg_features'],
-                'id2img_prompt_embs':     self.iter_flags['id2img_prompt_embs'],
-                'image_unnorm':           self.iter_flags['image_unnorm'],
-            }
-            if len(self.cached_inits) > 100:
-                # Delete a random element in the dict to save RAM.
-                del self.cached_inits[random.choice(list(self.cached_inits.keys()))]
-
         # The Prodigy optimizer seems to suppress the embeddings too much, 
         # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
         prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
@@ -1947,8 +1837,7 @@ class LatentDiffusion(DDPM):
 
             # NOTE: loss_comp_fg_bg_preserve is applied only when this 
             # iteration is teachable, because at such iterations the unet gradient is enabled.
-            # The current iteration may be a fresh iteration or a reuse_init_conds iteration.
-            # In both cases, if comp_init_fg_from_training_image, then we need to preserve the fg/bg areas.
+            # If comp_init_fg_from_training_image, then we need to preserve the fg/bg areas.
             # Although fg_mask_avail_ratio > 0 when comp_init_fg_from_training_image,
             # fg_mask_avail_ratio may have been updated after doing teacher filtering 
             # (since x_start has been filtered, masks are also filtered accordingly, 
@@ -2010,22 +1899,14 @@ class LatentDiffusion(DDPM):
                 
                 loss_dict.update({f'{prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
                 # Keep track of the number of iterations that use comp_init_fg_from_training_image.
-                if self.iter_flags['reuse_init_conds']:
-                    self.comp_init_fg_from_training_image_reuse_count += 1
-                else:
-                    self.comp_init_fg_from_training_image_fresh_count += 1
+                self.comp_init_fg_from_training_image_count += 1
                 
-                comp_init_fg_from_training_image_reuse_frac = self.comp_init_fg_from_training_image_reuse_count / (self.global_step + 1)
-                loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_reuse_frac': comp_init_fg_from_training_image_reuse_frac})
-                comp_init_fg_from_training_image_fresh_frac = self.comp_init_fg_from_training_image_fresh_count / (self.global_step + 1)
-                loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_fresh_frac': comp_init_fg_from_training_image_fresh_frac})
+                comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.global_step + 1)
+                loss_dict.update({f'{prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
             else:
                 loss_comp_fg_bg_preserve = 0
 
             comp_fg_bg_preserve_loss_scale = 0.5
-            # Scale down loss_comp_fg_bg_preserve if reuse_init_conds, as it's more noisy.
-            if self.iter_flags['reuse_init_conds']:
-                comp_fg_bg_preserve_loss_scale *= 0.5
 
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     * comp_fg_bg_preserve_loss_scale
@@ -3025,7 +2906,32 @@ class LatentDiffusion(DDPM):
         return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
                loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
 
-    def cache_and_log_generations(self, samples, img_colors, max_cache_size=48):
+    # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
+    # or a list of 3D [C, H, W] torch tensors.
+    # Data type of samples could be uint (0-25), or float (-1, 1) or (0, 1).
+    # If (-1, 1), then we should set do_normalize=True.
+    # img_colors: a single 1D torch tensor, indexing colors = [ None, 'green', 'red', 'purple' ]
+    # For raw output from raw output from SD decode_first_stage(),
+    # samples are be between [-1, 1], so we set do_normalize=True.
+    @rank_zero_only
+    def cache_and_log_generations(self, samples, img_colors, do_normalize=True, max_cache_size=48):
+        if isinstance(samples, np.ndarray):
+            samples = torch.from_numpy(samples)
+
+        # samples is a list of 3D tensor: (C, H, W)
+        if not isinstance(samples, torch.Tensor):
+            # Make sample a 4D tensor: (B, C, H, W)
+            samples = torch.cat(samples, 0)
+
+        if samples.dtype != torch.uint8:
+            if do_normalize:
+                samples = torch.clamp((samples + 1.0) / 2.0, min=0.0, max=1.0)
+            samples = (255. * samples).to(torch.uint8)
+
+        # img_colors is a 1D tensor: (B,)
+        if img_colors is None:
+            img_colors = torch.zeros(samples.size(0), dtype=torch.int)
+
         self.generation_cache.append(samples)
         self.generation_cache_img_colors.append(img_colors)
         self.num_cached_generations += len(samples)
@@ -3034,8 +2940,12 @@ class LatentDiffusion(DDPM):
             grid_folder = self.logger._save_dir + f'/samples'
             os.makedirs(grid_folder, exist_ok=True)
             grid_filename = grid_folder + f'/{self.cache_start_iter:04d}-{self.global_step:04d}.png'
-            save_grid(self.generation_cache, self.generation_cache_img_colors, 
-                      grid_filename, 12, do_normalize=True)
+            cached_images     = torch.cat(self.generation_cache,            0)
+            cached_img_colors = torch.cat(self.generation_cache_img_colors, 0)
+            # samples:    a (B, C, H, W) tensor.
+            # img_colors: a tensor of (B,) ints.
+            # samples should be between [0, 255] (uint8).
+            save_grid(cached_images, cached_img_colors, grid_filename, nrow=12)
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             # Clear the cache. If num_cached_generations > max_cache_size,
