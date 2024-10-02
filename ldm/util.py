@@ -903,6 +903,8 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices):
         # NOTE: if there are multiple subject tokens (e.g., 28 tokens), then only the first subject token
         # is aligned with the cls_delta_embedding_sum. 
         # The rest 27 tokens are aligned with the embeddings of ", ".
+        # This misalignment will be patched by calling 
+        # distribute_embedding_to_M_tokens_by_dict(cls_single_emb, placeholder2indices_1b) in LatentDiffusion::forward().
         prompt_embedding2[batch_i, start_index_N+1-i_off:-(M+i_off)] = prompt_embedding[batch_i, start_index_N+M:-1]
         batch_i2offset[batch_i] = i_off + M - 1
         occurred_subj_names[subj_name] = \

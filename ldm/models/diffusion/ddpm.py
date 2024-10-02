@@ -1171,13 +1171,10 @@ class LatentDiffusion(DDPM):
             if placeholder2indices_1b[k] is None:
                 continue
 
-        # The subject is represented with a multi-embedding token. The corresponding tokens
-        # in the class prompts are "class , , ,", 
-        # therefore the embeddings of "," need to be patched.
-        # BUG: if the batch size of a mix batch > 4, then the ph_indices_1b_N
-        # corresponds to the indices in more than one instance. But distribute_embedding_to_M_tokens()
-        # treat the indices as if they are always in the same instance.
-        # len(ph_indices_1b_N): embedding number of the subject token.
+        # NOTE: if there are multiple subject tokens (e.g., 28 tokens), then only the first subject token
+        # is aligned with the "class-token , , , ...". 
+        # The rest 27 tokens are aligned with the embeddings of ", ".
+        # This misalignment is patched below by distributing the class embeddings to the consecutive 28 tokens.
         cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb, placeholder2indices_1b)
         cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,   placeholder2indices_1b)
         
