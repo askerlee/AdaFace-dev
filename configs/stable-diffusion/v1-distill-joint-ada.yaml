@@ -53,8 +53,8 @@ model:
     # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.
     comp_prompt_distill_weight:       1e-3
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
-    # 0.9: 0.9 * class embeddings + 0.1 * subj embeddings.
-    cls_subj_mix_scale:               1
+    # 0.8: 0.8 * class embeddings + 0.2 * subj embeddings.
+    cls_subj_mix_scale:               0.8
     # Apply BN/LN on cross-attn Q and out features for loss computation.
     normalize_ca_q_and_outfeat:       True
     comp_fg_bg_preserve_loss_weight:  1e-3

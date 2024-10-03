@@ -1649,8 +1649,8 @@ class LatentDiffusion(DDPM):
         # We allow 2 to 6 denoising steps for preparing class instances for comp prompt distillation.
         num_init_prep_denoising_steps = \
             sample_num_denoising_steps( self.max_num_comp_distill_init_prep_denoising_steps, 
-                                        p_num_denoising_steps    = [0.2, 0.4, 0.4], 
-                                        cand_num_denoising_steps = [2,   4,    6] )
+                                        p_num_denoising_steps    = [0.3, 0.35, 0.35], 
+                                        cand_num_denoising_steps = [3,   4,   5] )
 
         if num_init_prep_denoising_steps > 0:
             # Class prep denoising: Denoise x_start with the class prompts 
