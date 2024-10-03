@@ -1392,7 +1392,7 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_comp_prompt_distillation. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_recon, noise, masks = \
+            x_recon, noise, masks, init_prep_context_type = \
                 self.prepare_comp_prompt_attn_activations(cond, x_start, noise, text_prompt_adhoc_info,
                                                           masks, all_subj_indices_1b,
                                                           fg_noise_anneal_mean_range=(0.3, 0.3),
@@ -1412,8 +1412,13 @@ class LatentDiffusion(DDPM):
             self.cache_and_log_generations(input_image, log_image_colors, do_normalize=False)
             recon_images = self.decode_first_stage(x_recon)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # All of them are 0, indicating no box.
-            log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
+            # If using subj context to do init prep, then the color is green.
+            # If using comp context to do init prep, then the color is purple.
+            if init_prep_context_type == 'subj':
+                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device)
+            else:
+                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
+
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
             # x_recon is not used for comp prompt distillation loss computation.
@@ -1668,8 +1673,10 @@ class LatentDiffusion(DDPM):
             # Randomly switch between the subject and class double contexts.
             if random.random() < 0.5:
                 init_prep_context = subj_double_context
+                init_prep_context_type = 'subj'
             else:
                 init_prep_context = cls_double_context
+                init_prep_context_type = 'cls'
 
             # Since we always use CFG for class prep denoising,
             # we need to pass the negative prompt as well.
@@ -1714,7 +1721,7 @@ class LatentDiffusion(DDPM):
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_prompt_distillation. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_recon, noise, masks
+        return x_recon, noise, masks, init_prep_context_type
     
     # Major losses for normal_recon iterations (loss_recon, loss_fg_bg_complementary, etc.).
     # (But there are still other losses used after calling this function.)
