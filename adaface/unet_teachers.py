@@ -51,7 +51,14 @@ class UNetTeacher(pl.LightningModule):
         else:
             print(f"Never using CFG.")
 
-    def forward(self, ddpm_model, x_start, noise, t, teacher_context, num_denoising_steps=1):
+    # Passing in ddpm_model to use its q_sample and predict_start_from_noise methods.
+    # We don't implement the two functions here, because they involve a few tensors 
+    # to be initialized, which will unnecessarily complicate the code.
+    # noise: the initial noise for the first iteration.
+    # t: the initial t. We will sample additional (num_denoising_steps - 1) smaller t.
+    # uses_same_t: when sampling t, use the same t for all instances.
+    def forward(self, ddpm_model, x_start, noise, t, teacher_context, 
+                num_denoising_steps=1, uses_same_t=False):
         assert num_denoising_steps <= 10
 
         if self.p_uses_cfg > 0:
@@ -87,6 +94,7 @@ class UNetTeacher(pl.LightningModule):
                     teacher_context = pos_context      
         else:
             # p_uses_cfg = 0. Never use CFG. 
+            self.uses_cfg = False
             # In this case, the student only passes pos_context to the teacher,
             # so no need to split teacher_context into pos_context and neg_context.
             # self.cfg_scale will be accessed by the student,
@@ -152,6 +160,10 @@ class UNetTeacher(pl.LightningModule):
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
 
+                    if uses_same_t:
+                        # If uses_same_t, we use the same earlier_timesteps for all instances.
+                        earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
+
                     # earlier_timesteps = ts[i+1] < ts[i].
                     ts.append(earlier_timesteps)
 
@@ -194,6 +206,8 @@ class ConsistentIDTeacher(UNetTeacher):
         # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
         pipe.release_components(["vae", "text_encoder"])
 
+# We use the default cfg_scale_range=[1.3, 2] for SimpleUNetTeacher.
+# Note p_uses_cfg=0.5 will also be passed in in kwargs.
 class SimpleUNetTeacher(UNetTeacher):
     def __init__(self, unet_dirpath='models/ensemble/sd15-unet', 
                  torch_dtype=torch.float16, **kwargs):
@@ -202,8 +216,3 @@ class SimpleUNetTeacher(UNetTeacher):
         self.unet = UNet2DConditionModel.from_pretrained(
                         unet_dirpath, torch_dtype=torch_dtype
                     )
-        # Disable CFG. Even if p_uses_cfg > 0, the randomly drawn cfg_scale is still 1,
-        # so the CFG is effectively disabled.
-        self.cfg_scale_range = [1, 1]
-
-        

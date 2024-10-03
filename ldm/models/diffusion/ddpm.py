@@ -73,8 +73,10 @@ class DDPM(pl.LightningModule):
                  normalize_ca_q_and_outfeat=True,
                  p_unet_distill_iter=0,
                  unet_teacher_types=None,
-                 p_unet_teacher_uses_cfg=0,
-                 unet_teacher_cfg_scale_range=[1.5, 3],
+                 max_num_unet_distill_denoising_steps=5,
+                 p_unet_teacher_uses_cfg=0.6,
+                 unet_teacher_cfg_scale_range=[1.3, 2],
+                 max_num_comp_distill_cls_prep_denoising_steps=6,
                  p_unet_distill_uses_comp_prompt=0.1,
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_dirpaths=None,
@@ -82,7 +84,6 @@ class DDPM(pl.LightningModule):
                  p_gen_id2img_rand_id=0.4,
                  p_perturb_face_id_embs=0.6,
                  perturb_face_id_embs_std_range=[0.5, 1.5],
-                 max_num_denoising_steps=3,
                  extend_prompt2token_proj_attention_multiplier=1,
                  ):
         
@@ -116,6 +117,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_types                     = list(unet_teacher_types) if unet_teacher_types is not None else None
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
+        self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
@@ -127,13 +129,15 @@ class DDPM(pl.LightningModule):
         else:
             self.p_unet_distill_uses_comp_prompt = 0
         self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
-        self.extra_unet_dirpaths                       = extra_unet_dirpaths
+        self.extra_unet_dirpaths                    = extra_unet_dirpaths
         self.unet_weights                           = unet_weights
         
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
-        self.max_num_denoising_steps                = max_num_denoising_steps
+
+        self.max_num_comp_distill_cls_prep_denoising_steps = max_num_comp_distill_cls_prep_denoising_steps
+
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_init_fg_from_training_image_count  = 0
 
@@ -416,8 +420,12 @@ class LatentDiffusion(DDPM):
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
-            self.comp_distill_prep_unet = create_unet_teacher('simple_unet', torch_dtype=torch.float16)
-            self.comp_distill_prep_unet.train = disabled_train
+            self.comp_distill_cls_prep_unet = \
+                create_unet_teacher('simple_unet', 
+                                    p_uses_cfg=1, # Always uses CFG for class prep denoising.
+                                    cfg_scale_range=[2, 4],
+                                    torch_dtype=torch.float16)
+            self.comp_distill_cls_prep_unet.train = disabled_train
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
         # We never train the CLIP text encoder. So disable the training of the CLIP text encoder.
@@ -994,7 +1002,7 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_unet_distill']:
             num_denoising_steps = \
-                sample_num_denoising_steps( self.max_num_denoising_steps, 
+                sample_num_denoising_steps( self.max_num_unet_distill_denoising_steps, 
                                             p_num_denoising_steps    = [0.2, 0.2, 0.3, 0.3], 
                                             cand_num_denoising_steps = [1, 2, 3, 5] )
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
@@ -1345,9 +1353,9 @@ class LatentDiffusion(DDPM):
         fg_mask             = self.iter_flags['fg_mask']
         batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
-
         placeholder2indices = extra_info['placeholder2indices']
         prompt_emb_mask     = extra_info['prompt_emb_mask']
+        
         # all_subj_indices, all_bg_indices are used to extract the attention weights
         # of the subject and background tokens for the attention loss computation.
         # join_dict_of_indices_with_key_filter(): separate the indices of the subject tokens from those of 
@@ -1356,11 +1364,17 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.subject_string_dict)
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.background_string_dict)
-        all_subj_indices_1b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
-                                                                   self.embedding_manager.subject_string_dict)
         if self.iter_flags['do_comp_prompt_distillation']:
-            all_subj_indices_2b = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
-                                                                       self.embedding_manager.subject_string_dict)
+            # all_subj_indices_2b is used in calc_prompt_mix_loss() in calc_comp_prompt_distill_loss().
+            all_subj_indices_2b = \
+                join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
+                                                     self.embedding_manager.subject_string_dict)
+            # all_subj_indices_1b is used to mix cls and subj embeddings in 
+            # prepare_comp_prompt_attn_activations().
+            # It's also used in calc_comp_fg_bg_preserve_loss() in calc_comp_prompt_distill_loss().
+            all_subj_indices_1b = \
+                join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
+                                                     self.embedding_manager.subject_string_dict)
 
         # prompt_emb_mask is used by calc_prompt_emb_delta_loss() to highlight the subject tokens.
         text_prompt_adhoc_info = { 'placeholder2indices':   placeholder2indices,
@@ -1571,9 +1585,9 @@ class LatentDiffusion(DDPM):
         # Compositional iter.
         # In a compositional iter, we don't use the t passed into p_losses().
         # Instead, t is randomly drawn from the middle (noisy but not too noisy) 30% segment of the timesteps.
-        t_tail = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
-                                (x_start.shape[0],), device=x_start.device)
-        t = t_tail
+        t_middle = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
+                                 (x_start.shape[0],), device=x_start.device)
+        t = t_middle
 
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks).
@@ -1636,11 +1650,42 @@ class LatentDiffusion(DDPM):
         cond = (c_prompt_emb_mixed, c_in, extra_info)
         # print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n", c_in)
 
-        num_denoising_steps = \
-            sample_num_denoising_steps( self.max_num_denoising_steps, 
-                                        p_num_denoising_steps    = [0.2, 0.2, 0.3, 0.3], 
-                                        cand_num_denoising_steps = [1, 2, 3, 5] )
-                    
+        # We allow 2 to 6 denoising steps for preparing class instances for comp prompt distillation.
+        num_cls_prep_denoising_steps = \
+            sample_num_denoising_steps( self.max_num_comp_distill_cls_prep_denoising_steps, 
+                                        p_num_denoising_steps    = [0.2, 0.4, 0.4], 
+                                        cand_num_denoising_steps = [2,   4,    6] )
+
+        if num_cls_prep_denoising_steps > 0:
+            # Class prep denoising: Denoise x_start with the class prompts 
+            # for num_cls_prep_denoising_steps times, using self.comp_distill_cls_prep_unet.
+            # We only use the second half-batch (class instances) for class prep denoising.
+            x_start_2 = x_start.chunk(2)[1]
+            noise_2 = noise.chunk(2)[1]
+            t_2 = t.chunk(2)[1]
+            c_prompt_emb_2   = c_prompt_emb_mixed.chunk(2)[1]
+            uncond_emb       = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
+            cls_prep_context = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
+
+            # Since we always use CFG for class prep denoising,
+            # we need to pass the negative prompt as well.
+            # cfg_scale_range=[2, 4].
+            with torch.no_grad():
+                cls_prep_noise_preds, cls_prep_x_starts, cls_prep_noises, all_t = \
+                    self.comp_distill_cls_prep_unet(self, x_start_2, noise_2, t_2, 
+                                                    teacher_context=cls_prep_context, 
+                                                    num_denoising_steps=num_cls_prep_denoising_steps,
+                                                    uses_same_t=True)
+            all_t_list = [ t[0].item() for t in all_t ]
+            print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
+                  f"{num_cls_prep_denoising_steps} class prep denoising steps {all_t_list}")
+            
+            # The last cls_prep_x_start is the final denoised image (with the smallest t).
+            # So we use it as the x_start to be denoised by the 4-type prompt set.
+            # Repeat x_start twice for both the subject and class instances.
+            x_start = cls_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+            del cls_prep_noise_preds, cls_prep_x_starts, cls_prep_noises, all_t
+
         extra_info['capture_ca_layers_activations'] = True
 
         # model_output is not used by the caller.
@@ -1820,7 +1865,8 @@ class LatentDiffusion(DDPM):
 
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
-                self.unet_teacher(self, x_start, noise, t, teacher_contexts, num_denoising_steps=num_denoising_steps)
+                self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
+                                  num_denoising_steps=num_denoising_steps)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
         # targets: replaced as the reconstructed x0 by the teacher UNet.
@@ -1975,11 +2021,11 @@ class LatentDiffusion(DDPM):
             loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
             loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
-                                                    extra_info['ca_layers_activations']['q'],
-                                                    ca_q_bns,
-                                                    extra_info['ca_layers_activations']['attnscore'], 
-                                                    filtered_fg_mask, batch_have_fg_mask,
-                                                    all_subj_indices_1b, BLOCK_SIZE)
+                                                     extra_info['ca_layers_activations']['q'],
+                                                     ca_q_bns,
+                                                     extra_info['ca_layers_activations']['attnscore'], 
+                                                     filtered_fg_mask, batch_have_fg_mask,
+                                                     all_subj_indices_1b, BLOCK_SIZE)
             
             if loss_comp_subj_bg_attn_suppress > 0:
                 loss_dict.update({f'{session_prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })

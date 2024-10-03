@@ -1389,11 +1389,11 @@ def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_r
     # the truncated cand_num_denoising_steps is [1, 2, 3, 5].
     cand_num_denoising_steps = [1, 2, 3, 5, 7]
 '''
-def sample_num_denoising_steps(max_num_denoising_steps, p_num_denoising_steps, cand_num_denoising_steps):
-    # Filter out the candidate denoising steps that exceed the max_num_denoising_steps.
-    # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 2, 3, 5].
+def sample_num_denoising_steps(max_num_unet_distill_denoising_steps, p_num_denoising_steps, cand_num_denoising_steps):
+    # Filter out the candidate denoising steps that exceed the max_num_unet_distill_denoising_steps.
+    # If max_num_unet_distill_denoising_steps = 5, then cand_num_denoising_steps = [1, 2, 3, 5].
     cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
-                                    if si <= max_num_denoising_steps ]
+                                    if si <= max_num_unet_distill_denoising_steps ]
     p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
     p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
 

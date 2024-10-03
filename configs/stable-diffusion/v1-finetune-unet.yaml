@@ -49,8 +49,8 @@ model:
     fg_bg_xlayer_consist_loss_weight: 5e-5
 
     # Finetuning the u-net consumes a huge amount of RAM. Even if we have BS=1,
-    # using optimizers other than Adam8bit and "--max_num_denoising_steps 2" will cause OOM.
-    # It's possible to use Prodigy with "--max_num_denoising_steps 1", but I'm not sure 
+    # using optimizers other than Adam8bit and "--max_num_unet_distill_denoising_steps 2" will cause OOM.
+    # It's possible to use Prodigy with "--max_num_unet_distill_denoising_steps 1", but I'm not sure 
     # how well it works.
     optimizer_type: Adam8bit           # AdamW, Adam8bit, NAdam, Prodigy
     grad_clip:  0.5
