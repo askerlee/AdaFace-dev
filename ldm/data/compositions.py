@@ -164,7 +164,7 @@ def sample_compositions(N, subj_type, is_training=False):
         # Disable another object in the image for non-animal subjects,
         # to avoid the spotlight of the non-animal subject being stolen by the other object.
         if subj_type == 'animal':
-            has_another_obj = np.random.choice([0, 1], p=[0.7, 0.3])
+            has_another_obj = False #np.random.choice([0, 1], p=[0.7, 0.3])
         else:
             has_another_obj = False
 
