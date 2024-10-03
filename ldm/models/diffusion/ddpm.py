@@ -59,7 +59,7 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
-                 cls_subj_mix_scale=1,
+                 cls_subj_mix_scale=0.8,
                  prompt_emb_delta_reg_weight=0.,
                  comp_prompt_distill_weight=1e-4,
                  comp_fg_bg_preserve_loss_weight=0.,
@@ -1437,10 +1437,10 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_normal_recon']:          
             BLOCK_SIZE = x_start.shape[0]
 
-            # Increase t slightly by (1.1, 1.4) to increase noise amount and make the denoising more challenging,
+            # Increase t slightly by (1.3, 1.6) to increase noise amount and make the denoising more challenging,
             # with smaller prob to keep the original t.
-            t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1.1, 1.4), 
-                                  keep_prob_range=(0.3, 0.1))
+            t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1.3, 1.6),
+                                  keep_prob_range=(0.2, 0.1))
             if self.iter_flags['num_denoising_steps'] > 1:
                 # Take a weighted average of t and 1000, to shift t to larger values, 
                 # so that the 2nd-6th denoising steps fall in more reasonable ranges.
