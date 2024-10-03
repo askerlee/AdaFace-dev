@@ -1365,7 +1365,7 @@ class LatentDiffusion(DDPM):
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.background_string_dict)
         if self.iter_flags['do_comp_prompt_distillation']:
-            # all_subj_indices_2b is used in calc_prompt_mix_loss() in calc_comp_prompt_distill_loss().
+            # all_subj_indices_2b is used in calc_feat_attn_delta_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                      self.embedding_manager.subject_string_dict)
@@ -1619,6 +1619,8 @@ class LatentDiffusion(DDPM):
         noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
         t       = t[:BLOCK_SIZE].repeat(4)
 
+        # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
+        masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
         # Update masks to be a 1-repeat-4 structure.
         masks = \
             repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks)
@@ -2079,14 +2081,14 @@ class LatentDiffusion(DDPM):
         # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
         # as it should be more accurate (?).
         # So if loss_comp_fg_bg_preserve is active, then loss_comp_prompt_distill is halved.
-        # all_subj_indices_2b is used in calc_prompt_mix_loss(), as it's used 
+        # all_subj_indices_2b is used in calc_feat_attn_delta_loss(), as it's used 
         # to index subj single and subj comp embeddings.
         # The indices will be shifted along the batch dimension (size doubled) 
-        # within calc_prompt_mix_loss() to index all the 4 blocks.
+        # within calc_feat_attn_delta_loss() to index all the 4 blocks.
         loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
-            = self.calc_prompt_mix_loss(ca_outfeats, ca_outfeat_lns,
-                                        extra_info['ca_layers_activations']['attnscore'], 
-                                        all_subj_indices_2b, BLOCK_SIZE)
+            = self.calc_feat_attn_delta_loss(ca_outfeats, ca_outfeat_lns,
+                                             extra_info['ca_layers_activations']['attnscore'], 
+                                             all_subj_indices_2b, BLOCK_SIZE)
 
         if loss_feat_delta_align > 0:
             loss_dict.update({f'{session_prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
@@ -2110,8 +2112,9 @@ class LatentDiffusion(DDPM):
                                     + loss_feat_delta_align       * feat_delta_align_scale
         
         return loss_comp_prompt_distill, loss_comp_fg_bg_preserve
-                   
-    def calc_prompt_mix_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
+    
+    # calc_feat_attn_delta_loss() is used by calc_comp_prompt_distill_loss().
+    def calc_feat_attn_delta_loss(self, ca_outfeats, ca_outfeat_lns, ca_attnscores, fg_indices_2b, BLOCK_SIZE):
         # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2855,7 +2858,9 @@ class LatentDiffusion(DDPM):
             feat_pool_kernel_size = 4
             feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
-            # calc_comp_fg_bg_preserve_loss() can have higher spatial precision than calc_prompt_mix_loss().
+            # calc_comp_fg_bg_preserve_loss() can have higher spatial precision 
+            # than calc_feat_attn_delta_loss(), but it requires fg_mask, 
+            # which is not always available.
             if do_feat_pooling and ca_outfeat.shape[-1] > 8:
                 pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
             else:
