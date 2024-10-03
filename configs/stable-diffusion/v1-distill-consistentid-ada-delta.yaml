@@ -38,7 +38,6 @@ model:
     # ConsistentID image embeddings are quite robust to random perturbations, so we set
     # a large std range of [0.5, 1.5].
     perturb_face_id_embs_std_range:   [0.5, 1]
-    unet_distill_delta_loss_boost:    1
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:       1e-5
     # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.

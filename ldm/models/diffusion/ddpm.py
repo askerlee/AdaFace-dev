@@ -65,7 +65,6 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  fg_bg_xlayer_consist_loss_weight=0.,
-                 unet_distill_delta_loss_boost=1,
                  enable_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -104,7 +103,6 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        self.unet_distill_delta_loss_boost          = unet_distill_delta_loss_boost
         # mix some of the subject embeddings into the class embeddings for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
         # posing too strong regularizations to the subject embeddings.
@@ -1491,17 +1489,13 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
         elif self.iter_flags['do_unet_distill']:
-            loss_unet_distill, loss_unet_distill_delta = \
+            loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, t, cond, extra_info, 
                                             text_prompt_adhoc_info, img_mask, fg_mask)
 
             v_loss_unet_distill = loss_unet_distill.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
             loss += loss_unet_distill
-
-            if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
-                loss_dict.update({f'{session_prefix}/loss_unet_distill_delta': loss_unet_distill_delta.mean().detach().item()})
-                loss += loss_unet_distill_delta * self.unet_distill_delta_loss_boost
 
         if self.iter_flags['do_prompt_emb_delta_reg']:
             # 'c_prompt_emb_4b' is the prompt embeddings before mixing.
@@ -1910,7 +1904,6 @@ class LatentDiffusion(DDPM):
             self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
             losses_unet_distill = []
-            losses_unet_distill_delta = []
 
         print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
 
@@ -1943,38 +1936,7 @@ class LatentDiffusion(DDPM):
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}",
                   end='')
             
-            # The first ID embedding in the batch is intact,
-            # and the remaining ID embeddings are the first added with noise.
-            # So we can contrast the first instance with the remaining instances,
-            # so as to highlight their differences caused by the noise.
-            # perturb_face_id_embs implies do_unet_distill and (not gen_id2img_rand_id).
-            # Therefore, targets == unet_teacher_noise_preds.
-            # We can set unet_distill_delta_loss_boost = 0 to disable the delta distillation loss.
-            if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
-                # model_output[:1] is actually model_output[0] with shape [1, 4, 64, 64].
-                # NOTE: if perturb_face_id_embs, the noises for different instances are the same.
-                # So we can contrast the first instance with the remaining instances.
-                delta_output    = model_output[1:] - model_output[:1]
-                delta_target    = target[1:]       - target[:1]
-                delta_img_mask  = img_mask[1:] if img_mask is not None else None
-                # NOTE: Is delta_fg_mask really necessary? The delta at the background should be very small.
-                # If bg_pixel_weight = 1, then background pixels have the same weight as foreground pixels,
-                # equivalent to setting delta_fg_mask = None.
-                # If we want to ignore noisy signals in the background due to randomness, 
-                # we can set bg_pixel_weight = 0.1.
-                delta_fg_mask   = fg_mask[1:] if fg_mask is not None else None
-                loss_unet_distill_delta, _ = \
-                    self.calc_recon_loss(delta_output, delta_target.to(delta_output.dtype),
-                                            delta_img_mask, fg_mask=delta_fg_mask, 
-                                            fg_pixel_weight=1, bg_pixel_weight=1)
-                print(f", {loss_unet_distill_delta.item():.4f}")
-                                            
-            else:
-                loss_unet_distill_delta = 0
-                print()
-
             losses_unet_distill.append(loss_unet_distill)
-            losses_unet_distill_delta.append(loss_unet_distill_delta)
 
             # Try hard to release memory after each step. But since they are part of the computation graph,
             # doing so may not have any effect :(
@@ -1985,12 +1947,7 @@ class LatentDiffusion(DDPM):
         # Instead, only increase the normalizer sub-linearly.
         loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
 
-        if self.iter_flags['perturb_face_id_embs'] and self.unet_distill_delta_loss_boost > 0:
-            loss_unet_distill_delta = sum(losses_unet_distill_delta) / np.sqrt(num_denoising_steps)
-        else:
-            loss_unet_distill_delta = torch.tensor(0, device=loss_unet_distill.device)
-
-        return loss_unet_distill, loss_unet_distill_delta
+        return loss_unet_distill
 
     def calc_comp_prompt_distill_loss(self, extra_info, filtered_fg_mask, batch_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
@@ -2097,19 +2054,19 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
 
-        # loss_subj_attn_delta_align_* use L2 losses, 
-        # so no need to use dynamic loss scale.
+        # Seems that loss_subj_attn_delta_align increases as the model gets better. Therefore we reduce 
+        # subj_attn_delta_align_loss_scale from 0.1 to 0.01, to minimize its negative impact.
         # TODO: check if we need to totally disable loss_subj_attn_delta_align, by setting its scale to 0.
-        subj_attn_delta_align_loss_scale = 0.1
-        # loss_feat_delta_align is around 0.5~1.5. loss_subj_attn_delta_align is around 0.3~0.6.
+        subj_attn_delta_align_loss_scale = 0.01
+        # loss_feat_delta_align is around 0.2. loss_subj_attn_delta_align is around 0.4-0.5.
 
         # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
         # So no need to use a dynamic loss scale.
         subj_attn_norm_distill_loss_scale = 1
 
-        loss_comp_prompt_distill =   loss_subj_attn_delta_align    * subj_attn_delta_align_loss_scale \
-                                    + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                    + loss_feat_delta_align       * feat_delta_align_scale
+        loss_comp_prompt_distill =   loss_subj_attn_delta_align  * subj_attn_delta_align_loss_scale \
+                                   + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
+                                   + loss_feat_delta_align       * feat_delta_align_scale
         
         return loss_comp_prompt_distill, loss_comp_fg_bg_preserve
     

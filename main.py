@@ -238,8 +238,6 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--unet_distill_delta_loss_boost", type=float, default=argparse.SUPPRESS,
-                        help="Boost factor for the UNet distillation delta loss (Set to 0 to disable)")
 
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -700,8 +698,6 @@ if __name__ == "__main__":
             config.model.params.p_unet_teacher_uses_cfg         = opt.p_unet_teacher_uses_cfg
         if hasattr(opt, 'unet_teacher_cfg_scale_range'):
             config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
-        if hasattr(opt, 'unet_distill_delta_loss_boost'):
-            config.model.params.unet_distill_delta_loss_boost   = opt.unet_distill_delta_loss_boost
 
         if hasattr(opt, 'extra_unet_dirpaths'):
             config.model.params.extra_unet_dirpaths             = opt.extra_unet_dirpaths
