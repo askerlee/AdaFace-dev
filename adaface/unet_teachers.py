@@ -6,7 +6,7 @@ from adaface.util import UNetEnsemble, create_consistentid_pipeline
 from diffusers import UNet2DConditionModel
 from omegaconf.listconfig import ListConfig
 
-def create_unet_teacher(teacher_type, device, **kwargs):
+def create_unet_teacher(teacher_type, device='cpu', **kwargs):
     # If teacher_type is a list with only one element, we dereference it.
     if isinstance(teacher_type, (tuple, list, ListConfig)) and len(teacher_type) == 1:
         teacher_type = teacher_type[0]
@@ -25,6 +25,8 @@ def create_unet_teacher(teacher_type, device, **kwargs):
         return UNetEnsembleTeacher(device=device, **kwargs)
     elif teacher_type == "consistentID":
         return ConsistentIDTeacher(**kwargs)
+    elif teacher_type == "simple_unet":
+        return SimpleUNetTeacher(**kwargs)
     # Since we've dereferenced the list if it has only one element, 
     # this holding implies the list has more than one element. Therefore it's UNetEnsembleTeacher.
     elif isinstance(teacher_type, (tuple, list, ListConfig)):
@@ -57,13 +59,17 @@ class UNetTeacher(pl.LightningModule):
             if self.uses_cfg:
                 # Randomly sample a cfg_scale from cfg_scale_range.
                 self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
+                if self.cfg_scale == 1:
+                    self.uses_cfg = False
+
+            if self.uses_cfg:
                 print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
             else:
                 self.cfg_scale = 1
-                print("Teacher does not use CFG.")      
+                print("Teacher does not use CFG.")
 
                 # If p_uses_cfg > 0, we always pass both pos_context and neg_context to the teacher.
-                # But the neg_context is only used when self.uses_cfg is True.
+                # But the neg_context is only used when self.uses_cfg is True and cfg_scale > 1.
                 # So we manually split the teacher_context into pos_context and neg_context, and only keep pos_context.
                 if self.name == 'unet_ensemble':
                     teacher_pos_contexts = []
@@ -80,8 +86,11 @@ class UNetTeacher(pl.LightningModule):
                         breakpoint()
                     teacher_context = pos_context      
         else:
-            # Disable CFG. self.cfg_scale will be accessed by the student. 
-            # So we need to make sure it is always set correctly, 
+            # p_uses_cfg = 0. Never use CFG. 
+            # In this case, the student only passes pos_context to the teacher,
+            # so no need to split teacher_context into pos_context and neg_context.
+            # self.cfg_scale will be accessed by the student,
+            # so we need to make sure it is always set correctly, 
             # in case someday we want to switch from CFG to non-CFG during runtime.
             self.cfg_scale = 1
 
@@ -118,7 +127,7 @@ class UNetTeacher(pl.LightningModule):
                 # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
                 noise_pred = self.unet(sample=x_noisy2, timestep=t2, encoder_hidden_states=teacher_context,
                                        return_dict=False)[0]
-                if self.uses_cfg:
+                if self.uses_cfg and self.cfg_scale > 1:
                     pos_noise_pred, neg_noise_pred = torch.chunk(noise_pred, 2, dim=0)
                     noise_pred = pos_noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
 
@@ -159,6 +168,8 @@ class Arc2FaceTeacher(UNetTeacher):
                         #"runwayml/stable-diffusion-v1-5", subfolder="unet"
                         'models/arc2face', subfolder="arc2face", torch_dtype=torch.float16
                     )
+        # Disable CFG. Even if p_uses_cfg > 0, the randomly drawn cfg_scale is still 1,
+        # so the CFG is effectively disabled.       
         self.cfg_scale_range = [1, 1]
 
 class UNetEnsembleTeacher(UNetTeacher):
@@ -182,3 +193,17 @@ class ConsistentIDTeacher(UNetTeacher):
         # Release VAE and text_encoder to save memory. UNet is still needed for denoising 
         # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
         pipe.release_components(["vae", "text_encoder"])
+
+class SimpleUNetTeacher(UNetTeacher):
+    def __init__(self, unet_dirpath='models/ensemble/sd15-unet', 
+                 torch_dtype=torch.float16, **kwargs):
+        super().__init__(**kwargs)
+        self.name = "simple_unet"
+        self.unet = UNet2DConditionModel.from_pretrained(
+                        unet_dirpath, torch_dtype=torch_dtype
+                    )
+        # Disable CFG. Even if p_uses_cfg > 0, the randomly drawn cfg_scale is still 1,
+        # so the CFG is effectively disabled.
+        self.cfg_scale_range = [1, 1]
+
+        

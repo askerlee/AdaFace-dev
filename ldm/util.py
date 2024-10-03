@@ -1380,6 +1380,27 @@ def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_r
 
     return t_annealed
 
+'''
+    Example:
+    # Gradually increase the chance of taking 5 or 7 denoising steps.
+    p_num_denoising_steps    = [0.2, 0.2, 0.3, 0.3]
+    # If p_num_denoising_steps is shorter, cand_num_denoising_steps will be truncated accordingly.
+    # Since there are 4 elements in p_num_denoising_steps, 
+    # the truncated cand_num_denoising_steps is [1, 2, 3, 5].
+    cand_num_denoising_steps = [1, 2, 3, 5, 7]
+'''
+def sample_num_denoising_steps(max_num_denoising_steps, p_num_denoising_steps, cand_num_denoising_steps):
+    # Filter out the candidate denoising steps that exceed the max_num_denoising_steps.
+    # If max_num_denoising_steps = 5, then cand_num_denoising_steps = [1, 2, 3, 5].
+    cand_num_denoising_steps = [ si for si in cand_num_denoising_steps \
+                                    if si <= max_num_denoising_steps ]
+    p_num_denoising_steps = p_num_denoising_steps[:len(cand_num_denoising_steps)]
+    p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
+
+    # num_denoising_steps: 1, 2, 3, 5, among which 3 and 5 are selected with bigger chances.
+    num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+    return num_denoising_steps
+
 def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
     for i, (range_lb, value) in enumerate(ranged_values):
         if i < len(ranged_values) - 1:
