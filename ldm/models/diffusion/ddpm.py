@@ -75,7 +75,7 @@ class DDPM(pl.LightningModule):
                  max_num_unet_distill_denoising_steps=5,
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
-                 max_num_comp_distill_cls_prep_denoising_steps=6,
+                 max_num_comp_distill_init_prep_denoising_steps=6,
                  p_unet_distill_uses_comp_prompt=0.1,
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_dirpaths=None,
@@ -134,7 +134,7 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
 
-        self.max_num_comp_distill_cls_prep_denoising_steps = max_num_comp_distill_cls_prep_denoising_steps
+        self.max_num_comp_distill_init_prep_denoising_steps = max_num_comp_distill_init_prep_denoising_steps
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_init_fg_from_training_image_count  = 0
@@ -418,12 +418,12 @@ class LatentDiffusion(DDPM):
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
-            self.comp_distill_cls_prep_unet = \
+            self.comp_distill_init_prep_unet = \
                 create_unet_teacher('simple_unet', 
                                     p_uses_cfg=1, # Always uses CFG for class prep denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)
-            self.comp_distill_cls_prep_unet.train = disabled_train
+            self.comp_distill_init_prep_unet.train = disabled_train
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
         # We never train the CLIP text encoder. So disable the training of the CLIP text encoder.
@@ -1480,10 +1480,10 @@ class LatentDiffusion(DDPM):
                                 
             loss_fg_bg_contrast, loss_recon = \
                 self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
-                                                    all_subj_indices, all_bg_indices,
-                                                    img_mask, fg_mask, batch_have_fg_mask,
-                                                    bg_pixel_weight,
-                                                    x_start.shape[0], loss_dict, session_prefix)
+                                                   all_subj_indices, all_bg_indices,
+                                                   img_mask, fg_mask, batch_have_fg_mask,
+                                                   bg_pixel_weight,
+                                                   x_start.shape[0], loss_dict, session_prefix)
             loss += loss_recon + loss_fg_bg_contrast
             v_loss_recon = loss_recon.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
@@ -1647,40 +1647,50 @@ class LatentDiffusion(DDPM):
         # print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n", c_in)
 
         # We allow 2 to 6 denoising steps for preparing class instances for comp prompt distillation.
-        num_cls_prep_denoising_steps = \
-            sample_num_denoising_steps( self.max_num_comp_distill_cls_prep_denoising_steps, 
+        num_init_prep_denoising_steps = \
+            sample_num_denoising_steps( self.max_num_comp_distill_init_prep_denoising_steps, 
                                         p_num_denoising_steps    = [0.2, 0.4, 0.4], 
                                         cand_num_denoising_steps = [2,   4,    6] )
 
-        if num_cls_prep_denoising_steps > 0:
+        if num_init_prep_denoising_steps > 0:
             # Class prep denoising: Denoise x_start with the class prompts 
-            # for num_cls_prep_denoising_steps times, using self.comp_distill_cls_prep_unet.
+            # for num_init_prep_denoising_steps times, using self.comp_distill_init_prep_unet.
             # We only use the second half-batch (class instances) for class prep denoising.
             x_start_2 = x_start.chunk(2)[1]
             noise_2 = noise.chunk(2)[1]
             t_2 = t.chunk(2)[1]
-            c_prompt_emb_2   = c_prompt_emb_mixed.chunk(2)[1]
+            c_prompt_emb_1, c_prompt_emb_2   = c_prompt_emb_mixed.chunk(2)
             uncond_emb       = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
-            cls_prep_context = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
+            # *_double_context contains both the positive and negative prompt embeddings.
+            subj_double_context = torch.cat([c_prompt_emb_1, uncond_emb], dim=0)
+            cls_double_context  = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
+
+            # Randomly switch between the subject and class double contexts.
+            if random.random() < 0.5:
+                init_prep_context = subj_double_context
+            else:
+                init_prep_context = cls_double_context
 
             # Since we always use CFG for class prep denoising,
             # we need to pass the negative prompt as well.
             # cfg_scale_range=[2, 4].
             with torch.no_grad():
-                cls_prep_noise_preds, cls_prep_x_starts, cls_prep_noises, all_t = \
-                    self.comp_distill_cls_prep_unet(self, x_start_2, noise_2, t_2, 
-                                                    teacher_context=cls_prep_context, 
-                                                    num_denoising_steps=num_cls_prep_denoising_steps,
-                                                    uses_same_t=True)
+                init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
+                    self.comp_distill_init_prep_unet(self, x_start_2, noise_2, t_2, 
+                                                     teacher_context=init_prep_context, 
+                                                     num_denoising_steps=num_init_prep_denoising_steps,
+                                                     uses_same_t=True)
+                
             all_t_list = [ t[0].item() for t in all_t ]
             print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                  f"{num_cls_prep_denoising_steps} class prep denoising steps {all_t_list}")
+                  f"{num_init_prep_denoising_steps} class prep denoising steps {all_t_list}")
             
-            # The last cls_prep_x_start is the final denoised image (with the smallest t).
+            # The last init_prep_x_start is the final denoised image (with the smallest t).
             # So we use it as the x_start to be denoised by the 4-type prompt set.
-            # Repeat x_start twice for both the subject and class instances.
-            x_start = cls_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-            del cls_prep_noise_preds, cls_prep_x_starts, cls_prep_noises, all_t
+            # We need to let the subject and class instances use the same x_start. 
+            # Therefore, we repeat init_prep_x_starts[-1] twice.
+            x_start = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+            del init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t
 
         extra_info['capture_ca_layers_activations'] = True
 
