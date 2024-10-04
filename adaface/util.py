@@ -158,7 +158,7 @@ class UNetEnsemble(nn.Module):
 
         self.unets = nn.ModuleList()
         if unets is not None:
-            self.unets += unets
+            self.unets += [ unet.to(device) for unet in unets ]
 
         if unet_types is not None:
             for unet_type in unet_types:
@@ -169,7 +169,7 @@ class UNetEnsemble(nn.Module):
                     unet = create_consistentid_pipeline(unet_only=True)
                 else:
                     breakpoint()
-                self.unets.append(unet)
+                self.unets.append(unet.to(device=device))
 
         if extra_unet_dirpaths is not None:
             for unet_path in extra_unet_dirpaths:

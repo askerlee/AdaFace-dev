@@ -171,7 +171,6 @@ class AdaFaceWrapper(nn.Module):
             )
             pipeline.scheduler = noise_scheduler
         # Otherwise, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
-
         self.pipeline = pipeline.to(self.device)
 
     def load_unet_from_file(self, unet_path, device=None):
