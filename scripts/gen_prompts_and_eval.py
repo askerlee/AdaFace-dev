@@ -41,8 +41,8 @@ def parse_args():
     parser.add_argument("--z_suffix_type", type=str, default='', 
                         help="Append this string to the subject placeholder string during inference "
                              "(default: '' for humans/animals, 'class_name' for others)")
-    parser.add_argument("--use_fp_trick_str", type=str, default=None,
-                        help="Whether to use the 'face portrait' trick for the subject")
+    parser.add_argument("--fp_trick_str", type=str, default=None,
+                        help="If specified, add 'face portrait'/'portrait' to the prompt to enhance faces")
     parser.add_argument("--prompt_prefix", type=str, default="",
                         help="prefix to prepend to each prompt")
     # prompt_suffix: usually reduces the similarity.
@@ -76,7 +76,8 @@ def parse_args():
                         help="Dry run: only print the commands without actual execution")
     parser.add_argument("--sep_log", type=str2bool, nargs='?', const=True, default=False,
                         help="Whether to save logs for each subject in different files")
-    
+    parser.add_argument("--gpus", type=str, default="0",
+                        help="GPUs to use for inference")
     args, unknown_args = parser.parse_known_args()
     return args, unknown_args
 
@@ -92,13 +93,13 @@ if __name__ == "__main__":
     for subject_type in ('man', 'woman', 'person'):
         if not hasattr(args, 'n_samples'):
             args.n_samples = 4
-        if args.use_fp_trick_str is None:
+        if args.fp_trick_str is None:
             if args.method == 'adaface':
                 fp_trick_string = "face portrait"
             elif args.method == 'pulid':
                 fp_trick_string = "portrait"
         else:
-            fp_trick_string = args.use_fp_trick_str
+            fp_trick_string = args.fp_trick_str
 
         print(f"Generating samples for {subject_type}: ")
 
@@ -156,7 +157,7 @@ if __name__ == "__main__":
         subjects, subj_types = subj_info['subjects'], subj_info['subj_types']
         subject_indices      = list(range(len(subjects)))
 
-        range_indices = parse_range_str(args.range)
+        range_indices = parse_range_str(args.range, fix_1_offset=True)
         if range_indices is not None:
             subject_indices = [ subject_indices[i] for i in range_indices ]
         else:
@@ -169,7 +170,14 @@ if __name__ == "__main__":
         SCORES_CSV_FILE = open(args.scores_csv, "w")
         SCORES_CSV_FILE.close()
 
-        for subject_idx in subject_indices:
+        if args.sep_log:
+            gpu_indices = parse_range_str(args.gpus, fix_1_offset=False)
+            if len(gpu_indices) < len(subject_indices):
+                print(f"Warning: number of GPUs ({len(gpu_indices)}) is less than the number of subjects ({len(subject_indices)}).")
+                print("Please specify more GPUs or set --sep_log to False.")
+                exit(0)
+
+        for si, subject_idx in enumerate(subject_indices):
             subject_name    = subjects[subject_idx]
             subj_type       = subj_types[subject_idx]
             prompt_filepath = subject_type2file_path[subj_type]
@@ -219,7 +227,9 @@ if __name__ == "__main__":
             # Be careful when running with sep_log, as it returns immediately without waiting for the completion.
             # If we specify a range of multiple subjects, it may run all of them in parallel, causing OOM or slow execution.
             if args.sep_log:
-                command_line = "screen -dmS " + subject_name + " -L -Logfile " + subject_name + ".log " + command_line
+                gpu_idx = gpu_indices[si]
+                command_line = "screen -dmS " + subject_name + " -L -Logfile " + subject_name + ".log " + command_line + f" --gpu {gpu_idx}"
+
             print(command_line)
             if not args.dryrun:
                 os.system(command_line)

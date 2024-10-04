@@ -401,7 +401,7 @@ def find_first_match(lst, search_term, extra_sig=""):
 # if fix_1_offset: range_str "3-7,8,10" => [2, 3, 4, 5, 6, 7, 9]
 # else:            range_str "3-7,8,10" => [3, 4, 5, 6, 7, 8, 10]
 # "a-b" is always inclusive, i.e., "a-b" = [a, a+1, ..., b]
-def parse_range_str(range_str, fix_1_offset=True):
+def parse_range_str(range_str, fix_1_offset=False):
     if range_str is None:
         return None
     
