@@ -20,7 +20,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        probably_anneal_t, sample_num_denoising_steps, count_optimized_params, count_params
+                        probably_anneal_t, count_optimized_params, count_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -827,9 +827,9 @@ class LatentDiffusion(DDPM):
             CLS_PROMPT_COMP    = 'cls_prompt_comp'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single'
 
-        # In 50% of the use_fp_trick iterations, we replace "face portrait" with "portrait",
-        # to reduce the model's reliance on the magic words "face portrait".
-        if self.iter_flags['use_fp_trick'] and random.random() < 0.5:
+        # In do_comp_prompt_distillation iterations, we replace "face portrait" with "portrait",
+        # so that the face area tends to be smaller under compositional prompts.
+        if self.iter_flags['use_fp_trick'] and self.iter_flags['do_comp_prompt_distillation']:
             for prompt_set_name in [SUBJ_PROMPT_SINGLE, SUBJ_PROMPT_COMP, CLS_PROMPT_SINGLE, CLS_PROMPT_COMP]:
                 prompt_set = batch[prompt_set_name]
                 prompt_set = [ prompt.replace("face portrait", "portrait") for prompt in prompt_set ]
