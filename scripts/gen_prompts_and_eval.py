@@ -74,7 +74,9 @@ def parse_args():
                         choices=["adaface", "pulid"])    
     parser.add_argument("--dryrun", action="store_true",
                         help="Dry run: only print the commands without actual execution")
-
+    parser.add_argument("--sep_log", type=str2bool, nargs='?', const=True, default=False,
+                        help="Whether to save logs for each subject in different files")
+    
     args, unknown_args = parser.parse_known_args()
     return args, unknown_args
 
@@ -214,6 +216,10 @@ if __name__ == "__main__":
             # Append all unknown args.
             command_line += " " + " ".join(unknown_args)
 
+            # Be careful when running with sep_log, as it returns immediately without waiting for the completion.
+            # If we specify a range of multiple subjects, it may run all of them in parallel, causing OOM or slow execution.
+            if args.sep_log:
+                command_line = "screen -dmS " + subject_name + " -L -Logfile " + subject_name + ".log " + command_line
             print(command_line)
             if not args.dryrun:
                 os.system(command_line)

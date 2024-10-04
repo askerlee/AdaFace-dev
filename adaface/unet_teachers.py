@@ -186,7 +186,7 @@ class Arc2FaceTeacher(UNetTeacher):
 
 class UNetEnsembleTeacher(UNetTeacher):
     # unet_weights are not model weights, but scalar weights for individual unets.
-    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights, device, **kwargs):
+    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights=None, device='cuda', **kwargs):
         super().__init__(**kwargs)
         self.name = "unet_ensemble"
         self.unet = UNetEnsemble(unets, unet_types, extra_unet_dirpaths, unet_weights, device)

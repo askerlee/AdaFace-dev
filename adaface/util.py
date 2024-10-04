@@ -188,9 +188,10 @@ class UNetEnsemble(nn.Module):
         self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)
 
         print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights.data.cpu().numpy()}")
-        self.dtype  = unet.dtype
-        self.device = unet.device
-        self.config = unet.config
+        # Set these fields to be compatible with diffusers.
+        self.dtype  = self.unets[0].dtype
+        self.device = self.unets[0].device
+        self.config = self.unets[0].config
 
     def forward(self, *args, **kwargs):
         return_dict = kwargs.get('return_dict', True)

@@ -10,6 +10,7 @@ from ldm.modules.lr_scheduler import SequentialLR2
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
+from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_ref_cosine_loss, \
@@ -106,7 +107,7 @@ class DDPM(pl.LightningModule):
         # mix some of the subject embeddings into the class embeddings for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
         # posing too strong regularizations to the subject embeddings.
-        self.cls_subj_mix_scale                     = cls_subj_mix_scale
+        # self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
@@ -415,11 +416,16 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
+            unet = UNet2DConditionModel.from_pretrained('models/ensemble/sd15-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
             self.comp_distill_init_prep_unet = \
-                create_unet_teacher('simple_unet', 
+                create_unet_teacher('unet_ensemble', 
+                                    # A trick to avoid creating multiple UNet instances.
+                                    unets = [unet, unet],
+                                    unet_types=None,
+                                    extra_unet_dirpaths=None,
                                     p_uses_cfg=1, # Always uses CFG for class prep denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)
@@ -1416,8 +1422,10 @@ class LatentDiffusion(DDPM):
             # If using comp context to do init prep, then the color is purple.
             if init_prep_context_type == 'subj':
                 log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device)
-            else:
+            elif init_prep_context_type == 'cls':
                 log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
+            elif init_prep_context_type == 'ensemble':
+                log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
 
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
@@ -1635,8 +1643,8 @@ class LatentDiffusion(DDPM):
         # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
         # so subj indices of the second-half batch are the repetitions of the 
         # original extra_info['placeholder2indices_1b'].
-        c_prompt_emb_mixed = mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
-                                                     cls_subj_mix_scale=self.cls_subj_mix_scale)
+        #c_prompt_emb_mixed = mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
+        #                                             cls_subj_mix_scale=self.cls_subj_mix_scale)
         
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1648,7 +1656,7 @@ class LatentDiffusion(DDPM):
         extra_info['img_mask']  = None
 
         # Update cond[0] to c_prompt_emb_mixed, to prepare for future reference.
-        cond = (c_prompt_emb_mixed, c_in, extra_info)
+        # cond = (c_prompt_emb, c_in, extra_info)
         # print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n", c_in)
 
         # We allow 2 to 6 denoising steps for preparing class instances for comp prompt distillation.
@@ -1664,12 +1672,14 @@ class LatentDiffusion(DDPM):
             x_start_2 = x_start.chunk(2)[1]
             noise_2 = noise.chunk(2)[1]
             t_2 = t.chunk(2)[1]
-            c_prompt_emb_1, c_prompt_emb_2   = c_prompt_emb_mixed.chunk(2)
+            c_prompt_emb_1, c_prompt_emb_2   = c_prompt_emb.chunk(2)
             uncond_emb       = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
             # *_double_context contains both the positive and negative prompt embeddings.
             subj_double_context = torch.cat([c_prompt_emb_1, uncond_emb], dim=0)
             cls_double_context  = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
-
+            init_prep_context_type = 'ensemble'
+            
+            '''
             # Randomly switch between the subject and class double contexts.
             if random.random() < 0.5:
                 init_prep_context = subj_double_context
@@ -1677,6 +1687,7 @@ class LatentDiffusion(DDPM):
             else:
                 init_prep_context = cls_double_context
                 init_prep_context_type = 'cls'
+            '''
 
             # Since we always use CFG for class prep denoising,
             # we need to pass the negative prompt as well.
@@ -1684,13 +1695,15 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
                     self.comp_distill_init_prep_unet(self, x_start_2, noise_2, t_2, 
-                                                     teacher_context=init_prep_context, 
+                                                     # The unet ensemble will do denoising with both subj_double_context
+                                                     # and cls_double_context, and average the results.
+                                                     teacher_context=[subj_double_context, cls_double_context], 
                                                      num_denoising_steps=num_init_prep_denoising_steps,
                                                      uses_same_t=True)
                 
             all_t_list = [ t[0].item() for t in all_t ]
             print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                  f"{num_init_prep_denoising_steps} class prep denoising steps {all_t_list}")
+                  f"{num_init_prep_denoising_steps} subj-cls ensemble prep denoising steps {all_t_list}")
             
             # The last init_prep_x_start is the final denoised image (with the smallest t).
             # So we use it as the x_start to be denoised by the 4-type prompt set.
