@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         init_x_with_fg_from_training_image, resize_mask_for_feat_or_attn, convert_attn_to_spatial_weight, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
-                        double_token_indices, merge_cls_token_embeddings, mix_cls_subj_embeddings, anneal_perturb_embedding, \
+                        double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
                         probably_anneal_t, sample_num_denoising_steps, count_optimized_params, count_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
@@ -104,10 +104,10 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
-        # mix some of the subject embeddings into the class embeddings for faster convergence.
-        # Otherwise, the class embeddings are too far from subject embeddings (as the init words are only "person"), 
-        # posing too strong regularizations to the subject embeddings.
-        # self.cls_subj_mix_scale                     = cls_subj_mix_scale
+        # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
+        # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
+        # posing too large losses to the subject embeddings.
+        self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
@@ -416,7 +416,8 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
-            unet = UNet2DConditionModel.from_pretrained('models/ensemble/sd15-unet', torch_dtype=torch.float16)
+            # Use RealisticVision unet to prepare x_start for compositional distillation, since it's more compositional.
+            unet = UNet2DConditionModel.from_pretrained('models/ensemble/rv4-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
@@ -426,7 +427,11 @@ class LatentDiffusion(DDPM):
                                     unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
-                                    p_uses_cfg=1, # Always uses CFG for class prep denoising.
+                                    # When aggregating the results of using subject embeddings vs. class embeddings,
+                                    # we give more weights to the class embeddings for better compositionality.
+                                    # NOTE: subject embeddings first, then class embeddings.
+                                    unet_weights = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
+                                    p_uses_cfg=1, # Always uses CFG for init prep denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)
             self.comp_distill_init_prep_unet.train = disabled_train
