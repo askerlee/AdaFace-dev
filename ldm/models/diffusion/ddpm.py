@@ -20,7 +20,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        probably_anneal_t, sample_num_denoising_steps, count_optimized_params, count_params
+                        probably_anneal_t, count_optimized_params, count_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -827,9 +827,9 @@ class LatentDiffusion(DDPM):
             CLS_PROMPT_COMP    = 'cls_prompt_comp'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single'
 
-        # In 50% of the use_fp_trick iterations, we replace "face portrait" with "portrait",
-        # to reduce the model's reliance on the magic words "face portrait".
-        if self.iter_flags['use_fp_trick'] and random.random() < 0.5:
+        # In do_comp_prompt_distillation iterations, we replace "face portrait" with "portrait",
+        # so that the face area tends to be smaller under compositional prompts.
+        if self.iter_flags['use_fp_trick'] and self.iter_flags['do_comp_prompt_distillation']:
             for prompt_set_name in [SUBJ_PROMPT_SINGLE, SUBJ_PROMPT_COMP, CLS_PROMPT_SINGLE, CLS_PROMPT_COMP]:
                 prompt_set = batch[prompt_set_name]
                 prompt_set = [ prompt.replace("face portrait", "portrait") for prompt in prompt_set ]
@@ -1010,10 +1010,11 @@ class LatentDiffusion(DDPM):
                                          keep_norm=True, verbose=True)
 
         if self.iter_flags['do_unet_distill']:
-            num_denoising_steps = \
-                sample_num_denoising_steps( self.max_num_unet_distill_denoising_steps, 
-                                            p_num_denoising_steps    = [0.2, 0.2, 0.3, 0.3], 
-                                            cand_num_denoising_steps = [1, 2, 3, 5] )
+            # Iterate among 1 ~ 5. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
+            # which would be faster for synchronization.
+            # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
+            # Otherwise, some values, e.g., 0 and 3, will never be chosen.
+            num_denoising_steps = self.global_step % 5 + 1
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
@@ -1557,7 +1558,7 @@ class LatentDiffusion(DDPM):
         ###### begin of do_comp_prompt_distillation ######
         if self.iter_flags['do_comp_prompt_distillation']:
             loss_comp_prompt_distill, loss_comp_fg_bg_preserve = \
-                self.calc_comp_prompt_distill_loss(extra_info, filtered_fg_mask, batch_have_fg_mask, 
+                self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, batch_have_fg_mask, 
                                                    all_subj_indices_1b, all_subj_indices_2b, 
                                                    BLOCK_SIZE, loss_dict, session_prefix)
             
@@ -1571,8 +1572,9 @@ class LatentDiffusion(DDPM):
                 comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.global_step + 1)
                 loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
 
-            # comp_fg_bg_preserve_loss_weight: 1e-3
+            # comp_fg_bg_preserve_loss_weight: 1e-3. loss_comp_fg_bg_preserve: 0.5-0.6.
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
+            # comp_prompt_distill_weight: 1e-3. loss_comp_prompt_distill: 2-3.
             loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
 
         if torch.isnan(loss):
@@ -1665,10 +1667,19 @@ class LatentDiffusion(DDPM):
         # print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n", c_in)
 
         # We allow 2 to 6 denoising steps for preparing class instances for comp prompt distillation.
+        '''
         num_init_prep_denoising_steps = \
             sample_num_denoising_steps( self.max_num_comp_distill_init_prep_denoising_steps, 
-                                        p_num_denoising_steps    = [0.3, 0.35, 0.35], 
-                                        cand_num_denoising_steps = [3,   4,   5] )
+                                        p_num_denoising_steps    = [0.1, 0.3, 0.3, 0.3], 
+                                        cand_num_denoising_steps = [1,   2,   3,   4] )
+        '''
+        
+        # num_init_prep_denoising_steps iterates from 1 to 5.
+        # Note 5 is co-prime with comp_distill_iter_gap == 3 or 4.
+        # Therefore, this will be a uniform distribution of 1 to 5.
+        # Otherwise say, if num_denoising_steps == self.global_step % 6, then since for comp_distill_iterations,
+        # the global_step is always a multiple of 3, then num_denoising_steps will always be 0 or 3, which is not desired.
+        num_init_prep_denoising_steps = self.global_step % 5 + 1
 
         if num_init_prep_denoising_steps > 0:
             # Class prep denoising: Denoise x_start with the class prompts 
@@ -1938,9 +1949,8 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * 2
             self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
-            losses_unet_distill = []
-
         print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
+        losses_unet_distill = []
 
         for s in range(len(model_outputs)):
             try:
@@ -1984,13 +1994,13 @@ class LatentDiffusion(DDPM):
 
         return loss_unet_distill
 
-    def calc_comp_prompt_distill_loss(self, extra_info, filtered_fg_mask, batch_have_fg_mask,
+    def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, batch_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
         # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
         # It contains the 12 specified cross-attention layers of UNet.
         # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
         # Similar are ca_attns and ca_attnscores.
-        ca_outfeats  = extra_info['ca_layers_activations']['outfeat']
+        ca_outfeats  = ca_layers_activations['outfeat']
 
         # NOTE: loss_comp_fg_bg_preserve is applied only when this 
         # iteration is teachable, because at such iterations the unet gradient is enabled.
@@ -2015,9 +2025,9 @@ class LatentDiffusion(DDPM):
             loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
             loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
-                                                     extra_info['ca_layers_activations']['q'],
+                                                     ca_layers_activations['q'],
                                                      ca_q_bns,
-                                                     extra_info['ca_layers_activations']['attnscore'], 
+                                                     ca_layers_activations['attnscore'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE)
             
@@ -2079,7 +2089,7 @@ class LatentDiffusion(DDPM):
         # within calc_feat_attn_delta_loss() to index all the 4 blocks.
         loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
             = self.calc_feat_attn_delta_loss(ca_outfeats, ca_outfeat_lns,
-                                             extra_info['ca_layers_activations']['attnscore'], 
+                                             ca_layers_activations['attnscore'], 
                                              all_subj_indices_2b, BLOCK_SIZE)
 
         if loss_feat_delta_align > 0:
