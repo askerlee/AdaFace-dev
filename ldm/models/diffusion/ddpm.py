@@ -827,13 +827,6 @@ class LatentDiffusion(DDPM):
             CLS_PROMPT_COMP    = 'cls_prompt_comp'
             CLS_PROMPT_SINGLE  = 'cls_prompt_single'
 
-        # In do_comp_prompt_distillation iterations, we replace "face portrait" with "portrait",
-        # so that the face area tends to be smaller under compositional prompts.
-        if self.iter_flags['use_fp_trick'] and self.iter_flags['do_comp_prompt_distillation']:
-            for prompt_set_name in [SUBJ_PROMPT_SINGLE, SUBJ_PROMPT_COMP, CLS_PROMPT_SINGLE, CLS_PROMPT_COMP]:
-                prompt_set = batch[prompt_set_name]
-                prompt_set = [ prompt.replace("face portrait", "portrait") for prompt in prompt_set ]
-
         captions = subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
         cls_single_prompts  = batch[CLS_PROMPT_SINGLE]
         subj_comp_prompts   = batch[SUBJ_PROMPT_COMP]
@@ -1379,9 +1372,7 @@ class LatentDiffusion(DDPM):
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                      self.embedding_manager.subject_string_dict)
-            # all_subj_indices_1b is used to mix cls and subj embeddings in 
-            # prepare_comp_prompt_attn_activations().
-            # It's also used in calc_comp_fg_bg_preserve_loss() in calc_comp_prompt_distill_loss().
+            # all_subj_indices_1b is used in calc_comp_fg_bg_preserve_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_1b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
                                                      self.embedding_manager.subject_string_dict)
@@ -1399,16 +1390,15 @@ class LatentDiffusion(DDPM):
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
             masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
-            # noise and masks are updated to be a 1-repeat-4 structure in prepare_comp_prompt_attn_activations().
+            # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
             # We return noise to make the gt_target up-to-date, which is the recon objective.
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_comp_prompt_distillation. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             x_recon, noise, masks, init_prep_context_type = \
-                self.prepare_comp_prompt_attn_activations(cond, x_start, noise, text_prompt_adhoc_info,
-                                                          masks, all_subj_indices_1b,
-                                                          fg_noise_anneal_mean_range=(0.3, 0.3),
-                                                          BLOCK_SIZE=BLOCK_SIZE)
+                self.do_comp_prompt_denoising(cond, x_start, noise, text_prompt_adhoc_info,
+                                              masks, fg_noise_anneal_mean_range=(0.3, 0.3),
+                                              BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
 
@@ -1590,10 +1580,9 @@ class LatentDiffusion(DDPM):
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
-    def prepare_comp_prompt_attn_activations(self, cond, x_start, noise, text_prompt_adhoc_info,
-                                             masks, all_subj_indices_1b, 
-                                             fg_noise_anneal_mean_range=(0.3, 0.3),
-                                             BLOCK_SIZE=1):
+    def do_comp_prompt_denoising(self, cond, x_start, noise, text_prompt_adhoc_info,
+                                 masks, fg_noise_anneal_mean_range=(0.3, 0.3),
+                                 BLOCK_SIZE=1):
         c_prompt_emb, c_in, extra_info = cond
 
         # Compositional iter.
@@ -1737,15 +1726,13 @@ class LatentDiffusion(DDPM):
                                 unet_has_grad='subject-half', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is enabled only when do_comp_prompt_distillation.
-                                # This is to cache the denoised images as future initialization.
+                                # This is to log the denoised images for debugging and visualization.
                                 do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
-                                # CFG is for classifier-free guidance to denoise x_start or x_recon 
-                                # that are to be saved for inspection.
                                 cfg_scale=5)
 
         extra_info['capture_ca_layers_activations'] = False
 
-        # noise and masks are updated to be a 1-repeat-4 structure in prepare_comp_prompt_attn_activations().
+        # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_prompt_distillation. We update it just in case.
