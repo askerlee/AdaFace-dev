@@ -112,7 +112,7 @@ class AdaFaceWrapper(nn.Module):
         
         if self.base_model_path is None:
             base_model_path_dict = { 
-                'text2img':  'runwayml/stable-diffusion-v1-5',
+                'text2img':  'models/ensemble/sd15-dste8-vae.safetensors',
                 'text2img3': 'stabilityai/stable-diffusion-3-medium-diffusers',
                 'flux':      'black-forest-labs/FLUX.1-schnell',
             }

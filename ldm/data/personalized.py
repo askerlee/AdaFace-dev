@@ -677,9 +677,10 @@ class PersonalizedBase(Dataset):
         comp_prompt_tmpl    = template + " " + composition_partial
 
         # "face portrait" trick for humans/animals.
-        fp_prompt_template      = "a face portrait of a {}"
-        single_fp_prompt_tmpl   = fp_prompt_template
-        comp_fp_prompt_tmpl     = single_fp_prompt_tmpl + " " + composition_partial
+        # Note in comp_prompt_tmpl, "face portrait" is replaced by "a portrait",
+        # to avoid the face being too dominant in the image.
+        single_fp_prompt_tmpl   = "face portrait of a {}"
+        comp_fp_prompt_tmpl     = "a portrait of a {}" + " " + composition_partial
 
         example["subj_prompt_single"]   = single_prompt_tmpl.format(subject_string)
         example["cls_prompt_single"]    = single_prompt_tmpl.format( cls_delta_string)
