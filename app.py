@@ -152,20 +152,20 @@ with gr.Blocks(css=css) as demo:
 
             prompt = gr.Dropdown(label="Prompt",
                        info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
-                       value=None,
+                       value="portrait, ((best quality)), ((masterpiece)), ((realistic)), highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
                        allow_custom_value=True,
                        filterable=False,
                        choices=[
-                            "((best quality)), ((masterpiece)), ((realistic)), highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
-                            "walking on the beach, sunset, orange sky",
-                            "in a white apron and chef hat, garnishing a gourmet dish",
-                            "dancing pose among folks in a park, waving hands",
-                            "in iron man costume, the sky ablaze with hues of orange and purple",
-                            "jedi wielding a lightsaber, star wars, eye level shot",
-                            "playing guitar on a boat, ocean waves",
-                            "with a passion for reading, curled up with a book in a cozy nook near a window",
-                            "running pose in a park, eye level shot",
-                            "in superman costume, the sky ablaze with hues of orange and purple"
+                            "portrait, ((best quality)), ((masterpiece)), ((realistic)), highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
+                            "portrait, walking on the beach, sunset, orange sky",
+                            "portrait, in a white apron and chef hat, garnishing a gourmet dish",
+                            "portrait, dancing pose among folks in a park, waving hands",
+                            "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
+                            "portrait, jedi wielding a lightsaber, star wars, eye level shot",
+                            "portrait, playing guitar on a boat, ocean waves",
+                            "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
+                            "portrait, running pose in a park, eye level shot",
+                            "portrait, in superman costume, the sky ablaze with hues of orange and purple"
                        ])
             
             enhance_face = gr.Checkbox(label="Enhance face", value=True, info="Enhance the face features by prepending 'face portrait' to the prompt")
