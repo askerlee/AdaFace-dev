@@ -16,9 +16,6 @@ from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import numpy as np
 import sys
-# Monkey patch the missing ldm module in the old arc2face adaface checkpoint.
-sys.modules['ldm'] = sys.modules['adaface']
-sys.modules['ldm.modules'] = sys.modules['adaface']
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
