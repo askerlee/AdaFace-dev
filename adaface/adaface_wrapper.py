@@ -5,7 +5,7 @@ from diffusers import (
     StableDiffusionPipeline,
     StableDiffusionImg2ImgPipeline,
     StableDiffusion3Pipeline,
-    FluxPipeline,
+    #FluxPipeline,
     DDIMScheduler,
     AutoencoderKL,
 )
@@ -15,7 +15,6 @@ from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import numpy as np
-import sys
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
@@ -98,8 +97,8 @@ class AdaFaceWrapper(nn.Module):
             PipelineClass = StableDiffusionPipeline
         elif self.pipeline_name == "text2img3":
             PipelineClass = StableDiffusion3Pipeline
-        elif self.pipeline_name == "flux":
-            PipelineClass = FluxPipeline
+        #elif self.pipeline_name == "flux":
+        #    PipelineClass = FluxPipeline
         # pipeline_name is None means only use this instance to generate adaface embeddings, not to generate images.
         elif self.pipeline_name is None:
             PipelineClass = StableDiffusionPipeline
@@ -351,7 +350,7 @@ class AdaFaceWrapper(nn.Module):
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, negative_prompt=None, guidance_scale=4.0, 
+    def forward(self, noise, prompt, negative_prompt=None, guidance_scale=6.0, 
                 out_image_count=4, ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
 

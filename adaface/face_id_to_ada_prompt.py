@@ -30,8 +30,8 @@ def create_id2ada_prompt_encoder(adaface_encoder_types, adaface_ckpt_paths=None,
         elif adaface_encoder_type == 'consistentID':
             id2ada_prompt_encoder = \
                 ConsistentID_ID2AdaPrompt(pipe=None,
-                                        adaface_ckpt_path=adaface_ckpt_path, 
-                                        *args, **kwargs)
+                                          adaface_ckpt_path=adaface_ckpt_path, 
+                                          *args, **kwargs)
     else:
         id2ada_prompt_encoder = Joint_FaceID2AdaPrompt(adaface_encoder_types, adaface_ckpt_paths, 
                                                        adaface_encoder_cfg_scales, enabled_encoders,

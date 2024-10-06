@@ -19,7 +19,7 @@ nvidia-tensorrt
 safetensors
 wandb
 gradio
-diffusers>=0.30.0
+diffusers==0.29.2
 webdataset
 bitsandbytes
 prodigyopt
