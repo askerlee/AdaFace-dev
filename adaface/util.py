@@ -223,7 +223,7 @@ class UNetEnsemble(nn.Module):
         else:
             return UNet2DConditionOutput(sample=sample)
 
-def create_consistentid_pipeline(base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
+def create_consistentid_pipeline(base_model_path="models/sd15-dste8-vae.safetensors", 
                                  dtype=torch.float16, unet_only=False):
     pipe = ConsistentIDPipeline.from_single_file(
         base_model_path, 

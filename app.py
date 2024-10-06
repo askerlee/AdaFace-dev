@@ -20,7 +20,7 @@ parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", defau
                     help="Scales for the ID2Ada prompt encoders")
 parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     help="List of enabled encoders (among the list of adaface_encoder_types)")
-parser.add_argument('--base_model_path', type=str, default='models/ensemble/sd15-dste8-vae.safetensors')
+parser.add_argument('--base_model_path', type=str, default='models/sd15-dste8-vae.safetensors')
 parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=['models/ensemble/rv4-unet', 
                                                                            'models/ensemble/ar18-unet'], 
                     help="Extra paths to the checkpoints of the UNet models")

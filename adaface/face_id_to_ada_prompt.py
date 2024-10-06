@@ -661,7 +661,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     
 # ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
-    def __init__(self, pipe=None, base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
+    def __init__(self, pipe=None, base_model_path="models/sd15-dste8-vae.safetensors", 
                  *args, **kwargs):
         self.name = 'consistentID'
         self.num_id_vecs = 4
@@ -672,12 +672,10 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             # are not used and will be released soon.
             # Only the consistentID modules and bise_net are used.
             assert base_model_path is not None, "base_model_path should be provided."
-            pipe = ConsistentIDPipeline.from_single_file(
-                base_model_path, 
-                torch_dtype=self.dtype
-            )
+            pipe = ConsistentIDPipeline.from_single_file(base_model_path)
             pipe.load_ConsistentID_model(consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
                                          bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth")
+            pipe.to(dtype=self.dtype)
             # Since the passed-in pipe is None, this should be called during inference,
             # when the teacher ConsistentIDPipeline is not initialized. 
             # Therefore, we release VAE, UNet and text_encoder to save memory.

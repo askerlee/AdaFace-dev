@@ -70,7 +70,7 @@ faceid_embeds = faceid_embeds.mean(dim=1, keepdim=True)
 #faceid_embeds = F.normalize(faceid_embeds, p=2, dim=-1)
 n_cond = faceid_embeds.shape[1]
 
-base_model_path = "models/ensemble/sd15-dste8-vae.safetensors" #"SG161222/Realistic_Vision_V4.0_noVAE"
+base_model_path = "models/sd15-dste8-vae.safetensors" #"SG161222/Realistic_Vision_V4.0_noVAE"
 vae_model_path = "stabilityai/sd-vae-ft-mse"
 ip_ckpt = "models/ip-adapter/ip-adapter-faceid-portrait_sd15.bin"
 device = "cuda"

@@ -16,7 +16,7 @@ _expand_mask = AttentionMaskConverter._expand_mask
 
 from .util import perturb_tensor
 
-def create_arc2face_pipeline(base_model_path="models/ensemble/sd15-dste8-vae.safetensors", 
+def create_arc2face_pipeline(base_model_path="models/sd15-dste8-vae.safetensors", 
                              dtype=torch.float16, unet_only=False):
     unet = UNet2DConditionModel.from_pretrained(
         'models/arc2face', subfolder="arc2face", torch_dtype=dtype

@@ -192,7 +192,7 @@ class UNetEnsembleTeacher(UNetTeacher):
         self.unet = UNetEnsemble(unets, unet_types, extra_unet_dirpaths, unet_weights, device)
 
 class ConsistentIDTeacher(UNetTeacher):
-    def __init__(self, base_model_path="models/ensemble/sd15-dste8-vae.safetensors", **kwargs):
+    def __init__(self, base_model_path="models/sd15-dste8-vae.safetensors", **kwargs):
         super().__init__(**kwargs)
         self.name = "consistentID"
         ### Load base model
