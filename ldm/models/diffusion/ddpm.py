@@ -764,7 +764,7 @@ class LatentDiffusion(DDPM):
         else:
             p_use_fp_trick = 0
 
-        self.iter_flags['use_fp_trick'] = random.random() < p_use_fp_trick
+        self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
         if self.iter_flags['do_comp_prompt_distillation'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # If do_comp_prompt_distillation, comp_init_fg_from_training_image is always enabled.
@@ -775,7 +775,7 @@ class LatentDiffusion(DDPM):
             p_comp_init_fg_from_training_image = 0
 
         self.iter_flags['comp_init_fg_from_training_image'] \
-            = random.random() < p_comp_init_fg_from_training_image
+            = (torch.rand(1) < p_comp_init_fg_from_training_image).item()
         
         if self.iter_flags['do_unet_distill']:
             # If do_unet_distill, then only use the background tokens in a small percentage of the iterations.
@@ -798,7 +798,7 @@ class LatentDiffusion(DDPM):
         # enable_background_token is True, as long as background token is specified in 
         # the command line of train.py.
         self.iter_flags['use_background_token'] = self.enable_background_token \
-                                                    and random.random() < p_use_background_token
+                                                    and (torch.rand(1) < p_use_background_token).item()
 
         # ** use_fp_trick is only for compositional iterations. **
         if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
@@ -873,7 +873,7 @@ class LatentDiffusion(DDPM):
         # do_unet_distill and random() < p_unet_distill_iter.
         # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
         # 0.1 if distilling on jointIDs.
-        if self.iter_flags['do_unet_distill'] and random.random() < self.p_gen_id2img_rand_id:
+        if self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_gen_id2img_rand_id).item():
             self.iter_flags['gen_id2img_rand_id'] = True
             self.batch_subject_names = [ "rand_id_to_img_prompt" ] * len(batch['subject_name'])
         else:
@@ -963,7 +963,7 @@ class LatentDiffusion(DDPM):
         p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
         # p_perturb_face_id_embs: default 0.6.
         # The overall prob of perturb_face_id_embs: (1 - 0.5) * 0.6 = 0.3.
-        self.iter_flags['perturb_face_id_embs'] = random.random() < p_perturb_face_id_embs
+        self.iter_flags['perturb_face_id_embs'] = (torch.rand(1) < p_perturb_face_id_embs).item()
         if self.iter_flags['perturb_face_id_embs']:
             if not self.iter_flags['same_subject_in_batch']:
                 self.iter_flags['same_subject_in_batch'] = True
@@ -1016,7 +1016,7 @@ class LatentDiffusion(DDPM):
             # never use the compositional prompts as the distillation target of arc2face.
             # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
-            if random.random() < self.p_unet_distill_uses_comp_prompt:
+            if (torch.rand(1) < self.p_unet_distill_uses_comp_prompt).item():
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
                 captions = batch[SUBJ_PROMPT_COMP]
 
@@ -1687,7 +1687,7 @@ class LatentDiffusion(DDPM):
             
             '''
             # Randomly switch between the subject and class double contexts.
-            if random.random() < 0.5:
+            if (torch.rand(1) < 0.5).item():
                 init_prep_context = subj_double_context
                 init_prep_context_type = 'subj'
             else:
@@ -2055,7 +2055,7 @@ class LatentDiffusion(DDPM):
         feat_delta_align_scale = 0.5
         if self.normalize_ca_q_and_outfeat:
             # Normalize ca_outfeat at 50% chance.
-            normalize_ca_outfeat = random.random() < 0.5
+            normalize_ca_outfeat = (torch.rand(1) < 0.5).item()
         else:
             normalize_ca_outfeat = False
 

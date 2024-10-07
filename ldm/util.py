@@ -1320,7 +1320,7 @@ def rand_annealed(training_percent, final_percent, mean_range,
     rand_lb = max(mean_annealed * fluct_range[0], legal_range[0])
     rand_ub = min(mean_annealed * fluct_range[1], legal_range[1])
     
-    return np.random.uniform(rand_lb, rand_ub)
+    return torch.rand(1) * (rand_ub - rand_lb) + rand_lb
 
 def torch_uniform(low, high, size, device=None):
     return torch.rand(size, device=device) * (high - low) + low
@@ -1330,7 +1330,7 @@ def torch_uniform(low, high, size, device=None):
 def draw_annealed_bool(training_percent, final_percent, true_prob_range):
     true_p_annealed = anneal_value(training_percent, final_percent, value_range=true_prob_range)
     # Flip a coin, with prob of true being true_p_annealed.    
-    return random.random() < true_p_annealed
+    return (torch.rand(1) < true_p_annealed).item()
 
 # ratio_range: range of fluctuation ratios (could > 1 or < 1).
 # keep_prob_range: range of annealed prob of keeping the original t. If (0, 0.5),
@@ -1350,11 +1350,11 @@ def probably_anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob
             ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
             ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
             # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
-            t_annealed[i] = np.random.randint(ti_lowerbound, ti_upperbound)
+            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound).item()
     else:
         t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
         t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
-        t_annealed = torch.tensor(np.random.randint(t_lowerbound, t_upperbound), 
+        t_annealed = torch.tensor(torch.randint.randint(t_lowerbound, t_upperbound).item(), 
                                   dtype=t.dtype, device=t.device)
 
     return t_annealed
@@ -1372,11 +1372,11 @@ def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_r
             ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
             ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
             # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
-            t_annealed[i] = np.random.randint(ti_lowerbound, ti_upperbound)
+            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound).item()
     else:
         t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
         t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
-        t_annealed = torch.tensor(np.random.randint(t_lowerbound, t_upperbound), 
+        t_annealed = torch.tensor(torch.randint(t_lowerbound, t_upperbound).item(), 
                                   dtype=t.dtype, device=t.device)
 
     return t_annealed
@@ -1399,7 +1399,8 @@ def sample_num_denoising_steps(max_num_unet_distill_denoising_steps, p_num_denoi
     p_num_denoising_steps = p_num_denoising_steps / np.sum(p_num_denoising_steps)
 
     # num_denoising_steps: 1, 2, 3, 5, among which 3 and 5 are selected with bigger chances.
-    num_denoising_steps = np.random.choice(cand_num_denoising_steps, p=p_num_denoising_steps)
+    sample_idx = torch.multinomial(p_num_denoising_steps, 1).item()
+    num_denoising_steps = cand_num_denoising_steps[sample_idx]
     return num_denoising_steps
 
 def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
@@ -1802,7 +1803,7 @@ def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=Fals
 def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
                                   perturb_prob, perturb_std_is_relative=True, keep_norm=False,
                                   std_dim=-1, norm_dim=-1, verbose=True):
-    if random.random() > perturb_prob:
+    if torch.rand(1) > perturb_prob:
         return embeddings
     
     if end_noise_std_range is not None:
@@ -1811,7 +1812,7 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
     else:
         noise_std_lb, noise_std_ub = begin_noise_std_range
         
-    perturb_std = np.random.uniform(noise_std_lb, noise_std_ub)
+    perturb_std = torch.rand(1).item() * (noise_std_ub - noise_std_lb) + noise_std_lb
 
     noised_embeddings = perturb_tensor(embeddings, perturb_std, perturb_std_is_relative, 
                                             keep_norm, std_dim, norm_dim, verbose=verbose)
@@ -1841,10 +1842,10 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
         scale_range_lb = base_scale_range_lb * extra_scale
         # scale_range_ub is at least 0.5.
         scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
-        fg_rand_scale = np.random.uniform(scale_range_lb, scale_range_ub)
+        fg_rand_scale = torch.rand(1).item() * (scale_range_ub - scale_range_lb) + scale_range_lb
     else:
         # fg areas are small. Scale the fg area to 70%-100% of the original size.
-        fg_rand_scale = np.random.uniform(base_scale_range_lb, base_scale_range_ub)
+        fg_rand_scale = torch.rand(1).item() * (base_scale_range_ub - base_scale_range_lb) + base_scale_range_lb
 
     # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
     # so we need to concatenate them at dim 1 before resizing.
