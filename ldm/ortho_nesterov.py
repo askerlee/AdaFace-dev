@@ -57,6 +57,8 @@ def zeroth_power_via_newtonschulz5(G, steps=5, eps=1e-7):
 def separate_params(param_groups):
     param_groups_2d     = []
     param_groups_non2d  = []
+    total_param_2d_count      = 0
+    total_param_non2d_count   = 0
 
     # Check if param_groups is a list of dicts or list of params
     if (isinstance(param_groups, list) and isinstance(param_groups[0], dict)) \
@@ -65,7 +67,7 @@ def separate_params(param_groups):
             param_groups = [param_groups]
         # param_groups is a list of dicts
         for group in param_groups:
-            params_2d, params_non2d = separate_params(group['params'])
+            params_2d, params_non2d, param_2d_count, param_non2d_count = separate_params(group['params'])
             param_group_2d      = {'params': params_2d}
             param_group_non2d   = {'params': params_non2d}
             # Copy the group dict and replace the 'params' key with the separated params
@@ -76,8 +78,10 @@ def separate_params(param_groups):
 
             param_groups_2d.append(param_group_2d)
             param_groups_non2d.append(param_group_non2d)
+            total_param_2d_count    += param_2d_count
+            total_param_non2d_count += param_non2d_count
 
-        return param_groups_2d, param_groups_non2d
+        return param_groups_2d, param_groups_non2d, total_param_2d_count, total_param_non2d_count
 
     elif isinstance(param_groups, list) and isinstance(param_groups[0], torch.Tensor):
         params_2d    = []
@@ -89,7 +93,7 @@ def separate_params(param_groups):
                 params_2d.append(param)
             else:
                 params_non2d.append(param)
-        return params_2d, params_non2d
+        return params_2d, params_non2d, len(params_2d), len(params_non2d)
     else:
         breakpoint()
 
@@ -111,8 +115,13 @@ class CombinedOptimizer:
         # will be a list of dicts.
         # If params is a dict, then each of param_groups_2d and param_groups_non2d will 
         # be a list of dicts containing only one dict.
-        param_groups_2d_non2d = separate_params(params)
+        param_groups_2d, param_groups_non2d, total_param_2d_count, total_param_non2d_count \
+            = separate_params(params)
+        param_groups_2d_non2d = (param_groups_2d, param_groups_non2d)
+        print(f"Total 2D params: {total_param_2d_count}, Total non-2D params: {total_param_non2d_count}")
+
         assert len(optimizer_types) == len(configs) == 2
+        assert optimizer_types[0] == OrthogonalNesterov, "The first optimizer must be OrthogonalNesterov"
         self.optimizers = [ optimizer_types[i](param_groups_2d_non2d[i], **configs[i]) for i in range(2) ]
         self.param_groups = [pg for opt in self.optimizers for pg in opt.param_groups]
         self.base_lrs = [opt.param_groups[0]['lr'] for opt in self.optimizers]

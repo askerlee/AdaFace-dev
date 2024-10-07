@@ -3050,8 +3050,8 @@ class LatentDiffusion(DDPM):
                 # ortho_nevstrov uses a much smaller LR. Theses settings are copied from
                 # https://github.com/KellerJordan/modded-nanogpt/blob/master/train_gpt2.py
                 ortho_nesterov_config = {'lr': 0.1 * lr, 'momentum': 0.95}
-                opt = OptimizerClass(opt_params_with_lrs, optimizer_types=(torch.optim.AdamW, OrthogonalNesterov),
-                                     configs=(adam_config, ortho_nesterov_config))
+                opt = OptimizerClass(opt_params_with_lrs, optimizer_types=(OrthogonalNesterov, torch.optim.AdamW),
+                                     configs=(ortho_nesterov_config, adam_config))
                 
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
