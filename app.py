@@ -93,7 +93,11 @@ def generate_image(image_paths, guidance_scale, avg_at_stage, perturb_std,
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
     if enhance_face and "face portrait" not in prompt:
-        prompt = "face portrait, " + prompt
+        if "portrait" in prompt:
+            # Enhance the face features by replacing "portrait" with "face portrait".
+            prompt = prompt.replace("portrait", "face portrait")
+        else:
+            prompt = "face portrait, " + prompt
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
     samples = adaface(noise, prompt, negative_prompt, guidance_scale=guidance_scale, 
