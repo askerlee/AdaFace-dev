@@ -25,6 +25,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
 from ldm.prodigy import Prodigy
+from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 
 from adaface.unet_teachers import create_unet_teacher
 
@@ -742,7 +743,7 @@ class LatentDiffusion(DDPM):
         self.batch_1st_subject_name  = batch['subject_name'][0]
         self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
-        # NOTE: *_fp prompts are like "a face portrait of ..." or "a portrait of ...". 
+        # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
         # When doing compositional distillation on humans/animals they are a little bit better.
         # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
@@ -3011,6 +3012,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = bnb.optim.Adam8bit
         elif self.optimizer_type == 'AdamW8bit':
             OptimizerClass = bnb.optim.AdamW8bit
+        elif self.optimizer_type == 'OrthogonalNesterov':
+            OptimizerClass = CombinedOptimizer
         elif self.optimizer_type == 'Prodigy':
             OptimizerClass = Prodigy
         else:
@@ -3037,10 +3040,19 @@ class LatentDiffusion(DDPM):
 
         count_optimized_params(opt_params_with_lrs)
 
+        # Adam series, or CombinedOptimizer.
         if 'Prodigy' not in self.optimizer_type:
-            opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                 betas=self.adam_config.betas)
-            
+            if 'adam' in self.optimizer_type.lower():
+                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
+                                    betas=self.adam_config.betas)
+            elif self.optimizer_type == 'OrthogonalNesterov':
+                adam_config = {'betas': self.adam_config.betas, 'weight_decay': self.weight_decay}
+                # ortho_nevstrov uses a much smaller LR. Theses settings are copied from
+                # https://github.com/KellerJordan/modded-nanogpt/blob/master/train_gpt2.py
+                ortho_nesterov_config = {'lr': 0.1 * lr, 'momentum': 0.95}
+                opt = OptimizerClass(opt_params_with_lrs, optimizer_types=(torch.optim.AdamW, OrthogonalNesterov),
+                                     configs=(adam_config, ortho_nesterov_config))
+                
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)

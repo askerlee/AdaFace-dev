@@ -659,7 +659,6 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def get_id2img_learnable_modules(self):
         return [ self.text_to_image_prompt_encoder ]
     
-# ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, pipe=None, base_model_path="models/sd15-dste8-vae.safetensors", 
                  *args, **kwargs):
@@ -672,6 +671,10 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             # are not used and will be released soon.
             # Only the consistentID modules and bise_net are used.
             assert base_model_path is not None, "base_model_path should be provided."
+            # Avoid passing dtype to ConsistentIDPipeline.from_single_file(),
+            # because we've overloaded .to() to convert consistentID specific modules as well, 
+            # but diffusers will call .to(dtype) in .from_single_file(), 
+            # and at that moment, the consistentID specific modules are not loaded yet.            
             pipe = ConsistentIDPipeline.from_single_file(base_model_path)
             pipe.load_ConsistentID_model(consistentID_weight_path="./models/ConsistentID/ConsistentID-v1.bin",
                                          bise_net_weight_path="./models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth")
