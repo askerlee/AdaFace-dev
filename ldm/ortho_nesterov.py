@@ -100,11 +100,18 @@ def separate_params(param_groups):
 
 '''
 # Note that CombinedOptimizer is not a torch.optim.Optimizer, but a wrapper around multiple optimizers.
-# Example usage:
+# Original Example:
     optimizer = CombinedOptimizer([
         torch.optim.AdamW(self.lm_head.parameters(), lr=learning_rate, betas=betas, weight_decay=0, fused=True),
         OrthogonalNesterov(self.transformer.h.parameters(), lr=0.1*learning_rate, momentum=0.95)
     ])
+# Refactored Example:
+    optimizer = CombinedOptimizer(\
+        self.parameters(),
+        [OrthogonalNesterov, torch.optim.AdamW],
+        [{'lr': 0.1*learning_rate, 'momentum': 0.95}, 
+         {'lr': learning_rate, 'betas': betas, 'weight_decay': 0, 'fused': True}
+        ])
 '''
 class CombinedOptimizer(torch.optim.Optimizer):
     def __init__(self, params, optimizer_types, configs):

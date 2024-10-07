@@ -1894,6 +1894,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
+@torch.compile
 def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25,
                                single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
                                mix_feat_grad_scale=0.05):
