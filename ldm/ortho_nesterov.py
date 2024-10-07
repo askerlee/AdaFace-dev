@@ -12,7 +12,8 @@ class OrthogonalNesterov(torch.optim.Optimizer):
         defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov, zeropower_iters=zeropower_iters)
         super().__init__(params, defaults)
 
-    def step(self):
+    # closure is here as a placeholder for compatibility with the PyTorch API
+    def step(self, closure=None):
         for group in self.param_groups:
             lr = group['lr']
             momentum = group['momentum']
@@ -105,7 +106,7 @@ def separate_params(param_groups):
         OrthogonalNesterov(self.transformer.h.parameters(), lr=0.1*learning_rate, momentum=0.95)
     ])
 '''
-class CombinedOptimizer:
+class CombinedOptimizer(torch.optim.Optimizer):
     def __init__(self, params, optimizer_types, configs):
         # Separate 2D and non-2D parameters.
         # param_groups_2d_non2d: (param_groups_2d, param_groups_non2d).
@@ -125,10 +126,15 @@ class CombinedOptimizer:
         self.optimizers = [ optimizer_types[i](param_groups_2d_non2d[i], **configs[i]) for i in range(2) ]
         self.param_groups = [pg for opt in self.optimizers for pg in opt.param_groups]
         self.base_lrs = [opt.param_groups[0]['lr'] for opt in self.optimizers]
+        # Combine the state dicts of all opt in self.optimizers into a single dict
+        self.state = {k: v for opt in self.optimizers for k, v in opt.state.items()}
+        # Initially all states are empty. So no point to print their counts.
+        # Only use the defaults of the OrthogonalNesterov optimizer
+        self.defaults = self.optimizers[0].defaults
 
-    def step(self):
+    def step(self, *args, **kwargs):
         for opt in self.optimizers:
-            opt.step()
+            opt.step(*args, **kwargs)
 
     def zero_grad(self, **kwargs):
         for opt in self.optimizers:
