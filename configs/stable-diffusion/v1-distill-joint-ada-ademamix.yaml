@@ -64,7 +64,8 @@ model:
     # loss_fg_xlayer_consist ~ 0.2, loss_bg_xlayer_consist ~ 0.1. * weight -> 3e-4.
     fg_bg_xlayer_consist_loss_weight: 5e-5
 
-    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, AdEMAMix, OrthogonalNesterov
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
+    # AdEMAMix, AdEMAMixDistributedShampoo, OrthogonalNesterov
     optimizer_type:           AdEMAMix
     grad_clip:                0.5
     adam_config:
