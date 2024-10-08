@@ -800,7 +800,7 @@ class LatentDiffusion(DDPM):
         # enable_background_token is True, as long as background token is specified in 
         # the command line of train.py.
         self.iter_flags['use_background_token'] = self.enable_background_token \
-                                                    and (torch.rand(1) < p_use_background_token).item()
+                                                    and (torch.rand(1) < p_use_background_token)
 
         # ** use_fp_trick is only for compositional iterations. **
         if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
@@ -875,7 +875,7 @@ class LatentDiffusion(DDPM):
         # do_unet_distill and random() < p_unet_distill_iter.
         # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
         # 0.1 if distilling on jointIDs.
-        if self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_gen_id2img_rand_id).item():
+        if self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_gen_id2img_rand_id):
             self.iter_flags['gen_id2img_rand_id'] = True
             self.batch_subject_names = [ "rand_id_to_img_prompt" ] * len(batch['subject_name'])
         else:
@@ -1018,7 +1018,7 @@ class LatentDiffusion(DDPM):
             # never use the compositional prompts as the distillation target of arc2face.
             # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
-            if (torch.rand(1) < self.p_unet_distill_uses_comp_prompt).item():
+            if torch.rand(1) < self.p_unet_distill_uses_comp_prompt:
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
                 captions = batch[SUBJ_COMP_PROMPT]
 
@@ -1689,7 +1689,7 @@ class LatentDiffusion(DDPM):
             
             '''
             # Randomly switch between the subject and class double contexts.
-            if (torch.rand(1) < 0.5).item():
+            if torch.rand(1) < 0.5:
                 init_prep_context = subj_double_context
                 init_prep_context_type = 'subj'
             else:
