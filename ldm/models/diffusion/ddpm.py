@@ -830,10 +830,11 @@ class LatentDiffusion(DDPM):
             CLS_COMP_PROMPT    = 'cls_comp_prompt'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt'
 
-        captions = subj_single_prompts = batch[SUBJ_SINGLE_PROMPT]
+        subj_single_prompts = batch[SUBJ_SINGLE_PROMPT]
         cls_single_prompts  = batch[CLS_SINGLE_PROMPT]
         subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
+        captions            = subj_single_prompts
 
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
@@ -1579,6 +1580,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
+    # Do denoising, collect the attention activations for computing the losses later.
     # masks: (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask). 
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
