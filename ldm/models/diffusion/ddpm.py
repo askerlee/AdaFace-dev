@@ -26,6 +26,7 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
+from ldm.ademamix import AdEMAMix
 
 from adaface.unet_teachers import create_unet_teacher
 
@@ -3016,6 +3017,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = CombinedOptimizer
         elif self.optimizer_type == 'Prodigy':
             OptimizerClass = Prodigy
+        elif self.optimizer_type == 'AdEMAMix':
+            OptimizerClass = AdEMAMix
         else:
             raise NotImplementedError()
             
@@ -3040,9 +3043,9 @@ class LatentDiffusion(DDPM):
 
         count_optimized_params(opt_params_with_lrs)
 
-        # Adam series, or CombinedOptimizer.
+        # Adam series, AdEMAMix, or OrthogonalNesterov.
         if 'Prodigy' not in self.optimizer_type:
-            if 'adam' in self.optimizer_type.lower():
+            if 'adam' in self.optimizer_type.lower() or 'AdEMAMix' in self.optimizer_type:
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                     betas=self.adam_config.betas)
             elif self.optimizer_type == 'OrthogonalNesterov':
