@@ -1350,11 +1350,11 @@ def probably_anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob
             ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
             ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
             # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
-            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound).item()
+            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound, (1,)).item()
     else:
         t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
         t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
-        t_annealed = torch.tensor(torch.randint.randint(t_lowerbound, t_upperbound).item(), 
+        t_annealed = torch.tensor(torch.randint.randint(t_lowerbound, t_upperbound, (1,)).item(), 
                                   dtype=t.dtype, device=t.device)
 
     return t_annealed
@@ -1372,11 +1372,11 @@ def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_r
             ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
             ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
             # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
-            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound).item()
+            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound, (1,)).item()
     else:
         t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
         t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
-        t_annealed = torch.tensor(torch.randint(t_lowerbound, t_upperbound).item(), 
+        t_annealed = torch.tensor(torch.randint(t_lowerbound, t_upperbound, (1,)).item(), 
                                   dtype=t.dtype, device=t.device)
 
     return t_annealed
