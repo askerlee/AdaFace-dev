@@ -1320,7 +1320,7 @@ def rand_annealed(training_percent, final_percent, mean_range,
     rand_lb = max(mean_annealed * fluct_range[0], legal_range[0])
     rand_ub = min(mean_annealed * fluct_range[1], legal_range[1])
     
-    return torch.rand(1) * (rand_ub - rand_lb) + rand_lb
+    return torch.rand(1).item() * (rand_ub - rand_lb) + rand_lb
 
 def torch_uniform(low, high, size, device=None):
     return torch.rand(size, device=device) * (high - low) + low
