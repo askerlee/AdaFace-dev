@@ -485,8 +485,8 @@ class PersonalizedBase(Dataset):
         #mask_fg_percent = fg_mask.astype(float).sum() / (255 * fg_mask.size)
         # print(f"mask_fg_percent: {mask_fg_percent}")
 
-        #print(f"subj_prompt_comp: {subj_prompt_comp}")
-        #print(f"cls_prompt_comp: {cls_prompt_comp}")
+        #print(f"subj_comp_prompt: {subj_comp_prompt}")
+        #print(f"cls_comp_prompt: {cls_comp_prompt}")
 
         if self.center_crop:        # default: False
             crop = min(image.shape[0], image.shape[1])
@@ -679,32 +679,33 @@ class PersonalizedBase(Dataset):
         # "face portrait" trick for humans/animals.
         # Note in comp_prompt_tmpl, "face portrait" is replaced by "a portrait",
         # to avoid the face being too dominant in the image.
-        single_fp_prompt_tmpl   = "face portrait of a {}"
-        comp_fp_prompt_tmpl     = "a portrait of a {}" + " " + composition_partial
+        single_fp_prompt_tmpl    = "face portrait of a {}"
+        subj_comp_fp_prompt_tmpl =    "a portrait of a {}" + " " + composition_partial
+        cls_comp_fp_prompt_tmpl  = "face portrait of a {}" + " " + composition_partial
 
-        example["subj_prompt_single"]   = single_prompt_tmpl.format(subject_string)
-        example["cls_prompt_single"]    = single_prompt_tmpl.format( cls_delta_string)
-        example["subj_prompt_comp"]     = comp_prompt_tmpl.format(subject_string) 
-        example["cls_prompt_comp"]      = comp_prompt_tmpl.format( cls_delta_string)
-
-        if bg_suffix:
-            example["subj_prompt_single_bg"] = single_prompt_tmpl.format(subject_string_with_bg)
-            example["subj_prompt_comp_bg"]   = comp_prompt_tmpl.format(  subject_string_with_bg)
-            example["cls_prompt_single_bg"]  = single_prompt_tmpl.format( cls_delta_string_with_bg)
-            example["cls_prompt_comp_bg"]    = comp_prompt_tmpl.format(   cls_delta_string_with_bg)
-
-        # Delta loss requires subj_prompt_single/cls_prompt_single to be token-wise aligned
-        # with subj_prompt_comp/cls_prompt_comp, so we need to specify them in the dataloader as well.
-        example["subj_prompt_single_fp"] = single_fp_prompt_tmpl.format(subject_string)
-        example["subj_prompt_comp_fp"]   = comp_fp_prompt_tmpl.format(  subject_string)
-        example["cls_prompt_single_fp"]  = single_fp_prompt_tmpl.format( cls_delta_string)
-        example["cls_prompt_comp_fp"]    = comp_fp_prompt_tmpl.format(   cls_delta_string)
+        example["subj_single_prompt"]   = single_prompt_tmpl.format(subject_string)
+        example["cls_single_prompt"]    = single_prompt_tmpl.format(cls_delta_string)
+        example["subj_comp_prompt"]     = comp_prompt_tmpl.format(  subject_string) 
+        example["cls_comp_prompt"]      = comp_prompt_tmpl.format(  cls_delta_string)
 
         if bg_suffix:
-            example["subj_prompt_single_fp_bg"] = single_fp_prompt_tmpl.format(subject_string_with_bg)
-            example["subj_prompt_comp_fp_bg"]   = comp_fp_prompt_tmpl.format(  subject_string_with_bg)
-            example["cls_prompt_single_fp_bg"]  = single_fp_prompt_tmpl.format( cls_delta_string_with_bg)
-            example["cls_prompt_comp_fp_bg"]    = comp_fp_prompt_tmpl.format(   cls_delta_string_with_bg)
+            example["subj_single_prompt_bg"] = single_prompt_tmpl.format( subject_string_with_bg)
+            example["subj_comp_prompt_bg"]   = comp_prompt_tmpl.format(   subject_string_with_bg)
+            example["cls_single_prompt_bg"]  = single_prompt_tmpl.format( cls_delta_string_with_bg)
+            example["cls_comp_prompt_bg"]    = comp_prompt_tmpl.format(   cls_delta_string_with_bg)
+
+        # Delta loss requires subj_single_prompt/cls_single_prompt to be token-wise aligned
+        # with subj_comp_prompt/cls_comp_prompt, so we need to specify them in the dataloader as well.
+        example["subj_single_prompt_fp"] = single_fp_prompt_tmpl.format(   subject_string)
+        example["subj_comp_prompt_fp"]   = subj_comp_fp_prompt_tmpl.format(subject_string)
+        example["cls_single_prompt_fp"]  = single_fp_prompt_tmpl.format(   cls_delta_string)
+        example["cls_comp_prompt_fp"]    = cls_comp_fp_prompt_tmpl.format( cls_delta_string)
+
+        if bg_suffix:
+            example["subj_single_prompt_fp_bg"] = single_fp_prompt_tmpl.format(   subject_string_with_bg)
+            example["subj_comp_prompt_fp_bg"]   = subj_comp_fp_prompt_tmpl.format(subject_string_with_bg)
+            example["cls_single_prompt_fp_bg"]  = single_fp_prompt_tmpl.format(   cls_delta_string_with_bg)
+            example["cls_comp_prompt_fp_bg"]    = cls_comp_fp_prompt_tmpl.format( cls_delta_string_with_bg)
 
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.

@@ -715,15 +715,15 @@ class LatentDiffusion(DDPM):
     # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
     # batch: { 'caption':               ['an illustration of a dirty z',                    
     #                                    'a depiction of a z'], 
-    #          'subj_prompt_comp':     ['an illustration of a dirty z dancing with a boy', 
+    #          'subj_comp_prompt':     ['an illustration of a dirty z dancing with a boy', 
     #                                    'a depiction of a z kicking a punching bag'],
-    #          'cls_prompt_single':     ['an illustration of a dirty person',          
+    #          'cls_single_prompt':     ['an illustration of a dirty person',          
     #                                    'a depiction of a person'],
     #                                    'a depiction of a person kicking a punching bag']
-    #          'cls_prompt_comp'  :    ['an illustration of a dirty person dancing with a boy', 
+    #          'cls_comp_prompt'  :    ['an illustration of a dirty person dancing with a boy', 
     #                                    'a depiction of a person kicking a punching bag'],
     #          'image':   [2, 512, 512, 3] }
-    # 'caption' is not named 'subj_prompt_single' to keep it compatible with older code.
+    # 'caption' is not named 'subj_single_prompt' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch):
         # Encode noise as 4-channel latent features.
@@ -750,7 +750,7 @@ class LatentDiffusion(DDPM):
         # When doing compositional distillation on humans/animals they are a little bit better.
         # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
         # so fp_trick won't be used.
-        if self.use_fp_trick and 'subj_prompt_single_fp' in batch:
+        if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_comp_prompt_distillation'] :
                 p_use_fp_trick = 0.7
             # If compositional distillation is enabled, then in normal recon iterations,
@@ -804,36 +804,36 @@ class LatentDiffusion(DDPM):
 
         # ** use_fp_trick is only for compositional iterations. **
         if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
-            SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp_bg'
-            SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp_bg'
-            CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp_bg'
-            CLS_PROMPT_COMP    = 'cls_prompt_comp_fp_bg'
+            SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp_bg'
+            SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp_bg'
+            CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp_bg'
+            CLS_COMP_PROMPT    = 'cls_comp_prompt_fp_bg'
         # use_fp_trick but not use_background_token.
         elif self.iter_flags['use_fp_trick']:
             # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
-            SUBJ_PROMPT_SINGLE = 'subj_prompt_single_fp'
-            SUBJ_PROMPT_COMP   = 'subj_prompt_comp_fp'
-            CLS_PROMPT_SINGLE  = 'cls_prompt_single_fp'
-            CLS_PROMPT_COMP    = 'cls_prompt_comp_fp'
+            SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
+            SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
+            CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
+            CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
         # not use_fp_trick and use_background_token.
         elif self.iter_flags['use_background_token']:
-            SUBJ_PROMPT_SINGLE = 'subj_prompt_single_bg'
-            SUBJ_PROMPT_COMP   = 'subj_prompt_comp_bg'
-            CLS_PROMPT_SINGLE  = 'cls_prompt_single_bg'
-            CLS_PROMPT_COMP    = 'cls_prompt_comp_bg'
+            SUBJ_SINGLE_PROMPT = 'subj_single_prompt_bg'
+            SUBJ_COMP_PROMPT   = 'subj_comp_prompt_bg'
+            CLS_SINGLE_PROMPT  = 'cls_single_prompt_bg'
+            CLS_COMP_PROMPT    = 'cls_comp_prompt_bg'
         # Either do_comp_prompt_distillation but not use_fp_trick_iter, 
         # or recon/unet_distill iters (not do_comp_prompt_distillation) and not use_background_token.
         # We don't use_fp_trick on training images. 
         else:
-            SUBJ_PROMPT_SINGLE = 'subj_prompt_single'
-            SUBJ_PROMPT_COMP   = 'subj_prompt_comp'
-            CLS_PROMPT_COMP    = 'cls_prompt_comp'
-            CLS_PROMPT_SINGLE  = 'cls_prompt_single'
+            SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
+            SUBJ_COMP_PROMPT   = 'subj_comp_prompt'
+            CLS_COMP_PROMPT    = 'cls_comp_prompt'
+            CLS_SINGLE_PROMPT  = 'cls_single_prompt'
 
-        captions = subj_single_prompts = batch[SUBJ_PROMPT_SINGLE]
-        cls_single_prompts  = batch[CLS_PROMPT_SINGLE]
-        subj_comp_prompts   = batch[SUBJ_PROMPT_COMP]
-        cls_comp_prompts    = batch[CLS_PROMPT_COMP]
+        captions = subj_single_prompts = batch[SUBJ_SINGLE_PROMPT]
+        cls_single_prompts  = batch[CLS_SINGLE_PROMPT]
+        subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
+        cls_comp_prompts    = batch[CLS_COMP_PROMPT]
 
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
@@ -1020,7 +1020,7 @@ class LatentDiffusion(DDPM):
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
             if (torch.rand(1) < self.p_unet_distill_uses_comp_prompt).item():
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
-                captions = batch[SUBJ_PROMPT_COMP]
+                captions = batch[SUBJ_COMP_PROMPT]
 
             if num_denoising_steps > 1:
                 # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
@@ -1570,7 +1570,7 @@ class LatentDiffusion(DDPM):
             # comp_prompt_distill_weight: 1e-3. loss_comp_prompt_distill: 2-3.
             loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
 
-        if torch.isnan(loss):
+        if torch.isnan(loss) and self.trainer.global_rank == 0:
             print('NaN loss detected.')
             breakpoint()
 
