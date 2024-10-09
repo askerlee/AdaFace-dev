@@ -603,7 +603,10 @@ def main(opt):
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
                         if opt.method == "adaface":                      
                             teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if opt.use_teacher_neg else None
-                            x_samples_ddim = pipeline(noise, prompts[0], None, opt.scale, batch_size, verbose=True)
+                            x_samples_ddim = pipeline(noise, prompts[0], None, 
+                                                      placeholder_tokens_pos='postpend',
+                                                      guidance_scale=opt.scale, out_image_count=batch_size, 
+                                                      verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []
                             # Remove the subject string 'z' from the prompt.

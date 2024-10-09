@@ -151,5 +151,5 @@ if __name__ == "__main__":
         adaface.prepare_adaface_embeddings(image_paths, init_id_embs, 
                                            perturb_at_stage='img_prompt_emb',
                                            perturb_std=args.perturb_std, update_text_encoder=True)    
-    images = adaface(noise, args.prompt, None, args.guidance_scale, args.out_image_count, verbose=True)
+    images = adaface(noise, args.prompt, None, 'postpend', args.guidance_scale, args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.perturb_std)
