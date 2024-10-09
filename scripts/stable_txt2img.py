@@ -246,6 +246,9 @@ def parse_args():
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")
+    parser.add_argument("--placeholder_tokens_pos", type=str, default="postpend",
+                        choices=["prepend", "postpend"],
+                        help="Position of the placeholder tokens in the prompt")
     
     args = parser.parse_args()
     return args
@@ -604,7 +607,7 @@ def main(opt):
                         if opt.method == "adaface":                      
                             teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if opt.use_teacher_neg else None
                             x_samples_ddim = pipeline(noise, prompts[0], None, 
-                                                      placeholder_tokens_pos='postpend',
+                                                      placeholder_tokens_pos=opt.placeholder_tokens_pos,
                                                       guidance_scale=opt.scale, out_image_count=batch_size, 
                                                       verbose=True)
                         elif opt.method == "pulid":
