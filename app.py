@@ -13,31 +13,39 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
-parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", default=None,    
+parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-08T14-42-05_zero3-ada-25000.pt',
                     help="Paths to the checkpoints of the ID2Ada prompt encoders")
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                     help="Scales for the ID2Ada prompt encoders")
 parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
-                    help="List of enabled encoders (among the list of adaface_encoder_types)")
-parser.add_argument('--base_model_path', type=str, default='models/sd15-dste8-vae.safetensors')
-parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=['models/ensemble/rv4-unet', 
-                                                                           'models/ensemble/ar18-unet'], 
+                    help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
+parser.add_argument('--model_style_type', type=str, default='realistic',
+                    choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
+parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=[], 
                     help="Extra paths to the checkpoints of the UNet models")
-parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                     help="Weights for the UNet models")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
+
+model_style_type2base_model_path = {
+    "realistic": "models/rv51/realisticVisionV51_v51VAE_dste8.safetensors",
+    "anime": "models/aingdiffusion/aingdiffusion_v170_ar.safetensors",
+    "photorealistic": "models/sar/sar.safetensors" # LDM format. Needs to be converted.
+}
+base_model_path = model_style_type2base_model_path[args.model_style_type]
 
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
 device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
 print(f"Device: {device}")
 
-adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=args.base_model_path,
+global adaface
+adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
                          adaface_encoder_types=args.adaface_encoder_types, 
-                         adaface_ckpt_paths=args.adaface_ckpt_paths, 
+                         adaface_ckpt_paths=args.adaface_ckpt_path, 
                          adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
                          enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
@@ -65,9 +73,21 @@ def update_out_gallery(images):
     return gr.update(height=800)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, avg_at_stage, perturb_std,
+def generate_image(image_paths, guidance_scale, model_style_type, avg_at_stage, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
+
+    global adaface
+
+    model_style_type = model_style_type.lower()
+    base_model_path = model_style_type2base_model_path[model_style_type]
+    # If the base model type is changed, reload the model.
+    if model_style_type != args.model_style_type:
+        adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
+                                 adaface_encoder_types=args.adaface_encoder_types,
+                                 adaface_ckpt_paths=args.adaface_ckpt_path, device=device)
+        # Update base model type.
+        args.model_style_type = model_style_type
 
     if image_paths is None or len(image_paths) == 0:
         raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
@@ -191,6 +211,15 @@ with gr.Blocks(css=css) as demo:
                 value=5.0,
             )
 
+            model_style_type = gr.Dropdown(
+                label="Base Model Style Type",
+                info="Switching the base model type will take 10~20 seconds to reload the model",
+                value=args.model_style_type,
+                choices=["Realistic", "Anime", "Photorealistic"],
+                allow_custom_value=False,
+                filterable=False,
+            )
+
             avg_at_stage = gr.Dropdown(label="Average at stage",
                                        choices=["id_emb", "img_prompt_emb", "ada_prompt_emb"],
                                        value="id_emb",
@@ -237,7 +266,7 @@ with gr.Blocks(css=css) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, avg_at_stage, perturb_std, num_images, 
+            inputs=[img_files, guidance_scale, model_style_type, avg_at_stage, perturb_std, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         ).then(
