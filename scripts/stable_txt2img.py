@@ -747,10 +747,9 @@ def main(opt):
                     unet_pardir = os.path.basename(os.path.dirname(opt.main_unet_filepath))
                     subj_name_method_sig += "-" + unet_pardir
 
-                if isinstance(opt.scale, (list, tuple)):
-                    scale_sig = "scale" + "-".join([f"{scale:.1f}" for scale in opt.scale])
-                else:
-                    scale_sig = f"scale{opt.scale:.1f}"
+                scale_sig = f"scale{opt.scale:.1f}"
+                if opt.do_neg_id_prompt_weight > 0:
+                    scale_sig += f"-negid{opt.do_neg_id_prompt_weight:.2f}"
                 experiment_sig = "-".join([date_sig, iter_sig, scale_sig])
 
                 if opt.bb_type:
