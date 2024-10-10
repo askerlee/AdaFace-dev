@@ -87,6 +87,7 @@ class DDPM(pl.LightningModule):
                  p_gen_id2img_rand_id=0.4,
                  p_perturb_face_id_embs=0.6,
                  perturb_face_id_embs_std_range=[0.5, 1.5],
+                 do_neg_id_prompt_weight=0,
                  extend_prompt2token_proj_attention_multiplier=1,
                  ):
         
@@ -137,6 +138,7 @@ class DDPM(pl.LightningModule):
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
+        self.do_neg_id_prompt_weight                = do_neg_id_prompt_weight
 
         self.max_num_comp_distill_init_prep_denoising_steps = max_num_comp_distill_init_prep_denoising_steps
 
@@ -493,7 +495,7 @@ class LatentDiffusion(DDPM):
             self.num_reuse_teachable_iters = 0
             # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
             # uncond_context[0]: [1, 77, 768].
-            self.uncond_emb         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
+            self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
             # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
             img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
             # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
@@ -1269,7 +1271,7 @@ class LatentDiffusion(DDPM):
     # This is not used for the iter_type 'do_normal_recon'.
     # unet_has_grad: 'all', 'none', 'subject-half'.
     def guided_denoise(self, x_start, noise, t, cond_context, text_prompt_adhoc_info, 
-                       uncond_context=None, unet_has_grad='all', 
+                       uncond_emb=None, unet_has_grad='all', 
                        do_pixel_recon=False, cfg_scale=-1):
         
         self.embedding_manager.set_prompt_adhoc_info(text_prompt_adhoc_info)
@@ -1311,14 +1313,15 @@ class LatentDiffusion(DDPM):
         # Get model output of both conditioned and uncond prompts.
         # Unconditional prompts and reconstructed images are never involved in optimization.
         if cfg_scale > 1:
-            if uncond_context is None:
-                # Use self.uncond_emb as the unconditional context.
+            if uncond_emb is None:
+                # Use self.uncond_context as the unconditional context.
                 # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
                 # By default, 'capture_ca_layers_activations' = False in a generated text context, 
-                # including uncond_context. So we don't need to set it in self.uncond_emb explicitly.                
-                uncond_emb  = self.uncond_emb[0].repeat(x_noisy.shape[0], 1, 1)
-                uncond_c_in = self.uncond_emb[1] * x_noisy.shape[0]
-                uncond_context = (uncond_emb, uncond_c_in, self.uncond_emb[2])
+                # including uncond_context. So we don't need to set it in self.uncond_context explicitly.                
+                uncond_emb  = self.uncond_context[0].repeat(x_noisy.shape[0], 1, 1)
+
+            uncond_c_in = self.uncond_context[1] * x_noisy.shape[0]
+            uncond_context = (uncond_emb, uncond_c_in, self.uncond_context[2])
 
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
@@ -1340,7 +1343,7 @@ class LatentDiffusion(DDPM):
         else:
             x_recon = None
         
-        return model_output, x_recon
+        return noise_pred, x_recon
 
     # Release part of the computation graph on unused instances to save RAM.
     def release_plosses_intermediates(self, local_vars):
@@ -1467,13 +1470,23 @@ class LatentDiffusion(DDPM):
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
             extra_info['img_mask']  = img_mask
-
             extra_info['capture_ca_layers_activations'] = True
+
+            # Apply neg_id_emb for 50% of the time.
+            if torch.rand(1) < 0.5:
+                neg_id_emb = c_prompt_emb * self.do_neg_id_prompt_weight + \
+                             self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
+                uncond_emb = neg_id_emb
+                cfg_scale  = 2
+            else:
+                # Don't use the negative prompt. So don't consider neg_id_emb.
+                uncond_emb = None
+                cfg_scale  = -1
 
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond_context, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    uncond_context=None,
+                                    uncond_emb=uncond_emb,
                                     unet_has_grad='all', 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is enabled only when do_comp_prompt_distillation.
@@ -1481,7 +1494,7 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
-                                    cfg_scale=-1)
+                                    cfg_scale=cfg_scale)
 
             extra_info['capture_ca_layers_activations'] = False
 
@@ -1688,7 +1701,7 @@ class LatentDiffusion(DDPM):
             noise_2 = noise.chunk(2)[1]
             t_2 = t.chunk(2)[1]
             c_prompt_emb_1, c_prompt_emb_2   = c_prompt_emb.chunk(2)
-            uncond_emb          = self.uncond_emb[0].repeat(x_start_2.shape[0], 1, 1)
+            uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
             # *_double_context contains both the positive and negative prompt embeddings.
             subj_double_context = torch.cat([c_prompt_emb_1, uncond_emb], dim=0)
             cls_double_context  = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
@@ -1729,11 +1742,21 @@ class LatentDiffusion(DDPM):
 
         extra_info['capture_ca_layers_activations'] = True
 
+        # For compositional denoising, we always apply neg_id_emb.
+        if torch.rand(1) < 1:
+            SUBJ = BLOCK_SIZE * 2
+            neg_id_emb      = c_prompt_emb[:SUBJ] * self.do_neg_id_prompt_weight + \
+                                self.uncond_context[0].repeat(SUBJ, 1, 1) * (1 - self.do_neg_id_prompt_weight)
+            cls_uncond_emb  = self.uncond_context[0].repeat(SUBJ, 1, 1)
+            uncond_emb      = torch.cat([neg_id_emb, cls_uncond_emb], dim=0)
+        else:
+            uncond_emb      = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
+
         # model_output is not used by the caller.
         model_output, x_recon = \
             self.guided_denoise(x_start, noise, t, cond_context, 
                                 text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                uncond_context=None,
+                                uncond_emb=uncond_emb,
                                 unet_has_grad='subject-half', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 # do_pixel_recon is enabled only when do_comp_prompt_distillation.
@@ -1832,6 +1855,9 @@ class LatentDiffusion(DDPM):
     
     def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, 
                                text_prompt_adhoc_info, img_mask, fg_mask):
+        c_prompt_emb, c_in, extra_info = cond_context
+        BLOCK_SIZE = x_start.shape[0]
+
         # num_denoising_steps > 1 implies do_unet_distill, but not vice versa.
         num_denoising_steps = self.iter_flags['num_denoising_steps']
         # student_prompt_embs is the prompt embedding of the student model.
@@ -1867,10 +1893,10 @@ class LatentDiffusion(DDPM):
                     if self.p_unet_teacher_uses_cfg > 0:
                         # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
                         # to the teacher.
-                        # self.uncond_emb is a tuple of (uncond_embs, uncond_c_in, extra_info).
+                        # self.uncond_context is a tuple of (uncond_embs, uncond_c_in, extra_info).
                         # Truncate the uncond_embs to the same length as teacher_context.
                         LEN_POS_PROMPT = teacher_context.shape[1]
-                        teacher_neg_context = self.uncond_emb[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
+                        teacher_neg_context = self.uncond_context[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
                         # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
                         teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
 
@@ -1889,7 +1915,7 @@ class LatentDiffusion(DDPM):
                         global_neg_id_embs = all_id2img_neg_prompt_embs[i]
                         # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
                         # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
-                        cls_neg_prompt_embs = self.uncond_emb[0][:1].repeat(teacher_context.shape[0], 1, 1)
+                        cls_neg_prompt_embs = self.uncond_context[0][:1].repeat(teacher_context.shape[0], 1, 1)
                         # teacher_neg_context: [BS, 81, 768]
                         teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
                         # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
@@ -1919,6 +1945,14 @@ class LatentDiffusion(DDPM):
         model_outputs = []
         #all_recon_images = []
 
+        # Apply neg_id_emb for 50% of the time.
+        if torch.rand(1) < 0.5:
+            neg_id_emb = c_prompt_emb * self.do_neg_id_prompt_weight + \
+                         self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
+            uncond_emb = neg_id_emb
+        else:
+            uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+
         for s in range(num_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
             # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
@@ -1937,7 +1971,7 @@ class LatentDiffusion(DDPM):
             model_output_s, x_recon_s = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    uncond_context=None,
+                                    uncond_emb=uncond_emb,
                                     unet_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale)
             model_outputs.append(model_output_s)
@@ -1974,8 +2008,8 @@ class LatentDiffusion(DDPM):
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
                 self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                        img_mask, fg_mask, fg_pixel_weight=1,
-                                        bg_pixel_weight=bg_pixel_weight)
+                                     img_mask, fg_mask, fg_pixel_weight=1,
+                                     bg_pixel_weight=bg_pixel_weight)
 
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}",
                   end='')
