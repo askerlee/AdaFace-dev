@@ -364,14 +364,18 @@ class AdaFaceWrapper(nn.Module):
         
         prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
         if verbose:
-            print(f"Subject prompt: {prompt}")
+            print(f"Subject prompt:\n{prompt}")
 
         if do_neg_id_prompt_weight > 0:
             # Use 'prepend' for the negative prompt, since it's long and we want to make sure
             # the placeholder tokens are not cut off.
-            negative_prompt  = self.update_prompt(negative_prompt, placeholder_tokens_pos='prepend')
-            null_negative_prompt = self.update_prompt(negative_prompt, placeholder_tokens_pos='prepend',
+            negative_prompt0 = negative_prompt
+            negative_prompt      = self.update_prompt(negative_prompt0, placeholder_tokens_pos='prepend')
+            null_negative_prompt = self.update_prompt(negative_prompt0, placeholder_tokens_pos='prepend',
                                                       use_null_placeholders=True)
+            if verbose:
+                print(f"Negative prompt:\n{negative_prompt}")
+                print(f"Null negative prompt:\n{null_negative_prompt}")
         else:
             null_negative_prompt = None
 
