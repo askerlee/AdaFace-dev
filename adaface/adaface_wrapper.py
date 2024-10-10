@@ -373,9 +373,11 @@ class AdaFaceWrapper(nn.Module):
             negative_prompt      = self.update_prompt(negative_prompt0, placeholder_tokens_pos='prepend')
             null_negative_prompt = self.update_prompt(negative_prompt0, placeholder_tokens_pos='prepend',
                                                       use_null_placeholders=True)
-            if verbose:
-                print(f"Negative prompt:\n{negative_prompt}")
-                print(f"Null negative prompt:\n{null_negative_prompt}")
+            '''         if verbose:
+                            print(f"Negative prompt:\n{negative_prompt}")
+                            print(f"Null negative prompt:\n{null_negative_prompt}")
+
+            '''        
         else:
             null_negative_prompt = None
 
