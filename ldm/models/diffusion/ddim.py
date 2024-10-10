@@ -132,7 +132,7 @@ class DDIMSampler(object):
         return samples, intermediates
 
     @torch.no_grad()
-    def ddim_sampling(self, cond, shape,
+    def ddim_sampling(self, cond_context, shape,
                       x_T=None, ddim_use_original_steps=False,
                       callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, log_every_t=100,
@@ -197,7 +197,7 @@ class DDIMSampler(object):
             # use_original_steps=False, quantize_denoised=False, temperature=1.0,
             # noise_dropout=0.0, score_corrector=None, corrector_kwargs=None,
             # guidance_scale=10.0, 
-            outs = self.p_sample_ddim(img, cond, ts, index=index, use_original_steps=ddim_use_original_steps,
+            outs = self.p_sample_ddim(img, cond_context, ts, index=index, use_original_steps=ddim_use_original_steps,
                                       quantize_denoised=quantize_denoised, temperature=temperature,
                                       noise_dropout=noise_dropout, score_corrector=score_corrector,
                                       corrector_kwargs=corrector_kwargs,
@@ -312,7 +312,7 @@ class DDIMSampler(object):
                 extract_into_tensor(sqrt_one_minus_alphas_cumprod, t, x0.shape) * noise)
 
     @torch.no_grad()
-    def decode(self, x_latent, cond, t_start, guidance_scale=1.0, unconditional_conditioning=None,
+    def decode(self, x_latent, cond_context, t_start, guidance_scale=1.0, unconditional_conditioning=None,
                use_original_steps=False):
 
         timesteps = np.arange(self.ddpm_num_timesteps) if use_original_steps else self.ddim_timesteps
@@ -339,7 +339,7 @@ class DDIMSampler(object):
         for i, step in enumerate(iterator):
             index = total_steps - i - 1
             ts = torch.full((x_latent.shape[0],), step, device=x_latent.device, dtype=torch.long)
-            x_dec, _ = self.p_sample_ddim(x_dec, cond, ts, index=index, use_original_steps=use_original_steps,
+            x_dec, _ = self.p_sample_ddim(x_dec, cond_context, ts, index=index, use_original_steps=use_original_steps,
                                           guidance_scale=guide_scale,
                                           unconditional_conditioning=unconditional_conditioning)
             if i <= max_guide_anneal_steps:

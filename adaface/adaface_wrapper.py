@@ -303,6 +303,7 @@ class AdaFaceWrapper(nn.Module):
 
     def encode_prompt(self, prompt, negative_prompt=None, 
                       placeholder_tokens_pos='append',
+                      do_neg_id_prompt=False,
                       device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
@@ -313,6 +314,11 @@ class AdaFaceWrapper(nn.Module):
         prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
         if verbose:
             print(f"Subject prompt: {prompt}")
+
+        if do_neg_id_prompt:
+            # Use 'prepend' for the negative prompt, since it's long and we want to make sure
+            # the placeholder tokens are not cut off.
+            negative_prompt = self.update_prompt(negative_prompt, placeholder_tokens_pos='prepend')
 
         # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
         # So we manually move it to GPU here.
@@ -365,6 +371,7 @@ class AdaFaceWrapper(nn.Module):
     # ref_img_strength is used only in the img2img pipeline.
     def forward(self, noise, prompt, negative_prompt=None, 
                 placeholder_tokens_pos='append',
+                do_neg_id_prompt=False,
                 guidance_scale=6.0, out_image_count=4, 
                 ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
@@ -376,6 +383,7 @@ class AdaFaceWrapper(nn.Module):
             negative_pooled_prompt_embeds_ = \
                 self.encode_prompt(prompt, negative_prompt, 
                                    placeholder_tokens_pos=placeholder_tokens_pos,
+                                   do_neg_id_prompt=do_neg_id_prompt,
                                    device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
