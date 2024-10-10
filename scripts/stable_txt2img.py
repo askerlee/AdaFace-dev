@@ -247,10 +247,10 @@ def parse_args():
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")
     parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
-                        choices=["prepend", "append", "enclose"],
+                        choices=["prepend", "append"],
                         help="Position of the placeholder tokens in the prompt")
-    parser.add_argument("--do_neg_id_prompt", action="store_true",
-                        help="Whether to add ID prompt embeddings into the negative prompt")
+    parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0,
+                        help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
     
     args = parser.parse_args()
     return args
@@ -610,7 +610,7 @@ def main(opt):
                             teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if opt.use_teacher_neg else None
                             x_samples_ddim = pipeline(noise, prompts[0], None, 
                                                       placeholder_tokens_pos=opt.placeholder_tokens_pos,
-                                                      do_neg_id_prompt=opt.do_neg_id_prompt,
+                                                      do_neg_id_prompt_weight=opt.do_neg_id_prompt_weight,
                                                       guidance_scale=opt.scale, out_image_count=batch_size, 
                                                       verbose=True)
                         elif opt.method == "pulid":

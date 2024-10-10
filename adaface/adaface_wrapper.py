@@ -217,11 +217,9 @@ class AdaFaceWrapper(nn.Module):
             self.placeholder_tokens_strs.append(placeholder_tokens_str)
 
         self.all_placeholder_tokens_str = " ".join(self.placeholder_tokens_strs)
-        HALF_L = len(self.all_placeholder_tokens) // 2
-        placeholder_tokens1, placeholder_tokens2 = \
-            self.all_placeholder_tokens[:HALF_L], self.all_placeholder_tokens[HALF_L:]
-        self.all_placeholder_tokens_str1 = " ".join(placeholder_tokens1)
-        self.all_placeholder_tokens_str2 = " ".join(placeholder_tokens2)
+        # all_null_placeholder_tokens_str: ", , , , ..." (20 times).
+        # It just contains the commas and spaces with the same length, but no actual tokens.
+        self.all_null_placeholder_tokens_str = " ".join([", "] * len(self.all_placeholder_tokens))
 
         # Add the new tokens to the tokenizer.
         num_added_tokens = tokenizer.add_tokens(self.all_placeholder_tokens)
@@ -231,8 +229,6 @@ class AdaFaceWrapper(nn.Module):
                 " `subject_string` that is not already in the tokenizer.")
 
         print(f"Added {num_added_tokens} tokens ({self.all_placeholder_tokens_str}) to the tokenizer.")
-        print(f"First  half: {self.all_placeholder_tokens_str1}")
-        print(f"Second half: {self.all_placeholder_tokens_str2}")
 
         # placeholder_token_ids: [49408, ..., 49423].
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.all_placeholder_tokens)
@@ -254,24 +250,31 @@ class AdaFaceWrapper(nn.Module):
                 token_embeds[token_id] = subj_embs[i]
             print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.all_placeholder_tokens_str}) in the text encoder.")
 
-    def update_prompt(self, prompt, placeholder_tokens_pos='append'):
+    def update_prompt(self, prompt, placeholder_tokens_pos='append',
+                      use_null_placeholders=False):
         if prompt is None:
             prompt = ""
 
+        if use_null_placeholders:
+            all_placeholder_tokens_str = self.all_null_placeholder_tokens_str
+        else:
+            all_placeholder_tokens_str = self.all_placeholder_tokens_str
+
         # Delete the subject_string from the prompt.
-        re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
-        re.sub(r'\b' + self.subject_string + r'\b,?',              "", prompt)
+        prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
+        prompt = re.sub(r'\b' + self.subject_string + r'\b,?',              "", prompt)
         # Prevously, arc2face ada prompts work better if they are prepended to the prompt,
         # and consistentID ada prompts work better if they are appended to the prompt.
         # When we do joint training, seems both work better if they are appended to the prompt.
         # Therefore we simply appended all placeholder_tokens_str's to the prompt.
         # NOTE: Prepending them hurts compositional prompts.
         if placeholder_tokens_pos == 'prepend':
-            prompt = self.all_placeholder_tokens_str + " " + prompt
+            prompt = all_placeholder_tokens_str + " " + prompt
         elif placeholder_tokens_pos == 'append':
-            prompt = prompt + " " + self.all_placeholder_tokens_str
-        elif placeholder_tokens_pos == 'enclose':
-            prompt = self.all_placeholder_tokens_str1 + " " + prompt + " " + self.all_placeholder_tokens_str2
+            prompt = prompt + " " + all_placeholder_tokens_str
+        else:
+            breakpoint()
+
         return prompt
 
     # avg_at_stage: 'id_emb', 'img_prompt_emb', or None.
@@ -301,28 +304,7 @@ class AdaFaceWrapper(nn.Module):
             self.update_text_encoder_subj_embeddings(all_adaface_subj_embs)
         return all_adaface_subj_embs
 
-    def encode_prompt(self, prompt, negative_prompt=None, 
-                      placeholder_tokens_pos='append',
-                      do_neg_id_prompt=False,
-                      device=None, verbose=False):
-        if negative_prompt is None:
-            negative_prompt = self.negative_prompt
-        
-        if device is None:
-            device = self.device
-        
-        prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
-        if verbose:
-            print(f"Subject prompt: {prompt}")
-
-        if do_neg_id_prompt:
-            # Use 'prepend' for the negative prompt, since it's long and we want to make sure
-            # the placeholder tokens are not cut off.
-            negative_prompt = self.update_prompt(negative_prompt, placeholder_tokens_pos='prepend')
-
-        # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
-        # So we manually move it to GPU here.
-        self.pipeline.text_encoder.to(device)
+    def diffusers_encode_prompts(self, prompt, negative_prompt, device):
         # pooled_prompt_embeds_, negative_pooled_prompt_embeds_ are used by text2img3 and flux.
         pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = None, None
 
@@ -331,7 +313,8 @@ class AdaFaceWrapper(nn.Module):
             # prompt_embeds_, negative_prompt_embeds_: [77, 768] -> [1, 77, 768].
             prompt_embeds_, negative_prompt_embeds_ = \
                 self.pipeline._encode_prompt(prompt, device=device, num_images_per_prompt=1,
-                                             do_classifier_free_guidance=True, negative_prompt=negative_prompt)
+                                             do_classifier_free_guidance=True, 
+                                             negative_prompt=negative_prompt)
             prompt_embeds_ = prompt_embeds_.unsqueeze(0)
             negative_prompt_embeds_ = negative_prompt_embeds_.unsqueeze(0)
         else:
@@ -365,13 +348,52 @@ class AdaFaceWrapper(nn.Module):
                                                 num_images_per_prompt=1, 
                                                 do_classifier_free_guidance=True,
                                                 negative_prompt=negative_prompt)
-                
+    
+        return prompt_embeds_, negative_prompt_embeds_, \
+               pooled_prompt_embeds_, negative_pooled_prompt_embeds_
+    
+    def encode_prompt(self, prompt, negative_prompt=None, 
+                      placeholder_tokens_pos='append',
+                      do_neg_id_prompt_weight=0,
+                      device=None, verbose=False):
+        if negative_prompt is None:
+            negative_prompt = self.negative_prompt
+        
+        if device is None:
+            device = self.device
+        
+        prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
+        if verbose:
+            print(f"Subject prompt: {prompt}")
+
+        if do_neg_id_prompt_weight > 0:
+            # Use 'prepend' for the negative prompt, since it's long and we want to make sure
+            # the placeholder tokens are not cut off.
+            negative_prompt  = self.update_prompt(negative_prompt, placeholder_tokens_pos='prepend')
+            null_negative_prompt = self.update_prompt(negative_prompt, placeholder_tokens_pos='prepend',
+                                                      use_null_placeholders=True)
+        else:
+            null_negative_prompt = None
+
+        # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
+        # So we manually move it to GPU here.
+        self.pipeline.text_encoder.to(device)
+
+        prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
+            self.diffusers_encode_prompts(prompt, negative_prompt, device)
+        
+        if 0 < do_neg_id_prompt_weight < 1:
+            _, negative_prompt_embeds_null, _, _ = \
+                self.diffusers_encode_prompts(prompt, null_negative_prompt, device)
+            negative_prompt_embeds_ = negative_prompt_embeds_ * do_neg_id_prompt_weight + \
+                                      negative_prompt_embeds_null * (1 - do_neg_id_prompt_weight)
+            
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
     def forward(self, noise, prompt, negative_prompt=None, 
                 placeholder_tokens_pos='append',
-                do_neg_id_prompt=False,
+                do_neg_id_prompt_weight=0,
                 guidance_scale=6.0, out_image_count=4, 
                 ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
@@ -383,7 +405,7 @@ class AdaFaceWrapper(nn.Module):
             negative_pooled_prompt_embeds_ = \
                 self.encode_prompt(prompt, negative_prompt, 
                                    placeholder_tokens_pos=placeholder_tokens_pos,
-                                   do_neg_id_prompt=do_neg_id_prompt,
+                                   do_neg_id_prompt_weight=do_neg_id_prompt_weight,
                                    device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
