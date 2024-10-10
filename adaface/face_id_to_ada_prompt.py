@@ -659,6 +659,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def get_id2img_learnable_modules(self):
         return [ self.text_to_image_prompt_encoder ]
     
+# ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, pipe=None, base_model_path="models/sd15-dste8-vae.safetensors", 
                  *args, **kwargs):
@@ -866,8 +867,17 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.encoders_num_static_img_suffix_embs[i], 
                                                                             img_prompt_dim=self.output_dim)
 
-                subj_basis_generator.extend_prompt2token_proj_attention(\
-                    ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
+                if subj_basis_generator.prompt2token_proj_attention_multipliers \
+                  == [1] * 12:
+                    subj_basis_generator.extend_prompt2token_proj_attention(\
+                        ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
+                elif subj_basis_generator.prompt2token_proj_attention_multipliers \
+                  != ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers:
+                    raise ValueError("Inconsistent prompt2token_proj_attention_multipliers.")
+                
+                assert subj_basis_generator.prompt2token_proj_attention_multipliers \
+                    == ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, \
+                    "Inconsistent prompt2token_proj_attention_multipliers."
                 subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict())
 
                 # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
