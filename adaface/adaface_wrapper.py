@@ -217,11 +217,11 @@ class AdaFaceWrapper(nn.Module):
             self.placeholder_tokens_strs.append(placeholder_tokens_str)
 
         self.all_placeholder_tokens_str = " ".join(self.placeholder_tokens_strs)
-        HALF_L = len(self.placeholder_tokens_strs)
-        placeholder_tokens_strs1, placeholder_tokens_strs2 = \
-            self.placeholder_tokens_strs[:HALF_L], self.placeholder_tokens_strs[HALF_L:]
-        self.all_placeholder_tokens_str1 = " ".join(placeholder_tokens_strs1)
-        self.all_placeholder_tokens_str2 = " ".join(placeholder_tokens_strs2)
+        HALF_L = len(self.all_placeholder_tokens) // 2
+        placeholder_tokens1, placeholder_tokens2 = \
+            self.all_placeholder_tokens[:HALF_L], self.all_placeholder_tokens[HALF_L:]
+        self.all_placeholder_tokens_str1 = " ".join(placeholder_tokens1)
+        self.all_placeholder_tokens_str2 = " ".join(placeholder_tokens2)
 
         # Add the new tokens to the tokenizer.
         num_added_tokens = tokenizer.add_tokens(self.all_placeholder_tokens)
@@ -231,7 +231,9 @@ class AdaFaceWrapper(nn.Module):
                 " `subject_string` that is not already in the tokenizer.")
 
         print(f"Added {num_added_tokens} tokens ({self.all_placeholder_tokens_str}) to the tokenizer.")
-        
+        print(f"First  half: {self.all_placeholder_tokens_str1}")
+        print(f"Second half: {self.all_placeholder_tokens_str2}")
+
         # placeholder_token_ids: [49408, ..., 49423].
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.all_placeholder_tokens)
         #print("New tokens:", self.placeholder_token_ids)
