@@ -217,6 +217,11 @@ class AdaFaceWrapper(nn.Module):
             self.placeholder_tokens_strs.append(placeholder_tokens_str)
 
         self.all_placeholder_tokens_str = " ".join(self.placeholder_tokens_strs)
+        HALF_L = len(self.placeholder_tokens_strs)
+        placeholder_tokens_strs1, placeholder_tokens_strs2 = \
+            self.placeholder_tokens_strs[:HALF_L], self.placeholder_tokens_strs[HALF_L:]
+        self.all_placeholder_tokens_str1 = " ".join(placeholder_tokens_strs1)
+        self.all_placeholder_tokens_str2 = " ".join(placeholder_tokens_strs2)
 
         # Add the new tokens to the tokenizer.
         num_added_tokens = tokenizer.add_tokens(self.all_placeholder_tokens)
@@ -247,7 +252,7 @@ class AdaFaceWrapper(nn.Module):
                 token_embeds[token_id] = subj_embs[i]
             print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.all_placeholder_tokens_str}) in the text encoder.")
 
-    def update_prompt(self, prompt, placeholder_tokens_pos='postpend'):
+    def update_prompt(self, prompt, placeholder_tokens_pos='append'):
         if prompt is None:
             prompt = ""
 
@@ -261,9 +266,10 @@ class AdaFaceWrapper(nn.Module):
         # NOTE: Prepending them hurts compositional prompts.
         if placeholder_tokens_pos == 'prepend':
             prompt = self.all_placeholder_tokens_str + " " + prompt
-        elif placeholder_tokens_pos == 'postpend':
+        elif placeholder_tokens_pos == 'append':
             prompt = prompt + " " + self.all_placeholder_tokens_str
-
+        elif placeholder_tokens_pos == 'enclose':
+            prompt = self.all_placeholder_tokens_str1 + " " + prompt + " " + self.all_placeholder_tokens_str2
         return prompt
 
     # avg_at_stage: 'id_emb', 'img_prompt_emb', or None.
@@ -294,7 +300,7 @@ class AdaFaceWrapper(nn.Module):
         return all_adaface_subj_embs
 
     def encode_prompt(self, prompt, negative_prompt=None, 
-                      placeholder_tokens_pos='postpend',
+                      placeholder_tokens_pos='append',
                       device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
@@ -356,7 +362,7 @@ class AdaFaceWrapper(nn.Module):
     
     # ref_img_strength is used only in the img2img pipeline.
     def forward(self, noise, prompt, negative_prompt=None, 
-                placeholder_tokens_pos='postpend',
+                placeholder_tokens_pos='append',
                 guidance_scale=6.0, out_image_count=4, 
                 ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)

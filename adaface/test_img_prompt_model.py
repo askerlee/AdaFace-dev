@@ -159,7 +159,7 @@ if __name__ == "__main__":
             pipeline.encode_prompt(comp_prompt, device='cuda', num_images_per_prompt=args.out_image_count,
                                    do_classifier_free_guidance=True, negative_prompt=negative_prompt)
         #pipeline.text_encoder = text_encoder
-        # Postpend the id prompt embeddings to the prompt embeddings.
+        # append the id prompt embeddings to the prompt embeddings.
         # For arc2face, id_prompt_emb can be either pre- or post-pended.
         # But for ConsistentID, id_prompt_emb has to be **post-pended**. Otherwise, the result images are blank.
 

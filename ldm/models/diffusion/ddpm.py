@@ -630,7 +630,7 @@ class LatentDiffusion(DDPM):
                 # Only return the ID2ImgPrompt embeddings, and discard the text embeddings.
                 prompt_embeddings = subj_id2img_prompt_embs
             elif return_prompt_embs_type == 'text_id':
-                # NOTE: always postpend the id2img prompts to the end of the prompt embeddings
+                # NOTE: always append the id2img prompts to the end of the prompt embeddings
                 # Arc2face doesn't care about the order of the prompts. But consistentID only works when
                 # the id2img prompt embeddings are postpended to the end of the prompt embeddings.
                 # prompt_embeddings: [BS, 81, 768]. 81: 77 + 4.

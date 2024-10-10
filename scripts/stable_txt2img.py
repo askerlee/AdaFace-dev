@@ -246,8 +246,8 @@ def parse_args():
                         help="Extra paths to the checkpoints of the UNet models")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")
-    parser.add_argument("--placeholder_tokens_pos", type=str, default="postpend",
-                        choices=["prepend", "postpend"],
+    parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
+                        choices=["prepend", "append", "enclose"],
                         help="Position of the placeholder tokens in the prompt")
     
     args = parser.parse_args()
@@ -566,7 +566,7 @@ def main(opt):
                     if not opt.eval_blip and not opt.diffusers:
                         prompts2 = []
                         for prompt in prompts:
-                            # Remove the subject string 'z', then postpend the placeholder tokens to the prompt.
+                            # Remove the subject string 'z', then append the placeholder tokens to the prompt.
                             # If there is a word 'a' before the subject string or ',' after, then remove 'a z,'.
                             prompt2 = re.sub(r'\b(a|an|the)\s+' + opt.subject_string + r'\b,?', "", prompt)
                             prompt2 = re.sub(r'\b' + opt.subject_string + r'\b,?', "", prompt2)

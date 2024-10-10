@@ -121,7 +121,7 @@ def generate_image(image_paths, guidance_scale, model_style_type, avg_at_stage, 
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
     samples = adaface(noise, prompt, negative_prompt, 
-                      placeholder_tokens_pos='postpend',
+                      placeholder_tokens_pos='append',
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, verbose=True)
     return samples
