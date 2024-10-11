@@ -1472,21 +1472,12 @@ class LatentDiffusion(DDPM):
             extra_info['img_mask']  = img_mask
             extra_info['capture_ca_layers_activations'] = True
 
-            # DISABLED: Apply neg_id_emb for 50% of the time.
-            if False: #torch.rand(1) < 0.5:
-                neg_id_emb = c_prompt_emb * self.do_neg_id_prompt_weight + \
-                             self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
-                uncond_emb = neg_id_emb
-                cfg_scale  = 2
-            else:
-                # Don't use the negative prompt. So don't consider neg_id_emb.
-                uncond_emb = None
-                cfg_scale  = -1
-
+            # DON'T apply neg_id_emb for recon iterations. 
+            # Don't do CFG either. So uncond_emb is None.
             model_output, x_recon = \
                 self.guided_denoise(x_start, noise, t, cond_context, 
                                     text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    uncond_emb=uncond_emb,
+                                    uncond_emb=None,
                                     unet_has_grad='all', 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is enabled only when do_comp_prompt_distillation.
@@ -1494,7 +1485,7 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
-                                    cfg_scale=cfg_scale)
+                                    cfg_scale=-1)
 
             extra_info['capture_ca_layers_activations'] = False
 
@@ -1744,10 +1735,11 @@ class LatentDiffusion(DDPM):
 
         # For compositional denoising, we always apply neg_id_emb.
         if torch.rand(1) < 1:
-            #subj_single_uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
-            # Use subj-single prompt embeddings for both subj-single and subj-comp instances.
+            # c_prompt_emb[:BLOCK_SIZE]: subj-single prompt embeddings.
+            # neg_id_emb = 0.2 * subj single emb + 0.8 * uncond emb.
             neg_id_emb      = c_prompt_emb[:BLOCK_SIZE] * self.do_neg_id_prompt_weight + \
                                 self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
+            # Use subj-single prompt embeddings for both subj-single and subj-comp instances.
             neg_id_emb      = neg_id_emb.repeat(2, 1, 1)
             cls_uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 2, 1, 1)
             uncond_emb      = torch.cat([neg_id_emb, cls_uncond_emb], dim=0)
@@ -1947,13 +1939,9 @@ class LatentDiffusion(DDPM):
         model_outputs = []
         #all_recon_images = []
 
-        # DISABLED: Apply neg_id_emb for 50% of the time.
-        if False: #torch.rand(1) < 0:
-            neg_id_emb = c_prompt_emb * self.do_neg_id_prompt_weight + \
-                         self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
-            uncond_emb = neg_id_emb
-        else:
-            uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+        # DON'T apply neg_id_emb for recon iterations. 
+        # But still apply CFG to match the teacher. So uncond_emb is the real uncond_emb.
+        uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
 
         for s in range(num_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
