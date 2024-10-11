@@ -1332,10 +1332,19 @@ def draw_annealed_bool(training_percent, final_percent, true_prob_range):
     # Flip a coin, with prob of true being true_p_annealed.    
     return (torch.rand(1) < true_p_annealed).item()
 
+def probably_draw_float(rand_range, default_value, default_prob=0.5):
+    lb, ub = rand_range
+    assert lb < ub
+    if torch.rand(1) < default_prob:
+        return default_value
+    else:
+        return torch.rand(1).item() * (ub - lb) + lb
+
+# t: original t. t_annealed: randomly scaled t, scaled according to ratio_range.
 # ratio_range: range of fluctuation ratios (could > 1 or < 1).
 # keep_prob_range: range of annealed prob of keeping the original t. If (0, 0.5),
 # then gradually increase the prob of keeping the original t from 0 to 0.5.
-def probably_anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
+def probably_anneal_int_tensor(t, training_percent, num_timesteps, ratio_range, keep_prob_range=(0, 0.5)):
     t_annealed = t.clone()
     # Gradually increase the chance of keeping the original t from 0 to 0.5.
     do_keep = draw_annealed_bool(training_percent, final_percent=1., true_prob_range=keep_prob_range)
@@ -1354,8 +1363,8 @@ def probably_anneal_t(t, training_percent, num_timesteps, ratio_range, keep_prob
     else:
         t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
         t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
-        t_annealed = torch.tensor(torch.randint.randint(t_lowerbound, t_upperbound, (1,)).item(), 
-                                  dtype=t.dtype, device=t.device)
+        t_annealed   = torch.tensor(torch.randint.randint(t_lowerbound, t_upperbound, (1,)).item(), 
+                                    dtype=t.dtype, device=t.device)
 
     return t_annealed
 

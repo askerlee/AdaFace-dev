@@ -20,7 +20,8 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        probably_anneal_t, count_optimized_params, count_params
+                        probably_anneal_int_tensor, probably_draw_float, \
+                        count_optimized_params, count_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -1459,7 +1460,7 @@ class LatentDiffusion(DDPM):
 
             # Increase t slightly by (1.3, 1.6) to increase noise amount and make the denoising more challenging,
             # with smaller prob to keep the original t.
-            t = probably_anneal_t(t, self.training_percent, self.num_timesteps, ratio_range=(1.3, 1.6),
+            t = probably_anneal_int_tensor(t, self.training_percent, self.num_timesteps, ratio_range=(1.3, 1.6),
                                   keep_prob_range=(0.2, 0.1))
             if self.iter_flags['num_denoising_steps'] > 1:
                 # Take a weighted average of t and 1000, to shift t to larger values, 
@@ -1733,12 +1734,18 @@ class LatentDiffusion(DDPM):
 
         extra_info['capture_ca_layers_activations'] = True
 
-        # For compositional denoising, we always apply neg_id_emb.
-        if torch.rand(1) < 1:
+        if self.do_neg_id_prompt_weight > 0:
+            # Draw 0 with prob 0.5, and draw a number uniformly from within (0, 0.2) with prob 0.5.
+            do_neg_id_prompt_weight = probably_draw_float([0, self.do_neg_id_prompt_weight], 0, default_prob=0.5)
+        else:
+            do_neg_id_prompt_weight = 0
+
+        # For compositional denoising, if do_neg_id_prompt_weight > 0, then we apply neg_id_emb.
+        if do_neg_id_prompt_weight > 0:
             # c_prompt_emb[:BLOCK_SIZE]: subj-single prompt embeddings.
             # neg_id_emb = 0.2 * subj single emb + 0.8 * uncond emb.
-            neg_id_emb      = c_prompt_emb[:BLOCK_SIZE] * self.do_neg_id_prompt_weight + \
-                                self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
+            neg_id_emb      = c_prompt_emb[:BLOCK_SIZE] * do_neg_id_prompt_weight + \
+                                self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - do_neg_id_prompt_weight)
             # Use subj-single prompt embeddings for both subj-single and subj-comp instances.
             neg_id_emb      = neg_id_emb.repeat(2, 1, 1)
             cls_uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 2, 1, 1)

@@ -14,7 +14,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import save_grid, list_np_images_to_4d_tensor, load_model_from_config
+from ldm.util import save_grid, load_model_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                   init_evaluators, set_tf_gpu
@@ -249,7 +249,7 @@ def parse_args():
     parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
                         choices=["prepend", "append"],
                         help="Position of the placeholder tokens in the prompt")
-    parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0,
+    parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.0,
                         help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
     
     args = parser.parse_args()
