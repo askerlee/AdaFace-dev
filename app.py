@@ -13,7 +13,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
-parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-08T14-42-05_zero3-ada-25000.pt',
+parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-08T14-42-05_zero3-ada-30000.pt',
                     help="Paths to the checkpoints of the ID2Ada prompt encoders")
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
@@ -26,6 +26,11 @@ parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=[],
                     help="Extra paths to the checkpoints of the UNet models")
 parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                     help="Weights for the UNet models")
+parser.add_argument("--guidance_scale", type=float, default=8.0,
+                    help="The guidance scale for the diffusion model. Default: 8.0")
+parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.2,
+                    help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
+
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
@@ -73,7 +78,7 @@ def update_out_gallery(images):
     return gr.update(height=800)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, model_style_type, avg_at_stage, perturb_std,
+def generate_image(image_paths, guidance_scale, model_style_type, do_neg_id_prompt_weight, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
 
@@ -97,7 +102,7 @@ def generate_image(image_paths, guidance_scale, model_style_type, avg_at_stage, 
 
     adaface_subj_embs = \
         adaface.prepare_adaface_embeddings(image_paths=image_paths, face_id_embs=None, 
-                                           avg_at_stage=avg_at_stage,
+                                           avg_at_stage='id_emb',
                                            perturb_at_stage='img_prompt_emb',
                                            perturb_std=perturb_std, update_text_encoder=True)
     
@@ -107,7 +112,7 @@ def generate_image(image_paths, guidance_scale, model_style_type, avg_at_stage, 
     # Sometimes the pipeline is on CPU, although we've put it on CUDA (due to some offloading mechanism).
     # Therefore we set the generator to the correct device.
     generator = torch.Generator(device=device).manual_seed(seed)
-    print(f"Manual seed: {seed}. avg_at_stage: {avg_at_stage}. perturb_std: {perturb_std}")
+    print(f"Manual seed: {seed}. do_neg_id_prompt_weight: {do_neg_id_prompt_weight}.")
     # Generate two images each time for the user to select from.
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
@@ -121,7 +126,7 @@ def generate_image(image_paths, guidance_scale, model_style_type, avg_at_stage, 
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
     samples = adaface(noise, prompt, negative_prompt, 
-                      placeholder_tokens_pos='append',
+                      do_neg_id_prompt_weight=do_neg_id_prompt_weight,
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, verbose=True)
     return samples
@@ -132,7 +137,7 @@ title = r"""
 """
 
 description = r"""
-<b>Official demo</b> for our NeurIPS 2024 submission <b>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</b>.<br>
+<b>Official demo</b> for our working paper <b>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</b>.<br>
 
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
@@ -208,7 +213,15 @@ with gr.Blocks(css=css) as demo:
                 minimum=1.0,
                 maximum=12.0,
                 step=1.0,
-                value=5.0,
+                value=args.guidance_scale,
+            )
+
+            do_neg_id_prompt_weight = gr.Slider(
+                label="Weight of ID prompt in the negative prompt",
+                minimum=0.0,
+                maximum=0.4,
+                step=0.05,
+                value=args.do_neg_id_prompt_weight,
             )
 
             model_style_type = gr.Dropdown(
@@ -220,13 +233,6 @@ with gr.Blocks(css=css) as demo:
                 filterable=False,
             )
 
-            avg_at_stage = gr.Dropdown(label="Average at stage",
-                                       choices=["id_emb", "img_prompt_emb", "ada_prompt_emb"],
-                                       value="id_emb",
-                                       allow_custom_value=False,
-                                       visible=False,
-                                      )
-            
             perturb_std = gr.Slider(
                 label="Std of noise added to input (may help stablize face embeddings)",
                 minimum=0.0,
@@ -266,7 +272,7 @@ with gr.Blocks(css=css) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, model_style_type, avg_at_stage, perturb_std, num_images, 
+            inputs=[img_files, guidance_scale, model_style_type, do_neg_id_prompt_weight, perturb_std, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         ).then(
