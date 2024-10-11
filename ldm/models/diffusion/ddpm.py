@@ -1472,8 +1472,8 @@ class LatentDiffusion(DDPM):
             extra_info['img_mask']  = img_mask
             extra_info['capture_ca_layers_activations'] = True
 
-            # Apply neg_id_emb for 50% of the time.
-            if torch.rand(1) < 0.5:
+            # DISABLED: Apply neg_id_emb for 50% of the time.
+            if False: #torch.rand(1) < 0.5:
                 neg_id_emb = c_prompt_emb * self.do_neg_id_prompt_weight + \
                              self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
                 uncond_emb = neg_id_emb
@@ -1744,10 +1744,12 @@ class LatentDiffusion(DDPM):
 
         # For compositional denoising, we always apply neg_id_emb.
         if torch.rand(1) < 1:
-            SUBJ = BLOCK_SIZE * 2
-            neg_id_emb      = c_prompt_emb[:SUBJ] * self.do_neg_id_prompt_weight + \
-                                self.uncond_context[0].repeat(SUBJ, 1, 1) * (1 - self.do_neg_id_prompt_weight)
-            cls_uncond_emb  = self.uncond_context[0].repeat(SUBJ, 1, 1)
+            #subj_single_uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+            # Use subj-single prompt embeddings for both subj-single and subj-comp instances.
+            neg_id_emb      = c_prompt_emb[:BLOCK_SIZE] * self.do_neg_id_prompt_weight + \
+                                self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
+            neg_id_emb      = neg_id_emb.repeat(2, 1, 1)
+            cls_uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 2, 1, 1)
             uncond_emb      = torch.cat([neg_id_emb, cls_uncond_emb], dim=0)
         else:
             uncond_emb      = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
@@ -1945,8 +1947,8 @@ class LatentDiffusion(DDPM):
         model_outputs = []
         #all_recon_images = []
 
-        # Apply neg_id_emb for 50% of the time.
-        if torch.rand(1) < 0.5:
+        # DISABLED: Apply neg_id_emb for 50% of the time.
+        if False: #torch.rand(1) < 0:
             neg_id_emb = c_prompt_emb * self.do_neg_id_prompt_weight + \
                          self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - self.do_neg_id_prompt_weight)
             uncond_emb = neg_id_emb
