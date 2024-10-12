@@ -756,7 +756,7 @@ class LatentDiffusion(DDPM):
         # so fp_trick won't be used.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_comp_prompt_distillation'] :
-                p_use_fp_trick = 0.7
+                p_use_fp_trick = 0.8
             # If compositional distillation is enabled, then in normal recon iterations,
             # we use the fp_trick most of the time, to better reconstructing single-face input images.
             # However, we still keep 20% of the do_normal_recon iterations to not use the fp_trick,
@@ -764,8 +764,9 @@ class LatentDiffusion(DDPM):
             elif self.iter_flags['do_normal_recon'] and self.comp_distill_iter_gap > 0:
                 p_use_fp_trick = 0.8
             else:
-                # If not doing compositional distillation, then use_fp_trick is disabled on do_normal_recon iterations,
-                # so that the ID embeddings alone are expected to reconstruct the subject portraits.
+                # If not doing compositional distillation and only doing do_normal_recon, 
+                # then use_fp_trick is disabled, so that the ID embeddings alone are expected 
+                # to reconstruct the subject portraits.
                 p_use_fp_trick = 0
         else:
             p_use_fp_trick = 0
@@ -1926,6 +1927,9 @@ class LatentDiffusion(DDPM):
         if num_init_prep_denoising_steps > 0:
             init_prep_context_type = 'ensemble'
             MAX_N_SEP = 3
+            # If num_init_prep_denoising_steps > MAX_N_SEP, then we split the denoising steps into
+            # shared denoising steps and separate denoising steps.
+            # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
             num_shared_denoising_steps = max(num_init_prep_denoising_steps - MAX_N_SEP, 0)
             num_sep_denoising_steps    = min(num_init_prep_denoising_steps, MAX_N_SEP)
             all_t_list = []
@@ -1947,6 +1951,7 @@ class LatentDiffusion(DDPM):
                 # Since we always use CFG for class prep denoising,
                 # we need to pass the negative prompt as well.
                 # cfg_scale_range of comp_distill_init_prep_unet is [2, 4].
+                # init_prep_noises: the noises that have been used in the denoising.
                 with torch.no_grad():
                     init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
                         self.comp_distill_init_prep_unet(self, x_start_4, noise_4, t_4, 
@@ -1958,7 +1963,7 @@ class LatentDiffusion(DDPM):
                                                         num_denoising_steps=num_shared_denoising_steps,
                                                         # Same t across instances.
                                                         uses_same_t=True)
-                # Repeat the 1-instance denoised x_start_4 to 2-instance x_start_2, i.e., the single and comp instances.
+                # Repeat the 1-instance denoised x_start_4 to 2-instance x_start_2, i.e., one single, one comp instances.
                 x_start_2   = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
                 t_2         = all_t[-1].repeat(2)
                 all_t_list  += [ t[0].item() for t in all_t ]
@@ -1967,16 +1972,17 @@ class LatentDiffusion(DDPM):
                 # for num_sep_denoising_steps times, using self.comp_distill_init_prep_unet.
                 # We only use the second half-batch (class instances) for class prep denoising.
                 # x_start and t are initialized as 1-repeat-4 at above, so the second half is 1-repeat-2.
+                # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
                 x_start_2   = x_start.chunk(2)[1]
                 t_2         = t.chunk(2)[1]
 
-            # Ensure the two instances use the same noise and t, although different x_start_2.
-            noise_2 = torch.randn_like(x_start[:BLOCK_SIZE].repeat(2, 1, 1, 1))
-            c_prompt_emb_1, c_prompt_emb_2 = c_prompt_emb.chunk(2)
+            # Ensure the two instances (one single, one comp) use the same noise and t, although on different x_start_2.
+            noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
+            subj_prompt_emb, cls_prompt_emb = c_prompt_emb.chunk(2)
             uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
             # *_double_context contains both the positive and negative prompt embeddings.
-            subj_double_context = torch.cat([c_prompt_emb_1, uncond_emb], dim=0)
-            cls_double_context  = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
+            subj_double_context = torch.cat([subj_prompt_emb, uncond_emb], dim=0)
+            cls_double_context  = torch.cat([cls_prompt_emb,  uncond_emb], dim=0)
 
             # Since we always use CFG for class prep denoising,
             # we need to pass the negative prompt as well.
@@ -2006,7 +2012,7 @@ class LatentDiffusion(DDPM):
 
         uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
         # Regenerate the noise, since the noise has been used above.
-        noise       = torch.randn_like(x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1))
+        noise       = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
         extra_info['capture_ca_layers_activations'] = True
 
         # model_output is not used by the caller.
