@@ -433,9 +433,10 @@ class LatentDiffusion(DDPM):
                                     unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
-                                    # When aggregating the results of using subject embeddings vs. class embeddings,
+                                    # unet_weights: [0.2, 0.8]. The "first unet" uses subject embeddings, 
+                                    # the second uses class embeddings. This means that,
+                                    # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
-                                    # NOTE: subject embeddings first, then class embeddings.
                                     unet_weights = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
                                     p_uses_cfg=1, # Always uses CFG for init prep denoising.
                                     cfg_scale_range=[2, 4],
@@ -1576,9 +1577,9 @@ class LatentDiffusion(DDPM):
                 comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.global_step + 1)
                 loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
 
-            # comp_fg_bg_preserve_loss_weight: 1e-3. loss_comp_fg_bg_preserve: 0.5-0.6.
+            # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
-            # comp_prompt_distill_weight: 1e-3. loss_comp_prompt_distill: 2-3.
+            # comp_prompt_distill_weight: 1e-2. loss_comp_prompt_distill: 2-3.
             loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
 
         if torch.isnan(loss) and self.trainer.global_rank == 0:
@@ -1590,190 +1591,6 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # Do denoising, collect the attention activations for computing the losses later.
-    # masks: (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask). 
-    # Put them in a tuple to avoid too many arguments. The updated masks are returned.
-    # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
-    # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
-    def do_comp_prompt_denoising(self, cond_context, x_start, noise, text_prompt_adhoc_info,
-                                 masks, fg_noise_anneal_mean_range=(0.3, 0.3),
-                                 BLOCK_SIZE=1):
-        c_prompt_emb, c_in, extra_info = cond_context
-
-        # Compositional iter.
-        # In a compositional iter, we don't use the t passed into p_losses().
-        # Instead, t is randomly drawn from the middle (noisy but not too noisy) 30% segment of the timesteps.
-        t_middle = torch.randint(int(self.num_timesteps * 0.4), int(self.num_timesteps * 0.7), 
-                                 (x_start.shape[0],), device=x_start.device)
-        t = t_middle
-
-        # Although img_mask is not explicitly referred to in the following code,
-        # it's updated within repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks).
-        img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
-
-        if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-            # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
-            # the background in the training images, which is not desirable.
-            # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
-            # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
-            filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
-            # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
-            # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
-            # fg_noise_anneal_mean_range = (0.3, 0.3)
-            x_start, fg_mask, filtered_fg_mask = \
-                init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                                    self.training_percent,
-                                                    base_scale_range=(0.8, 1.0),
-                                                    fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
-
-        else:
-            # We have to use random noise for x_start, as the training images 
-            # are not used for initialization.
-            x_start.normal_()
-
-        # Make the 4 instances in x_start, noise and t the same.
-        x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        t       = t[:BLOCK_SIZE].repeat(4)
-
-        # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
-        masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
-        # Update masks to be a 1-repeat-4 structure.
-        masks = \
-            repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks)
-        batch_have_fg_mask = masks[-1]
-        self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
-
-        # This code block is within self.iter_flags['do_comp_prompt_distillation'].
-        # The prompts are of 1-repeat-4 (distillation) structure.
-        # Embedding mixing is always applied to the subject indices in every instance in the 
-        # second half-batch (class instances) only, 
-        # and the first half-batch (subject instances) is not affected.
-        # So providing all_subj_indices_1b[1] is enough. No need to provide batch indices.
-        # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
-        # so subj indices of the second-half batch are the repetitions of the 
-        # original extra_info['placeholder2indices_1b'].
-        #c_prompt_emb_mixed = mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
-        #                                             cls_subj_mix_scale=self.cls_subj_mix_scale)
-        
-        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
-        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
-        # (img_mask is not used in the prompt-guided cross-attention layers).
-        # But we don't use img_mask in compositional iterations. Because in compositional iterations,
-        # the original images don't play a role (even if comp_init_fg_from_training_image,
-        # the unet doesn't consider the actual pixels outside of the subject areas, so img_mask is
-        # set to None in extra_info).
-        extra_info['img_mask']  = None
-
-        # Update cond_context[0] to c_prompt_emb_mixed, to prepare for future reference.
-        # cond_context = (c_prompt_emb, c_in, extra_info)
-        # print(f"Rank {self.trainer.global_rank} step {self.global_step}: do_comp_prompt_distillation\n", c_in)
-
-        # We allow 2 to 6 denoising steps for preparing class instances for comp prompt distillation.
-        '''
-        num_init_prep_denoising_steps = \
-            sample_num_denoising_steps( self.max_num_comp_distill_init_prep_denoising_steps, 
-                                        p_num_denoising_steps    = [0.1, 0.3, 0.3, 0.3], 
-                                        cand_num_denoising_steps = [1,   2,   3,   4] )
-        '''
-        
-        # num_init_prep_denoising_steps iterates from 1 to 5.
-        # Note 5 is co-prime with comp_distill_iter_gap == 3 or 4.
-        # Therefore, this will be a uniform distribution of 1 to 5.
-        # Otherwise say, if num_denoising_steps == self.global_step % 6, then since for comp_distill_iterations,
-        # the global_step is always a multiple of 3, then num_denoising_steps will always be 0 or 3, which is not desired.
-        num_init_prep_denoising_steps = self.global_step % 5 + 1
-
-        if num_init_prep_denoising_steps > 0:
-            # Class prep denoising: Denoise x_start with the class prompts 
-            # for num_init_prep_denoising_steps times, using self.comp_distill_init_prep_unet.
-            # We only use the second half-batch (class instances) for class prep denoising.
-            x_start_2 = x_start.chunk(2)[1]
-            noise_2 = noise.chunk(2)[1]
-            t_2 = t.chunk(2)[1]
-            c_prompt_emb_1, c_prompt_emb_2   = c_prompt_emb.chunk(2)
-            uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
-            # *_double_context contains both the positive and negative prompt embeddings.
-            subj_double_context = torch.cat([c_prompt_emb_1, uncond_emb], dim=0)
-            cls_double_context  = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
-            init_prep_context_type = 'ensemble'
-            
-            '''
-            # Randomly switch between the subject and class double contexts.
-            if torch.rand(1) < 0.5:
-                init_prep_context = subj_double_context
-                init_prep_context_type = 'subj'
-            else:
-                init_prep_context = cls_double_context
-                init_prep_context_type = 'cls'
-            '''
-
-            # Since we always use CFG for class prep denoising,
-            # we need to pass the negative prompt as well.
-            # cfg_scale_range=[2, 4].
-            with torch.no_grad():
-                init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
-                    self.comp_distill_init_prep_unet(self, x_start_2, noise_2, t_2, 
-                                                     # The unet ensemble will do denoising with both subj_double_context
-                                                     # and cls_double_context, and average the results.
-                                                     teacher_context=[subj_double_context, cls_double_context], 
-                                                     num_denoising_steps=num_init_prep_denoising_steps,
-                                                     uses_same_t=True)
-                
-            all_t_list = [ t[0].item() for t in all_t ]
-            print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                  f"{num_init_prep_denoising_steps} subj-cls ensemble prep denoising steps {all_t_list}")
-            
-            # The last init_prep_x_start is the final denoised image (with the smallest t).
-            # So we use it as the x_start to be denoised by the 4-type prompt set.
-            # We need to let the subject and class instances use the same x_start. 
-            # Therefore, we repeat init_prep_x_starts[-1] twice.
-            x_start = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-            del init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t
-
-        extra_info['capture_ca_layers_activations'] = True
-
-        if self.do_neg_id_prompt_weight > 0:
-            # Draw 0 with prob 0.5, and draw a number uniformly from within (0, 0.2) with prob 0.5.
-            do_neg_id_prompt_weight = probably_draw_float([0, self.do_neg_id_prompt_weight], 0, default_prob=0.5)
-        else:
-            do_neg_id_prompt_weight = 0
-
-        # For compositional denoising, if do_neg_id_prompt_weight > 0, then we apply neg_id_emb.
-        if do_neg_id_prompt_weight > 0:
-            # c_prompt_emb[:BLOCK_SIZE]: subj-single prompt embeddings.
-            # neg_id_emb = 0.2 * subj single emb + 0.8 * uncond emb.
-            neg_id_emb      = c_prompt_emb[:BLOCK_SIZE] * do_neg_id_prompt_weight + \
-                                self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) * (1 - do_neg_id_prompt_weight)
-            # Use subj-single prompt embeddings for both subj-single and subj-comp instances.
-            neg_id_emb      = neg_id_emb.repeat(2, 1, 1)
-            cls_uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 2, 1, 1)
-            uncond_emb      = torch.cat([neg_id_emb, cls_uncond_emb], dim=0)
-        else:
-            uncond_emb      = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
-
-        # model_output is not used by the caller.
-        model_output, x_recon = \
-            self.guided_denoise(x_start, noise, t, cond_context, 
-                                text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                uncond_emb=uncond_emb,
-                                unet_has_grad='subject-half', 
-                                # Reconstruct the images at the pixel level for CLIP loss.
-                                # do_pixel_recon is enabled only when do_comp_prompt_distillation.
-                                # This is to log the denoised images for debugging and visualization.
-                                do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
-                                cfg_scale=5)
-
-        extra_info['capture_ca_layers_activations'] = False
-
-        # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
-        # We return noise to make the gt_target up-to-date, which is the recon objective.
-        # But gt_target is probably not referred to in the following loss computations,
-        # since the current iteration is do_comp_prompt_distillation. We update it just in case.
-        # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_recon, noise, masks, init_prep_context_type
-    
     # Major losses for normal_recon iterations (loss_recon, loss_fg_bg_complementary, etc.).
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
@@ -2024,6 +1841,194 @@ class LatentDiffusion(DDPM):
 
         return loss_unet_distill
 
+    # Do denoising, collect the attention activations for computing the losses later.
+    # masks: (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask). 
+    # Put them in a tuple to avoid too many arguments. The updated masks are returned.
+    # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
+    # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
+    def do_comp_prompt_denoising(self, cond_context, x_start, noise, text_prompt_adhoc_info,
+                                 masks, fg_noise_anneal_mean_range=(0.3, 0.3), BLOCK_SIZE=1):
+        c_prompt_emb, c_in, extra_info = cond_context
+
+        # Compositional iter.
+        # In a compositional iter, we don't use the t passed into p_losses().
+        # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
+        t_middle = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+                                 (x_start.shape[0],), device=x_start.device)
+        t = t_middle
+
+        # Although img_mask is not explicitly referred to in the following code,
+        # it's updated within repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks).
+        img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
+
+        if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+            # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+            # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
+            # the background in the training images, which is not desirable.
+            # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
+            # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
+            filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
+            # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
+            # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
+            # fg_noise_anneal_mean_range = (0.3, 0.3)
+            x_start, fg_mask, filtered_fg_mask = \
+                init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
+                                                    self.training_percent,
+                                                    base_scale_range=(0.8, 1.0),
+                                                    fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
+
+        else:
+            # We have to use random noise for x_start, as the training images 
+            # are not used for initialization.
+            x_start.normal_()
+
+        # Make the 4 instances in x_start, noise and t the same.
+        x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+        noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+        t       = t[:BLOCK_SIZE].repeat(4)
+
+        # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
+        masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
+        # Update masks to be a 1-repeat-4 structure.
+        masks = \
+            repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks)
+        batch_have_fg_mask = masks[-1]
+        self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
+
+        # This code block is within self.iter_flags['do_comp_prompt_distillation'].
+        # The prompts are of 1-repeat-4 (distillation) structure.
+        # Embedding mixing is always applied to the subject indices in every instance in the 
+        # second half-batch (class instances) only, 
+        # and the first half-batch (subject instances) is not affected.
+        # So providing all_subj_indices_1b[1] is enough. No need to provide batch indices.
+        # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
+        # so subj indices of the second-half batch are the repetitions of the 
+        # original extra_info['placeholder2indices_1b'].
+        #c_prompt_emb_mixed = mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
+        #                                             cls_subj_mix_scale=self.cls_subj_mix_scale)
+        
+        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+        # (img_mask is not used in the prompt-guided cross-attention layers).
+        # But we don't use img_mask in compositional iterations. Because in compositional iterations,
+        # the original images don't play a role (even if comp_init_fg_from_training_image,
+        # the unet doesn't consider the actual pixels outside of the subject areas, so img_mask is
+        # set to None in extra_info).
+        extra_info['img_mask']  = None
+
+        # num_init_prep_denoising_steps iterates from 1 to 5.
+        # Note 5 is co-prime with comp_distill_iter_gap == 2, 3 or 4.
+        # Therefore, this will be a uniform distribution of 1 to 5.
+        # Otherwise say, if num_denoising_steps == self.global_step % 6, then since for comp_distill_iterations,
+        # the global_step is always a multiple of 3, then num_denoising_steps will always be 0 or 3, which is not desired.
+        num_init_prep_denoising_steps = self.global_step % 5 + 1
+
+        if num_init_prep_denoising_steps > 0:
+            init_prep_context_type = 'ensemble'
+            MAX_N_SEP = 3
+            num_shared_denoising_steps = max(num_init_prep_denoising_steps - MAX_N_SEP, 0)
+            num_sep_denoising_steps    = min(num_init_prep_denoising_steps, MAX_N_SEP)
+            all_t_list = []
+
+            # First, do num_shared_denoising_steps of shared denoising steps.
+            if num_shared_denoising_steps > 0:
+                # Class prep denoising: Denoise x_start_4 with the comp prompts 
+                # for num_shared_denoising_steps times, using self.comp_distill_init_prep_unet.
+                x_start_4                      = x_start.chunk(4)[3]
+                noise_4                        = noise.chunk(4)[3]
+                t_4                            = t.chunk(4)[3]
+                _, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
+                uncond_emb                     = self.uncond_context[0].repeat(x_start_4.shape[0], 1, 1)
+
+                # *_double_context contains both the positive and negative prompt embeddings.
+                subj_double_context = torch.cat([subj_comp_prompt_emb, uncond_emb], dim=0)
+                cls_double_context  = torch.cat([cls_comp_prompt_emb,  uncond_emb], dim=0)
+
+                # Since we always use CFG for class prep denoising,
+                # we need to pass the negative prompt as well.
+                # cfg_scale_range of comp_distill_init_prep_unet is [2, 4].
+                with torch.no_grad():
+                    init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
+                        self.comp_distill_init_prep_unet(self, x_start_4, noise_4, t_4, 
+                                                        # In each timestep, the unet ensemble will do denoising on the same x_start_4 
+                                                        # with both subj_double_context and cls_double_context, then average the results.
+                                                        # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                        # From the outside, the unet ensemble is transparent, like a single unet.
+                                                        teacher_context=[subj_double_context, cls_double_context], 
+                                                        num_denoising_steps=num_shared_denoising_steps,
+                                                        # Same t across instances.
+                                                        uses_same_t=True)
+                # Repeat the 1-instance denoised x_start_4 to 2-instance x_start_2, i.e., the single and comp instances.
+                x_start_2   = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+                t_2         = all_t[-1].repeat(2)
+                all_t_list  += [ t[0].item() for t in all_t ]
+            else:
+                # Class prep denoising: Denoise x_start_2 with the class single/comp prompts 
+                # for num_sep_denoising_steps times, using self.comp_distill_init_prep_unet.
+                # We only use the second half-batch (class instances) for class prep denoising.
+                # x_start and t are initialized as 1-repeat-4 at above, so the second half is 1-repeat-2.
+                x_start_2   = x_start.chunk(2)[1]
+                t_2         = t.chunk(2)[1]
+
+            # Ensure the two instances use the same noise and t, although different x_start_2.
+            noise_2 = torch.randn_like(x_start[:BLOCK_SIZE].repeat(2, 1, 1, 1))
+            c_prompt_emb_1, c_prompt_emb_2 = c_prompt_emb.chunk(2)
+            uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
+            # *_double_context contains both the positive and negative prompt embeddings.
+            subj_double_context = torch.cat([c_prompt_emb_1, uncond_emb], dim=0)
+            cls_double_context  = torch.cat([c_prompt_emb_2, uncond_emb], dim=0)
+
+            # Since we always use CFG for class prep denoising,
+            # we need to pass the negative prompt as well.
+            # cfg_scale_range=[2, 4].
+            with torch.no_grad():
+                init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
+                    self.comp_distill_init_prep_unet(self, x_start_2, noise_2, t_2, 
+                                                    # In each timestep, the unet ensemble will do denoising on the same x_start_4 
+                                                    # with both subj_double_context and cls_double_context, then average the results.
+                                                    # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                    # From the outside, the unet ensemble is transparent, like a single unet.
+                                                    teacher_context=[subj_double_context, cls_double_context], 
+                                                    num_denoising_steps=num_sep_denoising_steps,
+                                                    # Same t across instances.
+                                                    uses_same_t=True)
+            
+            all_t_list += [ t[0].item() for t in all_t ]
+            print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
+                  f"{num_init_prep_denoising_steps} subj-cls ensemble prep denoising steps {all_t_list}")
+            
+            # The last init_prep_x_start is the final denoised image (with the smallest t).
+            # So we use it as the x_start to be denoised by the 4-type prompt set.
+            # We need to let the subject and class instances use the same x_start. 
+            # Therefore, we repeat init_prep_x_starts[-1] twice.
+            x_start = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+            del init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t
+
+        uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
+        # Regenerate the noise, since the noise has been used above.
+        noise       = torch.randn_like(x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1))
+        extra_info['capture_ca_layers_activations'] = True
+
+        # model_output is not used by the caller.
+        # x_start will be added with noise to get x_noisy, on which the denoising is done to get model_output.
+        model_output, x_recon = \
+            self.guided_denoise(x_start, noise, t, cond_context, 
+                                text_prompt_adhoc_info=text_prompt_adhoc_info,
+                                uncond_emb=uncond_emb,
+                                unet_has_grad='subject-half', 
+                                # Reconstruct the images at the pixel level. cfg_scale does CFG to make 
+                                # the output images more clear, but the clearer images are not used in the loss computation.
+                                do_pixel_recon=True, cfg_scale=5)
+
+        extra_info['capture_ca_layers_activations'] = False
+
+        # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
+        # We return noise to make the gt_target up-to-date, which is the recon objective.
+        # But gt_target is probably not referred to in the following loss computations,
+        # since the current iteration is do_comp_prompt_distillation. We update it just in case.
+        # masks will still be used in the loss computation. So we return updated masks as well.
+        return x_recon, noise, masks, init_prep_context_type
+    
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, batch_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
         # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
@@ -2094,7 +2099,7 @@ class LatentDiffusion(DDPM):
         else:
             loss_comp_fg_bg_preserve = 0
 
-        feat_delta_align_scale = 0.5
+        feat_delta_align_scale = 1
         if self.normalize_ca_q_and_outfeat:
             # Normalize ca_outfeat at 50% chance.
             normalize_ca_outfeat = (torch.rand(1) < 0.5).item()
@@ -2135,10 +2140,11 @@ class LatentDiffusion(DDPM):
         subj_attn_delta_align_loss_scale = 0.01
         # loss_feat_delta_align is around 0.2. loss_subj_attn_delta_align is around 0.4-0.5.
 
-        # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (10~20, depending on various settings). 
+        # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (2~3, depending on various settings). 
         # So no need to use a dynamic loss scale.
-        subj_attn_norm_distill_loss_scale = 1
+        subj_attn_norm_distill_loss_scale = 0.1
 
+        # loss_feat_delta_align: 0.1~0.3 -> 0.3~0.5, loss_subj_attn_delta_align: 0.6 -> 0.006, loss_subj_attn_norm_distill: 2.5 -> 0.25.
         loss_comp_prompt_distill =   loss_subj_attn_delta_align  * subj_attn_delta_align_loss_scale \
                                    + loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                    + loss_feat_delta_align       * feat_delta_align_scale
