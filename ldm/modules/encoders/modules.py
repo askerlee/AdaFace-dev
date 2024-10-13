@@ -3,7 +3,7 @@ import torch.nn as nn
 from functools import partial
 import clip
 from einops import repeat
-from transformers import CLIPTokenizer, CLIPTextModel
+from transformers import CLIPTokenizer, CLIPTextModel, CLIPModel, CLIPProcessor
 import kornia
 import numpy as np
 from ldm.modules.x_transformer import Encoder, TransformerWrapper  # TODO: can we directly rely on lucidrains code and simply add this as a requirement? --> test
@@ -467,9 +467,10 @@ class FrozenCLIPTextEmbedder(nn.Module):
     """
     Uses the CLIP transformer encoder for text.
     """
-    def __init__(self, version='ViT-L/14', device="cuda", max_length=77, n_repeat=1, normalize=True):
+    def __init__(self, version='openai/clip-vit-base-patch32', device="cuda", max_length=77, n_repeat=1, normalize=True):
         super().__init__()
-        self.model, _ = clip.load(version, jit=False, device="cpu")
+        self.model = CLIPModel.from_pretrained(version).to('cpu')
+        self.processor = CLIPProcessor.from_pretrained(version)
         self.device = device
         self.max_length = max_length
         self.n_repeat = n_repeat
@@ -481,8 +482,10 @@ class FrozenCLIPTextEmbedder(nn.Module):
             param.requires_grad = False
 
     def forward(self, text):
-        tokens = clip.tokenize(text, truncate=True).to(self.device)
-        z = self.model.encode_text(tokens)
+        #tokens = clip.tokenize(text, truncate=True).to(self.device)
+        tokens = self.processor(text, truncation=True, max_length=self.max_length, return_tensors="pt", 
+                                padding=True, is_split_into_words=True)["input_ids"]
+        z = self.model.get_text_features(tokens)
         if self.normalize:
             z = z / torch.linalg.norm(z, dim=1, keepdim=True)
         return z

@@ -13,7 +13,8 @@ einops>=0.4.1
 transformers>=4.44.2
 kornia>=0.6
 exrex
-tensorflow>=2.17.0
+tensorflow[and-cuda]>=2.17.0
+tf_keras
 nvidia-pyindex
 # For unknown reasons, installing nvidia-tensorrt hangs.
 tensorrt-lean
@@ -28,7 +29,7 @@ prodigyopt
 numpy>=1.24.0
 onnxruntime-gpu
 insightface
+deepface
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
--e git+https://github.com/openai/CLIP.git@main#egg=clip
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
 -e .
