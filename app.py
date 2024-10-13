@@ -28,7 +28,7 @@ parser.add_argument('--unet_weights', type=float, nargs="+", default=[1],
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
-parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.2,
+parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.0,
                     help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
 
 parser.add_argument('--gpu', type=int, default=None)
@@ -161,7 +161,7 @@ css = '''
     overflow-y: auto; 
 }
 '''
-with gr.Blocks(css=css) as demo:
+with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
     # description
     gr.Markdown(title)
@@ -219,9 +219,10 @@ with gr.Blocks(css=css) as demo:
             do_neg_id_prompt_weight = gr.Slider(
                 label="Weight of ID prompt in the negative prompt",
                 minimum=0.0,
-                maximum=0.4,
-                step=0.05,
+                maximum=0.3,
+                step=0.1,
                 value=args.do_neg_id_prompt_weight,
+                visible=False,
             )
 
             model_style_type = gr.Dropdown(

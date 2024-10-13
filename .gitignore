@@ -37,3 +37,4 @@ lightning_logs/*
 lightning_logs
 logs-backup
 /*.log
+.gradio/certificate.pem
