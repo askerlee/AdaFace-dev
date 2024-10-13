@@ -1976,8 +1976,8 @@ class LatentDiffusion(DDPM):
                 x_start_2   = x_start.chunk(2)[1]
                 t_2         = t.chunk(2)[1]
 
-            # Ensure the two instances (one single, one comp) use the same noise and t, although on different x_start_2.
-            noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
+            # Ensure the two instances (one single, one comp) use the same t, although on different x_start_2 and noise.
+            noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
             subj_prompt_emb, cls_prompt_emb = c_prompt_emb.chunk(2)
             uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
             # *_double_context contains both the positive and negative prompt embeddings.
@@ -2012,7 +2012,9 @@ class LatentDiffusion(DDPM):
 
         uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
         # Regenerate the noise, since the noise has been used above.
-        noise       = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
+        # Ensure the two types of instances (single, comp) use different noise.
+        # But subj and cls instances use the same noise.
+        noise       = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
         extra_info['capture_ca_layers_activations'] = True
 
         # model_output is not used by the caller.
