@@ -14,7 +14,7 @@ model:
     embedding_manager_trainable: false
     monitor: train/loss
     scale_factor: 0.18215
-    p_unet_distill_iter: 0
+    unet_distill_iter_gap: 0
 
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager

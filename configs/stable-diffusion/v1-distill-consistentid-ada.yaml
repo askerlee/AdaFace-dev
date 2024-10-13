@@ -23,8 +23,11 @@ model:
     use_fp_trick:                     True
     comp_distill_iter_gap:            -1
     unet_teacher_types:               ['consistentID']
-    # The percentage of unet_distill_iter among do_normal_recon iters.
-    p_unet_distill_iter:              0.5
+    # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
+    # unet_distill_iter_gap = 2 means at 50% of the non-compositional iters, 
+    # we use the unet teacher's output as the target (do_unet_distill).
+    # at the other 50%, we use the original image as the target (do_normal_recon).
+    unet_distill_iter_gap:            2
     # Never generate random IDs for consistentID distillation, as
     # consistentID relies on CLIP features of the input image, 
     # which are not available when the IDs are random and there are no actual input images.

@@ -23,8 +23,11 @@ model:
     use_fp_trick:                     True
     comp_distill_iter_gap:            3
     unet_teacher_types:               ['arc2face']
-    # The percentage of unet_distill_iter among do_normal_recon iters.
-    p_unet_distill_iter:              0.1
+    # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
+    # unet_distill_iter_gap = 2 means at 50% of the non-compositional iters, 
+    # we use the unet teacher's output as the target (do_unet_distill).
+    # at the other 50%, we use the original image as the target (do_normal_recon).
+    unet_distill_iter_gap:            5
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.

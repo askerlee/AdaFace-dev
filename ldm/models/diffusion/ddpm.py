@@ -75,7 +75,8 @@ class DDPM(pl.LightningModule):
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
                  normalize_ca_q_and_outfeat=True,
-                 p_unet_distill_iter=0,
+                 unet_distill_iter_gap=2,
+                 unet_distill_weight=4,
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=5,
                  p_unet_teacher_uses_cfg=0.6,
@@ -117,7 +118,8 @@ class DDPM(pl.LightningModule):
         self.enable_background_token                = enable_background_token
         self.use_fp_trick                           = use_fp_trick
         self.normalize_ca_q_and_outfeat             = normalize_ca_q_and_outfeat
-        self.p_unet_distill_iter                    = p_unet_distill_iter if self.training else 0
+        self.unet_distill_iter_gap                  = unet_distill_iter_gap if self.training else 0
+        self.unet_distill_weight                    = unet_distill_weight
         self.unet_teacher_types                     = list(unet_teacher_types) if unet_teacher_types is not None else None
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
@@ -332,7 +334,7 @@ class DDPM(pl.LightningModule):
         else:
             self.iter_flags['do_comp_prompt_distillation']  = False
             self.non_comp_iter_counter += 1
-            if self.non_comp_iter_counter % 2 == 0:
+            if self.unet_distill_iter_gap > 0 and self.non_comp_iter_counter % self.unet_distill_iter_gap == 0:
                 self.iter_flags['do_normal_recon']  = False
                 self.iter_flags['do_unet_distill']  = True
                 # Disable do_prompt_emb_delta_reg during unet distillation.
@@ -407,7 +409,7 @@ class LatentDiffusion(DDPM):
         if base_model_path is not None:
             self.init_from_ckpt(base_model_path, ignore_keys)
         
-        if self.p_unet_distill_iter > 0 and self.unet_teacher_types is not None:
+        if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
             # When unet_teacher_types == 'unet_ensemble' or unet_teacher_types contains multiple values,
             # device, unets, extra_unet_dirpaths and unet_weights are needed. 
             # Otherwise, they are not needed.
@@ -878,7 +880,7 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['same_subject_in_batch'] = False
 
-        # do_unet_distill and random() < p_unet_distill_iter.
+        # do_unet_distill and random() < unet_distill_iter_gap.
         # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
         # 0.1 if distilling on jointIDs.
         if self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_gen_id2img_rand_id):
@@ -1513,6 +1515,7 @@ class LatentDiffusion(DDPM):
             v_loss_recon = loss_recon.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
+            
         elif self.iter_flags['do_unet_distill']:
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, 
@@ -1520,7 +1523,7 @@ class LatentDiffusion(DDPM):
 
             v_loss_unet_distill = loss_unet_distill.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
-            loss += loss_unet_distill
+            loss += loss_unet_distill * self.unet_distill_weight
 
         if self.iter_flags['do_prompt_emb_delta_reg']:
             # 'c_prompt_emb_4b' is the prompt embeddings before mixing.

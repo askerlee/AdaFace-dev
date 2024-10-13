@@ -220,8 +220,8 @@ def get_parser(**parser_kwargs):
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=1,
                         help="Multiplier of the prompt2token projection attention")
-    parser.add_argument("--p_unet_distill_iter", type=float, default=argparse.SUPPRESS,
-                        help="Probability of doing arc2face distillation in the 'do_normal_recon' iterations")
+    parser.add_argument("--unet_distill_iter_gap", type=int, default=argparse.SUPPRESS,
+                        help="Do unet distillation every N steps in non-compositional iterations")
     parser.add_argument("--unet_teacher_types", type=str, nargs="*", default=argparse.SUPPRESS,
                         choices=["arc2face","consistentID", "unet_ensemble"], 
                         help="Type(s) of the UNet teacher. Multiple values imply unet_ensemble. "
@@ -689,8 +689,8 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.prompt2token_proj_grad_scale = opt.prompt2token_proj_grad_scale
         config.model.params.personalization_config.params.prompt2token_proj_ext_attention_perturb_ratio = opt.prompt2token_proj_ext_attention_perturb_ratio
 
-        if hasattr(opt, 'p_unet_distill_iter'):
-            config.model.params.p_unet_distill_iter = opt.p_unet_distill_iter
+        if hasattr(opt, 'unet_distill_iter_gap'):
+            config.model.params.unet_distill_iter_gap = opt.unet_distill_iter_gap
         if hasattr(opt, 'unet_teacher_types'):
             if "unet_ensemble" in opt.unet_teacher_types:
                 assert len(opt.unet_teacher_types) == 1, \

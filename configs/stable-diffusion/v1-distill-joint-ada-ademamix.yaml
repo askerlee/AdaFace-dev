@@ -28,11 +28,12 @@ model:
     # Reduce p_unet_distill_uses_comp_prompt from 0.2 to 0.1, since the joint teachers
     # only have weak compositionality and their outputs are not so informative.
     p_unet_distill_uses_comp_prompt:  0.1
-    # The percentage of unet_distill_iter among do_normal_recon iters.
-    # p_unet_distill_iter = 0.5 means at 50% of the non-compositional iters, 
+    # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
+    # unet_distill_iter_gap = 2 means at 50% of the non-compositional iters, 
     # we use the unet teacher's output as the target (do_unet_distill).
     # at the other 50%, we use the original image as the target (do_normal_recon).
-    p_unet_distill_iter:              0.5
+    unet_distill_iter_gap:            2
+    unet_distill_weight:              4
     # The ratio of the id2img_prompt_encoder's lr to the main model's lr. Only effective when trainable.
     id2img_prompt_encoder_lr_ratio:   0.001
     # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
