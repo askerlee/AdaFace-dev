@@ -15,7 +15,9 @@ kornia>=0.6
 exrex
 tensorflow>=2.17.0
 nvidia-pyindex
-nvidia-tensorrt
+# For unknown reasons, installing nvidia-tensorrt hangs.
+tensorrt-lean
+tensorrt-dispatch
 safetensors
 wandb
 gradio
