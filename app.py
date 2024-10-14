@@ -73,26 +73,12 @@ def remove_back_to_files():
     # Hide uploaded_init_img_gallery, hide init_clear_button_column, show init_img_files,  reset init_img_selected_idx
     return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True)
 
-def update_out_gallery(images):
-    #rows = (len(images) + 1) // 2  # Calculate the number of rows needed
-    return gr.update(height=800)
-
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, model_style_type, do_neg_id_prompt_weight, perturb_std,
+def generate_image(image_paths, guidance_scale, do_neg_id_prompt_weight, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
-
-    model_style_type = model_style_type.lower()
-    base_model_path = model_style_type2base_model_path[model_style_type]
-    # If the base model type is changed, reload the model.
-    if model_style_type != args.model_style_type:
-        adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
-                                 adaface_encoder_types=args.adaface_encoder_types,
-                                 adaface_ckpt_paths=args.adaface_ckpt_path, device=device)
-        # Update base model type.
-        args.model_style_type = model_style_type
 
     if image_paths is None or len(image_paths) == 0:
         raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
@@ -131,6 +117,23 @@ def generate_image(image_paths, guidance_scale, model_style_type, do_neg_id_prom
                       out_image_count=num_images, generator=generator, verbose=True)
     return samples
 
+
+def check_prompt_and_model_type(prompt, model_style_type):
+    global adaface
+
+    model_style_type = model_style_type.lower()
+    base_model_path = model_style_type2base_model_path[model_style_type]
+    # If the base model type is changed, reload the model.
+    if model_style_type != args.model_style_type:
+        adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
+                                 adaface_encoder_types=args.adaface_encoder_types,
+                                 adaface_ckpt_paths=args.adaface_ckpt_path, device=device)
+        # Update base model type.
+        args.model_style_type = model_style_type
+
+    if not prompt:
+        raise gr.Error("Prompt cannot be blank")
+
 ### Description
 title = r"""
 <h1>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</h1>
@@ -142,7 +145,8 @@ description = r"""
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
 2. Check "Enhance Face" to highlight fine facial features.
-3. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
+3. If the face dominates the image, try increasing 'Weight of ID prompt in the negative prompt'.
+4. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
   AdaFace-Animate 
   <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
 </a>
@@ -222,7 +226,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 maximum=0.3,
                 step=0.1,
                 value=args.do_neg_id_prompt_weight,
-                visible=False,
+                visible=True,
             )
 
             model_style_type = gr.Dropdown(
@@ -265,7 +269,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         img_files.upload(fn=swap_to_gallery, inputs=img_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
         remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
 
-        submit.click(
+        submit.click(fn=check_prompt_and_model_type,
+                     inputs=[prompt, model_style_type],outputs=None).success(
             fn=randomize_seed_fn,
             inputs=[seed, randomize_seed],
             outputs=seed,
@@ -273,12 +278,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, model_style_type, do_neg_id_prompt_weight, perturb_std, num_images, 
+            inputs=[img_files, guidance_scale, do_neg_id_prompt_weight, perturb_std, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
-            outputs=[out_gallery]
-        ).then(
-            fn=update_out_gallery,
-            inputs=[out_gallery],
             outputs=[out_gallery]
         )
 
