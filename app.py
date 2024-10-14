@@ -2,7 +2,6 @@ import sys
 sys.path.append('./')
 
 from adaface.adaface_wrapper import AdaFaceWrapper
-from adaface.util import str2bool
 import torch
 import numpy as np
 import random

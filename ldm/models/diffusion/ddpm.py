@@ -20,8 +20,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        probably_anneal_int_tensor, probably_draw_float, \
-                        count_optimized_params, count_params
+                        probably_anneal_int_tensor, count_optimized_params, count_params
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -34,7 +33,6 @@ from adaface.unet_teachers import create_unet_teacher
 
 import copy
 from functools import partial
-import random
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 import sys
@@ -1515,7 +1513,7 @@ class LatentDiffusion(DDPM):
             v_loss_recon = loss_recon.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
-            
+
         elif self.iter_flags['do_unet_distill']:
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, 
