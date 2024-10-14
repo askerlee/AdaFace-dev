@@ -1144,7 +1144,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             else:
                 all_adaface_subj_embs.append(adaface_subj_embs)
                 num_available_id_vecs += N_ID
-                
+
         # No faces are found in the images, so return None embeddings.
         # We don't want to return an all-zero embedding, which is useless.
         if num_available_id_vecs == 0:

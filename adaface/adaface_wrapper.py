@@ -281,6 +281,8 @@ class AdaFaceWrapper(nn.Module):
 
         return prompt
 
+    # If face_id_embs is None, then it extracts face_id_embs from the images,
+    # then map them to ada prompt embeddings.
     # avg_at_stage: 'id_emb', 'img_prompt_emb', or None.
     # avg_at_stage == ada_prompt_emb usually produces the worst results.
     # id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
@@ -301,8 +303,12 @@ class AdaFaceWrapper(nn.Module):
         if all_adaface_subj_embs is None:
             return None
         
-        # [1, 1, 16, 768] -> [16, 768]
-        all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0).squeeze(0)
+        if all_adaface_subj_embs.ndim == 4:
+            # [1, 1, 16, 768] -> [16, 768]
+            all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0).squeeze(0)
+        elif all_adaface_subj_embs.ndim == 3:
+            # [1, 16, 768] -> [16, 768]
+            all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0)
 
         if update_text_encoder:
             self.update_text_encoder_subj_embeddings(all_adaface_subj_embs)
@@ -375,7 +381,7 @@ class AdaFaceWrapper(nn.Module):
         if device is None:
             device = self.device
         
-        plain_prompt = prompt
+        #plain_prompt = prompt
         #prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
         if verbose:
             print(f"Subject prompt:\n{prompt}")
