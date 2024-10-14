@@ -170,16 +170,16 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--save_meta_subj2person_type_cache_path",
         type=str, default=None,
         help="Path to save the cache of subject to person type mapping to")
-    
-    parser.add_argument("--subj_info_filepaths",
-        type=str, nargs="*", default=argparse.SUPPRESS,
-        help="Path to the subject info file (only necessary if multiple subjects are used)")
 
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
+                        choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
+    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                        choices=["arc2face", "consistentID"], 
+                        help="List of enabled encoders (among the list of adaface_encoder_types)")
+    
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=[],
                         help="Initialize embedding manager from one or multiple checkpoints")
-    parser.add_argument("--num_id2ada_prompt_encoder_types", type=int, default=1,
-                        help="Number of id2ada prompt encoder types")
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
@@ -297,7 +297,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
     personalization_config_params.token2num_vectors             = dict()
     for subject_string in dataset.subject_strings[:1]:
         personalization_config_params.token2num_vectors[subject_string] = \
-            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_id2ada_prompt_encoder_types
+            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_adaface_encoder_types
 
     if opt.background_string is not None:
         config.model.params.enable_background_token = True
@@ -648,14 +648,13 @@ if __name__ == "__main__":
             config.data.params.max_steps = opt.max_steps
                     
         config.data.params.train.params.subject_string = opt.subject_string
-        if hasattr(opt, 'subj_info_filepaths'):
-            config.data.params.train.params.subj_info_filepaths     = opt.subj_info_filepaths
 
+        opt.num_adaface_encoder_types = len(opt.adaface_encoder_types)
         # common_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix   = opt.common_placeholder_prefix
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
         config.data.params.train.params.num_vectors_per_subj_token  = \
-            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_id2ada_prompt_encoder_types
+            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_adaface_encoder_types
         config.data.params.train.params.num_vectors_per_bg_token    = opt.num_vectors_per_bg_token
 
         if opt.background_string is not None:
@@ -757,9 +756,11 @@ if __name__ == "__main__":
             config.model.base_lr = opt.lr
 
         # Personalization config
-        config.model.params.personalization_config.params.adaface_ckpt_paths = opt.adaface_ckpt_paths
+        config.model.params.personalization_config.params.adaface_ckpt_paths    = opt.adaface_ckpt_paths
+        config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
+        config.model.params.personalization_config.params.enabled_encoders      = opt.enabled_encoders
         config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
-
+    
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 
         if opt.base_model_path:

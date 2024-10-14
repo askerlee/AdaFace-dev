@@ -771,6 +771,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         self.encoders_num_id_vecs = [ adaface_encoder_types2num_id_vecs[encoder_type] \
                                       for encoder_type in adaface_encoder_types ]
         self.num_id_vecs = sum(self.encoders_num_id_vecs)
+        # super() sets self.is_training.
         super().__init__(*args, **kwargs)
         
         self.num_sub_encoders = len(adaface_encoder_types)
@@ -846,7 +847,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 torch.tensor([True] * self.num_sub_encoders)
 
         for i, encoder in enumerate(self.id2ada_prompt_encoders):
-            if not self.are_encoders_enabled[i]:
+            if not (self.is_training and self.are_encoders_enabled[i]):
                 for param in encoder.parameters():
                     param.requires_grad = False
             else:
@@ -1112,6 +1113,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         else:
             are_encoders_enabled = self.are_encoders_enabled
 
+        self.curr_are_encoders_enabled = are_encoders_enabled
         all_adaface_subj_embs = []
         num_available_id_vecs = 0
 

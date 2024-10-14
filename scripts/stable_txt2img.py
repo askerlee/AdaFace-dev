@@ -229,14 +229,14 @@ def parse_args():
     parser.add_argument("--method", type=str, default="adaface",
                         choices=["adaface", "pulid"])
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
-                        choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
+                        choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
+    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                        choices=["arc2face", "consistentID"], 
+                        help="List of enabled encoders (among the list of adaface_encoder_types)")
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", required=True)
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
-    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
-                        choices=["arc2face", "consistentID"], 
-                        help="List of enabled encoders (among the list of adaface_encoder_types)")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
@@ -334,7 +334,7 @@ def main(opt):
         config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = False
         # Currently embedding manager only supports one type of prompt encoder.
-        config.model.params.personalization_config.params.id2ada_prompt_encoder_types = opt.adaface_encoder_types
+        config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
 
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:

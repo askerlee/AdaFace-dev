@@ -110,10 +110,9 @@ model:
                                               'unet_distill_iter':     0.4,
                                               'compos_distill_iter':   0.4 }
         adaface_ckpt_paths:                 null
-        freeze_bg_subj_basis_generator:     false
-        id2ada_prompt_encoder_types:        ['consistentID', 'arc2face']
+        adaface_encoder_types:              ['consistentID', 'arc2face']
         # Probabilities for randomly dropping out each of the ada encoders.
-        p_encoder_dropout:                0.1
+        p_encoder_dropout:                  0
         # Load the ada components from these placeholders in the checkpoint.
   
     unet_config:

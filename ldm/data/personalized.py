@@ -149,11 +149,6 @@ class PersonalizedBase(Dataset):
                  num_vectors_per_subj_token=1,
                  num_vectors_per_bg_token=1,
                  center_crop=False,
-                 # If data_roots contain multiple top folders, and multiple subfolders in each top folder, 
-                 # and a subject in each subfolder folder, 
-                 # then we could provide a list of subject info files in subj_info_filepaths,
-                 # where the files contain the cls_delta_string of all subjects, in the field "cls_delta_strings".
-                 subj_info_filepaths=None,
                  load_meta_subj2person_type_cache_path=None,
                  save_meta_subj2person_type_cache_path=None,
                  verbose=False, 
@@ -327,20 +322,6 @@ class PersonalizedBase(Dataset):
             self._length = self.num_images 
 
         subj2attr = {}
-        if subj_info_filepaths is not None:
-            for subj_info_filepath in subj_info_filepaths:
-                _, subj2attr_singlefile = parse_subject_file(subj_info_filepath)
-                # Make sure subject names are always unique across different files.
-                for k in subj2attr_singlefile:
-                    if k not in subj2attr:
-                        subj2attr[k] = subj2attr_singlefile[k]
-                    else:
-                        # Make sure the keys are unique across different files.
-                        # If not, then the keys are duplicated, and we need to fix the data files.
-                        for subj_name in subj2attr_singlefile[k]:
-                            assert subj_name not in subj2attr[k], f"Duplicate subject {k} found in {subj_info_filepaths}!"
-                            subj2attr[k][subj_name] = subj2attr_singlefile[k][subj_name]
-
         # NOTE: if do_zero_shot, all subjects share the same subject/background placeholders and embedders.
         self.subject_strings        = [ subject_string ]         * self.num_subjects
         self.background_strings     = [ background_string ]      * self.num_subjects

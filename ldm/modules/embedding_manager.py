@@ -58,8 +58,6 @@ class EmbeddingManager(nn.Module):
             training_begin_perturb_std_range=None,
             training_end_perturb_std_range=None,
             training_perturb_prob=None,
-            id2ada_prompt_encoder_types=['arc2face'],
-            freeze_bg_subj_basis_generator=False,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             cls_delta_string='person',
             cls_delta_token_weights=None,
@@ -68,6 +66,8 @@ class EmbeddingManager(nn.Module):
             # During inference, prompt2token_proj_ext_attention_perturb_ratio is 0. 
             prompt2token_proj_ext_attention_perturb_ratio=0, 
             adaface_ckpt_paths=None,
+            adaface_encoder_types=['consistentID', 'arc2face'],
+            enabled_encoders=['consistentID', 'arc2face'],
             extend_prompt2token_proj_attention_multiplier=1,
             num_static_img_suffix_embs=0,
             p_encoder_dropout=0.1,
@@ -136,9 +136,12 @@ class EmbeddingManager(nn.Module):
         self.cls_delta_string  = cls_delta_string
         self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
         self.prompt2token_proj_ext_attention_perturb_ratio = prompt2token_proj_ext_attention_perturb_ratio
+
+        self.adaface_encoder_types = adaface_encoder_types
+        self.enabled_encoders = enabled_encoders        
         # The embedding manager is primarily used during training, so we set is_training=True.
         self.id2ada_prompt_encoder = \
-            create_id2ada_prompt_encoder(id2ada_prompt_encoder_types, 
+            create_id2ada_prompt_encoder(adaface_encoder_types, 
                                          num_static_img_suffix_embs=num_static_img_suffix_embs,
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
@@ -183,13 +186,33 @@ class EmbeddingManager(nn.Module):
                                        num_static_img_suffix_embs = 0)
             else:
                 # The subject SubjBasisGenerator will be initialized in self.id2ada_prompt_encoder.
-                # If id2ada_prompt_encoder_types contains multiple encoders (i.e, an actual type of 'jointIDs')
+                # If adaface_encoder_types contains multiple encoders (i.e, an actual type of 'jointIDs')
                 # then .subj_basis_generator is not a SubjBasisGenerator instance,
                 # but rather an nn.ModuleList of SubjBasisGenerator instances.
                 # Such an instance should not be called to get the adaface_subj_embs, but only be used for save/load.
                 subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
 
             self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
+
+        # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
+        # in loss computation in ddpm.py, and not used in this script.
+        ca_q_bns = {}
+        ca_outfeat_lns = {}
+        for ca_layer_idx in range(self.num_unet_ca_layers):
+            layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
+            ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=False)
+            ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=False)
+            #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
+
+        self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
+        self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
+
+        # self.load() loads both fg and bg SubjBasisGenerators, as well as ca_q_bns and ca_outfeat_lns.
+        # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
+        # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
+        # but instead use self.load().
+        if adaface_ckpt_paths is not None:
+            self.load(adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=False)
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, self.get_embeddings_for_tokens, 
@@ -205,19 +228,6 @@ class EmbeddingManager(nn.Module):
 
         self.loss_call_count = 0
         self.training_percent = 0
-        self.emb_global_scales_dict = None
-        # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
-        # in loss computation in ddpm.py, and not used in this script.
-        ca_q_bns = {}
-        ca_outfeat_lns = {}
-        for ca_layer_idx in range(self.num_unet_ca_layers):
-            layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
-            ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=False)
-            ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=False)
-            #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
-
-        self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
-        self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
 
         # image_prompt_dict have two keys: 'subj', 'bg'.
         # image_prompt_dict['subj'] is the image prompt embs for the subject, which is ready to be used.
@@ -231,11 +241,7 @@ class EmbeddingManager(nn.Module):
         # Add the search span by 1, just to be safe.
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
-
-        self.freeze_bg_subj_basis_generator = freeze_bg_subj_basis_generator
-        if adaface_ckpt_paths is not None:
-            self.load(adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=False)
-
+        
     def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
                               subj_name_to_cls_delta_string, 
                               cls_delta_string=None):
@@ -610,6 +616,7 @@ class EmbeddingManager(nn.Module):
             else:
                 ckpt_background_strings = []
 
+            # If multiple ckpts contain ca_q_bns and ca_outfeat_lns, the last one will be used.
             if "ca_q_bns" in ckpt:
                 self.ca_q_bns = ckpt["ca_q_bns"]
             if "ca_outfeat_lns" in ckpt:
@@ -624,12 +631,6 @@ class EmbeddingManager(nn.Module):
                             print(f"Missing keys: {ret.missing_keys}")
                         if ret is not None and len(ret.unexpected_keys) > 0:
                             print(f"Unexpected keys: {ret.unexpected_keys}")
-                    if self.freeze_bg_subj_basis_generator:
-                        # If we freeze the bg SubjBasisGenerator, the count of trainable parameters change from
-                        # 375202566 to 371453958, a reduction of 3743608 parameters, or 15MB. Considering the optimizer
-                        # saves m and v for each parameter, the reduction in memory is 15*3 = 45MB.
-                        for param in self.string_to_subj_basis_generator_dict[km].parameters():
-                            param.requires_grad = False
 
                 # Since we load fg SubjBasisGenerators through id2ada_prompt_encoder, we skip loading them here.
                 else:

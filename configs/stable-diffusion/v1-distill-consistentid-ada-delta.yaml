@@ -95,7 +95,7 @@ model:
                                               'unet_distill_iter':     0.4,
                                               'compos_distill_iter':   0.4 }
         adaface_ckpt_paths:                  null
-        id2ada_prompt_encoder_types:        ['consistentID']
+        adaface_encoder_types:              ['consistentID']
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:
