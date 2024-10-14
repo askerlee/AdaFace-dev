@@ -814,6 +814,10 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # Therefore, the clip_embedding_dim is the sum of the clip_embedding_dims of all adaface encoders.
         self.clip_embedding_dims            = [encoder.clip_embedding_dim for encoder in self.id2ada_prompt_encoders]
         self.clip_embedding_dim             = sum(self.clip_embedding_dims)
+
+        if adaface_ckpt_paths is not None:
+            self.load_adaface_ckpt(adaface_ckpt_paths)
+
         # The ctors of the derived classes have already initialized encoder.subj_basis_generator.
         # If subj_basis_generator expansion params are specified, they are equally applied to all adaface encoders.
         # This self.subj_basis_generator is not meant to be called as self.subj_basis_generator(), but instead,
@@ -822,9 +826,6 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             nn.ModuleList( [encoder.subj_basis_generator for encoder \
                             in self.id2ada_prompt_encoders] )
         
-        if adaface_ckpt_paths is not None:
-            self.load_adaface_ckpt(adaface_ckpt_paths)
-
         print(f"{self.name} ada prompt encoder initialized with {self.num_sub_encoders} sub-encoders. "
               f"ID vecs: {self.num_id_vecs}, static suffix embs: {self.num_static_img_suffix_embs}.")
         
@@ -843,6 +844,14 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             self.are_encoders_enabled = \
                 torch.tensor([True] * self.num_sub_encoders)
 
+        for i, encoder in enumerate(self.id2ada_prompt_encoders):
+            if not self.are_encoders_enabled[i]:
+                for param in encoder.parameters():
+                    param.requires_grad = False
+            else:
+                for param in encoder.parameters():
+                    param.requires_grad = True
+                    
     def load_adaface_ckpt(self, adaface_ckpt_paths):
         # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
         # so we dereference the list to get the actual path and load the subj_basis_generators of all adaface encoders.
@@ -861,6 +870,11 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 breakpoint()
 
             ckpt_subj_basis_generators = string_to_subj_basis_generator_dict[self.subject_string]
+            if len(ckpt_subj_basis_generators) != self.num_sub_encoders:
+                print(f"Number of subj_basis_generators in the ckpt ({len(ckpt_subj_basis_generators)}) "
+                      f"doesn't match the number of adaface encoders ({self.num_sub_encoders}).")
+                breakpoint()
+
             for i, subj_basis_generator in enumerate(self.subj_basis_generator):
                 ckpt_subj_basis_generator = ckpt_subj_basis_generators[i]
                 # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
