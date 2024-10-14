@@ -815,9 +815,6 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         self.clip_embedding_dims            = [encoder.clip_embedding_dim for encoder in self.id2ada_prompt_encoders]
         self.clip_embedding_dim             = sum(self.clip_embedding_dims)
 
-        if adaface_ckpt_paths is not None:
-            self.load_adaface_ckpt(adaface_ckpt_paths)
-
         # The ctors of the derived classes have already initialized encoder.subj_basis_generator.
         # If subj_basis_generator expansion params are specified, they are equally applied to all adaface encoders.
         # This self.subj_basis_generator is not meant to be called as self.subj_basis_generator(), but instead,
@@ -825,6 +822,10 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         self.subj_basis_generator           = \
             nn.ModuleList( [encoder.subj_basis_generator for encoder \
                             in self.id2ada_prompt_encoders] )
+
+        # load_adaface_ckpt() loads into self.subj_basis_generator. So we need to initialize self.subj_basis_generator first.
+        if adaface_ckpt_paths is not None:
+            self.load_adaface_ckpt(adaface_ckpt_paths)
         
         print(f"{self.name} ada prompt encoder initialized with {self.num_sub_encoders} sub-encoders. "
               f"ID vecs: {self.num_id_vecs}, static suffix embs: {self.num_static_img_suffix_embs}.")

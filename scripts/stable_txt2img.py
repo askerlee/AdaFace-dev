@@ -755,7 +755,11 @@ def main(opt):
 
                 if opt.bb_type:
                     experiment_sig += "-" + opt.bb_type
-                experiment_sig += "-" + ",".join(opt.adaface_encoder_types)
+                
+                if opt.enabled_encoders:
+                    experiment_sig += "-" + "-".join(opt.enabled_encoders)
+                else:
+                    experiment_sig += "-" + ",".join(opt.adaface_encoder_types)
 
                 # Use the first prompt of the current chunk from opt.prompt_file as the saved file name.
                 if opt.prompt_file:
