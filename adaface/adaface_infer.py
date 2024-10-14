@@ -41,23 +41,26 @@ def seed_everything(seed):
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pipeline", type=str, default="text2img", 
-                        choices=["text2img", "img2img", "text2img3", "flux"],
+                        choices=["text2img", "text2imgxl", "img2img", "text2img3", "flux"],
                         help="Type of pipeline to use (default: txt2img)")
     parser.add_argument("--base_model_path", type=str, default=None, 
                         help="Type of checkpoints to use (default: None, using the official model)")
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
+    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                        choices=["arc2face", "consistentID"], 
+                        help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")    
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
     parser.add_argument("--main_unet_filepath", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --base_model_path")
     parser.add_argument("--extra_unet_dirpaths", type=str, nargs="*", 
-                        default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
+                        default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")    
     parser.add_argument("--subject", type=str)
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
@@ -67,16 +70,13 @@ def parse_args():
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--scale", dest='guidance_scale', type=float, default=4, 
                         help="Guidance scale for the diffusion model")
-    parser.add_argument("--id_cfg_scale", type=float, default=6, 
-                        help="CFG scale when generating the identity embeddings")
-
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
     parser.add_argument("--num_images_per_row", type=int, default=4,
                         help="Number of images to display in a row in the output grid image.")
     parser.add_argument("--num_inference_steps", type=int, default=50,
-                        help="Number of DDIM inference steps")
+                        help="Number of inference steps")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on")
     parser.add_argument("--seed", type=int, default=42, 
                         help="the seed (for reproducible sampling). Set to -1 to disable.")
@@ -99,7 +99,7 @@ if __name__ == "__main__":
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
                              args.adaface_encoder_types, args.adaface_ckpt_paths, 
-                             args.adaface_encoder_cfg_scales, 
+                             args.adaface_encoder_cfg_scales, args.enabled_encoders,
                              args.subject_string, args.num_inference_steps,
                              unet_types=None,
                              main_unet_filepath=args.main_unet_filepath,

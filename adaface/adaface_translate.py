@@ -29,15 +29,18 @@ def parse_args():
                         help="Path to the UNet checkpoint (default: RealisticVision 4.0)")
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
-    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["arc2face"],
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")      
+    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                        choices=["arc2face", "consistentID"], 
+                        help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")        
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")    
     parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", 
-                        default=['models/ensemble/rv4-unet', 'models/ensemble/ar18-unet'], 
+                        default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[4, 2, 1], 
+    parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")    
     parser.add_argument("--in_folder",  type=str, required=True, help="Path to the folder containing input images")
     # If True, the input folder contains images of mixed subjects.
@@ -91,7 +94,7 @@ if __name__ == "__main__":
 
     adaface = AdaFaceWrapper("img2img", args.base_model_path, 
                              args.adaface_encoder_types, args.adaface_ckpt_paths,
-                             args.adaface_encoder_cfg_scales, 
+                             args.adaface_encoder_cfg_scales, args.enabled_encoders,
                              args.subject_string, args.num_inference_steps,
                              unet_types=None,
                              extra_unet_dirpaths=args.extra_unet_dirpaths, unet_weights=args.unet_weights, 

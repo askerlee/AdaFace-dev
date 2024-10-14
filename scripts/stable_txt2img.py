@@ -235,6 +235,7 @@ def parse_args():
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
     parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                        choices=["arc2face", "consistentID"], 
                         help="List of enabled encoders (among the list of adaface_encoder_types)")
     parser.add_argument("--use_teacher_neg", action="store_true",
                         help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")

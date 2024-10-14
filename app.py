@@ -2,7 +2,6 @@ import sys
 sys.path.append('./')
 
 from adaface.adaface_wrapper import AdaFaceWrapper
-from adaface.util import str2bool
 import torch
 import numpy as np
 import random
@@ -19,6 +18,7 @@ parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGG
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                     help="Scales for the ID2Ada prompt encoders")
 parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+                    choices=["arc2face", "consistentID"], 
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
 parser.add_argument('--model_style_type', type=str, default='realistic',
                     choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
