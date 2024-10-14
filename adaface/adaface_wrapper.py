@@ -381,8 +381,8 @@ class AdaFaceWrapper(nn.Module):
         if device is None:
             device = self.device
         
-        #plain_prompt = prompt
-        #prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
+        plain_prompt = prompt
+        prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
         if verbose:
             print(f"Subject prompt:\n{prompt}")
 
