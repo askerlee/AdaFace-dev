@@ -603,8 +603,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
 # delta_types: feat_to_ref or ex_to_base or both.
 def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex, 
                               ref_grad_scale=0.1, feat_base_grad_scale=0.05,
-                              use_cosine_loss=True, cosine_exponent=2,
-                              delta_types=['feat_to_ref', 'ex_to_base']):
+                              cosine_exponent=3, delta_types=['feat_to_ref', 'ex_to_base']):
         ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
         # Reduce the gradient to the reference features, 
         # as the reference features are supposed to be unchanged, as opposed to feat_*. 
@@ -632,48 +631,18 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
                 src_delta = ortho_subtract(ref_feat_ex_gs, ref_feat_base_gs)
                 tgt_delta = ortho_subtract(feat_ex,        feat_base_gs)
 
-            if use_cosine_loss:
-                # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
-                # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
-                loss_delta_align = calc_ref_cosine_loss(tgt_delta, src_delta, 
-                                                        exponent=cosine_exponent,
-                                                        do_demeans=[False, False],
-                                                        first_n_dims_to_flatten=(feat_base.ndim - 1), 
-                                                        ref_grad_scale=1,
-                                                        aim_to_align=True)
-            else:
-                # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
-                # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
-                # do_sqr=True: square the loss, so that the loss is more sensitive to 
-                # smaller (<< 1) align_coeffs.            
-                loss_delta_align = calc_align_coeff_loss(tgt_delta, src_delta, 
-                                                         margin=1., ref_grad_scale=1, do_sqr=True)
-            
+            # ref_grad_scale=1: ref grad scaling is disabled within calc_ref_cosine_loss,
+            # since we've done gs on ref_feat_base, ref_feat_ex, and feat_base.
+            loss_delta_align = calc_ref_cosine_loss(tgt_delta, src_delta, 
+                                                    exponent=cosine_exponent,
+                                                    do_demeans=[False, False],
+                                                    first_n_dims_to_flatten=(feat_base.ndim - 1), 
+                                                    ref_grad_scale=1,
+                                                    aim_to_align=True)
+
             losses_delta_align[delta_choice] = loss_delta_align
 
         return losses_delta_align
-
-def calc_align_coeff_loss(f1, f2, margin=1., encourage_align=True, ref_grad_scale=1, do_sqr=True):
-    ref_grad_scaler = gen_gradient_scaler(ref_grad_scale)
-    # Reduce the gradient to the reference features, 
-    # as the reference features are supposed to be unchanged, as opposed to feat_*. 
-    # (although it still has a learnable component from mixed subject prompt embeddings.)
-    f2_gs  = ref_grad_scaler(f2)    
-    align_coeffs  = calc_align_coeffs(f1, f2_gs)
-    if encourage_align:
-        # We encourage f1 to express at least margin * f2, i.e.,
-        # align_coeffs should be >= margin. So a loss is incurred if it's < margin.
-        # do_sqr=True: square the loss, so that the loss is more sensitive to smaller (<< margin) align_coeffs.
-        loss_align  = masked_mean(margin - align_coeffs,
-                                  margin - align_coeffs > 0,
-                                  do_sqr=do_sqr)
-    else:
-        # We discourage f1 to express more than margin * f2, i.e.,
-        # align_coeffs should be <= margin. So a loss is incurred if it's > margin.
-        loss_align  = masked_mean(align_coeffs - margin,
-                                  align_coeffs - margin > 0,
-                                  do_sqr=do_sqr)
-    return loss_align
 
 def calc_and_print_stats(ts, ts_name=None):
     if ts_name is not None:
@@ -1424,14 +1393,13 @@ def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
 
     raise ValueError(f"curr_pos {curr_pos} is out of range.")
 
-# feat_or_attn: 4D features or 3D attention. If it's attention, then
+# spatial_area: H*W of 4D features or 3D attention. If it's attention, then
 # its geometrical dimensions (H, W) have been flatten to 1D (last dim).
-# mask:      always 4D.
+# mask: always 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
-def resize_mask_for_feat_or_attn(feat_or_attn, mask, mask_name, num_spatial_dims=1,
-                                 mode="nearest|bilinear", warn_on_all_zero=True):
+def resize_mask_for_feat_or_attn(spatial_area, mask, mask_name, mode="nearest|bilinear", warn_on_all_zero=True):
     # Assume square feature maps, target_H = target_W.
-    target_H = int(np.sqrt(feat_or_attn.shape[-num_spatial_dims:].numel()))
+    target_H = int(np.sqrt(spatial_area))
     spatial_shape2 = (target_H, target_H)
 
     # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
@@ -1541,6 +1509,7 @@ def mix_embeddings(mix_scheme, c1, c2, mix_indices=None,
 
     return c_mix
 
+# mix_cls_subj_embeddings() is NO LONGER USED.
 def mix_cls_subj_embeddings(prompt_emb, subj_indices_1b_N, cls_subj_mix_scale=0.8):
     subj_emb, cls_emb = prompt_emb.chunk(2)
 
@@ -1905,41 +1874,36 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
     return prob_mat
 
 @torch.compile
-def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25,
-                               single_q_grad_scale=0.1, single_feat_grad_scale=0.01,
-                               mix_feat_grad_scale=0.05):
+def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
-    single_q_grad_scaler    = gen_gradient_scaler(single_q_grad_scale)
-
     # ca_q, ca_outfeat: [4, 1280, 64]
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: mix comp.
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
-    ss_q_gs = single_q_grad_scaler(ss_q)
-    ms_q_gs = single_q_grad_scaler(ms_q)
-
+    ss_q = ss_q.detach()
+   
     #num_heads = 8
     # Similar to the scale of the attention scores.
     matching_score_scale = 1 #(ca_q.shape[1] / num_heads) ** -0.5
     #print('matching_score_scale:', matching_score_scale)
     # sc_map_ss_score:        [1, 64, 64]. 
-    # Pairwise matching scores (9 subj comp image tokens) -> (9 subj single image tokens).
-    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q_gs) * matching_score_scale
+    # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
+    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Normalize among subj comp tokens (sc dim).
-    # NOTE: sc_map_ss_prob and mc_map_ms_prob are normalized among the comp instance dim,
-    # this can address scale changes (e.g. the subject is large in single instances,
+    # NOTE: sc_map_ss_prob and mc_map_ms_prob are normalized among the **comp instance** dim.
+    # This can address scale changes (e.g. the subject is large in single instances,
     # but becomes smaller in comp instances). If they are normalized among the single instance dim,
     # then each image token in the comp instance has a fixed total contribution to the reconstruction
     # of the single instance, which can hardly handle scale changes.
     sc_map_ss_prob  = F.softmax(sc_map_ss_score, dim=1)
 
-    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q_gs) * matching_score_scale
+    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
     # Normalize among mix comp tokens (mc dim).
     mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
     # breakpoint()
@@ -1971,14 +1935,13 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
     fg_mask_HW = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
 
     loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_HW)
-    # single_feat_grad_scale = 0.01: ss_fg_feat.
-    # subject-single features are still updated (although very slowly).
+    # ref_grad_scale=0: don't BP to ss_fg_feat.
     # We use cosine loss, so that when the reconstructed features are of different scales,
     # the loss could still be small.
     loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
                                                exponent=2, do_demeans=[False, False],
                                                first_n_dims_to_flatten=2, 
-                                               ref_grad_scale=single_feat_grad_scale)
+                                               ref_grad_scale=0)    
 
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
@@ -2023,7 +1986,7 @@ def calc_elastic_matching_loss(ca_q, ca_outfeat, fg_mask, fg_bg_cutoff_prob=0.25
                                                emb_mask=comp_bg_prob,
                                                exponent=2, do_demeans=[False, False],
                                                first_n_dims_to_flatten=2, 
-                                               ref_grad_scale=mix_feat_grad_scale)
+                                               ref_grad_scale=0)
     
     return loss_comp_single_map_align, loss_sc_ss_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
