@@ -65,6 +65,13 @@ class AdaFaceWrapper(nn.Module):
         self.encoders_num_id_vecs = self.id2ada_prompt_encoder.encoders_num_id_vecs
         self.extend_tokenizer_and_text_encoder()
 
+    def to(self, device):
+        self.device = device
+        self.id2ada_prompt_encoder.to(device)
+        self.pipeline.to(device)
+        print(f"Moved AdaFaceWrapper to {device}.")
+        return self
+    
     def initialize_pipeline(self):
         self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(self.adaface_encoder_types,
                                                                   self.adaface_ckpt_paths,

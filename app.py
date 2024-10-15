@@ -12,7 +12,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
-parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-08T14-42-05_zero3-ada-30000.pt',
+parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-14T16-09-24_zero3-ada-3500.pt',
                     help="Paths to the checkpoints of the ID2Ada prompt encoders")
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
@@ -54,7 +54,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
                          enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
-                         unet_weights=args.unet_weights, device=device)
+                         unet_weights=args.unet_weights, device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
@@ -79,6 +79,8 @@ def generate_image(image_paths, guidance_scale, do_neg_id_prompt_weight, perturb
                    seed, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
+
+    adaface.to(device)
 
     if image_paths is None or len(image_paths) == 0:
         raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
@@ -127,7 +129,7 @@ def check_prompt_and_model_type(prompt, model_style_type):
     if model_style_type != args.model_style_type:
         adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
                                  adaface_encoder_types=args.adaface_encoder_types,
-                                 adaface_ckpt_paths=args.adaface_ckpt_path, device=device)
+                                 adaface_ckpt_paths=args.adaface_ckpt_path, device='cpu')
         # Update base model type.
         args.model_style_type = model_style_type
 
@@ -141,6 +143,10 @@ title = r"""
 
 description = r"""
 <b>Official demo</b> for our working paper <b>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</b>.<br>
+
+❗️**What's New**❗️
+- Support switching between two model styles: **Realistic** and **Anime**.
+- If you just changed the model style, the first image/video generation will take extra 20~30 seconds for loading new model weight.
 
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
@@ -203,7 +209,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             "portrait, in superman costume, the sky ablaze with hues of orange and purple"
                        ])
             
-            enhance_face = gr.Checkbox(label="Enhance face", value=True, info="Enhance the face features by prepending 'face portrait' to the prompt")
+            enhance_face = gr.Checkbox(label="Enhance face", value=False, 
+                                       info="Enhance the face features by prepending 'face portrait' to the prompt")
 
             submit = gr.Button("Submit", variant="primary")
 
