@@ -1610,7 +1610,7 @@ class LatentDiffusion(DDPM):
             # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
             # So we don't do sqrt norm.
             loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
-                        self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attnscore'],
+                        self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
                                                            all_subj_indices,
                                                            all_bg_indices,
                                                            BLOCK_SIZE=BLOCK_SIZE,
@@ -2071,7 +2071,7 @@ class LatentDiffusion(DDPM):
                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
                                                      ca_layers_activations['q'],
                                                      ca_q_bns,
-                                                     ca_layers_activations['attnscore'], 
+                                                     ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE)
             
@@ -2133,7 +2133,7 @@ class LatentDiffusion(DDPM):
         # within calc_feat_attn_delta_loss() to index all the 4 blocks.
         loss_feat_delta_align, loss_subj_attn_delta_align, loss_subj_attn_norm_distill \
             = self.calc_feat_attn_delta_loss(ca_outfeats, ca_outfeat_lns,
-                                             ca_layers_activations['attnscore'], 
+                                             ca_layers_activations['attn'], 
                                              all_subj_indices_2b, BLOCK_SIZE)
 
         if loss_feat_delta_align > 0:
