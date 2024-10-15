@@ -1382,7 +1382,7 @@ class LatentDiffusion(DDPM):
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.background_string_dict)
         if self.iter_flags['do_comp_prompt_distillation']:
-            # all_subj_indices_2b is used in calc_feat_attn_delta_loss() in calc_comp_prompt_distill_loss().
+            # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                      self.embedding_manager.subject_string_dict)
@@ -2127,14 +2127,14 @@ class LatentDiffusion(DDPM):
         # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
         # as it should be more accurate (?).
         # So if loss_comp_fg_bg_preserve is active, then loss_comp_prompt_distill is halved.
-        # all_subj_indices_2b is used in calc_feat_attn_delta_loss(), as it's used 
+        # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
         # to index subj single and subj comp embeddings.
         # The indices will be shifted along the batch dimension (size doubled) 
-        # within calc_feat_attn_delta_loss() to index all the 4 blocks.
+        # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
         loss_feat_delta_align, loss_subj_attn_norm_distill \
-            = self.calc_feat_attn_delta_loss(ca_outfeats, ca_outfeat_lns,
-                                             ca_layers_activations['attn'], 
-                                             all_subj_indices_2b, BLOCK_SIZE)
+            = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_outfeat_lns,
+                                                      ca_layers_activations['attn'], 
+                                                      all_subj_indices_2b, BLOCK_SIZE)
 
         if loss_feat_delta_align > 0:
             loss_dict.update({f'{session_prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
@@ -2145,14 +2145,14 @@ class LatentDiffusion(DDPM):
         # So no need to use a dynamic loss scale.
         subj_attn_norm_distill_loss_scale = 0.1
 
-        # loss_feat_delta_align: 0.1~0.3 -> 0.3~0.5, loss_subj_attn_delta_align: 0.6 -> 0.006, loss_subj_attn_norm_distill: 2.5 -> 0.25.
+        # loss_feat_delta_align: 0.1~0.3 -> 0.3~0.5, loss_subj_attn_norm_distill: 2.5 -> 0.25.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                    + loss_feat_delta_align       * feat_delta_align_scale
         
         return loss_comp_prompt_distill, loss_comp_fg_bg_preserve
     
-    # calc_feat_attn_delta_loss() is used by calc_comp_prompt_distill_loss().
-    def calc_feat_attn_delta_loss(self, ca_outfeats, ca_outfeat_lns, ca_attns, fg_indices_2b, BLOCK_SIZE):
+    # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
+    def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_outfeat_lns, ca_attns, fg_indices_2b, BLOCK_SIZE):
         # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2186,6 +2186,7 @@ class LatentDiffusion(DDPM):
                                             23: 1., 24: 1.,                                   
                                            }
 
+        # feature map size -> [kernel size, stride size] of the pooler.
         feat_size2pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
 
         # Normalize the weights above so that each set sum to 1.
@@ -2199,6 +2200,8 @@ class LatentDiffusion(DDPM):
         loss_layers_feat_delta_align        = []
         loss_layers_subj_attn_norm_distill  = []
 
+        subj_single_feat_grad_scaler = gen_gradient_scaler(0.1)
+
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
                 continue
@@ -2207,7 +2210,7 @@ class LatentDiffusion(DDPM):
                 ca_outfeat = ca_outfeat_lns[str(unet_layer_idx)](ca_outfeat.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
             # each is [1, 1280, 16, 16]
-            subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
+            subj_single_feat, subj_comp_feat, cls_single_feat, cls_comp_feat \
                 = ca_outfeat.chunk(4)
             
             # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
@@ -2245,7 +2248,7 @@ class LatentDiffusion(DDPM):
 
             feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
             # subj_single_feat, ...: [1, 1280, 16, 16]
-            subj_single_feat, subj_comp_feat, mix_single_feat, mix_comp_feat \
+            subj_single_feat, subj_comp_feat, cls_single_feat, cls_comp_feat \
                 = ca_outfeat.chunk(4)
 
             # convert_attn_to_spatial_weight() will detach attention weights to 
@@ -2253,7 +2256,7 @@ class LatentDiffusion(DDPM):
             # reversed=True: larger subject attention => smaller spatial weight, i.e., 
             # pay more attention to the context.
             spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn, BLOCK_SIZE, 
-                                                                                                mix_comp_feat.shape[2:],
+                                                                                                cls_comp_feat.shape[2:],
                                                                                                 reversed=True)
 
             spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
@@ -2280,21 +2283,23 @@ class LatentDiffusion(DDPM):
             # ca_outfeat_2d: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280*7*7] = [4, 62720].
             ca_outfeat_2d = pooler(ca_outfeat).reshape(ca_outfeat.shape[0], -1)
             # subj_single_feat_2d, ...: [1, 1280, 62720]
-            subj_single_feat_2d, subj_comp_feat_2d, mix_single_feat_2d, mix_comp_feat_2d \
+            subj_single_feat_2d, subj_comp_feat_2d, cls_single_feat_2d, cls_comp_feat_2d \
                 = ca_outfeat_2d.chunk(4)
 
-            mix_single_feat_2d_gs  = mix_single_feat_2d.detach()
-            mix_comp_feat_2d_gs    = mix_comp_feat_2d.detach()
+            cls_single_feat_2d_gs  = cls_single_feat_2d.detach()
+            cls_comp_feat_2d_gs    = cls_comp_feat_2d.detach()
+            # subj_single_feat_grad_scaler reduces grad by 10x.
+            subj_single_feat_2d_gs = subj_single_feat_grad_scaler(subj_single_feat_2d)
 
-            comp_feat_delta   = ortho_subtract(subj_comp_feat_2d,   mix_comp_feat_2d_gs)
-            # subj_single_feat is not gs'ed, and I don't know why without gs it still works.
-            single_feat_delta = ortho_subtract(subj_single_feat_2d, mix_single_feat_2d_gs)
+            comp_feat_delta   = ortho_subtract(subj_comp_feat_2d,   cls_comp_feat_2d_gs)
+            # subj_single_feat is gs'ed by 10x to avoid it from degeneration.
+            single_feat_delta = ortho_subtract(subj_single_feat_2d_gs, cls_single_feat_2d_gs)
                 
             # single_feat_delta, comp_feat_delta: [1, 1280], ...
             # Pool the spatial dimensions H, W to remove spatial information.
             # The gradient goes back to single_feat_delta -> subj_comp_feat,
-            # as well as comp_feat_delta -> mix_comp_feat.
-            # If stop_single_grad, the gradients to subj_single_feat and mix_single_feat are stopped, 
+            # as well as comp_feat_delta -> cls_comp_feat.
+            # If stop_single_grad, the gradients to subj_single_feat and cls_single_feat are stopped, 
             # as these two images should look good by themselves (since they only contain the subject).
             # Note the learning strategy to the single image features should be different from 
             # the single embeddings, as the former should be optimized to look good by itself,
@@ -2828,7 +2833,7 @@ class LatentDiffusion(DDPM):
             feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
             # calc_comp_fg_bg_preserve_loss() can have higher spatial precision 
-            # than calc_feat_attn_delta_loss(), but it requires fg_mask, 
+            # than calc_feat_delta_and_attn_norm_loss(), but it requires fg_mask, 
             # which is not always available.
             if do_feat_pooling and ca_outfeat.shape[-1] > 8:
                 pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
