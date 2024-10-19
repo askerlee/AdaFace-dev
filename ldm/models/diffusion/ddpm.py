@@ -30,6 +30,8 @@ from ldm.ademamix import AdEMAMix
 from ldm.ademamix_shampoo import AdEMAMixDistributedShampoo
 
 from adaface.unet_teachers import create_unet_teacher
+from gma.network import GMA
+from gma.utils.utils import load_checkpoint as gma_load_checkpoint
 
 import copy
 from functools import partial
@@ -89,6 +91,7 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.5, 1.5],
                  do_neg_id_prompt_weight=0,
                  extend_prompt2token_proj_attention_multiplier=1,
+                 use_face_flow_for_sc_matching_loss=True,
                  ):
         
         super().__init__()
@@ -148,7 +151,7 @@ class DDPM(pl.LightningModule):
 
         self.cached_inits = {}
         self.do_prompt_emb_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
-        
+
         self.init_iteration_flags()
 
         self.model = DiffusionWrapper(unet_config)
@@ -158,7 +161,8 @@ class DDPM(pl.LightningModule):
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
         self.grad_clip = grad_clip
-    
+        self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
+
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
 
@@ -481,6 +485,16 @@ class LatentDiffusion(DDPM):
             self.embedding_manager.train()
         self.num_id_vecs                = self.embedding_manager.id2ada_prompt_encoder.num_id_vecs
         self.num_static_img_suffix_embs = self.embedding_manager.id2ada_prompt_encoder.num_static_img_suffix_embs
+
+        if self.use_face_flow_for_sc_matching_loss and self.comp_distill_iter_gap > 0:
+            flow_model_config = { 'mixed_precision': True, 'corr_normalized_by_sqrt_dim': False }
+            self.flow_model = GMA(flow_model_config)
+            self.flow_model.eval()
+            for param in self.flow_model.parameters():
+                param.requires_grad = False
+
+            flow_model_ckpt_path = "models/gma-sintel.pth"
+            gma_load_checkpoint(self.flow_model, flow_model_ckpt_path)
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -2864,10 +2878,12 @@ class LatentDiffusion(DDPM):
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
             # removed loss_layer_ms_mc_fg_match to save computation.
             # loss_layer_comp_single_align_map: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
+            # sc_map_ss_fg_prob_below_mean and mc_map_ms_fg_prob_below_mean are used as fg/bg soft masks of comp instances
+            # to suppress the activations on background areas.
             loss_layer_comp_single_align_map, loss_layer_sc_ss_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
-                = calc_elastic_matching_loss(ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
-                                             fg_bg_cutoff_prob=0.25)
+                = calc_elastic_matching_loss(self.flow_model, ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
+                                             ca_q_h, ca_q_w, fg_bg_cutoff_prob=0.25, num_flow_est_iters=3)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
             loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * feat_distill_layer_weight)
