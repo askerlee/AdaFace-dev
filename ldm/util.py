@@ -1866,7 +1866,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
 # according to the feature map size.
-def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True):
+def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
     if not enabled:
         return feat_or_attn_mat
     
@@ -1890,17 +1890,26 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True):
         do_unflatten = False
 
     if feat_or_attn_mat.shape[-1] not in feat_size2pooler_spec:
+        if debug:
+            print(f"Warning: feature map size {feat_or_attn_mat.shape[-1]} not in feat_size2pooler_spec.")
         return feat_or_attn_mat0
     
     # 16 -> 4, 2 (output 7), 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
     pooler_kernel_size, pooler_stride = feat_size2pooler_spec[feat_or_attn_mat.shape[-1]]
+    if debug:
+        print(f"Pooling: feature map size {feat_or_attn_mat.shape[-1]} maps to kernel size {pooler_kernel_size}, stride {pooler_stride}")
+
     # feature pooling: allow small perturbations of the locations of pixels.
     # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
     # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
     pooler = nn.AvgPool2d(pooler_kernel_size, stride=pooler_stride)
     feat_or_attn_mat2 = pooler(feat_or_attn_mat)
+    # Reverse the unflatten and unsqueeze operations.
     if do_unflatten:
         feat_or_attn_mat2 = feat_or_attn_mat2.reshape(*feat_or_attn_mat2.shape[:2], -1)
+    if feat_or_attn_mat0.ndim == 2:
+        feat_or_attn_mat2 = feat_or_attn_mat2.squeeze(1)
+
     return feat_or_attn_mat2
 
 def forward_warp_by_flow(image1, flow1to2):
