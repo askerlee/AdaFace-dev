@@ -75,7 +75,7 @@ class GMA(nn.Module):
         up_flow = up_flow.permute(0, 1, 4, 2, 5, 3)
         return up_flow.reshape(N, 2, 8 * H, 8 * W)
 
-    def forward(self, image1, image2, num_iters=12, flow_init=None, upsample=True, test_mode=0):
+    def forward(self, image1, image2, num_iters=12, flow_init=None, test_mode=0):
         """ Estimate optical flow between a pair of frames """
 
         # image1, image2: [1, 3, 440, 1024]
@@ -189,9 +189,9 @@ class GMA(nn.Module):
             fmap1 = F.interpolate(fmap1, scale_factor=4, mode='bilinear', align_corners=False)
             fmap2 = F.interpolate(fmap2, scale_factor=4, mode='bilinear', align_corners=False)
             H, W = H * 4, W * 4
-            scale_factor = 4
+            scale_factor = 32
         else:
-            scale_factor = 1
+            scale_factor = 8
 
         # CorrBlock has no learnable parameters.
         self.corr_fn = CorrBlock(fmap1, fmap2, num_levels=self.config.corr_levels, 
@@ -238,12 +238,22 @@ class GMA(nn.Module):
 
             # F(t+1) = F(t) + \Delta(t)
             coords1 = coords1 + delta_flow
-            flow = coords1 - coords0
 
-            flow_predictions.append(flow)
+            # upsample predictions
+            if up_mask is None:
+                # coords0 is fixed as original coords.
+                # upflow8: upsize to 8 * height, 8 * width. 
+                # flow value also *8 (scale the offsets proportionally to the resolution).
+                flow_up = upflow8(coords1 - coords0)
+            else:
+                # The final high resolution flow field is found 
+                # by using the mask to take a weighted combination over the neighborhood.
+                flow_up = self.upsample_flow(coords1 - coords0, up_mask)
+
+            flow_predictions.append(flow_up)
     
-        final_flow = coords1 - coords0
-        if scale_factor > 1:
-            final_flow = F.interpolate(final_flow, size=(H0, W0), mode='bilinear', align_corners=False)
+        final_flow = flow_predictions[-1]
+        final_flow = F.interpolate(final_flow, size=(H0, W0), 
+                                   mode='bilinear', align_corners=False) / scale_factor
 
         return final_flow

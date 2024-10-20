@@ -1,5 +1,4 @@
 import torch
-from torchvision.models.optical_flow import raft_large
 import cv2
 import numpy as np
 import torch.nn.functional as F
@@ -18,19 +17,16 @@ def backward_warp_by_flow(image2, flow1to2):
 #model = model.eval()
 flow_model_config = { 'mixed_precision': True }
 model = GMA(flow_model_config).to('cuda')
-flow_model_ckpt_path = "models/gma-kitti.pth"
+flow_model_ckpt_path = "models/gma-sintel.pth"
 gma_load_checkpoint(model, flow_model_ckpt_path)
 
-img1 = cv2.imread('gma/examples/1.png')
-img2 = cv2.imread('gma/examples/2.png')
+img1 = cv2.imread('gma/examples/xxr.png')
+img2 = cv2.imread('gma/examples/xxr-adaface.png')
 img1_batch = torch.from_numpy(img1).permute(2, 0, 1).unsqueeze(0).float().to('cuda')
 img2_batch = torch.from_numpy(img2).permute(2, 0, 1).unsqueeze(0).float().to('cuda')
-img1_batch = F.interpolate(img1_batch, scale_factor=2, mode='bilinear', align_corners=False)
-img2_batch = F.interpolate(img2_batch, scale_factor=2, mode='bilinear', align_corners=False)
 
-flow, flow_predictions = model(img1_batch, img2_batch, test_mode=1)
-flow = F.interpolate(flow_predictions[-1].unsqueeze(0), scale_factor=0.5, mode='bilinear', align_corners=False) * 0.5
-flow = flow.permute(0, 2, 3, 1)
-img1_recovered = backward_warp_by_flow(img2, flow[0].detach().cpu().numpy())
-cv2.imwrite('gma/examples/1_recovered.png', img1_recovered)
-
+flow, flow_predictions = model(img1_batch, img2_batch, num_iters=24, test_mode=1)
+flow = flow_predictions[-1]
+flow = flow.permute(1, 2, 0).detach().cpu().numpy()
+img1_recovered = backward_warp_by_flow(img2, flow)
+cv2.imwrite('gma/examples/xxr_recovered.png', img1_recovered)

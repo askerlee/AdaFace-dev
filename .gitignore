@@ -39,3 +39,4 @@ logs-backup
 /*.log
 latent_diffusion.egg-info/*
 .gradio/certificate.pem
+gma/examples/xxr*

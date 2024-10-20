@@ -494,7 +494,7 @@ class LatentDiffusion(DDPM):
             for param in self.flow_model.parameters():
                 param.requires_grad = False
 
-            flow_model_ckpt_path = "models/gma-things.pth"
+            flow_model_ckpt_path = "models/gma-sintel.pth"
             gma_load_checkpoint(self.flow_model, flow_model_ckpt_path)
         else:
             self.flow_model = None
@@ -2853,7 +2853,7 @@ class LatentDiffusion(DDPM):
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q_pooled, 
                                              ca_outfeat_pooled, fg_attn_mask_pooled, ca_q_h2, ca_q_w2, 
-                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=3)
+                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=6)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
             loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * feat_distill_layer_weight)

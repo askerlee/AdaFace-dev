@@ -1915,13 +1915,39 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
 
     return feat_or_attn_mat2
 
-def forward_warp_by_flow(image1, flow1to2):
-    H, W, _ = image1.shape
+def backward_warp_by_flow_np(image2, flow1to2):
+    H, W, _ = image2.shape
     flow1to2 = flow1to2.copy()
     flow1to2[:, :, 0] += np.arange(W)  # Adjust x-coordinates
     flow1to2[:, :, 1] += np.arange(H)[:, None]  # Adjust y-coordinates
-    image2_recovered = cv2.remap(image1, flow1to2, None, cv2.INTER_LINEAR)
-    return image2_recovered
+    image1_recovered = cv2.remap(image2, flow1to2, None, cv2.INTER_LINEAR)
+    return image1_recovered
+
+def backward_warp_by_flow(image2, flow1to2):
+    # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
+    B, C, H, W = image2.shape
+
+    # Create meshgrid for coordinates.
+    # NOTE: the default indexing is 'ij', so we need to use 'xy' to get the correct grid.
+    grid_x, grid_y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+    grid_x = grid_x.to(flow1to2.device)
+    grid_y = grid_y.to(flow1to2.device)
+    
+    # Adjust the flow to compute absolute coordinates
+    flow_x = flow1to2[:, 0, :, :] + grid_x  # Add x coordinates
+    flow_y = flow1to2[:, 1, :, :] + grid_y  # Add y coordinates
+
+    # Normalize flow values to the range [-1, 1] as required by grid_sample
+    flow_x = 2.0 * flow_x / (W - 1) - 1.0
+    flow_y = 2.0 * flow_y / (H - 1) - 1.0
+
+    # Stack and reshape the flow to form the sampling grid for grid_sample
+    # flow: [B, H, W, 2]
+    flow = torch.stack((flow_x, flow_y), dim=-1)
+    # Perform backward warping using grid_sample
+    image1_recovered = F.grid_sample(image2, flow, mode='bilinear', padding_mode='zeros', align_corners=True)
+
+    return image1_recovered
 
 @torch.compile
 def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask):
@@ -1958,30 +1984,45 @@ def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg
         
 #@torch.compile
 def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, H, W,
-                                        num_flow_est_iters=3):
+                                        num_flow_est_iters=6):
     if H*W != ss_feat.shape[-1]:
         breakpoint()
 
-    np.set_printoptions(precision=1, suppress=True)
+    #np.set_printoptions(precision=1, suppress=True)
 
     with torch.no_grad():
         # Latent optical flow from subj single feature maps to subj comp feature maps.
         s2c_flow = flow_model.est_flow_from_feats(ss_feat, sc_feat, H, W, 
                                                   num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=True)
 
-        '''
-        scale = 8 / s2c_flow.shape[-1]
-        s2c_flow = F.interpolate(s2c_flow, size=(8, 8), mode='bilinear', align_corners=False) * scale
-        print(f"Layer {layer_idx}: {H}x{W} -> 16x16 flow:")
-        print(s2c_flow.squeeze(0).cpu().numpy())
-        '''
+    sc_feat                 = sc_feat.reshape(*sc_feat.shape[:2], H, W)
+    sc_recon_ss_feat        = backward_warp_by_flow(sc_feat, s2c_flow)
+    fg_mask_B, fg_mask_N    = fg_mask.nonzero(as_tuple=True)    
+    sc_recon_ss_feat        = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
+    sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, fg_mask_N]
+    ss_fg_feat              = ss_feat.permute(0, 2, 1)[:, fg_mask_N]
 
-
-    return calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
+    # ref_grad_scale=0: don't BP to ss_fg_feat.
+    # We use cosine loss, so that when the reconstructed features are of different scales,
+    # the loss could still be small.
+    loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
+                                               exponent=2, do_demeans=[False, False],
+                                               first_n_dims_to_flatten=2, 
+                                               ref_grad_scale=0)   
+    
+    # print(f"Layer {layer_idx}: {H}x{W} flow loss: {loss_sc_ss_fg_match.item():.03f}")
+    return loss_sc_ss_fg_match
+    
+    '''
+    scale = 8 / s2c_flow.shape[-1]
+    s2c_flow = F.interpolate(s2c_flow, size=(8, 8), mode='bilinear', align_corners=False) * scale
+    print(f"Layer {layer_idx}: {H}x{W} -> 16x16 flow:")
+    print(s2c_flow.squeeze(0).cpu().numpy())
+    '''
 
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
-                               num_flow_est_iters=3):
+                               num_flow_est_iters=6):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
