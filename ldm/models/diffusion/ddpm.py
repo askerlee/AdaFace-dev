@@ -15,8 +15,8 @@ from diffusers import UNet2DConditionModel
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_ref_cosine_loss, \
                         calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
-                        save_grid, normalize_dict_values, masked_mean, \
-                        init_x_with_fg_from_training_image, resize_mask_for_feat_or_attn, convert_attn_to_spatial_weight, \
+                        save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
+                        init_x_with_fg_from_training_image, resize_mask_to_target_size, convert_attn_to_spatial_weight, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
@@ -1572,9 +1572,9 @@ class LatentDiffusion(DDPM):
             if loss_bg_xlayer_consist > 0:
                 loss_dict.update({f'{session_prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach().item() })
 
-            # Reduce the loss_fg_xlayer_consist_loss_scale by 5x if do_zero_shot.
-            fg_xlayer_consist_loss_scale = 0.2
-            bg_xlayer_consist_loss_scale = 0.06
+            # Reduce the loss_bg_xlayer_consist_loss_scale by 4x.
+            fg_xlayer_consist_loss_scale = 1
+            bg_xlayer_consist_loss_scale = 0.2
 
             loss += (loss_fg_xlayer_consist * fg_xlayer_consist_loss_scale + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
                     * self.fg_bg_xlayer_consist_loss_weight
@@ -2197,9 +2197,6 @@ class LatentDiffusion(DDPM):
                                             23: 1., 24: 1.,                                   
                                            }
 
-        # feature map size -> [kernel size, stride size] of the pooler.
-        feat_size2pooler_spec = { 8: [4, 2], 16: [4, 2], 32: [8, 4], 64: [8, 4] }
-
         # Normalize the weights above so that each set sum to 1.
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
         attn_norm_distill_layer_weights     = normalize_dict_values(attn_norm_distill_layer_weights)
@@ -2283,16 +2280,8 @@ class LatentDiffusion(DDPM):
 
             ca_outfeat  = ca_outfeat * spatial_weight
 
-            # 8  -> 4, 2 (output 3),  16 -> 4, 2 (output 7), 
-            # 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
-            pooler_kernel_size, pooler_stride = feat_size2pooler_spec[ca_outfeat.shape[-1]]
-            # feature pooling: allow small perturbations of the locations of pixels.
-            # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
-            # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
-            pooler = nn.AvgPool2d(pooler_kernel_size, stride=pooler_stride)
-
             # ca_outfeat_2d: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280*7*7] = [4, 62720].
-            ca_outfeat_2d = pooler(ca_outfeat).reshape(ca_outfeat.shape[0], -1)
+            ca_outfeat_2d = pool_feat_or_attn_mat(ca_outfeat).reshape(ca_outfeat.shape[0], -1)
             # subj_single_feat_2d, ...: [1, 1280, 62720]
             subj_single_feat_2d, subj_comp_feat_2d, cls_single_feat_2d, cls_comp_feat_2d \
                 = ca_outfeat_2d.chunk(4)
@@ -2302,7 +2291,7 @@ class LatentDiffusion(DDPM):
             # subj_single_feat_grad_scaler reduces grad by 10x.
             subj_single_feat_2d_gs = subj_single_feat_grad_scaler(subj_single_feat_2d)
 
-            comp_feat_delta   = ortho_subtract(subj_comp_feat_2d,   cls_comp_feat_2d_gs)
+            comp_feat_delta   = ortho_subtract(subj_comp_feat_2d,      cls_comp_feat_2d_gs)
             # subj_single_feat is gs'ed by 10x to avoid it from degeneration.
             single_feat_delta = ortho_subtract(subj_single_feat_2d_gs, cls_single_feat_2d_gs)
                 
@@ -2369,8 +2358,8 @@ class LatentDiffusion(DDPM):
             subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices,
                                                   do_sum=True, do_mean=False, do_sqrt_norm=False)
 
-            fg_mask2 = resize_mask_for_feat_or_attn(subj_score.shape[-1], fg_mask, "fg_mask", 
-                                                    mode="nearest|bilinear")
+            fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_score.shape[-1], 
+                                                  mode="nearest|bilinear")
             # Repeat 8 times to match the number of attention heads (for normalization).
             fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_score.shape[1], 1)
             fg_mask3 = torch.zeros_like(fg_mask2)
@@ -2532,8 +2521,8 @@ class LatentDiffusion(DDPM):
             loss_layers_fg_bg_complementary.append(loss_layer_fg_bg_comple * attn_align_layer_weight)
 
             if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
-                fg_mask2 = resize_mask_for_feat_or_attn(subj_score.shape[-1], fg_mask, "fg_mask", 
-                                                        mode="nearest|bilinear")
+                fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_score.shape[-1], 
+                                                      mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads (for normalization).
                 fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_score.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
@@ -2683,7 +2672,7 @@ class LatentDiffusion(DDPM):
 
             # Cross attention matrix between the prompt (77 tokens) and the image tokens (256 tokens).
             # [2, 8, 256, 77] => [2, 77, 8, 256]
-            attn_mat        = unet_attn.permute(0, 3, 1, 2)
+            attn_mat = unet_attn.permute(0, 3, 1, 2)
             # [2, 8, 64, 77]  => [2, 77, 8, 64]
             attn_score_mat_xlayer = ca_attns[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
             
@@ -2714,20 +2703,11 @@ class LatentDiffusion(DDPM):
             subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
             subj_attn = subj_attn.reshape(SSB_SIZE, Hx*Hx)
 
-            if bg_indices is not None:
-                # bg_attn:   [8, 8, 256] -> [2, 4, 8, 256] -> mean over 8 heads, sum over 4 embs -> [2, 256]
-                # 8: 8 attention heads. Last dim 256: number of image tokens.
-                # Average out head, because the head i in layer a may not correspond to head i in layer b.
-                bg_attn         = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).mean(dim=2).sum(dim=1)
-                bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
-                # bg_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
-                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, H, H)
-                bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-                bg_attn   = bg_attn.reshape(SSB_SIZE, Hx*Hx)
-            
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
-            #loss_layer_fg_xlayer_consist = ortho_l2loss(subj_attn, subj_attn_xlayer, mean=True)
+            subj_attn        = pool_feat_or_attn_mat(subj_attn)
+            subj_attn_xlayer = pool_feat_or_attn_mat(subj_attn_xlayer)
+
             loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
                                                                 exponent=2,    
                                                                 do_demeans=[True, True],
@@ -2738,7 +2718,19 @@ class LatentDiffusion(DDPM):
             loss_layers_fg_xlayer_consist.append(loss_layer_fg_xlayer_consist * attn_align_layer_weight)
             
             if bg_indices is not None:
-                #loss_layer_bg_xlayer_consist = ortho_l2loss(bg_attn, bg_attn_xlayer, mean=True)
+                # bg_attn:   [8, 8, 256] -> [2, 4, 8, 256] -> mean over 8 heads, sum over 4 embs -> [2, 256]
+                # 8: 8 attention heads. Last dim 256: number of image tokens.
+                # Average out head, because the head i in layer a may not correspond to head i in layer b.
+                bg_attn         = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).mean(dim=2).sum(dim=1)
+                bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
+                # bg_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
+                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, H, H)
+                bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
+                bg_attn   = bg_attn.reshape(SSB_SIZE, Hx*Hx)
+                
+                bg_attn         = pool_feat_or_attn_mat(bg_attn)
+                bg_attn_xlayer  = pool_feat_or_attn_mat(bg_attn_xlayer)
+
                 loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
                                                                     exponent=2,    
                                                                     do_demeans=[True, True],
@@ -2820,35 +2812,23 @@ class LatentDiffusion(DDPM):
             if ca_outfeat_lns is not None:
                 ca_outfeat = ca_outfeat_lns[str(unet_layer_idx)](ca_outfeat.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
-            do_feat_pooling = True
-            # feature pooling: allow small perturbations of the locations of pixels.
-            # calc_comp_fg_bg_preserve_loss() can have higher spatial precision 
-            # than calc_feat_delta_and_attn_norm_loss(), but it requires fg_mask, 
-            # which is not always available.
-            if do_feat_pooling and ca_outfeat.shape[-1] > 8:
-                feat_pool_kernel_size = 4
-                feat_pool_stride      = 2
-                pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
-            else:
-                pooler = nn.Identity()
-
             ###### elastic matching loss ######
             # q of each layer is used to compute the correlation matrix between subject-single and subject-comp instances,
             # as well as class-single and class-comp instances.
             # ca_outfeat is used to compute the reconstruction loss between subject-single and subject-comp instances 
             # (using the correlation matrix), as well as class-single and class-comp instances.
-            # layer_q: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_layer_q_pooled   = pooler(ca_layer_q)
+            # ca_layer_q: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
+            ca_layer_q_pooled   = pool_feat_or_attn_mat(ca_layer_q, enabled=True)
             ca_q_h2, ca_q_w2    = ca_layer_q_pooled.shape[-2:]
             ca_layer_q_pooled   = ca_layer_q_pooled.reshape(*ca_layer_q.shape[:2], -1)
             # ca_outfeat_pooled: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_outfeat_pooled   = pooler(ca_outfeat).reshape(*ca_outfeat.shape[:2], -1)
+            ca_outfeat_pooled   = pool_feat_or_attn_mat(ca_outfeat, enabled=True).reshape(*ca_outfeat.shape[:2], -1)
             # fg_attn_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
             fg_attn_mask_4b \
-                = resize_mask_for_feat_or_attn(ca_outfeat.shape[-2:].numel(), fg_mask_4b, "fg_mask_4b", 
-                                               mode="nearest|bilinear", warn_on_all_zero=False)
+                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", ca_outfeat.shape[-2:].numel(), 
+                                             mode="nearest|bilinear", warn_on_all_zero=False)
             # fg_attn_mask_4b: [4, 1, 8, 8] -> [4, 1, 8, 8]
-            fg_attn_mask_pooled_4b = pooler(fg_attn_mask_4b)
+            fg_attn_mask_pooled_4b = pool_feat_or_attn_mat(fg_attn_mask_4b, enabled=True)
             # fg_attn_mask_pooled: [4, 1, 8, 8] -> [1, 1, 8, 8] 
             fg_attn_mask_pooled = fg_attn_mask_pooled_4b.chunk(4)[0]
             # fg_attn_mask_pooled: [1, 1, 8, 8] -> [1, 1, 64]
@@ -2895,7 +2875,7 @@ class LatentDiffusion(DDPM):
                 subj_attn_hw = F.interpolate(subj_attn_hw, size=ca_outfeat.shape[2:], mode="bilinear", align_corners=False)
 
             # subj_attn_pooled: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
-            subj_attn_pooled = pooler(subj_attn_hw).reshape(*subj_attn_hw.shape[:2], -1)
+            subj_attn_pooled = pool_feat_or_attn_mat(subj_attn_hw, enabled=True).reshape(*subj_attn_hw.shape[:2], -1)
 
             subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn, mix_comp_subj_attn \
                 = subj_attn_pooled.chunk(4)

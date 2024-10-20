@@ -1393,16 +1393,16 @@ def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
 
     raise ValueError(f"curr_pos {curr_pos} is out of range.")
 
-# spatial_area: H*W of 4D features or 3D attention. If it's attention, then
+# target_spatial_area: H*W of 4D features or 3D attention. If it's attention, then
 # its geometrical dimensions (H, W) have been flatten to 1D (last dim).
 # mask: always 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
-def resize_mask_for_feat_or_attn(spatial_area, mask, mask_name, mode="nearest|bilinear", warn_on_all_zero=True):
+def resize_mask_to_target_size(mask, mask_name, target_spatial_area, mode="nearest|bilinear", warn_on_all_zero=True):
     # Assume square feature maps, target_H = target_W.
-    target_H = int(np.sqrt(spatial_area))
+    target_H = int(np.sqrt(target_spatial_area))
     spatial_shape2 = (target_H, target_H)
 
-    # NOTE: avoid "bilinear" mode. If the object is too small in the mask, 
+    # NOTE: masks should avoid "bilinear" mode. If the object is too small in the mask, 
     # it may result in all-zero masks.
     # mask: [2, 1, 64, 64] => mask2: [2, 1, 8, 8].
     mask2_nearest  = F.interpolate(mask.float(), size=spatial_shape2, mode='nearest')
@@ -1720,16 +1720,6 @@ def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_gra
 
     return loss_prompt_emb_delta
 
-def calc_dyn_loss_scale(loss, loss_base, loss_scale_base, min_scale_base_ratio=1, max_scale_base_ratio=2):
-    # Setting loss_base to 0 will disable the loss.
-    if loss_base == 0:
-        return 0
-    scale = loss.item() * loss_scale_base / loss_base
-    min_scale = loss_scale_base * min_scale_base_ratio
-    max_scale = loss_scale_base * max_scale_base_ratio
-    scale = max(min(max_scale, scale), min_scale)
-    return scale
-
 def to_float(x):
     if isinstance(x, torch.Tensor):
         return x.item()
@@ -1779,8 +1769,8 @@ def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=Fals
 # noise_std_range: the noise std / embeddings std falls within this range.
 # anneal_perturb_embedding() adds noise of the amount randomly selected from the noise_std_range.
 def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range, end_noise_std_range, 
-                                  perturb_prob, perturb_std_is_relative=True, keep_norm=False,
-                                  std_dim=-1, norm_dim=-1, verbose=True):
+                             perturb_prob, perturb_std_is_relative=True, keep_norm=False,
+                             std_dim=-1, norm_dim=-1, verbose=True):
     if torch.rand(1) > perturb_prob:
         return embeddings
     
@@ -1793,7 +1783,7 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
     perturb_std = torch.rand(1).item() * (noise_std_ub - noise_std_lb) + noise_std_lb
 
     noised_embeddings = perturb_tensor(embeddings, perturb_std, perturb_std_is_relative, 
-                                            keep_norm, std_dim, norm_dim, verbose=verbose)
+                                       keep_norm, std_dim, norm_dim, verbose=verbose)
     return noised_embeddings
 
 # At scaled background, fill new x_start with random values (100% noise). 
@@ -1872,6 +1862,46 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         # Re-normalize among the specified dimension after adding p to the diagonal.
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
+
+# features/attention pooling allows small perturbations of the locations of pixels.
+# pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
+# according to the feature map size.
+def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True):
+    if not enabled:
+        return feat_or_attn_mat
+    
+    # feature map size -> [kernel size, stride size] of the pooler.
+    feat_size2pooler_spec = { 16: [4, 2], 32: [8, 4], 64: [8, 4] }
+    # 3D should be attention maps. 4D should be feature maps.
+    # For attention maps, the last 2 dims are flattened to 1D. So we need to unflatten them.
+    feat_or_attn_mat0 = feat_or_attn_mat
+
+    # Attention matrix without the head dim.
+    if feat_or_attn_mat.ndim == 2:
+        feat_or_attn_mat = feat_or_attn_mat.unsqueeze(1)
+
+    # Attention matrix with the head dim.
+    if feat_or_attn_mat.ndim == 3:
+        do_unflatten = True
+        feat_or_attn_mat = feat_or_attn_mat.reshape(feat_or_attn_mat.shape[0], 
+                                                    int(np.sqrt(feat_or_attn_mat.shape[-1])), 
+                                                    int(np.sqrt(feat_or_attn_mat.shape[-1])))
+    else:
+        do_unflatten = False
+
+    if feat_or_attn_mat.shape[-1] not in feat_size2pooler_spec:
+        return feat_or_attn_mat0
+    
+    # 16 -> 4, 2 (output 7), 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
+    pooler_kernel_size, pooler_stride = feat_size2pooler_spec[feat_or_attn_mat.shape[-1]]
+    # feature pooling: allow small perturbations of the locations of pixels.
+    # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
+    # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
+    pooler = nn.AvgPool2d(pooler_kernel_size, stride=pooler_stride)
+    feat_or_attn_mat2 = pooler(feat_or_attn_mat)
+    if do_unflatten:
+        feat_or_attn_mat2 = feat_or_attn_mat2.reshape(*feat_or_attn_mat2.shape[:2], -1)
+    return feat_or_attn_mat2
 
 def forward_warp_by_flow(image1, flow1to2):
     H, W, _ = image1.shape

@@ -25,12 +25,12 @@ img1 = cv2.imread('gma/examples/1.png')
 img2 = cv2.imread('gma/examples/2.png')
 img1_batch = torch.from_numpy(img1).permute(2, 0, 1).unsqueeze(0).float().to('cuda')
 img2_batch = torch.from_numpy(img2).permute(2, 0, 1).unsqueeze(0).float().to('cuda')
-img1_batch = F.interpolate(img1_batch, scale_factor=4, mode='bilinear', align_corners=False)
-img2_batch = F.interpolate(img2_batch, scale_factor=4, mode='bilinear', align_corners=False)
+img1_batch = F.interpolate(img1_batch, scale_factor=2, mode='bilinear', align_corners=False)
+img2_batch = F.interpolate(img2_batch, scale_factor=2, mode='bilinear', align_corners=False)
 
 flow, flow_predictions = model(img1_batch, img2_batch, test_mode=1)
-flow = F.interpolate(flow_predictions[-1].unsqueeze(0), scale_factor=0.25, mode='bilinear', align_corners=False) * 0.25
+flow = F.interpolate(flow_predictions[-1].unsqueeze(0), scale_factor=0.5, mode='bilinear', align_corners=False) * 0.5
 flow = flow.permute(0, 2, 3, 1)
-img2_recovered = backward_warp_by_flow(img1, -flow[0].detach().cpu().numpy())
-cv2.imwrite('gma/examples/2_recovered.png', img2_recovered)
+img1_recovered = backward_warp_by_flow(img2, flow[0].detach().cpu().numpy())
+cv2.imwrite('gma/examples/1_recovered.png', img1_recovered)
 
