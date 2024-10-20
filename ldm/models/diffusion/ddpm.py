@@ -2839,7 +2839,7 @@ class LatentDiffusion(DDPM):
             fg_attn_mask_pooled_4b = pool_feat_or_attn_mat(fg_attn_mask_4b, enabled=True)
             # fg_attn_mask_pooled: [4, 1, 8, 8] -> [1, 1, 8, 8] 
             fg_attn_mask_pooled = fg_attn_mask_pooled_4b.chunk(4)[0]
-            # fg_attn_mask_pooled: [1, 1, 8, 8] -> [1, 1, 64]
+            # fg_attn_mask_pooled: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
             fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
 
             if unet_layer_idx not in elastic_matching_layer_weights:

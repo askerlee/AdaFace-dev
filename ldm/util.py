@@ -2000,9 +2000,20 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat,
     # Collapse the spatial dimensions again.
     sc_recon_ss_feat        = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
 
-    # fg_mask's spatial dim is already collapsed. fg_mask: [1, 64]
+    # fg_mask's spatial dim is already collapsed. fg_mask: [1, 225]
     # nonzero() returns (B, N) indices of True values as fg_mask_B, fg_mask_N.
     # So we use fg_mask_N to index the last dim of sc_recon_ss_feat.
+    '''
+    (Pdb) fg_mask_N
+    tensor([ 17,  18,  19,  20,  21,  22,  23,  24,  31,  32,  33,  34,  35,  36,
+            37,  38,  39,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  61,
+            62,  63,  64,  65,  66,  67,  68,  69,  70,  76,  77,  78,  79,  80,
+            81,  82,  83,  84,  85,  91,  92,  93,  94,  95,  96,  97,  98,  99,
+            100, 107, 108, 109, 110, 111, 112, 113, 114, 115, 122, 123, 124, 125,
+            126, 127, 128, 129, 130, 137, 138, 139, 140, 141, 142, 143, 144, 153,
+            154, 155, 156, 157, 158, 167, 168, 169, 170, 171, 172, 173, 182, 183,
+            184, 185, 186, 187, 188], device='cuda:0')
+    '''    
     fg_mask_B, fg_mask_N    = fg_mask.nonzero(as_tuple=True)    
     # sc_recon_ss_feat: [1, 1280, 64] -> [1, 64, 1280] -> [1, N_fg, 1280]
     sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, fg_mask_N]
