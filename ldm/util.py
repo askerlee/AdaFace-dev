@@ -1871,7 +1871,8 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
         return feat_or_attn_mat
     
     # feature map size -> [kernel size, stride size] of the pooler.
-    feat_size2pooler_spec = { 16: [4, 2], 32: [8, 4], 64: [8, 4] }
+    # 16 -> 4, 2 (output 7), 32 -> 4, 2 (output 15),  64 -> 8, 4 (output 15).
+    feat_size2pooler_spec = { 16: [4, 2], 32: [4, 2], 64: [8, 4] }
     # 3D should be attention maps. 4D should be feature maps.
     # For attention maps, the last 2 dims are flattened to 1D. So we need to unflatten them.
     feat_or_attn_mat0 = feat_or_attn_mat
@@ -1883,7 +1884,7 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
     # Attention matrix with the head dim.
     if feat_or_attn_mat.ndim == 3:
         do_unflatten = True
-        feat_or_attn_mat = feat_or_attn_mat.reshape(feat_or_attn_mat.shape[0], 
+        feat_or_attn_mat = feat_or_attn_mat.reshape(*feat_or_attn_mat.shape[:2], 
                                                     int(np.sqrt(feat_or_attn_mat.shape[-1])), 
                                                     int(np.sqrt(feat_or_attn_mat.shape[-1])))
     else:
@@ -1891,13 +1892,11 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
 
     if feat_or_attn_mat.shape[-1] not in feat_size2pooler_spec:
         if debug:
-            print(f"Warning: feature map size {feat_or_attn_mat.shape[-1]} not in feat_size2pooler_spec.")
+            print(f"{feat_or_attn_mat0.shape} not in feat_size2pooler_spec.")
         return feat_or_attn_mat0
     
-    # 16 -> 4, 2 (output 7), 32 -> 8, 4 (output 7),  64 -> 8, 4 (output 15).
+    # 16 -> 4, 2 (output 7), 32 -> 4, 2 (output 15),  64 -> 8, 4 (output 15).
     pooler_kernel_size, pooler_stride = feat_size2pooler_spec[feat_or_attn_mat.shape[-1]]
-    if debug:
-        print(f"Pooling: feature map size {feat_or_attn_mat.shape[-1]} maps to kernel size {pooler_kernel_size}, stride {pooler_stride}")
 
     # feature pooling: allow small perturbations of the locations of pixels.
     # If subj_single_feat is 8x8, then after pooling, it becomes 3x3, too rough.
@@ -1909,6 +1908,10 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
         feat_or_attn_mat2 = feat_or_attn_mat2.reshape(*feat_or_attn_mat2.shape[:2], -1)
     if feat_or_attn_mat0.ndim == 2:
         feat_or_attn_mat2 = feat_or_attn_mat2.squeeze(1)
+
+    if debug:
+        print(f"{list(feat_or_attn_mat0.shape)} -> {list(feat_or_attn_mat.shape)} "
+              f"(ks, stride)=({pooler_kernel_size}, {pooler_stride}) => {list(feat_or_attn_mat2.shape)}")
 
     return feat_or_attn_mat2
 

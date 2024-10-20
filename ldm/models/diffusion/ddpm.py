@@ -2184,6 +2184,7 @@ class LatentDiffusion(DDPM):
 
         # feature map distillation only uses delta loss on the features to reduce the 
         # class polluting the subject features.
+        # Feature map spatial sizes are all 64*64.
         feat_distill_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                      }
 
@@ -2280,9 +2281,9 @@ class LatentDiffusion(DDPM):
 
             ca_outfeat  = ca_outfeat * spatial_weight
 
-            # ca_outfeat_2d: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280*7*7] = [4, 62720].
+            # ca_outfeat_2d: [4, 320, 64, 64] -> [4, 320, 15, 15] -> [4, 320*8*8] = [4, 20480].
             ca_outfeat_2d = pool_feat_or_attn_mat(ca_outfeat).reshape(ca_outfeat.shape[0], -1)
-            # subj_single_feat_2d, ...: [1, 1280, 62720]
+            # subj_single_feat_2d, ...: [1, 320, 81920]
             subj_single_feat_2d, subj_comp_feat_2d, cls_single_feat_2d, cls_comp_feat_2d \
                 = ca_outfeat_2d.chunk(4)
 
@@ -2295,7 +2296,7 @@ class LatentDiffusion(DDPM):
             # subj_single_feat is gs'ed by 10x to avoid it from degeneration.
             single_feat_delta = ortho_subtract(subj_single_feat_2d_gs, cls_single_feat_2d_gs)
                 
-            # single_feat_delta, comp_feat_delta: [1, 1280], ...
+            # single_feat_delta, comp_feat_delta: [1, 320], ...
             # Pool the spatial dimensions H, W to remove spatial information.
             # The gradient goes back to single_feat_delta -> subj_comp_feat,
             # as well as comp_feat_delta -> cls_comp_feat.
@@ -2321,6 +2322,7 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
+        # Feature map spatial sizes are all 64*64.
         attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                    }
                 
@@ -2439,6 +2441,7 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
+        # Feature map spatial sizes are all 64*64.
         attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                    }
         # 16-18: feature maps 16x16.
@@ -2625,6 +2628,8 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         # layer 7 is absent, since layer 8 aligns with layer 7.
+        # Feature map spatial sizes are all 64*64.
+        # Except that layer 22 corresponds to layer 21 with 32x32 feature maps.
         attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                    }
         # 16-18: feature maps 16x16.
@@ -2705,6 +2710,8 @@ class LatentDiffusion(DDPM):
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
+            # NOTE: subj_attn is 2D. It will be unsqueezed to 3D, then reshaped to 4D for the pooling,
+            # then reshaped to 3D and squeezed to 2D as the final output.
             subj_attn        = pool_feat_or_attn_mat(subj_attn)
             subj_attn_xlayer = pool_feat_or_attn_mat(subj_attn_xlayer)
 
@@ -2760,6 +2767,7 @@ class LatentDiffusion(DDPM):
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
 
+        # Feature map spatial sizes are all 64*64.
         feat_distill_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                      }
 
