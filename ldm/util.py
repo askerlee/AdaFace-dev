@@ -1997,9 +1997,16 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat,
 
     sc_feat                 = sc_feat.reshape(*sc_feat.shape[:2], H, W)
     sc_recon_ss_feat        = backward_warp_by_flow(sc_feat, s2c_flow)
-    fg_mask_B, fg_mask_N    = fg_mask.nonzero(as_tuple=True)    
+    # Collapse the spatial dimensions again.
     sc_recon_ss_feat        = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
+
+    # fg_mask's spatial dim is already collapsed. fg_mask: [1, 64]
+    # nonzero() returns (B, N) indices of True values as fg_mask_B, fg_mask_N.
+    # So we use fg_mask_N to index the last dim of sc_recon_ss_feat.
+    fg_mask_B, fg_mask_N    = fg_mask.nonzero(as_tuple=True)    
+    # sc_recon_ss_feat: [1, 1280, 64] -> [1, 64, 1280] -> [1, N_fg, 1280]
     sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, fg_mask_N]
+    # ss_feat: [1, 1280, 64] -> [1, 64, 1280] -> [1, N_fg, 1280]
     ss_fg_feat              = ss_feat.permute(0, 2, 1)[:, fg_mask_N]
 
     # ref_grad_scale=0: don't BP to ss_fg_feat.
