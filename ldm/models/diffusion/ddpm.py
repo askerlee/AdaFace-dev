@@ -2343,7 +2343,7 @@ class LatentDiffusion(DDPM):
         mfmb_contrast_score_margin  = 0.4
 
         # Protect subject emb activations on fg areas.
-        subj_score_at_mf_grad_scale = 0.5
+        subj_score_at_mf_grad_scale  = 0.5
         subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_fg times as many elements as bg_indices.
@@ -2374,6 +2374,7 @@ class LatentDiffusion(DDPM):
             # Repeat 8 times to match the number of attention heads (for normalization).
             fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_score.shape[1], 1)
             fg_mask3 = torch.zeros_like(fg_mask2)
+            # Set fractional values (due to resizing) to 1.
             fg_mask3[fg_mask2 >  1e-6] = 1.
 
             bg_mask3 = (1 - fg_mask3)
@@ -2410,7 +2411,7 @@ class LatentDiffusion(DDPM):
             # subj_score_at_mb at any background locations.
             # If not, clamp() > 0, incurring a loss.
             # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
-            layer_subj_mb_excess    = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
+            layer_subj_mb_excess = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
             # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
             # activations conform to the margin restrictions.
             loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
