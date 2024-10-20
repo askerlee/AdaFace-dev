@@ -32,8 +32,6 @@ class GMA(nn.Module):
             self.config.mixed_precision = True
         if not hasattr(self.config, 'num_heads'):
             self.config.num_heads = 1
-        if not hasattr(self.config, 'corr_normalized_by_sqrt_dim'):
-            self.config.corr_normalized_by_sqrt_dim = True
 
         print0(f"corr_levels: {self.config.corr_levels}, corr_radius: {self.config.corr_radius}")
                 
@@ -51,11 +49,15 @@ class GMA(nn.Module):
             if isinstance(m, nn.BatchNorm2d):
                 m.eval()
 
-    def initialize_flow(self, img):
+    # If img is the input image, then coords0 and coords1 are shrunk to 1/8 of the original image,
+    # i.e., S = 8.
+    # If img is the feature map, then coords0 and coords1 are of the same size as the feature map.
+    # i.e., S = 1.
+    def initialize_flow(self, img, S=8):
         """ Flow is represented as difference between two coordinate grids flow = coords1 - coords0"""
         N, C, H, W = img.shape
-        coords0 = coords_grid(N, H // 8, W // 8).to(img.device)
-        coords1 = coords_grid(N, H // 8, W // 8).to(img.device)
+        coords0 = coords_grid(N, H // S, W // S).to(img.device)
+        coords1 = coords_grid(N, H // S, W // S).to(img.device)
 
         # optical flow computed as difference: flow = coords1 - coords0
         return coords0, coords1
@@ -120,6 +122,7 @@ class GMA(nn.Module):
         # coords0 is always fixed as original coords.
         # coords1 is iteratively updated as coords0 + current estimated flow.
         # At this moment coords0 == coords1.
+        # coords0, coords1 are 1/8 * 1/8 = 1/64 of the original image.
         coords0, coords1 = self.initialize_flow(image1)
         
         if flow_init is not None:
@@ -166,7 +169,8 @@ class GMA(nn.Module):
             
         return flow_predictions
 
-    def est_flow_from_feats(self, fmap1, fmap2, H, W, num_iters=3, flow_init=None):
+    def est_flow_from_feats(self, fmap1, fmap2, H, W, num_iters=3, flow_init=None,
+                            corr_normalized_by_sqrt_dim=True):
         """ Estimate optical flow between a pair of frame features """
         hdim = self.hidden_dim
         cdim = self.context_dim
@@ -179,8 +183,8 @@ class GMA(nn.Module):
         H0, W0 = H, W
         # After corr_levels -1 = 3 levels of pooling, the feature map size is 1/8 of the original image.
         # So the minimum size of the feature map is 1/8 of the original image.
-        # If the minimum size is less than 16, the top level of the correlation pyramid will be 1x1.
-        # In this case, we enlarge the feature map by 4x to make the top level of the pyramid 4x4.
+        # If the minimum size is < 16, the top level of the correlation pyramid will be 1x1 or 2x2.
+        # In this case, we enlarge the feature map by 4x to make the top level of the pyramid at least 4x4.
         if min(H, W) < 16:
             fmap1 = F.interpolate(fmap1, scale_factor=4, mode='bilinear', align_corners=False)
             fmap2 = F.interpolate(fmap2, scale_factor=4, mode='bilinear', align_corners=False)
@@ -192,7 +196,7 @@ class GMA(nn.Module):
         # CorrBlock has no learnable parameters.
         self.corr_fn = CorrBlock(fmap1, fmap2, num_levels=self.config.corr_levels, 
                                  radius=self.config.corr_radius, 
-                                 corr_normalized_by_sqrt_dim=self.config.corr_normalized_by_sqrt_dim)
+                                 corr_normalized_by_sqrt_dim=corr_normalized_by_sqrt_dim)
 
         net_feat = torch.zeros(BS, hdim, H, W).to(fmap1.device)
         inp_feat = torch.zeros(BS, cdim, H, W).to(fmap1.device)
@@ -205,8 +209,9 @@ class GMA(nn.Module):
         # coords1 is iteratively updated as coords0 + current estimated flow.
         # At this moment coords0 == coords1.
         # inp_feat: [BS, 128, H, W]. Only H and W are used to initialize coords0 and coords1.
-        # So passing inp_feat is sufficient.
-        coords0, coords1 = self.initialize_flow(inp_feat)
+        # So passing in inp_feat is sufficient.
+        # coords0, coords1 are of the same size as inp_feat.
+        coords0, coords1 = self.initialize_flow(inp_feat, S=1)
         
         if flow_init is not None:
             coords1 = coords1 + flow_init
@@ -241,6 +246,4 @@ class GMA(nn.Module):
         if scale_factor > 1:
             final_flow = F.interpolate(final_flow, size=(H0, W0), mode='bilinear', align_corners=False)
 
-        # Collapse H, W dimensions.
-        final_flow = final_flow.reshape(BS, 2, H0*W0)
         return final_flow

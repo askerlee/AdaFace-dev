@@ -15,7 +15,7 @@ from queue import Queue
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
-import random, math, sys, re
+import math, sys, re, cv2
 
 from safetensors.torch import load_file as safetensors_load_file
 
@@ -1873,6 +1873,14 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
         prob_mat = prob_mat / prob_mat.sum(dim=renormalize_dim, keepdim=True)
     return prob_mat
 
+def forward_warp_by_flow(image1, flow1to2):
+    H, W, _ = image1.shape
+    flow1to2 = flow1to2.copy()
+    flow1to2[:, :, 0] += np.arange(W)  # Adjust x-coordinates
+    flow1to2[:, :, 1] += np.arange(H)[:, None]  # Adjust y-coordinates
+    image2_recovered = cv2.remap(image1, flow1to2, None, cv2.INTER_LINEAR)
+    return image2_recovered
+
 @torch.compile
 def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask):
     # recon_sc_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
@@ -1907,17 +1915,30 @@ def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg
     return loss_sc_ss_fg_match
         
 #@torch.compile
-def calc_flow_warped_feat_matching_loss(flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, H, W,
+def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, H, W,
                                         num_flow_est_iters=3):
     if H*W != ss_feat.shape[-1]:
         breakpoint()
 
-    # Latent optical flow from subj single feature maps to subj comp feature maps.
-    s2c_flow = flow_model.est_flow_from_feats(ss_feat, sc_feat, H, W, num_iters=num_flow_est_iters)
-    breakpoint()
-    
+    np.set_printoptions(precision=1, suppress=True)
+
+    with torch.no_grad():
+        # Latent optical flow from subj single feature maps to subj comp feature maps.
+        s2c_flow = flow_model.est_flow_from_feats(ss_feat, sc_feat, H, W, 
+                                                  num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=True)
+
+        '''
+        scale = 8 / s2c_flow.shape[-1]
+        s2c_flow = F.interpolate(s2c_flow, size=(8, 8), mode='bilinear', align_corners=False) * scale
+        print(f"Layer {layer_idx}: {H}x{W} -> 16x16 flow:")
+        print(s2c_flow.squeeze(0).cpu().numpy())
+        '''
+
+
+    return calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
+
 #@torch.compile
-def calc_elastic_matching_loss(flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
+def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
                                num_flow_est_iters=3):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
@@ -1963,10 +1984,12 @@ def calc_elastic_matching_loss(flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_b
     loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
 
     if flow_model is None:
-        loss_sc_ss_fg_match = calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
+        loss_sc_ss_fg_match = \
+            calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
     else:
-        loss_sc_ss_fg_match = calc_flow_warped_feat_matching_loss(flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask,
-                                                                  H, W, num_flow_est_iters=num_flow_est_iters)
+        loss_sc_ss_fg_match = \
+            calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, 
+                                                fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
         
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)

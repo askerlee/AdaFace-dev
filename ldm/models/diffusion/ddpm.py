@@ -91,7 +91,7 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.5, 1.5],
                  do_neg_id_prompt_weight=0,
                  extend_prompt2token_proj_attention_multiplier=1,
-                 use_face_flow_for_sc_matching_loss=True,
+                 use_face_flow_for_sc_matching_loss=False,
                  ):
         
         super().__init__()
@@ -486,15 +486,18 @@ class LatentDiffusion(DDPM):
         self.num_id_vecs                = self.embedding_manager.id2ada_prompt_encoder.num_id_vecs
         self.num_static_img_suffix_embs = self.embedding_manager.id2ada_prompt_encoder.num_static_img_suffix_embs
 
+        self.flow_model = None
         if self.use_face_flow_for_sc_matching_loss and self.comp_distill_iter_gap > 0:
-            flow_model_config = { 'mixed_precision': True, 'corr_normalized_by_sqrt_dim': False }
+            flow_model_config = { 'mixed_precision': True }
             self.flow_model = GMA(flow_model_config)
             self.flow_model.eval()
             for param in self.flow_model.parameters():
                 param.requires_grad = False
 
-            flow_model_ckpt_path = "models/gma-sintel.pth"
+            flow_model_ckpt_path = "models/gma-things.pth"
             gma_load_checkpoint(self.flow_model, flow_model_ckpt_path)
+        else:
+            self.flow_model = None
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -2181,13 +2184,7 @@ class LatentDiffusion(DDPM):
 
         # feature map distillation only uses delta loss on the features to reduce the 
         # class polluting the subject features.
-        feat_distill_layer_weights = {  7:  0.5, 8: 0.5,   
-                                        12: 1.,
-                                        16: 1., 17: 1.,
-                                        18: 1.,
-                                        19: 1., 20: 1., 
-                                        21: 1., 22: 1., 
-                                        23: 1., 24: 1., 
+        feat_distill_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                      }
 
         # attn norm distillation is applied to almost all conditioning layers.
@@ -2335,13 +2332,7 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { 7: 0.5, 8: 0.5,
-                                     12: 1.,
-                                     16: 1., 17: 1.,
-                                     18: 1.,
-                                     19: 1., 20: 1., 
-                                     21: 1., 22: 1., 
-                                     23: 1., 24: 1., 
+        attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                    }
                 
         # Normalize the weights above so that each set sum to 1.
@@ -2458,13 +2449,7 @@ class LatentDiffusion(DDPM):
 
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
-        attn_align_layer_weights = { 7: 0.5, 8: 0.5,
-                                     12: 1.,
-                                     16: 1., 17: 1.,
-                                     18: 1.,
-                                     19: 1., 20: 1., 
-                                     21: 1., 22: 1., 
-                                     23: 1., 24: 1., 
+        attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                    }
         # 16-18: feature maps 16x16.
         # 19-21: feature maps 32x32.
@@ -2650,13 +2635,7 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         # layer 7 is absent, since layer 8 aligns with layer 7.
-        attn_align_layer_weights = { 8: 0.5,
-                                     12: 1.,
-                                     16: 1., 17: 1.,
-                                     18: 1.,
-                                     19: 0.5, 20: 0.5, 
-                                     21: 0.5,  22: 0.25, 
-                                     23: 0.25, 24: 0.25, 
+        attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                    }
         # 16-18: feature maps 16x16.
         # 19-21: feature maps 32x32.
@@ -2788,15 +2767,16 @@ class LatentDiffusion(DDPM):
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
 
-        feat_distill_layer_weights = {  7: 0.5, 8: 0.5,   
-                                        12: 1.,
-                                        16: 1., 17: 1.,
-                                        18: 1.,
-                                        19: 1, 20: 1, 
-                                        21: 1, 22: 1, 
-                                        23: 1, 24: 1, 
+        feat_distill_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                      }
 
+        elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
+                                         }
+        
+        # Normalize the weights above so that each set sum to 1.
+        feat_distill_layer_weights      = normalize_dict_values(feat_distill_layer_weights)
+        elastic_matching_layer_weights  = normalize_dict_values(elastic_matching_layer_weights)
+        
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
         # *_4b means it corresponds to a 4-block batch (batch size = 4 * BLOCK_SIZE).
         fg_mask_4b = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1)
@@ -2811,9 +2791,6 @@ class LatentDiffusion(DDPM):
                                 ind_subj_subj_B_1b + 2 * BLOCK_SIZE,    ind_subj_subj_B_1b + 3 * BLOCK_SIZE], dim=0)
         ind_subj_N = ind_subj_subj_N_1b.repeat(4)
         
-        # Normalize the weights above so that each set sum to 1.
-        feat_distill_layer_weights  = normalize_dict_values(feat_distill_layer_weights)
-
         loss_layers_comp_single_map_align      = []
         loss_layers_sc_ss_fg_match             = []
         loss_layers_sc_mc_bg_match             = []
@@ -2843,13 +2820,13 @@ class LatentDiffusion(DDPM):
                 ca_outfeat = ca_outfeat_lns[str(unet_layer_idx)](ca_outfeat.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
 
             do_feat_pooling = True
-            feat_pool_kernel_size = 4
-            feat_pool_stride      = 2
             # feature pooling: allow small perturbations of the locations of pixels.
             # calc_comp_fg_bg_preserve_loss() can have higher spatial precision 
             # than calc_feat_delta_and_attn_norm_loss(), but it requires fg_mask, 
             # which is not always available.
             if do_feat_pooling and ca_outfeat.shape[-1] > 8:
+                feat_pool_kernel_size = 4
+                feat_pool_stride      = 2
                 pooler = nn.AvgPool2d(feat_pool_kernel_size, stride=feat_pool_stride)
             else:
                 pooler = nn.Identity()
@@ -2860,7 +2837,9 @@ class LatentDiffusion(DDPM):
             # ca_outfeat is used to compute the reconstruction loss between subject-single and subject-comp instances 
             # (using the correlation matrix), as well as class-single and class-comp instances.
             # layer_q: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_layer_q_pooled   = pooler(ca_layer_q).reshape(*ca_layer_q.shape[:2], -1)
+            ca_layer_q_pooled   = pooler(ca_layer_q)
+            ca_q_h2, ca_q_w2    = ca_layer_q_pooled.shape[-2:]
+            ca_layer_q_pooled   = ca_layer_q_pooled.reshape(*ca_layer_q.shape[:2], -1)
             # ca_outfeat_pooled: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
             ca_outfeat_pooled   = pooler(ca_outfeat).reshape(*ca_outfeat.shape[:2], -1)
             # fg_attn_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
@@ -2874,6 +2853,8 @@ class LatentDiffusion(DDPM):
             # fg_attn_mask_pooled: [1, 1, 8, 8] -> [1, 1, 64]
             fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
 
+            if unet_layer_idx not in elastic_matching_layer_weights:
+                continue
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
             # removed loss_layer_ms_mc_fg_match to save computation.
             # loss_layer_comp_single_align_map: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
@@ -2881,8 +2862,9 @@ class LatentDiffusion(DDPM):
             # to suppress the activations on background areas.
             loss_layer_comp_single_align_map, loss_layer_sc_ss_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
-                = calc_elastic_matching_loss(self.flow_model, ca_layer_q_pooled, ca_outfeat_pooled, fg_attn_mask_pooled, 
-                                             ca_q_h, ca_q_w, fg_bg_cutoff_prob=0.25, num_flow_est_iters=3)
+                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q_pooled, 
+                                             ca_outfeat_pooled, fg_attn_mask_pooled, ca_q_h2, ca_q_w2, 
+                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=3)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
             loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * feat_distill_layer_weight)
