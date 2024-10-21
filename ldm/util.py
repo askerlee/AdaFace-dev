@@ -1872,7 +1872,7 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
     
     # feature map size -> [kernel size, stride size] of the pooler.
     # 16 -> 4, 2 (output 7), 32 -> 4, 2 (output 15),  64 -> 8, 4 (output 15).
-    feat_size2pooler_spec = { 8: [2, 1], 16: [4, 2], 32: [4, 2], 64: [8, 4] }
+    feat_size2pooler_spec = { 8: [2, 1], 16: [2, 1], 32: [4, 2], 64: [4, 2] }
     # 3D should be attention maps. 4D should be feature maps.
     # For attention maps, the last 2 dims are flattened to 1D. So we need to unflatten them.
     feat_or_attn_mat0 = feat_or_attn_mat
@@ -2012,6 +2012,7 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     sc_q = pool_feat_or_attn_mat(sc_q)
     H2, W2 = ss_q.shape[-2], ss_q.shape[-1]
 
+    print(f"Layer {layer_idx}: q {H}x{W} -> {H2}x{W2}:")
     # Latent optical flow from subj single feature maps to subj comp feature maps.
     # ss_q has been detached, so the grad will only flow into sc_q through flow_model.
     s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2,
@@ -2051,7 +2052,7 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
                                                first_n_dims_to_flatten=2, 
                                                ref_grad_scale=0)   
     
-    # print(f"Layer {layer_idx}: {H}x{W} flow loss: {loss_sc_ss_fg_match.item():.03f}")
+    print(f"Layer {layer_idx}: {H}x{W} flow loss: {loss_sc_ss_fg_match.item():.03f}")
     return loss_sc_ss_fg_match
     
     '''
