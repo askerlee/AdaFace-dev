@@ -2012,11 +2012,10 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     sc_q = pool_feat_or_attn_mat(sc_q)
     H2, W2 = ss_q.shape[-2], ss_q.shape[-1]
 
-    with torch.no_grad():
-        # Latent optical flow from subj single feature maps to subj comp feature maps.
-        s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2,
-                                                  num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
-        s2c_flow = resize_flow(s2c_flow, H, W)
+    # Latent optical flow from subj single feature maps to subj comp feature maps.
+    s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2,
+                                              num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
+    s2c_flow = resize_flow(s2c_flow, H, W)
 
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
     sc_recon_ss_feat    = backward_warp_by_flow(sc_feat, s2c_flow)
