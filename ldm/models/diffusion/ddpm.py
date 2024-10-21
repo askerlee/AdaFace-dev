@@ -15,7 +15,7 @@ from diffusers import UNet2DConditionModel
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_ref_cosine_loss, \
                         calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
-                        save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
+                        save_grid, normalize_dict_values, masked_mean, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, convert_attn_to_spatial_weight, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
@@ -2281,7 +2281,7 @@ class LatentDiffusion(DDPM):
             ca_outfeat  = ca_outfeat * spatial_weight
 
             # ca_outfeat_2d: [4, 320, 64, 64] -> [4, 320, 15, 15] -> [4, 320*8*8] = [4, 20480].
-            ca_outfeat_2d = pool_feat_or_attn_mat(ca_outfeat).reshape(ca_outfeat.shape[0], -1)
+            ca_outfeat_2d = ca_outfeat.reshape(ca_outfeat.shape[0], -1)
             # subj_single_feat_2d, ...: [1, 320, 81920]
             subj_single_feat_2d, subj_comp_feat_2d, cls_single_feat_2d, cls_comp_feat_2d \
                 = ca_outfeat_2d.chunk(4)
@@ -2709,11 +2709,6 @@ class LatentDiffusion(DDPM):
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
-            # NOTE: subj_attn is 2D. It will be unsqueezed to 3D, then reshaped to 4D for the pooling,
-            # then reshaped to 3D and squeezed to 2D as the final output.
-            subj_attn        = pool_feat_or_attn_mat(subj_attn)
-            subj_attn_xlayer = pool_feat_or_attn_mat(subj_attn_xlayer)
-
             loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
                                                                 exponent=2,    
                                                                 do_demeans=[True, True],
@@ -2734,9 +2729,6 @@ class LatentDiffusion(DDPM):
                 bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
                 bg_attn   = bg_attn.reshape(SSB_SIZE, Hx*Hx)
                 
-                bg_attn         = pool_feat_or_attn_mat(bg_attn)
-                bg_attn_xlayer  = pool_feat_or_attn_mat(bg_attn_xlayer)
-
                 loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
                                                                     exponent=2,    
                                                                     do_demeans=[True, True],
@@ -2825,21 +2817,16 @@ class LatentDiffusion(DDPM):
             # ca_outfeat is used to compute the reconstruction loss between subject-single and subject-comp instances 
             # (using the correlation matrix), as well as class-single and class-comp instances.
             # ca_layer_q: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_layer_q_pooled   = pool_feat_or_attn_mat(ca_layer_q, enabled=True)
-            ca_q_h2, ca_q_w2    = ca_layer_q_pooled.shape[-2:]
-            ca_layer_q_pooled   = ca_layer_q_pooled.reshape(*ca_layer_q.shape[:2], -1)
-            # ca_outfeat_pooled: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_outfeat_pooled   = pool_feat_or_attn_mat(ca_outfeat, enabled=True).reshape(*ca_outfeat.shape[:2], -1)
+            ca_layer_q   = ca_layer_q.reshape(*ca_layer_q.shape[:2], -1)
+            ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
             # fg_attn_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
             fg_attn_mask_4b \
                 = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", ca_outfeat.shape[-2:].numel(), 
                                              mode="nearest|bilinear", warn_on_all_zero=False)
-            # fg_attn_mask_4b: [4, 1, 8, 8] -> [4, 1, 8, 8]
-            fg_attn_mask_pooled_4b = pool_feat_or_attn_mat(fg_attn_mask_4b, enabled=True)
-            # fg_attn_mask_pooled: [4, 1, 8, 8] -> [1, 1, 8, 8] 
-            fg_attn_mask_pooled = fg_attn_mask_pooled_4b.chunk(4)[0]
-            # fg_attn_mask_pooled: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
-            fg_attn_mask_pooled = fg_attn_mask_pooled.reshape(*fg_attn_mask_pooled.shape[:2], -1)
+            # fg_attn_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
+            fg_attn_mask = fg_attn_mask_4b.chunk(4)[0]
+            # fg_attn_mask: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
+            fg_attn_mask = fg_attn_mask.reshape(*fg_attn_mask.shape[:2], -1)
 
             if unet_layer_idx not in elastic_matching_layer_weights:
                 continue
@@ -2850,8 +2837,8 @@ class LatentDiffusion(DDPM):
             # to suppress the activations on background areas.
             loss_layer_comp_single_align_map, loss_layer_sc_ss_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
-                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q_pooled, 
-                                             ca_outfeat_pooled, fg_attn_mask_pooled, ca_q_h2, ca_q_w2, 
+                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q, 
+                                             ca_outfeat, fg_attn_mask, ca_q_h, ca_q_w, 
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
@@ -2881,11 +2868,11 @@ class LatentDiffusion(DDPM):
             if subj_attn_hw.shape[2:] != ca_outfeat.shape[2:]:
                 subj_attn_hw = F.interpolate(subj_attn_hw, size=ca_outfeat.shape[2:], mode="bilinear", align_corners=False)
 
-            # subj_attn_pooled: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
-            subj_attn_pooled = pool_feat_or_attn_mat(subj_attn_hw, enabled=True).reshape(*subj_attn_hw.shape[:2], -1)
+            # subj_attn_hw: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
+            subj_attn_flat = subj_attn_hw.reshape(*subj_attn_hw.shape[:2], -1)
 
             subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn, mix_comp_subj_attn \
-                = subj_attn_pooled.chunk(4)
+                = subj_attn_flat.chunk(4)
 
             mix_comp_subj_attn_gs = mix_comp_subj_attn.detach()
 
