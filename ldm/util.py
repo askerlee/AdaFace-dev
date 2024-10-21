@@ -1915,6 +1915,19 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
 
     return feat_or_attn_mat2
 
+def resize_flow(flow, H, W):
+    if flow.ndim == 4:
+        flow[:, 0, :, :] *= W / flow.shape[3]
+        flow[:, 1, :, :] *= H / flow.shape[2]
+        flow = F.interpolate(flow, size=(H, W), mode='bilinear', align_corners=False)
+    elif flow.ndim == 3:
+        flow[0, :, :] *= W / flow.shape[2]
+        flow[1, :, :] *= H / flow.shape[1]
+        flow = F.interpolate(flow.unsqueeze(0), size=(H, W), mode='bilinear', align_corners=False)[0]
+    else:
+        breakpoint()
+    return flow
+
 def backward_warp_by_flow_np(image2, flow1to2):
     H, W, _ = image2.shape
     flow1to2 = flow1to2.copy()
@@ -1992,10 +2005,15 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     # ss_q: [1, 1280, 64]. fg_mask: [1, 64] -> [1, 1, 64]
     ss_q = ss_q * fg_mask.unsqueeze(1)
 
+    # Smooth ss_q and sc_q before flow estimation, to get continuous flow estimation.
+    ss_q = pool_feat_or_attn_mat(ss_q)
+    sc_q = pool_feat_or_attn_mat(sc_q)
+
     with torch.no_grad():
         # Latent optical flow from subj single feature maps to subj comp feature maps.
         s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, 
                                                   num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
+        s2c_flow = resize_flow(s2c_flow, H, W)
 
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
     sc_recon_ss_feat    = backward_warp_by_flow(sc_feat, s2c_flow)
