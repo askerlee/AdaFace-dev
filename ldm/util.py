@@ -1983,18 +1983,18 @@ def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg
     return loss_sc_ss_fg_match
         
 #@torch.compile
-def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, H, W,
+def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_feat, sc_feat, fg_mask, H, W,
                                         num_flow_est_iters=12):
     if H*W != ss_feat.shape[-1]:
         breakpoint()
 
     # Remove background features to reduce noisy matching.
-    # ss_feat: [1, 1280, 64]. fg_mask: [1, 64] -> [1, 1, 64]
-    ss_feat = ss_feat * fg_mask.unsqueeze(1)
+    # ss_q: [1, 1280, 64]. fg_mask: [1, 64] -> [1, 1, 64]
+    ss_q = ss_q * fg_mask.unsqueeze(1)
 
     with torch.no_grad():
         # Latent optical flow from subj single feature maps to subj comp feature maps.
-        s2c_flow = flow_model.est_flow_from_feats(ss_feat, sc_feat, H, W, 
+        s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, 
                                                   num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
 
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
@@ -2091,7 +2091,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
             calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
     else:
         loss_sc_ss_fg_match = \
-            calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, 
+            calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_feat, sc_feat, 
                                                 fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
         
     # fg_mask: [1, 64] => [1, 64, 1].
