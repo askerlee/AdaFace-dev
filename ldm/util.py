@@ -2013,6 +2013,7 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     H2, W2 = ss_q.shape[-2], ss_q.shape[-1]
 
     # Latent optical flow from subj single feature maps to subj comp feature maps.
+    # ss_q has been detached, so the grad will only flow into sc_q through flow_model.
     s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2,
                                               num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
     s2c_flow = resize_flow(s2c_flow, H, W)
