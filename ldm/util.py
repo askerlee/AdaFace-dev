@@ -2081,7 +2081,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # Span fg_mask to become a mask for the (fg, fg) pairwise matching scores,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
     fg_mask_pairwise = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
-
+    
     loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
 
     if flow_model is None:

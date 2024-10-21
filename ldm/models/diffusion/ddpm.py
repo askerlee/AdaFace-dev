@@ -2821,7 +2821,7 @@ class LatentDiffusion(DDPM):
             ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
             # fg_attn_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
             fg_attn_mask_4b \
-                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", ca_outfeat.shape[-2:].numel(), 
+                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", ca_outfeat.shape[-1], 
                                              mode="nearest|bilinear", warn_on_all_zero=False)
             # fg_attn_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
             fg_attn_mask = fg_attn_mask_4b.chunk(4)[0]
