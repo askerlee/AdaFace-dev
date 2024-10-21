@@ -486,7 +486,6 @@ class LatentDiffusion(DDPM):
         self.num_id_vecs                = self.embedding_manager.id2ada_prompt_encoder.num_id_vecs
         self.num_static_img_suffix_embs = self.embedding_manager.id2ada_prompt_encoder.num_static_img_suffix_embs
 
-        self.flow_model = None
         if self.use_face_flow_for_sc_matching_loss and self.comp_distill_iter_gap > 0:
             flow_model_config = { 'mixed_precision': True }
             self.flow_model = GMA(flow_model_config)
@@ -1033,7 +1032,7 @@ class LatentDiffusion(DDPM):
             # which would be faster for synchronization.
             # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
             # Otherwise, some values, e.g., 0 and 3, will never be chosen.
-            num_denoising_steps = self.global_step % 5 + 1
+            num_denoising_steps = self.global_step % 3 + 3
             self.iter_flags['num_denoising_steps'] = num_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
@@ -2853,7 +2852,7 @@ class LatentDiffusion(DDPM):
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q_pooled, 
                                              ca_outfeat_pooled, fg_attn_mask_pooled, ca_q_h2, ca_q_w2, 
-                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=6)
+                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=12)
 
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
             loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * feat_distill_layer_weight)

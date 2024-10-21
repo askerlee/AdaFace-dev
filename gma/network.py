@@ -169,7 +169,7 @@ class GMA(nn.Module):
             
         return flow_predictions
 
-    def est_flow_from_feats(self, fmap1, fmap2, H, W, num_iters=3, flow_init=None,
+    def est_flow_from_feats(self, fmap1, fmap2, H, W, num_iters=12, flow_init=None,
                             corr_normalized_by_sqrt_dim=True):
         """ Estimate optical flow between a pair of frame features """
         hdim = self.hidden_dim
@@ -183,13 +183,18 @@ class GMA(nn.Module):
         H0, W0 = H, W
         # After corr_levels -1 = 3 levels of pooling, the feature map size is 1/8 of the original image.
         # So the minimum size of the feature map is 1/8 of the original image.
-        # If the minimum size is < 16, the top level of the correlation pyramid will be 1x1 or 2x2.
+        # If the minimum size is < 8, the top level of the correlation pyramid will be 1x1.
         # In this case, we enlarge the feature map by 4x to make the top level of the pyramid at least 4x4.
-        if min(H, W) < 16:
+        if min(H, W) < 8:
             fmap1 = F.interpolate(fmap1, scale_factor=4, mode='bilinear', align_corners=False)
             fmap2 = F.interpolate(fmap2, scale_factor=4, mode='bilinear', align_corners=False)
-            H, W = H * 4, W * 4
+            H, W = H0 * 4, W0 * 4
             scale_factor = 32
+        elif min(H, W) < 16:
+            fmap1 = F.interpolate(fmap1, scale_factor=2, mode='bilinear', align_corners=False)
+            fmap2 = F.interpolate(fmap2, scale_factor=2, mode='bilinear', align_corners=False)
+            H, W = H0 * 2, W0 * 2
+            scale_factor = 16
         else:
             scale_factor = 8
 
@@ -257,3 +262,4 @@ class GMA(nn.Module):
                                    mode='bilinear', align_corners=False) / scale_factor
 
         return final_flow
+

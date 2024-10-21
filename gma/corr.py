@@ -10,7 +10,6 @@ class CorrBlock:
     def __init__(self, fmap1, fmap2, num_levels=4, radius=4, corr_normalized_by_sqrt_dim=True):
         self.num_levels = num_levels
         self.radius = radius
-        self.corr_normalized_by_sqrt_dim = corr_normalized_by_sqrt_dim
         
         self.corr_pyramid = []
 
