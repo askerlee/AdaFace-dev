@@ -2865,8 +2865,8 @@ class LatentDiffusion(DDPM):
             subj_attn_hw = subj_attn.reshape(*subj_attn.shape[:2], H, H)
             # At some layers, the output features are upsampled. So we need to 
             # upsample the attn map to match the output features.
-            if subj_attn_hw.shape[2:] != ca_outfeat.shape[2:]:
-                subj_attn_hw = F.interpolate(subj_attn_hw, size=ca_outfeat.shape[2:], mode="bilinear", align_corners=False)
+            if subj_attn_hw.shape[2:] != (ca_q_h, ca_q_w):
+                subj_attn_hw = F.interpolate(subj_attn_hw, size=(ca_q_h, ca_q_w), mode="bilinear", align_corners=False)
 
             # subj_attn_hw: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
             subj_attn_flat = subj_attn_hw.reshape(*subj_attn_hw.shape[:2], -1)
