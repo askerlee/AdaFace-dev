@@ -1872,7 +1872,7 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
     
     # feature map size -> [kernel size, stride size] of the pooler.
     # 16 -> 4, 2 (output 7), 32 -> 4, 2 (output 15),  64 -> 8, 4 (output 15).
-    feat_size2pooler_spec = { 16: [4, 2], 32: [4, 2], 64: [8, 4] }
+    feat_size2pooler_spec = { 8: [2, 1], 16: [4, 2], 32: [4, 2], 64: [8, 4] }
     # 3D should be attention maps. 4D should be feature maps.
     # For attention maps, the last 2 dims are flattened to 1D. So we need to unflatten them.
     feat_or_attn_mat0 = feat_or_attn_mat
