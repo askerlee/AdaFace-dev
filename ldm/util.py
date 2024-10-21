@@ -1988,17 +1988,19 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_feat, sc_feat,
     if H*W != ss_feat.shape[-1]:
         breakpoint()
 
-    #np.set_printoptions(precision=1, suppress=True)
+    # Remove background features to reduce noisy matching.
+    # ss_feat: [1, 1280, 64]. fg_mask: [1, 64] -> [1, 1, 64]
+    ss_feat = ss_feat * fg_mask.unsqueeze(1)
 
     with torch.no_grad():
         # Latent optical flow from subj single feature maps to subj comp feature maps.
         s2c_flow = flow_model.est_flow_from_feats(ss_feat, sc_feat, H, W, 
                                                   num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
 
-    sc_feat                 = sc_feat.reshape(*sc_feat.shape[:2], H, W)
-    sc_recon_ss_feat        = backward_warp_by_flow(sc_feat, s2c_flow)
+    sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
+    sc_recon_ss_feat    = backward_warp_by_flow(sc_feat, s2c_flow)
     # Collapse the spatial dimensions again.
-    sc_recon_ss_feat        = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
+    sc_recon_ss_feat    = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
 
     # fg_mask's spatial dim is already collapsed. fg_mask: [1, 225]
     # nonzero() returns (B, N) indices of True values as fg_mask_B, fg_mask_N.
