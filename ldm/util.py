@@ -494,9 +494,8 @@ def demean(x, demean_dims=[-1]):
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
 def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
                          exponent=2, do_demeans=[False, False],
-                         first_n_dims_to_flatten=2,
-                         ref_grad_scale=0, aim_to_align=True, 
-                         margin=0, debug=False):
+                         first_n_dims_into_instances=2,
+                         ref_grad_scale=0, aim_to_align=True, debug=False):
 
     B = delta.shape[0]
     loss = 0
@@ -520,7 +519,7 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         if emb_mask_i is not None:
             try:
                 # delta_i_flattened_dims_shape: [1, 77, 768]
-                delta_i_flattened_dims_shape = delta_i.shape[:first_n_dims_to_flatten]
+                delta_i_flattened_dims_shape = delta_i.shape[:first_n_dims_into_instances]
                 # truncate_mask: [1, 77].
                 truncate_mask = (emb_mask_i > 0).squeeze(-1).expand(delta_i_flattened_dims_shape)
                 # delta_i: [1, 77, 768] => [58, 768].
@@ -539,9 +538,9 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         else:
             # Flatten delta and ref_delta, by tucking the token dimensions into the batch dimension.
             # delta_i: [2464, 768], ref_delta_i: [2464, 768]
-            delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_to_flatten].numel(), -1)
+            delta_i     = delta_i.reshape(delta_i.shape[:first_n_dims_into_instances].numel(), -1)
             ref_delta_i = ref_delta_i.reshape(delta_i.shape)
-            # emb_mask_i should have first_n_dims_to_flatten dims before flattening.
+            # emb_mask_i should have first_n_dims_into_instances dims before flattening.
             emb_mask_i  = emb_mask_i.flatten() if emb_mask_i is not None else None
 
         # A bias vector to a set of conditioning embeddings doesn't change the attention matrix 
@@ -573,6 +572,9 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
         # push delta_i to be orthogonal with ref_delta_i.
         cosine_label = 1 if aim_to_align else -1
         # losses_i: 1D tensor of losses for each embedding.
+        # F.cosine_embedding_loss() computes the cosines of each pair of instance
+        # in delta_i and ref_delta_i. 
+        # Each cosine is invariant to the scale of the corresponding two instances.
         losses_i = F.cosine_embedding_loss(delta_i, ref_delta_i_pow, 
                                            torch.ones_like(delta_i[:, 0]) * cosine_label, 
                                            reduction='none')
@@ -584,12 +586,6 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
             loss_i = losses_i.mean()
 
         loss_i = loss_i * batch_mask[i]
-
-        if margin > 0:
-            # Only incurs loss when loss_i is larger than margin.
-            # If the loss is above the margin, subtracting the margin won't change the gradient,
-            # as the margin is constant.            
-            loss_i = torch.clamp(loss_i - margin, min=0)
 
         loss += loss_i
 
@@ -636,7 +632,7 @@ def calc_delta_alignment_loss(feat_base, feat_ex, ref_feat_base, ref_feat_ex,
             loss_delta_align = calc_ref_cosine_loss(tgt_delta, src_delta, 
                                                     exponent=cosine_exponent,
                                                     do_demeans=[False, False],
-                                                    first_n_dims_to_flatten=(feat_base.ndim - 1), 
+                                                    first_n_dims_into_instances=(feat_base.ndim - 1), 
                                                     ref_grad_scale=1,
                                                     aim_to_align=True)
 
@@ -1714,7 +1710,7 @@ def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_gra
                              # and thus are already centered at each dimension,
                              # the class embeddings are not. So we still need to do demean on cls_emb_delta.
                              do_demeans=[False, True],
-                             first_n_dims_to_flatten=2,
+                             first_n_dims_into_instances=2,
                              ref_grad_scale=cls_delta_grad_scale,   # 0.05
                              aim_to_align=True)
 
@@ -1963,7 +1959,7 @@ def backward_warp_by_flow(image2, flow1to2):
     return image1_recovered
 
 @torch.compile
-def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask):
+def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, fg_mask):
     # recon_sc_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
     # ** We only use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
     # Because we rely on fg_mask to determine the fg area, which is only available for the subj single instance. 
@@ -1981,24 +1977,12 @@ def calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg
     sc_recon_ss_fg_feat = sc_recon_ss_fg_feat.permute(0, 2, 1)
     # mc_recon_ms_feat = torch.matmul(mc_feat, mc_map_ms_prob)
 
-    # fg_mask: bool of [1, 64] with N_fg True values.
-    # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [N_fg, 1280]
-    ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, fg_mask_N]
-    # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
-
-    # ref_grad_scale=0: don't BP to ss_fg_feat.
-    # We use cosine loss, so that when the reconstructed features are of different scales,
-    # the loss could still be small.
-    loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                               exponent=2, do_demeans=[False, False],
-                                               first_n_dims_to_flatten=2, 
-                                               ref_grad_scale=0)    
-    return loss_sc_ss_fg_match
+    return sc_recon_ss_fg_feat
         
 #@torch.compile
-def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_feat, sc_feat, fg_mask, H, W,
-                                        num_flow_est_iters=12):
-    if H*W != ss_feat.shape[-1]:
+def reconstruct_feat_with_matching_flow(flow_model, ss_q, sc_q, sc_feat, fg_mask, 
+                                        H, W, num_flow_est_iters=12):
+    if H*W != sc_feat.shape[-1]:
         breakpoint()
 
     # Remove background features to reduce noisy matching.
@@ -2044,19 +2028,8 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     fg_mask_B, fg_mask_N    = fg_mask.nonzero(as_tuple=True)    
     # sc_recon_ss_feat: [1, 1280, 64] -> [1, 64, 1280] -> [1, N_fg, 1280]
     sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, fg_mask_N]
-    # ss_feat: [1, 1280, 64] -> [1, 64, 1280] -> [1, N_fg, 1280]
-    ss_fg_feat              = ss_feat.permute(0, 2, 1)[:, fg_mask_N]
 
-    # ref_grad_scale=0: don't BP to ss_fg_feat.
-    # We use cosine loss, so that when the reconstructed features are of different scales,
-    # the loss could still be small.
-    loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                               exponent=2, do_demeans=[False, False],
-                                               first_n_dims_to_flatten=2, 
-                                               ref_grad_scale=0)   
-    
-    print(f"Layer {layer_idx}: {H}x{W} flow loss: {loss_sc_ss_fg_match.item():.03f}")
-    return loss_sc_ss_fg_match
+    return sc_recon_ss_fg_feat
     
     '''
     scale = 8 / s2c_flow.shape[-1]
@@ -2064,6 +2037,48 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     print(f"Layer {layer_idx}: {H}x{W} -> 16x16 flow:")
     print(s2c_flow.squeeze(0).cpu().numpy())
     '''
+
+def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, 
+                               ss_q, sc_q, H, W, num_flow_est_iters):
+
+    fg_mask_B, fg_mask_N = fg_mask.nonzero(as_tuple=True)
+    
+    # sc_recon_ss_fg_feat*: [1, 1280, N_fg] => [1, N_fg, 1280]
+    sc_recon_ss_fg_feat_attn_agg = \
+        reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, fg_mask)
+    if flow_model is not None:
+        sc_recon_ss_fg_feat_flow = \
+            reconstruct_feat_with_matching_flow(flow_model, ss_q, sc_q, sc_feat, 
+                                                fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
+    else:
+        sc_recon_ss_fg_feat_flow = None
+        
+    losses_sc_ss_fg_match = []
+    # fg_mask: bool of [1, 64] with N_fg True values.
+    # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [1, N_fg, 1280]
+    ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, fg_mask_N]
+    # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
+
+    loss_type_names = ['attn_agg', 'flow']
+
+    for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
+        if sc_recon_ss_fg_feat is None:
+            losses_sc_ss_fg_match.append(0)
+            continue
+
+        # ref_grad_scale=0: don't BP to ss_fg_feat.
+        # We use cosine loss, so that when the reconstructed features are of different scales,
+        # the loss could still be small.
+        loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
+                                                   exponent=2, do_demeans=[False, False],
+                                                   first_n_dims_into_instances=2, 
+                                                   ref_grad_scale=0)   
+        
+        losses_sc_ss_fg_match.append(loss_sc_ss_fg_match)
+
+        print(f"Layer {layer_idx}: {H}x{W} {loss_type_names[i]} loss: {loss_sc_ss_fg_match.item():.03f}")
+
+    return losses_sc_ss_fg_match
 
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
@@ -2113,17 +2128,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     
     loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
 
-    loss_sc_ss_fg_match_attn_agg = \
-        calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
-    if flow_model is not None:
-        loss_sc_ss_fg_match_flow = \
-            calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_feat, sc_feat, 
-                                                fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
-    else:
-        loss_sc_ss_fg_match_flow = 0
-
-    loss_sc_ss_fg_match = loss_sc_ss_fg_match_attn_agg  + loss_sc_ss_fg_match_flow
-
+    losses_sc_ss_fg_match = calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, 
+                                                       sc_map_ss_prob, fg_mask, 
+                                                       ss_q, sc_q, H, W, num_flow_est_iters)
+    
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
     # Sum up the mapping probs from comp instances to the fg area of the single instances.
@@ -2167,8 +2175,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
                                                emb_mask=comp_bg_prob,
                                                exponent=2, do_demeans=[False, False],
-                                               first_n_dims_to_flatten=2, 
+                                               first_n_dims_into_instances=2, 
                                                ref_grad_scale=0)
     
-    return loss_comp_single_map_align, loss_sc_ss_fg_match, \
+    return loss_comp_single_map_align, losses_sc_ss_fg_match, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean

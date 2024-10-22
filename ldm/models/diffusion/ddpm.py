@@ -2082,8 +2082,8 @@ class LatentDiffusion(DDPM):
                 ca_q_bns = None
                 ca_outfeat_lns = None
 
-            loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
-            loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
+            loss_comp_single_map_align, loss_sc_ss_fg_match_attn_agg, loss_sc_ss_fg_match_flow, \
+            loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
                                                      ca_layers_activations['q'],
                                                      ca_q_bns,
@@ -2098,8 +2098,10 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach().item() })
             if loss_comp_single_map_align > 0:
                 loss_dict.update({f'{session_prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach().item() })
-            if loss_sc_ss_fg_match > 0:
-                loss_dict.update({f'{session_prefix}/sc_ss_fg_match': loss_sc_ss_fg_match.mean().detach().item() })
+            if loss_sc_ss_fg_match_attn_agg > 0:
+                loss_dict.update({f'{session_prefix}/sc_ss_fg_match_attn_agg': loss_sc_ss_fg_match_attn_agg.mean().detach().item() })
+            if loss_sc_ss_fg_match_flow > 0:
+                loss_dict.update({f'{session_prefix}/sc_ss_fg_match_flow':     loss_sc_ss_fg_match_flow.mean().detach().item() })
             if loss_mc_ms_fg_match > 0:
                 loss_dict.update({f'{session_prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach().item() })
             if loss_sc_mc_bg_match > 0:
@@ -2114,6 +2116,7 @@ class LatentDiffusion(DDPM):
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             sc_mc_bg_match_loss_scale = 1
             
+            loss_sc_ss_fg_match = loss_sc_ss_fg_match_attn_agg + loss_sc_ss_fg_match_flow
             # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
             loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
                                         + (loss_sc_ss_fg_match + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
@@ -2514,7 +2517,7 @@ class LatentDiffusion(DDPM):
                 calc_ref_cosine_loss(bg_score, subj_score, 
                                      exponent=2,    
                                      do_demeans=[False, False],
-                                     first_n_dims_to_flatten=2, 
+                                     first_n_dims_into_instances=2, 
                                      ref_grad_scale=fg_grad_scale,
                                      aim_to_align=False,
                                      debug=False)
@@ -2712,7 +2715,7 @@ class LatentDiffusion(DDPM):
             loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
                                                                 exponent=2,    
                                                                 do_demeans=[True, True],
-                                                                first_n_dims_to_flatten=1,
+                                                                first_n_dims_into_instances=1,
                                                                 ref_grad_scale=1,
                                                                 aim_to_align=True)
             
@@ -2732,7 +2735,7 @@ class LatentDiffusion(DDPM):
                 loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
                                                                     exponent=2,    
                                                                     do_demeans=[True, True],
-                                                                    first_n_dims_to_flatten=1,
+                                                                    first_n_dims_into_instances=1,
                                                                     ref_grad_scale=1,
                                                                     aim_to_align=True)
                 
@@ -2780,7 +2783,8 @@ class LatentDiffusion(DDPM):
         ind_subj_N = ind_subj_subj_N_1b.repeat(4)
         
         loss_layers_comp_single_map_align      = []
-        loss_layers_sc_ss_fg_match             = []
+        loss_layers_sc_ss_fg_match_attn_agg    = []
+        loss_layers_sc_ss_fg_match_flow        = []
         loss_layers_sc_mc_bg_match             = []
 
         loss_layers_comp_subj_bg_attn_suppress = []
@@ -2829,14 +2833,17 @@ class LatentDiffusion(DDPM):
             # loss_layer_comp_single_align_map: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
             # sc_map_ss_fg_prob_below_mean and mc_map_ms_fg_prob_below_mean are used as fg/bg soft masks of comp instances
             # to suppress the activations on background areas.
-            loss_layer_comp_single_align_map, loss_layer_sc_ss_fg_match, \
+            loss_layer_comp_single_align_map, losses_sc_ss_fg_match, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q, 
                                              ca_outfeat, fg_attn_mask, ca_q_h, ca_q_w, 
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12)
 
+            loss_sc_ss_fg_match_attn_agg, loss_sc_ss_fg_match_flow = losses_sc_ss_fg_match
+            
             loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * elastic_matching_layer_weight)
-            loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * elastic_matching_layer_weight)
+            loss_layers_sc_ss_fg_match_attn_agg.append(loss_sc_ss_fg_match_attn_agg * elastic_matching_layer_weight)
+            loss_layers_sc_ss_fg_match_flow.append(loss_sc_ss_fg_match_flow * elastic_matching_layer_weight)
             loss_layers_sc_mc_bg_match.append(loss_layer_sc_mc_bg_match * elastic_matching_layer_weight)
 
             if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
@@ -2885,15 +2892,16 @@ class LatentDiffusion(DDPM):
             loss_layers_comp_mix_bg_attn_suppress.append(loss_layer_mix_bg_attn_suppress  * elastic_matching_layer_weight)
 
         loss_comp_single_map_align      = sum(loss_layers_comp_single_map_align)
-        loss_sc_ss_fg_match             = sum(loss_layers_sc_ss_fg_match)
+        loss_sc_ss_fg_match_attn_agg    = sum(loss_layers_sc_ss_fg_match_attn_agg)
+        loss_sc_ss_fg_match_flow        = sum(loss_layers_sc_ss_fg_match_flow)
         # loss_mc_ms_fg_match is disabled for efficiency.
         loss_mc_ms_fg_match             = 0
         loss_sc_mc_bg_match             = sum(loss_layers_sc_mc_bg_match)
         loss_comp_subj_bg_attn_suppress = sum(loss_layers_comp_subj_bg_attn_suppress)
         loss_comp_mix_bg_attn_suppress  = sum(loss_layers_comp_mix_bg_attn_suppress)
 
-        return loss_comp_single_map_align, loss_sc_ss_fg_match, loss_mc_ms_fg_match, \
-               loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
+        return loss_comp_single_map_align, loss_sc_ss_fg_match_attn_agg, loss_sc_ss_fg_match_flow, \
+               loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
 
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
