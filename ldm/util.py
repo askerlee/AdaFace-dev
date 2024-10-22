@@ -2063,6 +2063,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
     # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
 
     loss_type_names = ['attn', 'flow']
+    print(f"Layer {layer_idx}: {H}x{W} sc-ss recon losses:", end=' ')
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:
@@ -2084,7 +2085,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
         all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
-        print(f"Layer {layer_idx}: {H}x{W} sc-ss recon {loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}")
+        print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}", end=' ')
 
     # We have both attn and flow token losses.
     if len(all_token_losses_sc_recon_ss_fg) > 1:
@@ -2095,7 +2096,8 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
         loss_sc_recon_ss_fg_min = token_losses_sc_recon_ss_fg.mean()
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
 
-        print(f"Layer {layer_idx}: {H}x{W} sc-ss recon min : {loss_sc_recon_ss_fg_min.item():.03f}")
+        print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}", end=' ')
+    print()
 
     return losses_sc_recon_ss_fg
 
