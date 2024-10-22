@@ -2005,18 +2005,21 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
     # ss_q: [1, 1280, 64]. fg_mask: [1, 64] -> [1, 1, 64]
     ss_q = ss_q * fg_mask.unsqueeze(1)
 
+    # Restore the spatial dimensions of ss_q and sc_q, before doing pooling.
     ss_q = ss_q.reshape(*ss_q.shape[:2], H, W)
     sc_q = sc_q.reshape(*sc_q.shape[:2], H, W)
-    # Smooth ss_q and sc_q before flow estimation, to get continuous flow estimation.
+    # Pooling smoothes ss_q and sc_q spatially, to get more continuous flow estimation.
     ss_q = pool_feat_or_attn_mat(ss_q)
     sc_q = pool_feat_or_attn_mat(sc_q)
     H2, W2 = ss_q.shape[-2], ss_q.shape[-1]
 
-    print(f"Layer {layer_idx}: q {H}x{W} -> {H2}x{W2}:")
+    # print(f"Layer {layer_idx}: q {H}x{W} -> {H2}x{W2}")
     # Latent optical flow from subj single feature maps to subj comp feature maps.
-    # ss_q has been detached, so the grad will only flow into sc_q through flow_model.
-    s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2,
-                                              num_iters=num_flow_est_iters, corr_normalized_by_sqrt_dim=False)
+    # Enabling grad seems to lead to quite bad results. 
+    # Maybe updating q through flow is not a good idea.
+    with torch.no_grad():
+        s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2, num_iters=num_flow_est_iters, 
+                                                  corr_normalized_by_sqrt_dim=False)
     s2c_flow = resize_flow(s2c_flow, H, W)
 
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)

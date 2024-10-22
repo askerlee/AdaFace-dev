@@ -2759,14 +2759,10 @@ class LatentDiffusion(DDPM):
             return 0, 0, 0, 0, 0, 0
 
         # Feature map spatial sizes are all 64*64.
-        feat_distill_layer_weights = { 22: 1, 23: 1, 24: 1, 
-                                     }
-
-        elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
+        elastic_matching_layer_weights = { 23: 1, 24: 1, 
                                          }
         
         # Normalize the weights above so that each set sum to 1.
-        feat_distill_layer_weights      = normalize_dict_values(feat_distill_layer_weights)
         elastic_matching_layer_weights  = normalize_dict_values(elastic_matching_layer_weights)
         
         # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
@@ -2791,9 +2787,9 @@ class LatentDiffusion(DDPM):
         loss_layers_comp_mix_bg_attn_suppress  = []
         
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
-            if unet_layer_idx not in feat_distill_layer_weights:
+            if unet_layer_idx not in elastic_matching_layer_weights:
                 continue
-            feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
+            elastic_matching_layer_weight = elastic_matching_layer_weights[unet_layer_idx]
 
             # ca_outfeat: [4, 1280, 8, 8]
             # ca_layer_q: [4, 8, 64, 160] -> [4, 8, 160, 64] -> [4, 8*160, 8, 8]
@@ -2828,8 +2824,6 @@ class LatentDiffusion(DDPM):
             # fg_attn_mask: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
             fg_attn_mask = fg_attn_mask.reshape(*fg_attn_mask.shape[:2], -1)
 
-            if unet_layer_idx not in elastic_matching_layer_weights:
-                continue
             # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
             # removed loss_layer_ms_mc_fg_match to save computation.
             # loss_layer_comp_single_align_map: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
@@ -2841,10 +2835,9 @@ class LatentDiffusion(DDPM):
                                              ca_outfeat, fg_attn_mask, ca_q_h, ca_q_w, 
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12)
 
-            loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * feat_distill_layer_weight)
-            loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * feat_distill_layer_weight)
-            # loss_mc_ms_fg_match += loss_layer_ms_mc_fg_match * feat_distill_layer_weight
-            loss_layers_sc_mc_bg_match.append(loss_layer_sc_mc_bg_match * feat_distill_layer_weight)
+            loss_layers_comp_single_map_align.append(loss_layer_comp_single_align_map * elastic_matching_layer_weight)
+            loss_layers_sc_ss_fg_match.append(loss_layer_sc_ss_fg_match * elastic_matching_layer_weight)
+            loss_layers_sc_mc_bg_match.append(loss_layer_sc_mc_bg_match * elastic_matching_layer_weight)
 
             if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
                 continue
@@ -2888,8 +2881,8 @@ class LatentDiffusion(DDPM):
             loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs_pos,  
                                                            mc_map_ss_fg_prob_below_mean)
 
-            loss_layers_comp_subj_bg_attn_suppress.append(loss_layer_subj_bg_attn_suppress * feat_distill_layer_weight)
-            loss_layers_comp_mix_bg_attn_suppress.append(loss_layer_mix_bg_attn_suppress  * feat_distill_layer_weight)
+            loss_layers_comp_subj_bg_attn_suppress.append(loss_layer_subj_bg_attn_suppress * elastic_matching_layer_weight)
+            loss_layers_comp_mix_bg_attn_suppress.append(loss_layer_mix_bg_attn_suppress  * elastic_matching_layer_weight)
 
         loss_comp_single_map_align      = sum(loss_layers_comp_single_map_align)
         loss_sc_ss_fg_match             = sum(loss_layers_sc_ss_fg_match)
