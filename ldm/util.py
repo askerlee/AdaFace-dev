@@ -578,7 +578,9 @@ def calc_ref_cosine_loss(delta, ref_delta, emb_mask=None,
                                            reduction='none')
         # emb_mask_i has been flatten to 1D. So it gives different embeddings 
         # different relative weights (after normalization).
-        losses_i = losses_i * emb_mask_i
+        if emb_mask_i is not None:
+            losses_i = losses_i * emb_mask_i
+
         if reduction == 'mean':
             if emb_mask_i is not None:
                 loss_i = losses_i.sum() / (emb_mask_i.sum() + 1e-8)
@@ -2086,6 +2088,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
 
     # We have both attn and flow token losses.
     if len(all_token_losses_sc_recon_ss_fg) > 1:
+        # all_token_losses_sc_recon_ss_fg: [2, 1, 1037]. 1037: number of fg tokens.
         all_token_losses_sc_recon_ss_fg = torch.stack(all_token_losses_sc_recon_ss_fg, dim=0)
         # Take the smaller loss between attn and flow.
         token_losses_sc_recon_ss_fg = all_token_losses_sc_recon_ss_fg.min(dim=0).values
