@@ -1251,7 +1251,6 @@ class LatentDiffusion(DDPM):
         extra_info['cls_comp_prompts']   = cls_comp_prompts
         extra_info['cls_comp_emb']       = cls_comp_emb
                             
-        # 'delta_prompts' is only used in comp_prompt_mix_reg iters. 
         # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
         # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
         # than those actually used in this iter.)
@@ -1540,7 +1539,6 @@ class LatentDiffusion(DDPM):
             loss += loss_unet_distill * self.unet_distill_weight
 
         if self.iter_flags['do_prompt_emb_delta_reg']:
-            # 'c_prompt_emb_4b' is the prompt embeddings before mixing.
             loss_prompt_emb_delta = calc_prompt_emb_delta_loss( 
                         extra_info['c_prompt_emb_4b'], extra_info['prompt_emb_mask'])
 
@@ -1913,18 +1911,6 @@ class LatentDiffusion(DDPM):
         batch_have_fg_mask = masks[-1]
         self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
 
-        # This code block is within self.iter_flags['do_comp_prompt_distillation'].
-        # The prompts are of 1-repeat-4 (distillation) structure.
-        # Embedding mixing is always applied to the subject indices in every instance in the 
-        # second half-batch (class instances) only, 
-        # and the first half-batch (subject instances) is not affected.
-        # So providing all_subj_indices_1b[1] is enough. No need to provide batch indices.
-        # The prompts are always repetitions like (subj_comp_prompts * T, cls_comp_prompts * T),
-        # so subj indices of the second-half batch are the repetitions of the 
-        # original extra_info['placeholder2indices_1b'].
-        #c_prompt_emb_mixed = mix_cls_subj_embeddings(c_prompt_emb, all_subj_indices_1b[1], 
-        #                                             cls_subj_mix_scale=self.cls_subj_mix_scale)
-        
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -2083,7 +2069,7 @@ class LatentDiffusion(DDPM):
                 ca_outfeat_lns = None
 
             loss_comp_single_map_align, loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
-            loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress \
+            loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
                 = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
                                                      ca_layers_activations['q'],
                                                      ca_q_bns,
@@ -2093,9 +2079,9 @@ class LatentDiffusion(DDPM):
             
             if loss_comp_subj_bg_attn_suppress > 0:
                 loss_dict.update({f'{session_prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })
-            # comp_mix_bg_attn_suppress is not optimized, and only recorded for monitoring.
-            if loss_comp_mix_bg_attn_suppress > 0:
-                loss_dict.update({f'{session_prefix}/comp_mix_bg_attn_suppress': loss_comp_mix_bg_attn_suppress.mean().detach().item() })
+            # comp_cls_bg_attn_suppress is not optimized, and only recorded for monitoring.
+            if loss_comp_cls_bg_attn_suppress > 0:
+                loss_dict.update({f'{session_prefix}/comp_cls_bg_attn_suppress': loss_comp_cls_bg_attn_suppress.mean().detach().item() })
             if loss_comp_single_map_align > 0:
                 loss_dict.update({f'{session_prefix}/comp_single_map_align': loss_comp_single_map_align.mean().detach().item() })
             if loss_sc_recon_ss_fg_attn_agg > 0:
@@ -2113,18 +2099,17 @@ class LatentDiffusion(DDPM):
             # loss_comp_single_map_align is L1 loss on attn maps, so its magnitude is small.
             # But this loss is always very small, so no need to scale it up.
             comp_single_map_align_loss_scale = 1
-            # mix single - mix comp matching loss is less important, so scale it down.
             ms_mc_fg_match_loss_scale = 0.1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             sc_mc_bg_match_loss_scale = 1
             
             loss_sc_recon_ss_fg = loss_sc_recon_ss_fg_min #loss_sc_recon_ss_fg_attn_agg + loss_sc_recon_ss_fg_flow
-            # No need to scale down loss_comp_mix_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
+            # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
             loss_comp_fg_bg_preserve = loss_comp_single_map_align * comp_single_map_align_loss_scale \
                                         + (loss_sc_recon_ss_fg + loss_mc_ms_fg_match * ms_mc_fg_match_loss_scale
                                             + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
                                             * elastic_matching_loss_scale \
-                                        + (loss_comp_subj_bg_attn_suppress + loss_comp_mix_bg_attn_suppress) \
+                                        + (loss_comp_subj_bg_attn_suppress + loss_comp_cls_bg_attn_suppress) \
                                             * comp_subj_bg_attn_suppress_loss_scale
         else:
             loss_comp_fg_bg_preserve = 0
@@ -2235,22 +2220,22 @@ class LatentDiffusion(DDPM):
             subj_attn_4b = attn_mat[fg_indices_4b].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).sum(dim=1)
             # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)
-            subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn, mix_comp_subj_attn \
+            subj_single_subj_attn, subj_comp_subj_attn, cls_single_subj_attn, cls_comp_subj_attn \
                 = subj_attn_4b.chunk(4)
 
             if unet_layer_idx in attn_norm_distill_layer_weights:
                 attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
 
-                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to mix_comp_subj_attn/mix_single_subj_attn. 
+                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to cls_comp_subj_attn/cls_single_subj_attn. 
                 # Use this scaler to release the graph and avoid OOM.
-                mix_comp_subj_attn_gs   = mix_comp_subj_attn.detach()
-                mix_single_subj_attn_gs = mix_single_subj_attn.detach()
+                cls_comp_subj_attn_gs   = cls_comp_subj_attn.detach()
+                cls_single_subj_attn_gs = cls_single_subj_attn.detach()
 
                 # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
-                # Note mix_*subj_attn use *_gs versions.
-                loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - mix_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
-                loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - mix_single_subj_attn_gs.mean(dim=-1)).abs().mean()
+                # Note cls_*subj_attn use *_gs versions.
+                loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - cls_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
+                loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - cls_single_subj_attn_gs.mean(dim=-1)).abs().mean()
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
                 loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
@@ -2268,20 +2253,20 @@ class LatentDiffusion(DDPM):
             # avoid BP through attention.
             # reversed=True: larger subject attention => smaller spatial weight, i.e., 
             # pay more attention to the context.
-            spatial_weight_mix_comp, spatial_attn_mix_comp   = convert_attn_to_spatial_weight(mix_comp_subj_attn, BLOCK_SIZE, 
-                                                                                                cls_comp_feat.shape[2:],
-                                                                                                reversed=True)
+            spatial_weight_cls_comp, spatial_attn_cls_comp   = convert_attn_to_spatial_weight(cls_comp_subj_attn, BLOCK_SIZE, 
+                                                                                              cls_comp_feat.shape[2:],
+                                                                                              reversed=True)
 
             spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
-                                                                                                subj_comp_feat.shape[2:],
-                                                                                                reversed=True)
-            # Use mix single/comp weights on both subject-only and mix features, 
+                                                                                              subj_comp_feat.shape[2:],
+                                                                                              reversed=True)
+            # Use cls single/comp weights on both subject-only and cls features, 
             # to reduce misalignment and facilitate distillation.
             # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
-            spatial_weight = (spatial_weight_mix_comp + spatial_weight_subj_comp) / 2
-            # spatial_attn_mix_comp, spatial_attn_subj_comp are returned for debugging purposes. 
+            spatial_weight = (spatial_weight_cls_comp + spatial_weight_subj_comp) / 2
+            # spatial_attn_cls_comp, spatial_attn_subj_comp are returned for debugging purposes. 
             # Delete them to release RAM.
-            del spatial_attn_mix_comp, spatial_attn_subj_comp
+            del spatial_attn_cls_comp, spatial_attn_subj_comp
 
             ca_outfeat  = ca_outfeat * spatial_weight
 
@@ -2756,7 +2741,7 @@ class LatentDiffusion(DDPM):
     # Features with comp prompts should be similar with the original images at the foreground.
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
-    # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_mix_bg_attn_suppress.
+    # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_outfeat_lns, ca_qs, ca_q_bns, ca_attns, 
                                       fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
@@ -2791,7 +2776,7 @@ class LatentDiffusion(DDPM):
         loss_layers_sc_mc_bg_match             = []
 
         loss_layers_comp_subj_bg_attn_suppress = []
-        loss_layers_comp_mix_bg_attn_suppress  = []
+        loss_layers_comp_cls_bg_attn_suppress  = []
         
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
             if unet_layer_idx not in elastic_matching_layer_weights:
@@ -2875,13 +2860,13 @@ class LatentDiffusion(DDPM):
             # subj_attn_hw: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
             subj_attn_flat = subj_attn_hw.reshape(*subj_attn_hw.shape[:2], -1)
 
-            subj_single_subj_attn, subj_comp_subj_attn, mix_single_subj_attn, mix_comp_subj_attn \
+            subj_single_subj_attn, subj_comp_subj_attn, cls_single_subj_attn, cls_comp_subj_attn \
                 = subj_attn_flat.chunk(4)
 
-            mix_comp_subj_attn_gs = mix_comp_subj_attn.detach()
+            cls_comp_subj_attn_gs = cls_comp_subj_attn.detach()
 
             subj_comp_subj_attn_pos   = subj_comp_subj_attn.clamp(min=0)
-            mix_comp_subj_attn_gs_pos = mix_comp_subj_attn_gs.clamp(min=0)
+            cls_comp_subj_attn_gs_pos = cls_comp_subj_attn_gs.clamp(min=0)
 
             # Suppress the subj attention scores on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
@@ -2889,11 +2874,11 @@ class LatentDiffusion(DDPM):
             # We allow pushing them to -inf, doing which seems to perform better.
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
                                                            sc_map_ss_fg_prob_below_mean)
-            loss_layer_mix_bg_attn_suppress  = masked_mean(mix_comp_subj_attn_gs_pos,  
+            loss_layer_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
                                                            mc_map_ss_fg_prob_below_mean)
 
             loss_layers_comp_subj_bg_attn_suppress.append(loss_layer_subj_bg_attn_suppress * elastic_matching_layer_weight)
-            loss_layers_comp_mix_bg_attn_suppress.append(loss_layer_mix_bg_attn_suppress  * elastic_matching_layer_weight)
+            loss_layers_comp_cls_bg_attn_suppress.append(loss_layer_cls_bg_attn_suppress  * elastic_matching_layer_weight)
 
         loss_comp_single_map_align      = sum(loss_layers_comp_single_map_align)
         loss_sc_recon_ss_fg_attn_agg    = sum(loss_layers_sc_recon_ss_fg_attn_agg)
@@ -2903,10 +2888,10 @@ class LatentDiffusion(DDPM):
         loss_mc_ms_fg_match             = 0
         loss_sc_mc_bg_match             = sum(loss_layers_sc_mc_bg_match)
         loss_comp_subj_bg_attn_suppress = sum(loss_layers_comp_subj_bg_attn_suppress)
-        loss_comp_mix_bg_attn_suppress  = sum(loss_layers_comp_mix_bg_attn_suppress)
+        loss_comp_cls_bg_attn_suppress  = sum(loss_layers_comp_cls_bg_attn_suppress)
 
         return loss_comp_single_map_align, loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
-               loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_mix_bg_attn_suppress
+               loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress
 
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
