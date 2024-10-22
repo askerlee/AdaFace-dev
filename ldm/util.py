@@ -2053,32 +2053,32 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
     else:
         sc_recon_ss_fg_feat_flow = None
         
-    losses_sc_ss_fg_match = []
+    losses_sc_recon_ss_fg = []
     # fg_mask: bool of [1, 64] with N_fg True values.
     # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [1, N_fg, 1280]
     ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, fg_mask_N]
     # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
 
-    loss_type_names = ['attn_agg', 'flow']
+    loss_type_names = ['attn', 'flow']
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:
-            losses_sc_ss_fg_match.append(0)
+            losses_sc_recon_ss_fg.append(0)
             continue
 
         # ref_grad_scale=0: don't BP to ss_fg_feat.
         # We use cosine loss, so that when the reconstructed features are of different scales,
         # the loss could still be small.
-        loss_sc_ss_fg_match = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
+        loss_sc_recon_ss_fg = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
                                                    exponent=2, do_demeans=[False, False],
                                                    first_n_dims_into_instances=2, 
                                                    ref_grad_scale=0)   
         
-        losses_sc_ss_fg_match.append(loss_sc_ss_fg_match)
+        losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
 
-        print(f"Layer {layer_idx}: {H}x{W} {loss_type_names[i]} loss: {loss_sc_ss_fg_match.item():.03f}")
+        print(f"Layer {layer_idx}: {H}x{W} {loss_type_names[i]} loss: {loss_sc_recon_ss_fg.item():.03f}")
 
-    return losses_sc_ss_fg_match
+    return losses_sc_recon_ss_fg
 
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
@@ -2128,7 +2128,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     
     loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
 
-    losses_sc_ss_fg_match = calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, 
+    losses_sc_recon_ss_fg = calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, 
                                                        sc_map_ss_prob, fg_mask, 
                                                        ss_q, sc_q, H, W, num_flow_est_iters)
     
@@ -2178,5 +2178,5 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
                                                first_n_dims_into_instances=2, 
                                                ref_grad_scale=0)
     
-    return loss_comp_single_map_align, losses_sc_ss_fg_match, \
+    return loss_comp_single_map_align, losses_sc_recon_ss_fg, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
