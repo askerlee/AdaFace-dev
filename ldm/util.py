@@ -2067,7 +2067,7 @@ def calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_fe
 
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
-                               num_flow_est_iters=6):
+                               num_flow_est_iters=12):
     # fg_mask: [1, 1, 64] => [1, 64]
     fg_mask = fg_mask.bool().squeeze(1)
     if fg_mask.sum() == 0:
@@ -2076,6 +2076,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # ca_q, ca_outfeat: [4, 1280, 64]
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: class comp.
+    # NOTE: q is computed from x (input features), k and v are computed from prompt embeddings.
+    # So we use q to compute image token matching scores and flow. 
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
     ss_q = ss_q.detach()
    
@@ -2111,14 +2113,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     
     loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
 
-    if flow_model is None:
-        loss_sc_ss_fg_match = \
-            calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
-    else:
-        loss_sc_ss_fg_match = \
+    loss_sc_ss_fg_match_attn_agg = \
+        calc_attn_aggregated_feat_matching_loss(ss_feat, sc_feat, sc_map_ss_prob, fg_mask)
+    if flow_model is not None:
+        loss_sc_ss_fg_match_flow = \
             calc_flow_warped_feat_matching_loss(layer_idx, flow_model, ss_q, sc_q, ss_feat, sc_feat, 
                                                 fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
-        
+    else:
+        loss_sc_ss_fg_match_flow = 0
+
+    loss_sc_ss_fg_match = loss_sc_ss_fg_match_attn_agg  + loss_sc_ss_fg_match_flow
+
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
     # Sum up the mapping probs from comp instances to the fg area of the single instances.
