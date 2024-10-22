@@ -492,25 +492,23 @@ def demean(x, demean_dims=[-1]):
 # emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to weight different tokens.
 # do_demeans: a list of two bools, indicating whether to demean delta and ref_delta, respectively.
 # ref_grad_scale = 0: no gradient will be BP-ed to the reference embedding.
-def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None, 
+# If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
+# If reduction == 'mean', return a scalar loss.
+def calc_ref_cosine_loss(delta, ref_delta, emb_mask=None, 
                          exponent=2, do_demeans=[False, False],
                          first_n_dims_into_instances=2,
-                         ref_grad_scale=0, aim_to_align=True, debug=False):
+                         ref_grad_scale=0, aim_to_align=True, 
+                         reduction='mean', debug=False):
 
     B = delta.shape[0]
     loss = 0
-    if batch_mask is not None:
-        assert batch_mask.shape == (B,)
-        # All instances are not counted. So return 0.
-        if batch_mask.sum() == 0:
-            return 0
-    else:
-        batch_mask = torch.ones(B, device=delta.device)
+    losses = []
 
     # Calculate the loss for each sample in the batch, 
     # as the mask may be different for each sample.
     for i in range(B):
-        # Keep the batch dimension when dealing with the i-th sample.
+        # Keep the batch dimension when dealing with the i-th sample, so that
+        # we don't need to mess with first_n_dims_into_instances.
         delta_i     = delta[[i]]
         ref_delta_i = ref_delta[[i]]
         emb_mask_i  = emb_mask[[i]] if emb_mask is not None else None
@@ -580,17 +578,25 @@ def calc_ref_cosine_loss(delta, ref_delta, batch_mask=None, emb_mask=None,
                                            reduction='none')
         # emb_mask_i has been flatten to 1D. So it gives different embeddings 
         # different relative weights (after normalization).
-        if emb_mask_i is not None:
-            loss_i = (losses_i * emb_mask_i).sum() / (emb_mask_i.sum() + 1e-8)
+        losses_i = losses_i * emb_mask_i
+        if reduction == 'mean':
+            if emb_mask_i is not None:
+                loss_i = losses_i.sum() / (emb_mask_i.sum() + 1e-8)
+            else:
+                loss_i = losses_i.mean()
+
+            loss += loss_i
+        elif reduction == 'none':
+            losses.append(losses_i)
         else:
-            loss_i = losses_i.mean()
-
-        loss_i = loss_i * batch_mask[i]
-
-        loss += loss_i
-
-    loss /= batch_mask.sum()
-    return loss
+            breakpoint()
+            
+    if reduction == 'mean':
+        loss = loss / B
+        return loss
+    else:
+        losses = torch.stack(losses, dim=0)
+        return losses
 
 # feat_base, feat_ex, ...: [2, 9, 1280].
 # Last dim is the channel dim.
@@ -2030,13 +2036,6 @@ def reconstruct_feat_with_matching_flow(flow_model, ss_q, sc_q, sc_feat, fg_mask
     sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, fg_mask_N]
 
     return sc_recon_ss_fg_feat
-    
-    '''
-    scale = 8 / s2c_flow.shape[-1]
-    s2c_flow = F.interpolate(s2c_flow, size=(8, 8), mode='bilinear', align_corners=False) * scale
-    print(f"Layer {layer_idx}: {H}x{W} -> 16x16 flow:")
-    print(s2c_flow.squeeze(0).cpu().numpy())
-    '''
 
 def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, 
                                ss_q, sc_q, H, W, num_flow_est_iters):
@@ -2053,7 +2052,9 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
     else:
         sc_recon_ss_fg_feat_flow = None
         
-    losses_sc_recon_ss_fg = []
+    losses_sc_recon_ss_fg       = []
+    all_token_losses_sc_recon_ss_fg = []
+
     # fg_mask: bool of [1, 64] with N_fg True values.
     # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [1, N_fg, 1280]
     ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, fg_mask_N]
@@ -2066,17 +2067,32 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
             losses_sc_recon_ss_fg.append(0)
             continue
 
-        # ref_grad_scale=0: don't BP to ss_fg_feat.
         # We use cosine loss, so that when the reconstructed features are of different scales,
         # the loss could still be small.
-        loss_sc_recon_ss_fg = calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                                   exponent=2, do_demeans=[False, False],
-                                                   first_n_dims_into_instances=2, 
-                                                   ref_grad_scale=0)   
-        
+        # ref_grad_scale=0: don't BP to ss_fg_feat.
+        # If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
+        # If reduction == 'mean', return a scalar loss.        
+        token_losses_sc_recon_ss_fg = \
+            calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
+                                 exponent=1, do_demeans=[False, False],
+                                 first_n_dims_into_instances=2, 
+                                 ref_grad_scale=0, aim_to_align=True,
+                                 reduction='none')
+        loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
+        all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
-        print(f"Layer {layer_idx}: {H}x{W} {loss_type_names[i]} loss: {loss_sc_recon_ss_fg.item():.03f}")
+        print(f"Layer {layer_idx}: {H}x{W} sc-ss recon {loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}")
+
+    # We have both attn and flow token losses.
+    if len(all_token_losses_sc_recon_ss_fg) > 1:
+        all_token_losses_sc_recon_ss_fg = torch.stack(all_token_losses_sc_recon_ss_fg, dim=0)
+        # Take the smaller loss between attn and flow.
+        token_losses_sc_recon_ss_fg = all_token_losses_sc_recon_ss_fg.min(dim=0).values
+        loss_sc_recon_ss_fg_min = token_losses_sc_recon_ss_fg.mean()
+        losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
+
+        print(f"Layer {layer_idx}: {H}x{W} sc-ss recon min : {loss_sc_recon_ss_fg_min.item():.03f}")
 
     return losses_sc_recon_ss_fg
 
