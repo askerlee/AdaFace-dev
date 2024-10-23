@@ -2117,9 +2117,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
     ss_q = ss_q.detach()
    
-    #num_heads = 8
+    num_heads = 8
     # Similar to the scale of the attention scores.
-    matching_score_scale = 1 #(ca_q.shape[1] / num_heads) ** -0.5
+    matching_score_scale = (ca_q.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
     sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
@@ -2155,8 +2155,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     
     # fg_mask: [1, 64] => [1, 64, 1].
     fg_mask = fg_mask.float().unsqueeze(2)
-    # Sum up the mapping probs from comp instances to the fg area of the single instances.
+    # Sum up the mapping probs from comp instances to the fg area of the single instances, so that 
+    # ** each entry is the total prob of each image token in the comp instance
+    # ** maps to the whole fg area in the single instance.
     # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1] => [1, 1, 64].
+    # matmul() sums up over the ss tokens dim, filtered by fg_mask.
     sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
     mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
 
@@ -2166,23 +2169,23 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 
     # in the subj single instance, then this token is probably background.
     sc_map_ss_fg_prob_below_mean = fg_bg_cutoff_prob - sc_map_ss_fg_prob
-    mc_map_ss_fg_prob_below_mean = fg_bg_cutoff_prob - mc_map_ms_fg_prob
+    mc_map_ms_fg_prob_below_mean = fg_bg_cutoff_prob - mc_map_ms_fg_prob
     # Set large negative values to 0, which correspond to large positive probs in 
     # sc_map_ss_fg_prob/mc_map_ms_fg_prob at fg areas of the corresponding single instances,
     # likely being foreground areas. 
     # When sc_map_ss_fg_prob/mc_map_ms_fg_prob < fg_bg_cutoff_prob = 0.25, this token is likely to be bg.
     # The smaller sc_map_ss_fg_prob/mc_map_ms_fg_prob is, the more likely this token is bg.
     sc_map_ss_fg_prob_below_mean = torch.clamp(sc_map_ss_fg_prob_below_mean, min=0)
-    mc_map_ss_fg_prob_below_mean = torch.clamp(mc_map_ss_fg_prob_below_mean, min=0)
+    mc_map_ms_fg_prob_below_mean = torch.clamp(mc_map_ms_fg_prob_below_mean, min=0)
 
     # Image tokens that don't map to any fg image tokens in subj single instance
     # (i.e., corresponding to small sc_map_ss_fg_prob elements)
     # are considered as bg tokens.
-    # Note comp_bg_prob is a soft mask, not a hard mask.
-    # comp_bg_prob: [1, 1, 64]. Can be viewed as a token-wise weight, used
+    # Note sc_to_ss_bg_prob is a soft mask, not a hard mask.
+    # sc_to_ss_bg_prob: [1, 1, 64]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
-    # comp_bg_prob: [1, 1, 64] => [1, 64, 1]. values: 0 ~ fg_bg_cutoff_prob=0.25.
-    comp_bg_prob = mc_map_ss_fg_prob_below_mean.permute(0, 2, 1)
+    # sc_to_ss_bg_prob: [1, 1, 64] => [1, 64, 1]. values: 0 ~ fg_bg_cutoff_prob=0.25.
+    sc_to_ss_bg_prob = sc_map_ss_fg_prob_below_mean.permute(0, 2, 1)
 
     # We compute cosine loss on the features dim. 
     # So we permute the features to the last dim.
@@ -2194,10 +2197,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
     # will be backpropagated to subj embeddings).
     loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
-                                               emb_mask=comp_bg_prob,
-                                               exponent=2, do_demeans=[False, False],
+                                               emb_mask=sc_to_ss_bg_prob,
+                                               exponent=1, do_demeans=[False, False],
                                                first_n_dims_into_instances=2, 
+                                               aim_to_align=True, 
                                                ref_grad_scale=0)
     
     return loss_comp_single_map_align, losses_sc_recon_ss_fg, \
-           loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean
+           loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ms_fg_prob_below_mean

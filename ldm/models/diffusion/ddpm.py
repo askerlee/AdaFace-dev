@@ -1550,8 +1550,8 @@ class LatentDiffusion(DDPM):
             # prompt_emb_delta_reg_weight: 1e-5.
             loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
-        # fg_bg_xlayer_consist_loss_weight == 5e-5. 
-        if self.fg_bg_xlayer_consist_loss_weight > 0 \
+        # fg_bg_xlayer_consist_loss_weight == 0, disabled. Only monitor.
+        if self.fg_bg_xlayer_consist_loss_weight >= 0 \
           and ( self.iter_flags['do_normal_recon']  or self.iter_flags['do_comp_prompt_distillation'] ):
             # SSB_SIZE: subject sub-batch size.
             # If do_normal_recon, then both instances are subject instances. 
@@ -1560,7 +1560,7 @@ class LatentDiffusion(DDPM):
             # (subj-single and subj-comp instances).
             SSB_SIZE = BLOCK_SIZE if self.iter_flags['do_normal_recon'] else 2 * BLOCK_SIZE
             loss_fg_xlayer_consist, loss_bg_xlayer_consist = \
-                self.calc_fg_bg_xlayer_consist_loss(extra_info['ca_layers_activations']['attn'],
+                self.calc_fg_bg_xlayer_consist_loss(extra_info['ca_layers_activations']['attnscore'],
                                                     all_subj_indices,
                                                     all_bg_indices,
                                                     SSB_SIZE)
@@ -2665,7 +2665,8 @@ class LatentDiffusion(DDPM):
                 continue
 
             # Cross attention matrix between the prompt (77 tokens) and the image tokens (256 tokens).
-            # [2, 8, 256, 77] => [2, 77, 8, 256]
+            # [BS, Head, Image-tokens, Prompt-tokens] -> [BS, Prompt-tokens, Head, Image-tokens]
+            # [2, 8, 256, 77] => [2, 77, 8, 256] 
             attn_mat = unet_attn.permute(0, 3, 1, 2)
             # [2, 8, 64, 77]  => [2, 77, 8, 64]
             attn_score_mat_xlayer = ca_attns[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
@@ -2694,7 +2695,8 @@ class LatentDiffusion(DDPM):
             # Reshape to a squre matrix then resize to the size of the layer below.
             # subj_attn: [2, 256] -> [2, 16, 16] -> [2, 8, 8] -> [2, 64]
             subj_attn = subj_attn.reshape(SSB_SIZE, 1, H, H)
-            subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
+            if H != Hx:
+                subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
             subj_attn = subj_attn.reshape(SSB_SIZE, Hx*Hx)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
