@@ -2114,15 +2114,10 @@ class LatentDiffusion(DDPM):
         else:
             loss_comp_fg_bg_preserve = 0
 
-        feat_delta_align_scale = 1
-        if self.normalize_ca_q_and_outfeat:
+        feat_delta_align_scale = 0.1
+        # normalize_ca_q_and_outfeat is enabled 50% of the time.
+        if self.normalize_ca_q_and_outfeat and (torch.rand(1) < 0.5):
             # Normalize ca_outfeat at 50% chance.
-            normalize_ca_outfeat = (torch.rand(1) < 0.5).item()
-        else:
-            normalize_ca_outfeat = False
-
-        # normalize_ca_outfeat is enabled 50% of the time.
-        if normalize_ca_outfeat:
             ca_outfeat_lns = self.embedding_manager.ca_outfeat_lns
             # If using LN, feat delta is around 5x smaller. So we scale it up to 
             # match the scale of not using LN.
