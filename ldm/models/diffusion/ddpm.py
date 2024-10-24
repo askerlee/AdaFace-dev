@@ -1607,7 +1607,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # Major losses for normal_recon iterations (loss_recon, loss_subj_bg_complementary, etc.).
+    # Major losses for normal_recon iterations (loss_recon, loss_subj_bg_complem, etc.).
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
                                       all_subj_indices, all_bg_indices,
@@ -1617,25 +1617,25 @@ class LatentDiffusion(DDPM):
 
         if self.fg_bg_complementary_loss_weight > 0:
             # NOTE: Do not check iter_flags['use_background_token'] here. If use_background_token, 
-            # then loss_subj_bg_complementary, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
+            # then loss_subj_bg_complem, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
             # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
             # all_subj_indices and all_bg_indices are used, instead of *_1b.
             # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
             # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
             # So we don't do sqrt norm.
-            loss_subj_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
+            loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
                         self.calc_subj_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
-                                                           all_subj_indices,
-                                                           all_bg_indices,
-                                                           BLOCK_SIZE=BLOCK_SIZE,
-                                                           fg_grad_scale=0.1,
-                                                           fg_mask=fg_mask,
-                                                           instance_mask=batch_have_fg_mask,
-                                                           do_sqrt_norm=False
-                                                          )
+                                                             all_subj_indices,
+                                                             all_bg_indices,
+                                                             BLOCK_SIZE=BLOCK_SIZE,
+                                                             fg_grad_scale=0.1,
+                                                             fg_mask=fg_mask,
+                                                             instance_mask=batch_have_fg_mask,
+                                                             do_sqrt_norm=False
+                                                            )
 
-            if loss_subj_bg_complementary > 0:
-                loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complementary.mean().detach().item()})
+            if loss_subj_bg_complem > 0:
+                loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complem.mean().detach().item()})
             # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
             if loss_subj_mb_suppress > 0:
                 loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
@@ -1644,9 +1644,12 @@ class LatentDiffusion(DDPM):
             if loss_subj_bg_mask_contrast > 0:
                 loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_subj_bg_mask_contrast.mean().detach().item()})
 
-            # Reduce the scale of loss_subj_bg_complementary if do_zero_shot, as it hurts performance. 
-            loss_subj_bg_complementary_scale = 0.2
-            loss_fg_bg_contrast += (loss_subj_bg_complementary * loss_subj_bg_complementary_scale + loss_subj_mb_suppress \
+            # **DISABLED** loss_subj_bg_complem since it seems to hurt performance.
+            # loss_subj_bg_complem encourages the attention of subject tokens and bg tokens to be complementary on the image.
+            # However, even if we try to minimize this loss, the subject and bg tokens 
+            # still attend to roughly the same areas.
+            loss_subj_bg_complem_scale = 0
+            loss_fg_bg_contrast += (loss_subj_bg_complem * loss_subj_bg_complem_scale + loss_subj_mb_suppress \
                                     + loss_bg_mf_suppress + loss_subj_bg_mask_contrast) \
                                    * self.fg_bg_complementary_loss_weight
 
@@ -2457,10 +2460,10 @@ class LatentDiffusion(DDPM):
         # K_bg: 4, number of embeddings per background token.
         K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
 
-        loss_layers_subj_bg_complementary = []
-        loss_layers_subj_mb_suppress    = []
-        loss_layers_bg_mf_suppress      = []
-        loss_layers_subj_bg_mask_contrast = []
+        loss_layers_subj_bg_complem         = []
+        loss_layers_subj_mb_suppress        = []
+        loss_layers_bg_mf_suppress          = []
+        loss_layers_subj_bg_mask_contrast   = []
 
         subj_mb_suppress_scale                = 0.05
         bg_mf_suppress_scale                  = 0.1
@@ -2509,7 +2512,7 @@ class LatentDiffusion(DDPM):
             # Use subj_score as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
             # fg_grad_scale: 0.1.
-            loss_layer_subj_bg_comple = \
+            loss_layer_subj_bg_complem = \
                 calc_ref_cosine_loss(bg_score, subj_score, 
                                      exponent=2,    
                                      do_demeans=[False, False],
@@ -2518,8 +2521,8 @@ class LatentDiffusion(DDPM):
                                      aim_to_align=False,
                                      debug=False)
 
-            # loss_subj_bg_complementary doesn't need fg_mask.
-            loss_layers_subj_bg_complementary.append(loss_layer_subj_bg_comple * attn_align_layer_weight)
+            # loss_subj_bg_complem doesn't need fg_mask.
+            loss_layers_subj_bg_complem.append(loss_layer_subj_bg_complem * attn_align_layer_weight)
 
             if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
                 fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_score.shape[-1], 
@@ -2613,12 +2616,12 @@ class LatentDiffusion(DDPM):
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
 
-        loss_subj_bg_complementary  = sum(loss_layers_subj_bg_complementary)
+        loss_subj_bg_complem        = sum(loss_layers_subj_bg_complem)
         loss_subj_mb_suppress       = sum(loss_layers_subj_mb_suppress)
         loss_bg_mf_suppress         = sum(loss_layers_bg_mf_suppress)
         loss_subj_bg_mask_contrast  = sum(loss_layers_subj_bg_mask_contrast)
 
-        return loss_subj_bg_complementary, loss_subj_mb_suppress, \
+        return loss_subj_bg_complem, loss_subj_mb_suppress, \
                loss_bg_mf_suppress, loss_subj_bg_mask_contrast
 
     # SSB_SIZE: subject sub-batch size.
