@@ -13,7 +13,7 @@ import bitsandbytes as bnb
 from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
-                        ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_ref_cosine_loss, \
+                        ortho_subtract, calc_dyn_loss_scale, gen_gradient_scaler, calc_ref_cosine_loss, \
                         calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
                         save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, convert_attn_to_spatial_weight, \
@@ -69,7 +69,6 @@ class DDPM(pl.LightningModule):
                  comp_prompt_distill_weight=1e-4,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 fg_bg_xlayer_consist_loss_weight=0.,
                  enable_background_token=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -110,7 +109,6 @@ class DDPM(pl.LightningModule):
         self.comp_prompt_distill_weight             = comp_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
-        self.fg_bg_xlayer_consist_loss_weight       = fg_bg_xlayer_consist_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -1550,32 +1548,6 @@ class LatentDiffusion(DDPM):
             # prompt_emb_delta_reg_weight: 1e-5.
             loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
-        # fg_bg_xlayer_consist_loss_weight == 0, disabled. Only monitor.
-        if self.fg_bg_xlayer_consist_loss_weight >= 0 \
-          and ( self.iter_flags['do_normal_recon']  or self.iter_flags['do_comp_prompt_distillation'] ):
-            # SSB_SIZE: subject sub-batch size.
-            # If do_normal_recon, then both instances are subject instances. 
-            # The subject sub-batch size SSB_SIZE = 2 (1 * BLOCK_SIZE).
-            # If do_comp_prompt_distillation, then subject sub-batch size SSB_SIZE = 2 * BLOCK_SIZE. 
-            # (subj-single and subj-comp instances).
-            SSB_SIZE = BLOCK_SIZE if self.iter_flags['do_normal_recon'] else 2 * BLOCK_SIZE
-            loss_fg_xlayer_consist, loss_bg_xlayer_consist = \
-                self.calc_fg_bg_xlayer_consist_loss(extra_info['ca_layers_activations']['attnscore'],
-                                                    all_subj_indices,
-                                                    all_bg_indices,
-                                                    SSB_SIZE)
-            if loss_fg_xlayer_consist > 0:
-                loss_dict.update({f'{session_prefix}/fg_xlayer_consist': loss_fg_xlayer_consist.mean().detach().item() })
-            if loss_bg_xlayer_consist > 0:
-                loss_dict.update({f'{session_prefix}/bg_xlayer_consist': loss_bg_xlayer_consist.mean().detach().item() })
-
-            # Reduce the loss_bg_xlayer_consist_loss_scale by 4x.
-            fg_xlayer_consist_loss_scale = 1
-            bg_xlayer_consist_loss_scale = 0.2
-
-            loss += (loss_fg_xlayer_consist * fg_xlayer_consist_loss_scale + loss_bg_xlayer_consist * bg_xlayer_consist_loss_scale) \
-                    * self.fg_bg_xlayer_consist_loss_weight
-
         ###### begin of do_comp_prompt_distillation ######
         if self.iter_flags['do_comp_prompt_distillation']:
             loss_comp_prompt_distill, loss_comp_fg_bg_preserve = \
@@ -2147,7 +2119,22 @@ class LatentDiffusion(DDPM):
 
         # DO NOT DISABLE loss_subj_attn_norm_distill, otherwise 
         # the subject token attention will dominate the whole image, reducing compositionality.
-        subj_attn_norm_distill_loss_scale = 0.01
+        """        
+        Given base_loss_and_scale=(0.4, 0.01), ref_loss_and_scale=(0.6, 0.02), rel_scale_range=(-0.5, 10).
+        Each loss_delta = ref_loss - base_loss = 0.6 - 0.4 = 0.2, corresponds to a scale_delta of 0.01.
+        - When loss = 0.8:
+            relative_scale = (0.8 - 0.4) / 0.2 = 2
+            scale_delta = 0.01
+            scale = 2 * 0.01 + 0.01 = 0.03
+
+        - When loss = 0.1:
+            relative_scale = (0.1 - 0.4) / 0.2 = -1.5
+            relative_scale (clamped) = -0.5
+            scale = -0.5 * 0.01 + 0.01 = 0.005
+        """    
+        subj_attn_norm_distill_loss_scale = \
+            calc_dyn_loss_scale(loss_subj_attn_norm_distill, base_loss_and_scale=(0.4, 0.01),
+                                ref_loss_and_scale=(0.6, 0.02), rel_scale_range=(-0.5, 10))
 
         # loss_feat_delta_align: 0.02~0.03, loss_subj_attn_norm_distill: 0.25 -> 0.0025.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
@@ -2622,130 +2609,6 @@ class LatentDiffusion(DDPM):
 
         return loss_subj_bg_complem, loss_subj_mb_suppress, \
                loss_bg_mf_suppress, loss_subj_bg_mask_contrast
-
-    # SSB_SIZE: subject sub-batch size.
-    # bg_indices could be None if iter_flags['use_background_token'] = False.
-    def calc_fg_bg_xlayer_consist_loss(self, ca_attns, subj_indices, bg_indices, SSB_SIZE):
-        # Discard the first few bottom layers from alignment.
-        # attn_align_layer_weights: relative weight of each layer. 
-        # layer 7 is absent, since layer 8 aligns with layer 7.
-        # Feature map spatial sizes are all 64*64.
-        # Except that layer 22 corresponds to layer 21 with 32x32 feature maps.
-        attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
-                                   }
-        # 16-18: feature maps 16x16.
-        # 19-21: feature maps 32x32.
-        # 22-24: feature maps 64x64.
-        # The weight is inversely proportional to the feature map size.
-        # The larger the feature map, the more details the layer captures, and 
-        # fg/bg loss hurts more high-frequency details, therefore it has a smalll weight.
-                
-        # Align a layer with the layer below it.
-        attn_align_xlayer_maps = { 8: 7, 12: 8, 16: 12, 17: 16, 18: 17, 19: 18, 
-                                   20: 19, 21: 20, 22: 21, 23: 22, 24: 23 }
-
-        # Normalize the weights above so that each set sum to 1.
-        attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
-
-        # K_subj: 20, number of embeddings per subject token.
-        K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        # In each instance, subj_indices has K_subj elements, 
-        # and bg_indices has K_bg elements or 0 elements 
-        # (if iter_flags['use_background_token'] = False)
-        '''
-        (Pdb) subj_indices
-        (tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], device='cuda:0'), tensor([ 5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-                21, 22, 23, 24], device='cuda:0'))
-        '''
-        # SSB_SIZE = 2, so we only keep instances indexed by [0, 1].
-        subj_indices = (subj_indices[0][:SSB_SIZE*K_subj], subj_indices[1][:SSB_SIZE*K_subj])
-
-        if bg_indices is not None:
-            # K_bg: 1 or 2, number of embeddings per background token.
-            K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
-            # bg_indices: ([0, 1], [11, 12]).
-            bg_indices = (bg_indices[0][:SSB_SIZE*K_bg], bg_indices[1][:SSB_SIZE*K_bg])
-
-        loss_layers_fg_xlayer_consist = []
-        loss_layers_bg_xlayer_consist = []
-
-        for unet_layer_idx, unet_attn in ca_attns.items():
-            if (unet_layer_idx not in attn_align_layer_weights) \
-                or (attn_align_xlayer_maps[unet_layer_idx] not in ca_attns):
-                continue
-
-            # Cross attention matrix between the prompt (77 tokens) and the image tokens (256 tokens).
-            # [BS, Head, Image-tokens, Prompt-tokens] -> [BS, Prompt-tokens, Head, Image-tokens]
-            # [2, 8, 256, 77] => [2, 77, 8, 256] 
-            attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # [2, 8, 64, 77]  => [2, 77, 8, 64]
-            attn_score_mat_xlayer = ca_attns[attn_align_xlayer_maps[unet_layer_idx]].permute(0, 3, 1, 2)
-            
-            # Make sure attn_score_mat_xlayer is always smaller than attn_mat.
-            # So we always scale down attn_mat to match attn_score_mat_xlayer.
-            if attn_score_mat_xlayer.shape[-1] > attn_mat.shape[-1]:
-                attn_mat, attn_score_mat_xlayer = attn_score_mat_xlayer, attn_mat
-
-            # H: 16, Hx: 8. The H of current layer vs the H of the layer below.
-            H  = int(np.sqrt(attn_mat.shape[-1]))
-            Hx = int(np.sqrt(attn_score_mat_xlayer.shape[-1]))
-
-            # Why taking mean over 8 heads: In a CA layer, FFN features added to the CA features. 
-            # If there were no FFN pathways, the CA features of the previous CA layer would be better aligned
-            # with the current CA layer (ignoring the transformations by the intermediate conv layers).
-            # Therefore, the CA features in the current CA layer may be barely aligned 
-            # with the CA features in the L_xlayer-th CA layer. So it's of little benefit
-            # to align the corresponding heads across CA layers.
-            # subj_attn:        [40, 8, 256] -> [2, 20, 8, 256] -> mean over 8 heads, sum over 20 embs -> [2, 256] 
-            # Average out head, because the head i in layer a may not correspond to head i in layer b.
-            subj_attn        = attn_mat[subj_indices].reshape(       SSB_SIZE, K_subj, *attn_mat.shape[2:]).mean(dim=2).sum(dim=1)
-            # subj_attn_xlayer: [40, 8, 64]  -> [2, 20, 8, 64]  -> mean over 8 heads, sum over 20 embs -> [2, 64]
-            subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_subj, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
-
-            # Reshape to a squre matrix then resize to the size of the layer below.
-            # subj_attn: [2, 256] -> [2, 16, 16] -> [2, 8, 8] -> [2, 64]
-            subj_attn = subj_attn.reshape(SSB_SIZE, 1, H, H)
-            if H != Hx:
-                subj_attn = F.interpolate(subj_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-            subj_attn = subj_attn.reshape(SSB_SIZE, Hx*Hx)
-
-            attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
-
-            loss_layer_fg_xlayer_consist = calc_ref_cosine_loss(subj_attn, subj_attn_xlayer,
-                                                                exponent=2,    
-                                                                do_demeans=[True, True],
-                                                                first_n_dims_into_instances=1,
-                                                                ref_grad_scale=1,
-                                                                aim_to_align=True)
-            
-            loss_layers_fg_xlayer_consist.append(loss_layer_fg_xlayer_consist * attn_align_layer_weight)
-            
-            if bg_indices is not None:
-                # bg_attn:   [8, 8, 256] -> [2, 4, 8, 256] -> mean over 8 heads, sum over 4 embs -> [2, 256]
-                # 8: 8 attention heads. Last dim 256: number of image tokens.
-                # Average out head, because the head i in layer a may not correspond to head i in layer b.
-                bg_attn         = attn_mat[bg_indices].reshape(SSB_SIZE, K_bg, *attn_mat.shape[2:]).mean(dim=2).sum(dim=1)
-                bg_attn_xlayer  = attn_score_mat_xlayer[bg_indices].reshape(SSB_SIZE, K_bg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
-                # bg_attn: [2, 4, 256] -> [2, 4, 16, 16] -> [2, 4, 8, 8] -> [2, 4, 64]
-                bg_attn   = bg_attn.reshape(SSB_SIZE, 1, H, H)
-                bg_attn   = F.interpolate(bg_attn, size=(Hx, Hx), mode="bilinear", align_corners=False)
-                bg_attn   = bg_attn.reshape(SSB_SIZE, Hx*Hx)
-                
-                loss_layer_bg_xlayer_consist = calc_ref_cosine_loss(bg_attn, bg_attn_xlayer,
-                                                                    exponent=2,    
-                                                                    do_demeans=[True, True],
-                                                                    first_n_dims_into_instances=1,
-                                                                    ref_grad_scale=1,
-                                                                    aim_to_align=True)
-                
-                loss_layers_bg_xlayer_consist.append(loss_layer_bg_xlayer_consist * attn_align_layer_weight)
-
-        loss_fg_xlayer_consist = sum(loss_layers_fg_xlayer_consist)
-        loss_bg_xlayer_consist = sum(loss_layers_bg_xlayer_consist)
-
-        return loss_fg_xlayer_consist, loss_bg_xlayer_consist
 
     # Intuition of comp_fg_bg_preserve_loss: 
     # In distillation iterations, if comp_init_fg_from_training_image, then at fg_mask areas, x_start is initialized with 

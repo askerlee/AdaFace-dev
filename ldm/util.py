@@ -1636,12 +1636,6 @@ def replace_prompt_comp_extra(comp_prompts, single_prompts, new_comp_extras):
     
     return new_comp_prompts
 
-def dampen_large_loss(loss, max_magnitude=1.):
-    if loss > max_magnitude:
-        loss = loss * max_magnitude / loss.item()
-
-    return loss
-
 def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
     if token_indices is None:
         return None
@@ -1723,6 +1717,44 @@ def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_gra
                              aim_to_align=True)
 
     return loss_prompt_emb_delta
+
+def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, rel_scale_range=(-0.5, 10)):
+    """
+    Return a loss scale as a function of loss.
+
+    The scale is computed using linear interpolation based on the formula:
+    scale_delta: the offset of the ref scale from the base scale, (ref_scale - base_scale).
+    relative_scale: the offset of the output scale from the base scale, as a multiple of scale_delta.
+    relative_scale = (loss - base_loss) / (ref_loss - base_loss)
+    scale = relative_scale * scale_delta + base_scale
+
+    Examples:
+    Given base_loss_and_scale=(0.4, 0.01), ref_loss_and_scale=(0.6, 0.02), rel_scale_range=(-0.5, 10).
+    Each loss_delta = ref_loss - base_loss = 0.6 - 0.4 = 0.2, corresponds to a scale_delta of 0.01.
+    - When loss = 0.8:
+        relative_scale = (0.8 - 0.4) / 0.2 = 2
+        scale_delta = 0.01
+        scale = 2 * 0.01 + 0.01 = 0.03
+
+    - When loss = 0.1:
+        relative_scale = (0.1 - 0.4) / 0.2 = -1.5
+        relative_scale (clamped) = -0.5
+        scale = -0.5 * 0.01 + 0.01 = 0.005
+    """    
+    base_loss, base_scale = base_loss_and_scale
+    ref_loss, ref_scale   = ref_loss_and_scale
+    rel_scale_lb, rel_scale_ub = rel_scale_range
+
+    # Ensure the losses are not equal, avoiding division by zero
+    assert ref_loss != base_loss, "ref_loss and base_loss cannot be the same."
+    assert rel_scale_lb > -1,     "rel_scale_lb must be greater than -1, otherwise the scale can be negative."
+    
+    relative_scale = (loss.item() - base_loss) / (ref_loss - base_loss)
+    relative_scale = np.clip(relative_scale, rel_scale_lb, rel_scale_ub)
+    scale_delta = ref_scale - base_scale
+    scale = relative_scale * scale_delta + base_scale
+    return scale
+    
 
 def to_float(x):
     if isinstance(x, torch.Tensor):
