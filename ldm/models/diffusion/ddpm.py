@@ -1644,11 +1644,11 @@ class LatentDiffusion(DDPM):
             if loss_subj_bg_mask_contrast > 0:
                 loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_subj_bg_mask_contrast.mean().detach().item()})
 
-            # **DISABLED** loss_subj_bg_complem since it seems to hurt performance.
+            # DO NOT DISABLE loss_subj_bg_complem.
             # loss_subj_bg_complem encourages the attention of subject tokens and bg tokens to be complementary on the image.
-            # However, even if we try to minimize this loss, the subject and bg tokens 
-            # still attend to roughly the same areas.
-            loss_subj_bg_complem_scale = 0
+            # Although this loss seems not to reduce through optimization,
+            # it prevents bg tokens from absorbing subject features. Therefore, it is necessary.
+            loss_subj_bg_complem_scale = 0.2
             loss_fg_bg_contrast += (loss_subj_bg_complem * loss_subj_bg_complem_scale + loss_subj_mb_suppress \
                                     + loss_bg_mf_suppress + loss_subj_bg_mask_contrast) \
                                    * self.fg_bg_complementary_loss_weight
@@ -2496,6 +2496,7 @@ class LatentDiffusion(DDPM):
             
             # sel_emb_attns_by_indices will split bg_indices to multiple instances,
             # and select the corresponding attention rows for each instance.
+            # bg_score: 3D
             bg_score   = sel_emb_attns_by_indices(attnscore_mat, bg_indices, 
                                                   do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
