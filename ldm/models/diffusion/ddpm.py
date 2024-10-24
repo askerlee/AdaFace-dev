@@ -2145,11 +2145,9 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
 
-        # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (2~3, depending on various settings). 
-        # So no need to use a dynamic loss scale.
-        # **DISABLED** loss_subj_attn_norm_distill seems to reduce subject authenticity
-        # by suppressing the subject embedding attention. So we disabled it.
-        subj_attn_norm_distill_loss_scale = 0
+        # DO NOT DISABLE loss_subj_attn_norm_distill, otherwise 
+        # the subject token attention will dominate the whole image, reducing compositionality.
+        subj_attn_norm_distill_loss_scale = 0.01
 
         # loss_feat_delta_align: 0.02~0.03, loss_subj_attn_norm_distill: 0.25 -> 0.0025.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
