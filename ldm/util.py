@@ -338,10 +338,10 @@ def parse_subject_file(subject_file_path):
     # The most important variables: "subjects", "cls_delta_strings", "data_folder", "class_names"
     return subj_info, subj2attr
 
-# Orthogonal subtraction of b from a: the residual is orthogonal to b (on the last dimension).
-# NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b.
-# ortho_subtract(a, b) scales proportionally to the scale of a.
-# a, b are n-dimensional tensors. Subtraction happens at the last dim.
+# Orthogonal subtraction of b from a: the residual is orthogonal to b (on the last on_last_n_dims dims).
+# NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b,
+# but scales proportionally to the scale of a.
+# a, b are n-dimensional tensors. Subtraction happens at the last on_last_n_dims dims.
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
 def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):

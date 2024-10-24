@@ -2275,9 +2275,9 @@ class LatentDiffusion(DDPM):
 
             # [4, 320, 64, 64] -> [4, 320, 31, 31]
             ca_outfeat = pool_feat_or_attn_mat(ca_outfeat)
-            # ca_outfeat_3d: [4, 320, 31, 31] -> [4, 320, 961]
-            ca_outfeat_3d = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
-            # subj_single_feat_3d, ...: [1, 320, 961]
+            # ca_outfeat_3d: [4, 320, 31, 31] -> [4, 320, 961] -> [4, 961, 320]
+            ca_outfeat_3d = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1).permute(0, 2, 1)
+            # subj_single_feat_3d, ...: [1, 961, 320]
             subj_single_feat_3d, subj_comp_feat_3d, cls_single_feat_3d, cls_comp_feat_3d \
                 = ca_outfeat_3d.chunk(4)
 
@@ -2301,7 +2301,14 @@ class LatentDiffusion(DDPM):
             # the single embeddings, as the former should be optimized to look good by itself,
             # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
             # and 2) the embeddings are amendable to composition.
-            loss_layer_feat_delta_align = ortho_l2loss(comp_feat_delta, single_feat_delta, mean=True)
+            # loss_layer_feat_delta_align = ortho_l2loss(comp_feat_delta, single_feat_delta, mean=True)
+            loss_layer_feat_delta_align = \
+                calc_ref_cosine_loss(comp_feat_delta, single_feat_delta, 
+                                     emb_mask=None,
+                                     exponent=2, do_demeans=[False, False],
+                                     first_n_dims_into_instances=2, 
+                                     aim_to_align=True, 
+                                     ref_grad_scale=1)
             loss_layers_feat_delta_align.append(loss_layer_feat_delta_align * feat_distill_layer_weight)
 
         loss_feat_delta_align       = sum(loss_layers_feat_delta_align)
