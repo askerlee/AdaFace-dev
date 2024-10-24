@@ -15,7 +15,7 @@ from diffusers import UNet2DConditionModel
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         ortho_subtract, ortho_l2loss, gen_gradient_scaler, calc_ref_cosine_loss, \
                         calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
-                        save_grid, normalize_dict_values, masked_mean, \
+                        save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, convert_attn_to_spatial_weight, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
@@ -1401,7 +1401,7 @@ class LatentDiffusion(DDPM):
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                      self.embedding_manager.subject_string_dict)
-            # all_subj_indices_1b is used in calc_comp_fg_bg_preserve_loss() in calc_comp_prompt_distill_loss().
+            # all_subj_indices_1b is used in calc_comp_subj_bg_preserve_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_1b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
                                                      self.embedding_manager.subject_string_dict)
@@ -1607,7 +1607,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # Major losses for normal_recon iterations (loss_recon, loss_fg_bg_complementary, etc.).
+    # Major losses for normal_recon iterations (loss_recon, loss_subj_bg_complementary, etc.).
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
                                       all_subj_indices, all_bg_indices,
@@ -1617,14 +1617,14 @@ class LatentDiffusion(DDPM):
 
         if self.fg_bg_complementary_loss_weight > 0:
             # NOTE: Do not check iter_flags['use_background_token'] here. If use_background_token, 
-            # then loss_fg_bg_complementary, loss_bg_mf_suppress, loss_fg_bg_mask_contrast 
+            # then loss_subj_bg_complementary, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
             # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
             # all_subj_indices and all_bg_indices are used, instead of *_1b.
-            # But only the indices to the first block are extracted in calc_fg_bg_complementary_loss().
+            # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
             # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
             # So we don't do sqrt norm.
-            loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast = \
-                        self.calc_fg_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
+            loss_subj_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
+                        self.calc_subj_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
                                                            all_subj_indices,
                                                            all_bg_indices,
                                                            BLOCK_SIZE=BLOCK_SIZE,
@@ -1634,20 +1634,20 @@ class LatentDiffusion(DDPM):
                                                            do_sqrt_norm=False
                                                           )
 
-            if loss_fg_bg_complementary > 0:
-                loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_fg_bg_complementary.mean().detach().item()})
+            if loss_subj_bg_complementary > 0:
+                loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complementary.mean().detach().item()})
             # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
             if loss_subj_mb_suppress > 0:
                 loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
             if loss_bg_mf_suppress > 0:
                 loss_dict.update({f'{session_prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach().item()})
-            if loss_fg_bg_mask_contrast > 0:
-                loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_fg_bg_mask_contrast.mean().detach().item()})
+            if loss_subj_bg_mask_contrast > 0:
+                loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_subj_bg_mask_contrast.mean().detach().item()})
 
-            # Reduce the scale of loss_fg_bg_complementary if do_zero_shot, as it hurts performance. 
-            loss_fg_bg_complementary_scale = 0.2
-            loss_fg_bg_contrast += (loss_fg_bg_complementary * loss_fg_bg_complementary_scale + loss_subj_mb_suppress \
-                                    + loss_bg_mf_suppress + loss_fg_bg_mask_contrast) \
+            # Reduce the scale of loss_subj_bg_complementary if do_zero_shot, as it hurts performance. 
+            loss_subj_bg_complementary_scale = 0.2
+            loss_fg_bg_contrast += (loss_subj_bg_complementary * loss_subj_bg_complementary_scale + loss_subj_mb_suppress \
+                                    + loss_bg_mf_suppress + loss_subj_bg_mask_contrast) \
                                    * self.fg_bg_complementary_loss_weight
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
@@ -2070,7 +2070,7 @@ class LatentDiffusion(DDPM):
 
             loss_comp_single_map_align, loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
             loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
-                = self.calc_comp_fg_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
+                = self.calc_comp_subj_bg_preserve_loss(ca_outfeats, ca_outfeat_lns, 
                                                      ca_layers_activations['q'],
                                                      ca_q_bns,
                                                      ca_layers_activations['attn'], 
@@ -2149,16 +2149,19 @@ class LatentDiffusion(DDPM):
 
         # If do_zero_shot, loss_subj_attn_norm_distill is quite stable (2~3, depending on various settings). 
         # So no need to use a dynamic loss scale.
-        subj_attn_norm_distill_loss_scale = 0.1
+        # **DISABLED** loss_subj_attn_norm_distill seems to reduce subject authenticity
+        # by suppressing the subject embedding attention. So we disabled it.
+        subj_attn_norm_distill_loss_scale = 0
 
-        # loss_feat_delta_align: 0.1~0.3 -> 0.3~0.5, loss_subj_attn_norm_distill: 2.5 -> 0.25.
+        # loss_feat_delta_align: 0.02~0.03, loss_subj_attn_norm_distill: 0.25 -> 0.0025.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                    + loss_feat_delta_align       * feat_delta_align_scale
         
         return loss_comp_prompt_distill, loss_comp_fg_bg_preserve
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
-    def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_outfeat_lns, ca_attns, fg_indices_2b, BLOCK_SIZE):
+    def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_outfeat_lns, ca_attns, 
+                                           subj_indices_2b, BLOCK_SIZE):
         # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -2191,9 +2194,9 @@ class LatentDiffusion(DDPM):
         feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
         attn_norm_distill_layer_weights     = normalize_dict_values(attn_norm_distill_layer_weights)
 
-        # K_fg: 4, number of embeddings per subject token.
-        K_fg = len(fg_indices_2b[0]) // len(torch.unique(fg_indices_2b[0]))
-        fg_indices_4b = double_token_indices(fg_indices_2b, BLOCK_SIZE * 2)
+        # K_subj: 4, number of embeddings per subject token.
+        K_subj = len(subj_indices_2b[0]) // len(torch.unique(subj_indices_2b[0]))
+        subj_indices_4b = double_token_indices(subj_indices_2b, BLOCK_SIZE * 2)
 
         loss_layers_feat_delta_align        = []
         loss_layers_subj_attn_norm_distill  = []
@@ -2217,7 +2220,7 @@ class LatentDiffusion(DDPM):
             # subj_attn_4b: [4, 8, 256]  (1 embedding  for 1 token)  => [4, 1, 8, 256] => [4, 8, 256]
             # or            [16, 8, 256] (4 embeddings for 1 token)  => [4, 4, 8, 256] => [4, 8, 256]
             # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
-            subj_attn_4b = attn_mat[fg_indices_4b].reshape(BLOCK_SIZE*4, K_fg, *attn_mat.shape[2:]).sum(dim=1)
+            subj_attn_4b = attn_mat[subj_indices_4b].reshape(BLOCK_SIZE*4, K_subj, *attn_mat.shape[2:]).sum(dim=1)
             # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
             # or                          [1, 8, 256] (4 embeddings for 1 token)
             subj_single_subj_attn, subj_comp_subj_attn, cls_single_subj_attn, cls_comp_subj_attn \
@@ -2228,8 +2231,8 @@ class LatentDiffusion(DDPM):
 
                 # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to cls_comp_subj_attn/cls_single_subj_attn. 
                 # Use this scaler to release the graph and avoid OOM.
-                cls_comp_subj_attn_gs   = cls_comp_subj_attn.detach()
-                cls_single_subj_attn_gs = cls_single_subj_attn.detach()
+                cls_comp_subj_attn_gs       = cls_comp_subj_attn.detach()
+                cls_single_subj_attn_gs     = cls_single_subj_attn.detach()
 
                 # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
@@ -2270,20 +2273,23 @@ class LatentDiffusion(DDPM):
 
             ca_outfeat  = ca_outfeat * spatial_weight
 
-            # ca_outfeat_2d: [4, 320, 64, 64] -> [4, 320, 15, 15] -> [4, 320*8*8] = [4, 20480].
-            ca_outfeat_2d = ca_outfeat.reshape(ca_outfeat.shape[0], -1)
-            # subj_single_feat_2d, ...: [1, 320, 81920]
-            subj_single_feat_2d, subj_comp_feat_2d, cls_single_feat_2d, cls_comp_feat_2d \
-                = ca_outfeat_2d.chunk(4)
+            # [4, 320, 64, 64] -> [4, 320, 31, 31]
+            ca_outfeat = pool_feat_or_attn_mat(ca_outfeat)
+            # ca_outfeat_3d: [4, 320, 31, 31] -> [4, 320, 961]
+            ca_outfeat_3d = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
+            # subj_single_feat_3d, ...: [1, 320, 961]
+            subj_single_feat_3d, subj_comp_feat_3d, cls_single_feat_3d, cls_comp_feat_3d \
+                = ca_outfeat_3d.chunk(4)
 
-            cls_single_feat_2d_gs  = cls_single_feat_2d.detach()
-            cls_comp_feat_2d_gs    = cls_comp_feat_2d.detach()
+            cls_single_feat_3d_gs  = cls_single_feat_3d.detach()
+            cls_comp_feat_3d_gs    = cls_comp_feat_3d.detach()
             # subj_single_feat_grad_scaler reduces grad by 10x.
-            subj_single_feat_2d_gs = subj_single_feat_grad_scaler(subj_single_feat_2d)
+            subj_single_feat_3d_gs = subj_single_feat_grad_scaler(subj_single_feat_3d)
 
-            comp_feat_delta   = ortho_subtract(subj_comp_feat_2d,      cls_comp_feat_2d_gs)
+            # ortho_subtract() is done on each image token individually, potentially with different scales.
+            comp_feat_delta   = ortho_subtract(subj_comp_feat_3d,      cls_comp_feat_3d_gs)
             # subj_single_feat is gs'ed by 10x to avoid it from degeneration.
-            single_feat_delta = ortho_subtract(subj_single_feat_2d_gs, cls_single_feat_2d_gs)
+            single_feat_delta = ortho_subtract(subj_single_feat_3d_gs, cls_single_feat_3d_gs)
                 
             # single_feat_delta, comp_feat_delta: [1, 320], ...
             # Pool the spatial dimensions H, W to remove spatial information.
@@ -2303,8 +2309,8 @@ class LatentDiffusion(DDPM):
 
         return loss_feat_delta_align, loss_subj_attn_norm_distill
 
-    def calc_fg_mb_suppress_loss(self, ca_attns, subj_indices, 
-                                 BLOCK_SIZE, fg_mask, instance_mask=None):
+    def calc_subj_masked_bg_suppress_loss(self, ca_attns, subj_indices, 
+                                          BLOCK_SIZE, fg_mask, instance_mask=None):
         if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
           or (instance_mask is not None and instance_mask.sum() == 0):
             return 0
@@ -2317,8 +2323,8 @@ class LatentDiffusion(DDPM):
                 
         # Normalize the weights above so that each set sum to 1.
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
-        # K_fg: 9, number of embeddings per subject token.
-        K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+        # K_subj: 9, number of embeddings per subject token.
+        K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         subj_mb_suppress_scale      = 0.05
         mfmb_contrast_score_margin  = 0.4
 
@@ -2326,13 +2332,13 @@ class LatentDiffusion(DDPM):
         subj_score_at_mf_grad_scale  = 0.5
         subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
 
-        # In each instance, subj_indices has K_fg times as many elements as bg_indices.
+        # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # bg_indices: ([0, 1, 2, 3], [11, 12, 34, 29]).
         # BLOCK_SIZE = 2, so we only keep instances indexed by [0, 1].
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        subj_indices = (subj_indices[0][:BLOCK_SIZE*K_fg], subj_indices[1][:BLOCK_SIZE*K_fg])
+        subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
 
         loss_layers_subj_mb_suppress    = []
 
@@ -2345,7 +2351,7 @@ class LatentDiffusion(DDPM):
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attnscore_mat = unet_attn.permute(0, 3, 1, 2)
 
-            # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
+            # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
             subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices,
                                                   do_sum=True, do_mean=False, do_sqrt_norm=False)
 
@@ -2411,20 +2417,21 @@ class LatentDiffusion(DDPM):
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch, i.e., BLOCK_SIZE = batch size.
     # bg_indices: we assume the bg tokens appear in all instances in the batch.
-    def calc_fg_bg_complementary_loss(self, ca_attns,
-                                      subj_indices, 
-                                      bg_indices,
-                                      BLOCK_SIZE, 
-                                      fg_grad_scale=0.1,
-                                      fg_mask=None, instance_mask=None,
-                                      do_sqrt_norm=False):
+    def calc_subj_bg_complementary_loss(self, ca_attns,
+                                        subj_indices, 
+                                        bg_indices,
+                                        BLOCK_SIZE, 
+                                        fg_grad_scale=0.1,
+                                        fg_mask=None, instance_mask=None,
+                                        do_sqrt_norm=False):
         
         if subj_indices is None:
             return 0, 0, 0, 0
         
         if subj_indices is not None and bg_indices is None:
-            loss_subj_mb_suppress = self.calc_fg_mb_suppress_loss(ca_attns, subj_indices, 
-                                                                  BLOCK_SIZE, fg_mask, instance_mask)
+            loss_subj_mb_suppress = \
+                self.calc_subj_masked_bg_suppress_loss(ca_attns, subj_indices, 
+                                                       BLOCK_SIZE, fg_mask, instance_mask)
             
             return 0, loss_subj_mb_suppress, 0, 0
 
@@ -2438,38 +2445,38 @@ class LatentDiffusion(DDPM):
         # 22-24: feature maps 64x64.
         # The weight is inversely proportional to the feature map size.
         # The larger the feature map, the more details the layer captures, and 
-        # fg/bg loss hurts more high-frequency details, therefore it has a smalll weight.
+        # subj/bg loss hurts more high-frequency details, therefore it has a smalll weight.
 
         # Normalize the weights above so that each set sum to 1.
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
 
-        # K_fg: 9, number of embeddings per subject token.
-        K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+        # K_subj: 9, number of embeddings per subject token.
+        K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         # K_bg: 4, number of embeddings per background token.
         K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
 
-        loss_layers_fg_bg_complementary = []
+        loss_layers_subj_bg_complementary = []
         loss_layers_subj_mb_suppress    = []
         loss_layers_bg_mf_suppress      = []
-        loss_layers_fg_bg_mask_contrast = []
+        loss_layers_subj_bg_mask_contrast = []
 
         subj_mb_suppress_scale                = 0.05
         bg_mf_suppress_scale                  = 0.1
-        fgbg_emb_contrast_scale               = 0.05
+        subj_bg_emb_contrast_scale            = 0.05
         mfmb_contrast_score_margin            = 0.4
-        subj_bg_contrast_at_mf_score_margin   = 0.4 * K_fg / K_bg     # 0.9
+        subj_bg_contrast_at_mf_score_margin   = 0.4 * K_subj / K_bg     # 0.9
         bg_subj_contrast_at_mb_score_margin   = 0.4
 
         subj_score_at_mf_grad_scale = 0.5
         subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
 
-        # In each instance, subj_indices has K_fg times as many elements as bg_indices.
+        # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # bg_indices: ([0, 1, 2, 3], [11, 12, 34, 29]).
         # BLOCK_SIZE = 2, so we only keep instances indexed by [0, 1].
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        subj_indices = (subj_indices[0][:BLOCK_SIZE*K_fg], subj_indices[1][:BLOCK_SIZE*K_fg])
+        subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
 
         for unet_layer_idx, unet_attn in ca_attns.items():
             if (unet_layer_idx not in attn_align_layer_weights):
@@ -2478,7 +2485,7 @@ class LatentDiffusion(DDPM):
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attnscore_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_fg embeddings -> [2, 8, 64]
+            # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
             subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices, 
                                                   do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
             
@@ -2500,7 +2507,7 @@ class LatentDiffusion(DDPM):
             # Use subj_score as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
             # fg_grad_scale: 0.1.
-            loss_layer_fg_bg_comple = \
+            loss_layer_subj_bg_comple = \
                 calc_ref_cosine_loss(bg_score, subj_score, 
                                      exponent=2,    
                                      do_demeans=[False, False],
@@ -2509,8 +2516,8 @@ class LatentDiffusion(DDPM):
                                      aim_to_align=False,
                                      debug=False)
 
-            # loss_fg_bg_complementary doesn't need fg_mask.
-            loss_layers_fg_bg_complementary.append(loss_layer_fg_bg_comple * attn_align_layer_weight)
+            # loss_subj_bg_complementary doesn't need fg_mask.
+            loss_layers_subj_bg_complementary.append(loss_layer_subj_bg_comple * attn_align_layer_weight)
 
             if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
                 fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_score.shape[-1], 
@@ -2596,20 +2603,21 @@ class LatentDiffusion(DDPM):
                 # bg_mf_suppress_scale: 0.1. More penalty of bg emb activations on fg areas.
                 loss_layers_bg_mf_suppress.append(loss_layer_bg_mf_suppress \
                                                     * attn_align_layer_weight * bg_mf_suppress_scale)
-                # fgbg_emb_contrast_scale: 0.05. Balanced penalty of fg emb activation 
+                # subj_bg_emb_contrast_scale: 0.05. Balanced penalty of fg emb activation 
                 # contrast on fg and bg areas.
-                loss_layers_fg_bg_mask_contrast.append((loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
-                                                        * attn_align_layer_weight * fgbg_emb_contrast_scale)
+                loss_layers_subj_bg_mask_contrast.append((loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
+                                                         * attn_align_layer_weight * subj_bg_emb_contrast_scale)
                 #print(f'layer {unet_layer_idx}')
                 #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
                 #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
 
-        loss_fg_bg_complementary = sum(loss_layers_fg_bg_complementary)
-        loss_subj_mb_suppress    = sum(loss_layers_subj_mb_suppress)
-        loss_bg_mf_suppress      = sum(loss_layers_bg_mf_suppress)
-        loss_fg_bg_mask_contrast = sum(loss_layers_fg_bg_mask_contrast)
+        loss_subj_bg_complementary  = sum(loss_layers_subj_bg_complementary)
+        loss_subj_mb_suppress       = sum(loss_layers_subj_mb_suppress)
+        loss_bg_mf_suppress         = sum(loss_layers_bg_mf_suppress)
+        loss_subj_bg_mask_contrast  = sum(loss_layers_subj_bg_mask_contrast)
 
-        return loss_fg_bg_complementary, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_fg_bg_mask_contrast
+        return loss_subj_bg_complementary, loss_subj_mb_suppress, \
+               loss_bg_mf_suppress, loss_subj_bg_mask_contrast
 
     # SSB_SIZE: subject sub-batch size.
     # bg_indices could be None if iter_flags['use_background_token'] = False.
@@ -2635,9 +2643,9 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
 
-        # K_fg: 20, number of embeddings per subject token.
-        K_fg = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        # In each instance, subj_indices has K_fg elements, 
+        # K_subj: 20, number of embeddings per subject token.
+        K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+        # In each instance, subj_indices has K_subj elements, 
         # and bg_indices has K_bg elements or 0 elements 
         # (if iter_flags['use_background_token'] = False)
         '''
@@ -2648,7 +2656,7 @@ class LatentDiffusion(DDPM):
                 21, 22, 23, 24], device='cuda:0'))
         '''
         # SSB_SIZE = 2, so we only keep instances indexed by [0, 1].
-        subj_indices = (subj_indices[0][:SSB_SIZE*K_fg], subj_indices[1][:SSB_SIZE*K_fg])
+        subj_indices = (subj_indices[0][:SSB_SIZE*K_subj], subj_indices[1][:SSB_SIZE*K_subj])
 
         if bg_indices is not None:
             # K_bg: 1 or 2, number of embeddings per background token.
@@ -2688,9 +2696,9 @@ class LatentDiffusion(DDPM):
             # to align the corresponding heads across CA layers.
             # subj_attn:        [40, 8, 256] -> [2, 20, 8, 256] -> mean over 8 heads, sum over 20 embs -> [2, 256] 
             # Average out head, because the head i in layer a may not correspond to head i in layer b.
-            subj_attn        = attn_mat[subj_indices].reshape(       SSB_SIZE, K_fg, *attn_mat.shape[2:]).mean(dim=2).sum(dim=1)
+            subj_attn        = attn_mat[subj_indices].reshape(       SSB_SIZE, K_subj, *attn_mat.shape[2:]).mean(dim=2).sum(dim=1)
             # subj_attn_xlayer: [40, 8, 64]  -> [2, 20, 8, 64]  -> mean over 8 heads, sum over 20 embs -> [2, 64]
-            subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_fg, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
+            subj_attn_xlayer = attn_score_mat_xlayer[subj_indices].reshape(SSB_SIZE, K_subj, *attn_score_mat_xlayer.shape[2:]).mean(dim=2).sum(dim=1)
 
             # Reshape to a squre matrix then resize to the size of the layer below.
             # subj_attn: [2, 256] -> [2, 16, 16] -> [2, 8, 8] -> [2, 64]
@@ -2744,8 +2752,8 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
-    def calc_comp_fg_bg_preserve_loss(self, ca_outfeats, ca_outfeat_lns, ca_qs, ca_q_bns, ca_attns, 
-                                      fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
+    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_outfeat_lns, ca_qs, ca_q_bns, ca_attns, 
+                                        fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
@@ -2761,12 +2769,12 @@ class LatentDiffusion(DDPM):
         # *_4b means it corresponds to a 4-block batch (batch size = 4 * BLOCK_SIZE).
         fg_mask_4b = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1)
 
-        # K_fg: 4, number of embeddings per subject token.
-        K_fg   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+        # K_subj: 4, number of embeddings per subject token.
+        K_subj   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
         # ind_subj_subj_B_1b, ind_subj_subj_N_1b: [0, 0, 0, 0], [5, 6, 7, 8].
-        ind_subj_subj_B_1b, ind_subj_subj_N_1b = subj_indices[0][:BLOCK_SIZE*K_fg], subj_indices[1][:BLOCK_SIZE*K_fg]
+        ind_subj_subj_B_1b, ind_subj_subj_N_1b = subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj]
         ind_subj_B = torch.cat([ind_subj_subj_B_1b,                     ind_subj_subj_B_1b + BLOCK_SIZE,
                                 ind_subj_subj_B_1b + 2 * BLOCK_SIZE,    ind_subj_subj_B_1b + 3 * BLOCK_SIZE], dim=0)
         ind_subj_N = ind_subj_subj_N_1b.repeat(4)
@@ -2844,10 +2852,10 @@ class LatentDiffusion(DDPM):
             unet_attn = ca_attns[unet_layer_idx]
             # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256] 
             attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_subj_attn: [4, 77, 8, 256] -> [4 * K_fg, 8, 256] -> [4, K_fg, 8, 256]
+            # subj_subj_attn: [4, 77, 8, 256] -> [4 * K_subj, 8, 256] -> [4, K_subj, 8, 256]
             # attn_mat and subj_subj_attn are not pooled.
-            subj_attn = attn_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_fg, *attn_mat.shape[2:])
-            # Sum over 9 subject embeddings. [4, K_fg, 8, 256] -> [4, 8, 256].
+            subj_attn = attn_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_subj, *attn_mat.shape[2:])
+            # Sum over 9 subject embeddings. [4, K_subj, 8, 256] -> [4, 8, 256].
             # The scale of the summed attention won't be overly large, since we've done 
             # distribute_embedding_to_M_tokens() to them.
             subj_attn = subj_attn.sum(dim=1)
