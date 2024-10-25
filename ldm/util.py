@@ -2230,7 +2230,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # will be backpropagated to subj embeddings).
     loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
                                                emb_mask=sc_to_ss_bg_prob,
-                                               exponent=1, do_demeans=[False, False],
+                                               exponent=2, do_demeans=[False, False],
                                                first_n_dims_into_instances=2, 
                                                aim_to_align=True, 
                                                ref_grad_scale=0)

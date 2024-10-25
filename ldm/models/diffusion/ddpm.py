@@ -2076,7 +2076,7 @@ class LatentDiffusion(DDPM):
             comp_single_map_align_loss_scale = 1
             ms_mc_fg_match_loss_scale = 0.1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            sc_mc_bg_match_loss_scale = 1
+            sc_mc_bg_match_loss_scale = 3
             
             loss_sc_recon_ss_fg = loss_sc_recon_ss_fg_min #loss_sc_recon_ss_fg_attn_agg + loss_sc_recon_ss_fg_flow
             # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
@@ -2089,7 +2089,7 @@ class LatentDiffusion(DDPM):
         else:
             loss_comp_fg_bg_preserve = 0
 
-        feat_delta_align_scale = 0.1
+        feat_delta_align_scale = 0.2
         # normalize_ca_q_and_outfeat is enabled 50% of the time.
         if self.normalize_ca_q_and_outfeat and (torch.rand(1) < 0.5):
             # Normalize ca_outfeat at 50% chance.
@@ -2133,8 +2133,8 @@ class LatentDiffusion(DDPM):
             scale = -0.5 * 0.01 + 0.01 = 0.005
         """    
         subj_attn_norm_distill_loss_scale = \
-            calc_dyn_loss_scale(loss_subj_attn_norm_distill, base_loss_and_scale=(0.4, 0.01),
-                                ref_loss_and_scale=(0.6, 0.02), rel_scale_range=(-0.5, 10))
+            calc_dyn_loss_scale(loss_subj_attn_norm_distill, base_loss_and_scale=(0.4, 0.02),
+                                ref_loss_and_scale=(0.6, 0.04), rel_scale_range=(-0.5, 10))
 
         # loss_feat_delta_align: 0.02~0.03, loss_subj_attn_norm_distill: 0.25 -> 0.0025.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
