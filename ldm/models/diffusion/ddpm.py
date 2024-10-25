@@ -2235,27 +2235,6 @@ class LatentDiffusion(DDPM):
             subj_single_feat, subj_comp_feat, cls_single_feat, cls_comp_feat \
                 = ca_outfeat.chunk(4)
 
-            # convert_attn_to_spatial_weight() will detach attention weights to 
-            # avoid BP through attention.
-            # reversed=True: larger subject attention => smaller spatial weight, i.e., 
-            # pay more attention to the context.
-            spatial_weight_cls_comp, spatial_attn_cls_comp   = convert_attn_to_spatial_weight(cls_comp_subj_attn, BLOCK_SIZE, 
-                                                                                              cls_comp_feat.shape[2:],
-                                                                                              reversed=True)
-
-            spatial_weight_subj_comp, spatial_attn_subj_comp = convert_attn_to_spatial_weight(subj_comp_subj_attn, BLOCK_SIZE,
-                                                                                              subj_comp_feat.shape[2:],
-                                                                                              reversed=True)
-            # Use cls single/comp weights on both subject-only and cls features, 
-            # to reduce misalignment and facilitate distillation.
-            # The multiple heads are aggregated by mean(), since the weighted features don't have multiple heads.
-            spatial_weight = (spatial_weight_cls_comp + spatial_weight_subj_comp) / 2
-            # spatial_attn_cls_comp, spatial_attn_subj_comp are returned for debugging purposes. 
-            # Delete them to release RAM.
-            del spatial_attn_cls_comp, spatial_attn_subj_comp
-
-            ca_outfeat  = ca_outfeat * spatial_weight
-
             # [4, 320, 64, 64] -> [4, 320, 31, 31]
             ca_outfeat = pool_feat_or_attn_mat(ca_outfeat)
             # ca_outfeat_3d: [4, 320, 31, 31] -> [4, 320, 961] -> [4, 961, 320]
