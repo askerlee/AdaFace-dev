@@ -56,8 +56,6 @@ model:
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
     # 0.8: 0.8 * class embeddings + 0.2 * subj embeddings.
     cls_subj_mix_scale:               0.8
-    # Apply BN/LN on cross-attn Q and out features for loss computation.
-    normalize_ca_q_and_outfeat:       True
     comp_fg_bg_preserve_loss_weight:  3e-3
     # fg_bg_complementary loss: used in recon / unet_distill iters.
     # loss_fg_bg_complementary: 1.5,  * weight -> 7.5e-4

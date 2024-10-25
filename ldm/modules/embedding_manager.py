@@ -194,20 +194,7 @@ class EmbeddingManager(nn.Module):
 
             self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
-        # ca_q_bns and ca_outfeat_lns are used to normalize the q/out features
-        # in loss computation in ddpm.py, and not used in this script.
-        ca_q_bns = {}
-        ca_outfeat_lns = {}
-        for ca_layer_idx in range(self.num_unet_ca_layers):
-            layer_idx = self.ca_layer_idx2layer_idx[ca_layer_idx]
-            ca_q_bns[str(layer_idx)]       = nn.BatchNorm2d(self.ca_infeat_dims[ca_layer_idx], affine=False)
-            ca_outfeat_lns[str(layer_idx)] = nn.LayerNorm(self.ca_infeat_dims[ca_layer_idx], elementwise_affine=False)
-            #print(layer_idx, self.ca_infeat_dims[ca_layer_idx])
-
-        self.ca_q_bns       = nn.ModuleDict(ca_q_bns)
-        self.ca_outfeat_lns = nn.ModuleDict(ca_outfeat_lns)
-
-        # self.load() loads both fg and bg SubjBasisGenerators, as well as ca_q_bns and ca_outfeat_lns.
+        # self.load() loads both fg and bg SubjBasisGenerators.
         # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
         # but instead use self.load().
@@ -578,9 +565,6 @@ class EmbeddingManager(nn.Module):
                         "placeholder_strings":                  self.placeholder_strings,
                         "subject_strings":                      self.subject_strings,
                         "background_strings":                   self.background_strings,
-                        # Used to normalize attention features for calc_comp_fg_bg_preserve_loss() during training.
-                        "ca_q_bns":                             self.ca_q_bns,
-                        "ca_outfeat_lns":                       self.ca_outfeat_lns,
                      }
         
         torch.save(saved_dict, adaface_ckpt_path)
@@ -615,12 +599,6 @@ class EmbeddingManager(nn.Module):
                 ckpt_background_strings = ckpt["background_strings"]
             else:
                 ckpt_background_strings = []
-
-            # If multiple ckpts contain ca_q_bns and ca_outfeat_lns, the last one will be used.
-            if "ca_q_bns" in ckpt:
-                self.ca_q_bns = ckpt["ca_q_bns"]
-            if "ca_outfeat_lns" in ckpt:
-                self.ca_outfeat_lns = ckpt["ca_outfeat_lns"]
 
             for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
                 if hasattr(ckpt_subj_basis_generator, 'placeholder_is_bg') and ckpt_subj_basis_generator.placeholder_is_bg:
