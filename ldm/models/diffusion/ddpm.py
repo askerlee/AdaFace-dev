@@ -2081,7 +2081,7 @@ class LatentDiffusion(DDPM):
         else:
             loss_comp_fg_bg_preserve = 0
 
-        feat_delta_align_scale = 0.2
+        feat_delta_align_scale = 0.01 #0.2
 
         # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
         # as it should be more accurate (?).

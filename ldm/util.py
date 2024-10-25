@@ -1402,11 +1402,13 @@ def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
 # mask: always 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
 def resize_mask_to_target_size(mask, mask_name, target_spatial_area, mode="nearest|bilinear", warn_on_all_zero=True):
-    if len(target_spatial_area) == 2:
-        target_H, target_W = target_spatial_area
-    else:
+    if isinstance(target_spatial_area, int):
         # Assume square feature maps, target_H = target_W.
         target_H = target_W = int(np.sqrt(target_spatial_area))
+    elif len(target_spatial_area) == 2:
+        target_H, target_W = target_spatial_area
+    else:
+        breakpoint()
     spatial_shape = (target_H, target_H)
 
     # NOTE: masks should avoid "bilinear" mode. If the object is too small in the mask, 
