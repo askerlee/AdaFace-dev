@@ -1748,7 +1748,7 @@ def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, rel_scale
     # Ensure the losses are not equal, avoiding division by zero
     assert ref_loss != base_loss, "ref_loss and base_loss cannot be the same."
     assert rel_scale_lb > -1,     "rel_scale_lb must be greater than -1, otherwise the scale can be negative."
-    
+
     relative_scale = (loss.item() - base_loss) / (ref_loss - base_loss)
     relative_scale = np.clip(relative_scale, rel_scale_lb, rel_scale_ub)
     scale_delta = ref_scale - base_scale
@@ -2179,7 +2179,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
     fg_mask_pairwise = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
     
-    loss_comp_single_map_align = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
+    loss_subj_comp_map_single_align_with_cls = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
 
     losses_sc_recon_ss_fg = calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, 
                                                        sc_map_ss_prob, fg_mask, 
@@ -2235,5 +2235,5 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
                                                aim_to_align=True, 
                                                ref_grad_scale=0)
     
-    return loss_comp_single_map_align, losses_sc_recon_ss_fg, \
+    return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ms_fg_prob_below_mean
