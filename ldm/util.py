@@ -2113,17 +2113,19 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
                                  first_n_dims_into_instances=2, 
                                  ref_grad_scale=0, aim_to_align=True,
                                  reduction='none')
-        loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
         all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
+        # Here loss_sc_recon_ss_fg is only for printing. 
+        # The final loss_sc_recon_ss_fg is computed by taking the tokenwise min of the two losses.
+        loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
         print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}", end=' ')
 
     # We have both attn and flow token losses.
     if len(all_token_losses_sc_recon_ss_fg) > 1:
         # all_token_losses_sc_recon_ss_fg: [2, 1, 1037]. 1037: number of fg tokens.
         all_token_losses_sc_recon_ss_fg = torch.stack(all_token_losses_sc_recon_ss_fg, dim=0)
-        # Take the smaller loss between attn and flow.
+        # Take the smaller loss tokenwise between attn and flow.
         token_losses_sc_recon_ss_fg = all_token_losses_sc_recon_ss_fg.min(dim=0).values
         loss_sc_recon_ss_fg_min = token_losses_sc_recon_ss_fg.mean()
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
