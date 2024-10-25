@@ -2109,7 +2109,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
         # If reduction == 'mean', return a scalar loss.        
         token_losses_sc_recon_ss_fg = \
             calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                 exponent=1, do_demeans=[False, False],
+                                 exponent=2, do_demeans=[False, False],
                                  first_n_dims_into_instances=2, 
                                  ref_grad_scale=0, aim_to_align=True,
                                  reduction='none')
@@ -2230,7 +2230,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # will be backpropagated to subj embeddings).
     loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
                                                emb_mask=sc_to_ss_bg_prob,
-                                               exponent=1, do_demeans=[False, False],
+                                               exponent=2, do_demeans=[False, False],
                                                first_n_dims_into_instances=2, 
                                                aim_to_align=True, 
                                                ref_grad_scale=0)
