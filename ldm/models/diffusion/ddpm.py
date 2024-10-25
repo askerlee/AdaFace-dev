@@ -2576,7 +2576,7 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
-    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_qs, ca_q_bns, ca_attns, 
+    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_qs, ca_attns, 
                                         fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
