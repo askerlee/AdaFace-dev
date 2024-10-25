@@ -16,7 +16,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         ortho_subtract, calc_dyn_loss_scale, gen_gradient_scaler, calc_ref_cosine_loss, \
                         calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
                         save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
-                        init_x_with_fg_from_training_image, resize_mask_to_target_size, convert_attn_to_spatial_weight, \
+                        init_x_with_fg_from_training_image, resize_mask_to_target_size, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
@@ -1591,7 +1591,7 @@ class LatentDiffusion(DDPM):
             # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
             # all_subj_indices and all_bg_indices are used, instead of *_1b.
             # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
-            # do_sqrt_norm=False: we only care about the sum of fg attn scores vs. bg attn scores. 
+            # do_sqrt_norm=False: we only care about the sum of fg attn probs vs. bg attn probs. 
             # So we don't do sqrt norm.
             loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
                         self.calc_subj_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
@@ -2273,11 +2273,11 @@ class LatentDiffusion(DDPM):
         # K_subj: 9, number of embeddings per subject token.
         K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
         subj_mb_suppress_scale      = 0.05
-        mfmb_contrast_score_margin  = 0.4
+        mfmb_contrast_attn_margin   = 0.4
 
         # Protect subject emb activations on fg areas.
-        subj_score_at_mf_grad_scale  = 0.5
-        subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
+        subj_attn_at_mf_grad_scale  = 0.5
+        subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2296,16 +2296,16 @@ class LatentDiffusion(DDPM):
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
-            attnscore_mat = unet_attn.permute(0, 3, 1, 2)
+            attn_mat = unet_attn.permute(0, 3, 1, 2)
 
-            # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
-            subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices,
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
+            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices,
                                                   do_sum=True, do_mean=False, do_sqrt_norm=False)
 
-            fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_score.shape[-1], 
+            fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
                                                   mode="nearest|bilinear")
             # Repeat 8 times to match the number of attention heads (for normalization).
-            fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_score.shape[1], 1)
+            fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
             fg_mask3 = torch.zeros_like(fg_mask2)
             # Set fractional values (due to resizing) to 1.
             fg_mask3[fg_mask2 >  1e-6] = 1.
@@ -2321,30 +2321,30 @@ class LatentDiffusion(DDPM):
                 print("WARNING: bg_mask3 has all-zero masks.")
                 continue
 
-            subj_score_at_mf = subj_score * fg_mask3
-            subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
-            # subj_score_at_mb: [BLOCK_SIZE, 8, 64].
+            subj_attn_at_mf = subj_attn * fg_mask3
+            subj_attn_at_mf = subj_attn_at_mf_grad_scaler(subj_attn_at_mf)
+            # subj_attn_at_mb: [BLOCK_SIZE, 8, 64].
             # mb: mask foreground locations, mask background locations.
-            subj_score_at_mb = subj_score * bg_mask3
+            subj_attn_at_mb = subj_attn * bg_mask3
 
             # fg_mask3: [BLOCK_SIZE, 8, 64]
-            # avg_subj_score_at_mf: [BLOCK_SIZE, 1, 1]
-            # keepdim=True, since scores at all locations will use them as references (subtract them).
-            avg_subj_score_at_mf = masked_mean(subj_score_at_mf, fg_mask3, dim=(1,2), keepdim=True)
+            # avg_subj_attn_at_mf: [BLOCK_SIZE, 1, 1]
+            # keepdim=True, since attn probs at all locations will use them as references (subtract them).
+            avg_subj_attn_at_mf = masked_mean(subj_attn_at_mf, fg_mask3, dim=(1,2), keepdim=True)
 
             '''
-            avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
+            avg_subj_attn_at_mb = masked_mean(subj_attn_at_mb, bg_mask3, dim=(1,2), keepdim=True)
             if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
                 print(f'layer {unet_layer_idx}')
-                print(f'avg_subj_score_at_mf: {avg_subj_score_at_mf.mean():.4f}, avg_subj_score_at_mb: {avg_subj_score_at_mb.mean():.4f}')
+                print(f'avg_subj_attn_at_mf: {avg_subj_attn_at_mf.mean():.4f}, avg_subj_attn_at_mb: {avg_subj_attn_at_mb.mean():.4f}')
             '''
 
-            # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
-            # to be at least larger by mfmb_contrast_score_margin = 0.4 than 
-            # subj_score_at_mb at any background locations.
+            # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations) 
+            # to be at least larger by mfmb_contrast_attn_margin = 0.4 than 
+            # subj_attn_at_mb at any background locations.
             # If not, clamp() > 0, incurring a loss.
             # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
-            layer_subj_mb_excess = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
+            layer_subj_mb_excess = subj_attn_at_mb + mfmb_contrast_attn_margin - avg_subj_attn_at_mf
             # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
             # activations conform to the margin restrictions.
             loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
@@ -2407,15 +2407,15 @@ class LatentDiffusion(DDPM):
         loss_layers_bg_mf_suppress          = []
         loss_layers_subj_bg_mask_contrast   = []
 
-        subj_mb_suppress_scale                = 0.05
-        bg_mf_suppress_scale                  = 0.1
-        subj_bg_emb_contrast_scale            = 0.05
-        mfmb_contrast_score_margin            = 0.4
-        subj_bg_contrast_at_mf_score_margin   = 0.4 * K_subj / K_bg     # 0.9
-        bg_subj_contrast_at_mb_score_margin   = 0.4
+        subj_mb_suppress_scale              = 0.05
+        bg_mf_suppress_scale                = 0.1
+        subj_bg_emb_contrast_scale          = 0.05
+        mfmb_contrast_attn_margin           = 0.1
+        subj_bg_contrast_at_mf_attn_margin  = 0.1 * K_subj / K_bg     # 0.9
+        bg_subj_contrast_at_mb_attn_margin  = 0.1
 
-        subj_score_at_mf_grad_scale = 0.5
-        subj_score_at_mf_grad_scaler = gen_gradient_scaler(subj_score_at_mf_grad_scale)
+        subj_attn_at_mf_grad_scale = 0.5
+        subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
@@ -2431,20 +2431,20 @@ class LatentDiffusion(DDPM):
 
             # [2, 8, 256, 77] / [2, 8, 64, 77] =>
             # [2, 77, 8, 256] / [2, 77, 8, 64]
-            attnscore_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_score: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
-            subj_score = sel_emb_attns_by_indices(attnscore_mat, subj_indices, 
-                                                  do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
+            attn_mat = unet_attn.permute(0, 3, 1, 2)
+            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
+            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, 
+                                                 do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
             
             # sel_emb_attns_by_indices will split bg_indices to multiple instances,
             # and select the corresponding attention rows for each instance.
-            # bg_score: 3D
-            bg_score   = sel_emb_attns_by_indices(attnscore_mat, bg_indices, 
-                                                  do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
+            # bg_attn: 3D
+            bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, 
+                                                 do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
-            # aim_to_align=False: push bg_score to be orthogonal with subj_score, 
+            # aim_to_align=False: push bg_attn to be orthogonal with subj_attn, 
             # so that the two attention maps are complementary.
             # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
             # But we don't want to only focus on large activations. So set it to 2.
@@ -2452,11 +2452,11 @@ class LatentDiffusion(DDPM):
             # to make the two attention maps more complementary (expect the loss pushes the 
             # subject embedding to a more accurate point).
 
-            # Use subj_score as a reference, and scale down grad to fg attn, 
+            # Use subj_attn as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
             # fg_grad_scale: 0.1.
             loss_layer_subj_bg_complem = \
-                calc_ref_cosine_loss(bg_score, subj_score, 
+                calc_ref_cosine_loss(bg_attn, subj_attn, 
                                      exponent=2,    
                                      do_demeans=[False, False],
                                      first_n_dims_into_instances=2, 
@@ -2468,10 +2468,10 @@ class LatentDiffusion(DDPM):
             loss_layers_subj_bg_complem.append(loss_layer_subj_bg_complem * attn_align_layer_weight)
 
             if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
-                fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_score.shape[-1], 
+                fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
                                                       mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads (for normalization).
-                fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_score.shape[1], 1)
+                fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
                 fg_mask3 = torch.zeros_like(fg_mask2)
                 fg_mask3[fg_mask2 >  1e-6] = 1.
 
@@ -2486,60 +2486,60 @@ class LatentDiffusion(DDPM):
                     print("WARNING: bg_mask3 has all-zero masks.")
                     continue
 
-                # subj_score_at_mf: [BLOCK_SIZE, 8, 64].
+                # subj_attn_at_mf: [BLOCK_SIZE, 8, 64].
                 # subj, bg: subject embedding,         background embedding.
                 # mf,   mb: mask foreground locations, mask background locations.
-                subj_score_at_mf = subj_score * fg_mask3
+                subj_attn_at_mf = subj_attn * fg_mask3
                 # Protect subject emb activations on fg areas.
-                subj_score_at_mf = subj_score_at_mf_grad_scaler(subj_score_at_mf)
+                subj_attn_at_mf = subj_attn_at_mf_grad_scaler(subj_attn_at_mf)
 
-                bg_score_at_mf   = bg_score   * fg_mask3
-                subj_score_at_mb = subj_score * bg_mask3
-                bg_score_at_mb   = bg_score   * bg_mask3
+                bg_attn_at_mf   = bg_attn   * fg_mask3
+                subj_attn_at_mb = subj_attn * bg_mask3
+                bg_attn_at_mb   = bg_attn   * bg_mask3
 
                 # fg_mask3:             [BLOCK_SIZE, 8, 64]
-                # avg_subj_score_at_mf: [BLOCK_SIZE, 1, 1]
-                # keepdim=True, since scores at all locations will use them as references (subtract them).
+                # avg_subj_attn_at_mf: [BLOCK_SIZE, 1, 1]
+                # keepdim=True, since attn probs at all locations will use them as references (subtract them).
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
                 # It's meaningless to average among the instances.
-                avg_subj_score_at_mf = masked_mean(subj_score_at_mf, fg_mask3, dim=(1,2), keepdim=True)
-                avg_subj_score_at_mb = masked_mean(subj_score_at_mb, bg_mask3, dim=(1,2), keepdim=True)
-                avg_bg_score_at_mf   = masked_mean(bg_score_at_mf,   fg_mask3, dim=(1,2), keepdim=True)
-                avg_bg_score_at_mb   = masked_mean(bg_score_at_mb,   bg_mask3, dim=(1,2), keepdim=True)
+                avg_subj_attn_at_mf = masked_mean(subj_attn_at_mf, fg_mask3, dim=(1,2), keepdim=True)
+                avg_subj_attn_at_mb = masked_mean(subj_attn_at_mb, bg_mask3, dim=(1,2), keepdim=True)
+                avg_bg_attn_at_mf   = masked_mean(bg_attn_at_mf,   fg_mask3, dim=(1,2), keepdim=True)
+                avg_bg_attn_at_mb   = masked_mean(bg_attn_at_mb,   bg_mask3, dim=(1,2), keepdim=True)
 
-                # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations) 
-                # to be at least larger by mfmb_contrast_score_margin = 0.4 than 
-                # subj_score_at_mb at any background locations.
+                # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations) 
+                # to be at least larger by mfmb_contrast_attn_margin = 0.4 than 
+                # subj_attn_at_mb at any background locations.
                 # If not, clamp() > 0, incurring a loss.
                 # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
-                layer_subj_mb_excess    = subj_score_at_mb + mfmb_contrast_score_margin - avg_subj_score_at_mf
+                layer_subj_mb_excess    = subj_attn_at_mb + mfmb_contrast_attn_margin - avg_subj_attn_at_mf
                 # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
                 loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
                                                             layer_subj_mb_excess > 0, 
                                                             instance_weights=instance_mask)
-                # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
-                # to be at least larger by mfmb_contrast_score_margin = 1 than
-                # bg_score_at_mf at any foreground locations.
+                # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
+                # to be at least larger by mfmb_contrast_attn_margin = 1 than
+                # bg_attn_at_mf at any foreground locations.
                 # If not, clamp() > 0, incurring a loss.
-                layer_bg_mf_suppress          = bg_score_at_mf + mfmb_contrast_score_margin - avg_bg_score_at_mb
+                layer_bg_mf_suppress          = bg_attn_at_mf + mfmb_contrast_attn_margin - avg_bg_attn_at_mb
                 loss_layer_bg_mf_suppress     = masked_mean(layer_bg_mf_suppress, 
                                                             layer_bg_mf_suppress > 0, 
                                                             instance_weights=instance_mask)
-                # Encourage avg_subj_score_at_mf (subj_score averaged at foreground locations)
-                # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.8 than
-                # bg_score_at_mf at any foreground locations.
-                # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_score_at_mf 
-                # usually takes a much smaller value than avg_subj_score_at_mf.
-                # avg_subj_score_at_mf.item(): protect subj fg activations.
-                layer_subj_bg_contrast_at_mf        = bg_score_at_mf + subj_bg_contrast_at_mf_score_margin - avg_subj_score_at_mf
+                # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations)
+                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 0.8 than
+                # bg_attn_at_mf at any foreground locations.
+                # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_attn_at_mf 
+                # usually takes a much smaller value than avg_subj_attn_at_mf.
+                # avg_subj_attn_at_mf.item(): protect subj fg activations.
+                layer_subj_bg_contrast_at_mf        = bg_attn_at_mf + subj_bg_contrast_at_mf_attn_margin - avg_subj_attn_at_mf
                 loss_layer_subj_bg_contrast_at_mf   = masked_mean(layer_subj_bg_contrast_at_mf, 
                                                                   layer_subj_bg_contrast_at_mf > 0, 
                                                                   instance_weights=instance_mask)
-                # Encourage avg_bg_score_at_mb (bg_score averaged at background locations)
-                # to be at least larger by subj_bg_contrast_at_mf_score_margin = 0.2 than
-                # subj_score_at_mb at any background locations.
-                layer_bg_subj_contrast_at_mb        = subj_score_at_mb + bg_subj_contrast_at_mb_score_margin - avg_bg_score_at_mb
+                # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
+                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 0.2 than
+                # subj_attn_at_mb at any background locations.
+                layer_bg_subj_contrast_at_mb        = subj_attn_at_mb + bg_subj_contrast_at_mb_attn_margin - avg_bg_attn_at_mb
                 loss_layer_bg_subj_contrast_at_mb   = masked_mean(layer_bg_subj_contrast_at_mb, 
                                                                   layer_bg_subj_contrast_at_mb > 0, 
                                                                   instance_weights=instance_mask)
@@ -2620,6 +2620,7 @@ class LatentDiffusion(DDPM):
             # ca_outfeat: [4, 1280, 8, 8]
             # ca_layer_q: [4, 8, 64, 160] -> [4, 8, 160, 64] -> [4, 8*160, 8, 8]
             ca_layer_q = ca_qs[unet_layer_idx]
+            # This way of calculation ca_q_h is to consider the case when the height and width might not be the same.
             ca_q_h = int(np.sqrt(ca_layer_q.shape[2] * ca_outfeat.shape[2] // ca_outfeat.shape[3]))
             ca_q_w = ca_layer_q.shape[2] // ca_q_h
             ca_layer_q = ca_layer_q.permute(0, 1, 3, 2).reshape(ca_layer_q.shape[0], -1, ca_q_h, ca_q_w)
@@ -2633,12 +2634,14 @@ class LatentDiffusion(DDPM):
             # as well as class-single and class-comp instances.
             # ca_outfeat is used to compute the reconstruction loss between subject-single and subject-comp instances 
             # (using the correlation matrix), as well as class-single and class-comp instances.
-            # ca_layer_q: [4, 1280, 8, 8] -> [4, 1280, 8, 8] -> [4, 1280, 64].
+            # Flatten the spatial dimensions of ca_layer_q and ca_outfeat.
+            # ca_layer_q: [4, 1280, 8, 8] -> [4, 1280, 64].
+            # ca_outfeat: [4, 1280, 8, 8] -> [4, 1280, 64].
             ca_layer_q   = ca_layer_q.reshape(*ca_layer_q.shape[:2], -1)
             ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
             # fg_attn_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
             fg_attn_mask_4b \
-                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", ca_outfeat.shape[-1], 
+                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", (ca_q_h, ca_q_w), 
                                              mode="nearest|bilinear", warn_on_all_zero=False)
             # fg_attn_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
             fg_attn_mask = fg_attn_mask_4b.chunk(4)[0]
@@ -2697,7 +2700,7 @@ class LatentDiffusion(DDPM):
             subj_comp_subj_attn_pos   = subj_comp_subj_attn.clamp(min=0)
             cls_comp_subj_attn_gs_pos = cls_comp_subj_attn_gs.clamp(min=0)
 
-            # Suppress the subj attention scores on background areas in comp instances.
+            # Suppress the subj attention probs on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
             # Some elements in subj_comp_subj_attn are negative. 
             # We allow pushing them to -inf, doing which seems to perform better.

@@ -693,8 +693,8 @@ def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=Tr
     # Mean among the 8 heads, then sum across the 2 occurrences of the subject tokens.
 
     spatial_scale = np.sqrt(flat_attn.shape[-1] / out_spatial_shape.numel())
-    spatial_shape2 = (int(out_spatial_shape[0] * spatial_scale), int(out_spatial_shape[1] * spatial_scale))
-    spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape2)
+    spatial_shape = (int(out_spatial_shape[0] * spatial_scale), int(out_spatial_shape[1] * spatial_scale))
+    spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape)
     spatial_attn = F.interpolate(spatial_attn, size=out_spatial_shape, mode='bilinear', align_corners=False)
 
     attn_mean, attn_std = spatial_attn.mean(dim=(2,3), keepdim=True), \
@@ -1397,21 +1397,24 @@ def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
 
     raise ValueError(f"curr_pos {curr_pos} is out of range.")
 
-# target_spatial_area: H*W of 4D features or 3D attention. If it's attention, then
-# its geometrical dimensions (H, W) have been flatten to 1D (last dim).
+# target_spatial_area: Either (H, W) or flattened H*W. If it's based on an attention map, then
+# its geometrical dimensions (H, W) have been flatten to H*W. In this case, we assume H = W.
 # mask: always 4D.
 # mode: either "nearest" or "nearest|bilinear". Other modes will be ignored.
 def resize_mask_to_target_size(mask, mask_name, target_spatial_area, mode="nearest|bilinear", warn_on_all_zero=True):
-    # Assume square feature maps, target_H = target_W.
-    target_H = int(np.sqrt(target_spatial_area))
-    spatial_shape2 = (target_H, target_H)
+    if len(target_spatial_area) == 2:
+        target_H, target_W = target_spatial_area
+    else:
+        # Assume square feature maps, target_H = target_W.
+        target_H = target_W = int(np.sqrt(target_spatial_area))
+    spatial_shape = (target_H, target_H)
 
     # NOTE: masks should avoid "bilinear" mode. If the object is too small in the mask, 
     # it may result in all-zero masks.
     # mask: [2, 1, 64, 64] => mask2: [2, 1, 8, 8].
-    mask2_nearest  = F.interpolate(mask.float(), size=spatial_shape2, mode='nearest')
+    mask2_nearest  = F.interpolate(mask.float(), size=spatial_shape, mode='nearest')
     if mode == "nearest|bilinear":
-        mask2_bilinear = F.interpolate(mask.float(), size=spatial_shape2, mode='bilinear', align_corners=False)
+        mask2_bilinear = F.interpolate(mask.float(), size=spatial_shape, mode='bilinear', align_corners=False)
         # Always keep larger mask sizes.
         # When the subject only occupies a small portion of the image,
         # 'nearest' mode usually keeps more non-zero pixels than 'bilinear' mode.
