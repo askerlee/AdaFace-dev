@@ -2116,12 +2116,15 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
                                  first_n_dims_into_instances=2, 
                                  ref_grad_scale=0, aim_to_align=True,
                                  reduction='none')
+
+        # Here loss_sc_recon_ss_fg (corresponding to loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow) 
+        # is only for debugging. 
+        # The optimized loss_sc_recon_ss_fg is loss_sc_recon_ss_fg_min, computed by 
+        # taking the tokenwise min of the two losses.
+        loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
         all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
-        # Here loss_sc_recon_ss_fg is only for printing. 
-        # The final loss_sc_recon_ss_fg is computed by taking the tokenwise min of the two losses.
-        loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
         print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}", end=' ')
 
     # We have both attn and flow token losses.
