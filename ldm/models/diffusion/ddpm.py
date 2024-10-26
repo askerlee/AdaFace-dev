@@ -20,7 +20,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        probably_anneal_int_tensor, count_optimized_params, count_params
+                        probably_anneal_int_tensor, count_optimized_params, count_params, add_dict_to_dict
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -1591,8 +1591,6 @@ class LatentDiffusion(DDPM):
             # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
             # all_subj_indices and all_bg_indices are used, instead of *_1b.
             # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
-            # do_sqrt_norm=False: we only care about the sum of fg attn probs vs. bg attn probs. 
-            # So we don't do sqrt norm.
             loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
                         self.calc_subj_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
                                                              all_subj_indices,
@@ -1600,8 +1598,7 @@ class LatentDiffusion(DDPM):
                                                              BLOCK_SIZE=BLOCK_SIZE,
                                                              fg_grad_scale=0.1,
                                                              fg_mask=fg_mask,
-                                                             instance_mask=batch_have_fg_mask,
-                                                             do_sqrt_norm=False
+                                                             instance_mask=batch_have_fg_mask
                                                             )
 
             if loss_subj_bg_complem > 0:
@@ -2036,39 +2033,26 @@ class LatentDiffusion(DDPM):
             # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
             # excluding the instance from the fg_bg_preserve_loss.
 
+            loss_dict = self.calc_comp_subj_bg_preserve_loss(ca_outfeats, 
+                                                             ca_layers_activations['q'],
+                                                             ca_layers_activations['attn'], 
+                                                             filtered_fg_mask, batch_have_fg_mask,
+                                                             all_subj_indices_1b, BLOCK_SIZE,
+                                                             recon_feat_objectives=['feat', 'delta'])
+            
+            loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow',
+                           'loss_sc_recon_ss_fg_min', 'loss_ss_fg_recon_sc_attn_agg', 'loss_ss_fg_recon_sc_flow', 'loss_ss_fg_recon_sc_min',
+                           'loss_mc_ms_fg_match', 'loss_sc_mc_bg_match', 'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
+            
             loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, \
             loss_sc_recon_ss_fg_min, loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow, loss_ss_fg_recon_sc_min, \
             loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
-                = self.calc_comp_subj_bg_preserve_loss(ca_outfeats, 
-                                                       ca_layers_activations['q'],
-                                                       ca_layers_activations['attn'], 
-                                                       filtered_fg_mask, batch_have_fg_mask,
-                                                       all_subj_indices_1b, BLOCK_SIZE,
-                                                       recon_feat_objectives=['feat', 'delta'])
-            
-            if loss_comp_subj_bg_attn_suppress > 0:
-                loss_dict.update({f'{session_prefix}/comp_subj_bg_attn_suppress': loss_comp_subj_bg_attn_suppress.mean().detach().item() })
-            # comp_cls_bg_attn_suppress is not optimized, and only recorded for monitoring.
-            if loss_comp_cls_bg_attn_suppress > 0:
-                loss_dict.update({f'{session_prefix}/comp_cls_bg_attn_suppress': loss_comp_cls_bg_attn_suppress.mean().detach().item() })
-            if loss_subj_comp_map_single_align_with_cls > 0:
-                loss_dict.update({f'{session_prefix}/subj_comp_map_single_align_with_cls': loss_subj_comp_map_single_align_with_cls.mean().detach().item() })
-            if loss_sc_recon_ss_fg_attn_agg > 0:
-                loss_dict.update({f'{session_prefix}/sc_recon_ss_fg_attn_agg': loss_sc_recon_ss_fg_attn_agg.mean().detach().item() })
-            if loss_sc_recon_ss_fg_flow > 0:
-                loss_dict.update({f'{session_prefix}/sc_recon_ss_fg_flow':     loss_sc_recon_ss_fg_flow.mean().detach().item() })
-            if loss_sc_recon_ss_fg_min > 0:
-                loss_dict.update({f'{session_prefix}/sc_recon_ss_fg_min':      loss_sc_recon_ss_fg_min.mean().detach().item() })
-            if loss_ss_fg_recon_sc_attn_agg > 0:
-                loss_dict.update({f'{session_prefix}/ss_fg_recon_sc_attn_agg': loss_ss_fg_recon_sc_attn_agg.mean().detach().item() })
-            if loss_ss_fg_recon_sc_flow > 0:
-                loss_dict.update({f'{session_prefix}/ss_fg_recon_sc_flow':     loss_ss_fg_recon_sc_flow.mean().detach().item() })
-            if loss_ss_fg_recon_sc_min > 0:
-                loss_dict.update({f'{session_prefix}/ss_fg_recon_sc_min':      loss_ss_fg_recon_sc_min.mean().detach().item() })
-            if loss_mc_ms_fg_match > 0:
-                loss_dict.update({f'{session_prefix}/mc_ms_fg_match': loss_mc_ms_fg_match.mean().detach().item() })
-            if loss_sc_mc_bg_match > 0:
-                loss_dict.update({f'{session_prefix}/sc_mc_bg_match': loss_sc_mc_bg_match.mean().detach().item() })
+                = { loss_name: loss_dict.get(loss_name) for loss_name in loss_names }
+
+            for loss_name in loss_names:
+                if loss_name in loss_dict and loss_dict[loss_name] > 0:
+                    loss_name2 = loss_name.replace('loss_', '')
+                    loss_dict.update({f'{session_prefix}/{loss_name2}': loss_dict[loss_name].mean().detach().item() })
 
             elastic_matching_loss_scale = 1
             # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so its magnitude is small.
@@ -2307,8 +2291,7 @@ class LatentDiffusion(DDPM):
             attn_mat = unet_attn.permute(0, 3, 1, 2)
 
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
-            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices,
-                                                  do_sum=True, do_mean=False, do_sqrt_norm=False)
+            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, do_sum=True, do_mean=False)
 
             fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
                                                   mode="nearest|bilinear")
@@ -2372,13 +2355,9 @@ class LatentDiffusion(DDPM):
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch, i.e., BLOCK_SIZE = batch size.
     # bg_indices: we assume the bg tokens appear in all instances in the batch.
-    def calc_subj_bg_complementary_loss(self, ca_attns,
-                                        subj_indices, 
-                                        bg_indices,
-                                        BLOCK_SIZE, 
-                                        fg_grad_scale=0.1,
-                                        fg_mask=None, instance_mask=None,
-                                        do_sqrt_norm=False):
+    def calc_subj_bg_complementary_loss(self, ca_attns, subj_indices, bg_indices,
+                                        BLOCK_SIZE, fg_grad_scale=0.1,
+                                        fg_mask=None, instance_mask=None):
         
         if subj_indices is None:
             return 0, 0, 0, 0
@@ -2441,14 +2420,12 @@ class LatentDiffusion(DDPM):
             # [2, 77, 8, 256] / [2, 77, 8, 64]
             attn_mat = unet_attn.permute(0, 3, 1, 2)
             # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
-            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, 
-                                                 do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
+            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, do_sum=True, do_mean=False)
             
             # sel_emb_attns_by_indices will split bg_indices to multiple instances,
             # and select the corresponding attention rows for each instance.
             # bg_attn: 3D
-            bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, 
-                                                 do_sum=True, do_mean=False, do_sqrt_norm=do_sqrt_norm)
+            bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, do_sum=True, do_mean=False)
 
             attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
 
@@ -2572,8 +2549,7 @@ class LatentDiffusion(DDPM):
         loss_bg_mf_suppress         = sum(loss_layers_bg_mf_suppress)
         loss_subj_bg_mask_contrast  = sum(loss_layers_subj_bg_mask_contrast)
 
-        return loss_subj_bg_complem, loss_subj_mb_suppress, \
-               loss_bg_mf_suppress, loss_subj_bg_mask_contrast
+        return loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast
 
     # Intuition of comp_fg_bg_preserve_loss: 
     # In distillation iterations, if comp_init_fg_from_training_image, then at fg_mask areas, x_start is initialized with 
@@ -2612,17 +2588,7 @@ class LatentDiffusion(DDPM):
                                 ind_subj_subj_B_1b + 2 * BLOCK_SIZE,    ind_subj_subj_B_1b + 3 * BLOCK_SIZE], dim=0)
         ind_subj_N = ind_subj_subj_N_1b.repeat(4)
         
-        loss_layers_subj_comp_map_single_align_with_cls      = []
-        loss_layers_sc_recon_ss_fg_attn_agg    = []
-        loss_layers_sc_recon_ss_fg_flow        = []
-        loss_layers_sc_recon_ss_fg_min         = []
-        loss_layers_ss_fg_recon_sc_attn_agg    = []
-        loss_layers_ss_fg_recon_sc_flow        = []
-        loss_layers_ss_fg_recon_sc_min         = []
-        loss_layers_sc_mc_bg_match             = []
-
-        loss_layers_comp_subj_bg_attn_suppress = []
-        loss_layers_comp_cls_bg_attn_suppress  = []
+        loss_dict = {}
         
         for unet_layer_idx, ca_outfeat in ca_outfeats.items():
             if unet_layer_idx not in elastic_matching_layer_weights:
@@ -2675,15 +2641,16 @@ class LatentDiffusion(DDPM):
             loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
             loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow, loss_ss_fg_recon_sc_min = losses_ss_fg_recon_sc
 
-            loss_layers_subj_comp_map_single_align_with_cls.append(loss_layer_subj_comp_map_single_align_with_cls * elastic_matching_layer_weight)
-            loss_layers_sc_recon_ss_fg_attn_agg.append(loss_sc_recon_ss_fg_attn_agg * elastic_matching_layer_weight)
-            loss_layers_sc_recon_ss_fg_flow.append(loss_sc_recon_ss_fg_flow * elastic_matching_layer_weight)
-            loss_layers_sc_recon_ss_fg_min.append(loss_sc_recon_ss_fg_min * elastic_matching_layer_weight)
-            loss_layers_ss_fg_recon_sc_attn_agg.append(loss_ss_fg_recon_sc_attn_agg * elastic_matching_layer_weight)
-            loss_layers_ss_fg_recon_sc_flow.append(loss_ss_fg_recon_sc_flow * elastic_matching_layer_weight)
-            loss_layers_ss_fg_recon_sc_min.append(loss_ss_fg_recon_sc_min * elastic_matching_layer_weight)
-            loss_layers_sc_mc_bg_match.append(loss_layer_sc_mc_bg_match * elastic_matching_layer_weight)
-
+            add_dict_to_dict(loss_dict, 
+                              { 'loss_layer_subj_comp_map_single_align_with_cls': loss_layer_subj_comp_map_single_align_with_cls * elastic_matching_layer_weight,
+                                'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * elastic_matching_layer_weight,
+                                'loss_sc_recon_ss_fg_flow':       loss_sc_recon_ss_fg_flow * elastic_matching_layer_weight,
+                                'loss_sc_recon_ss_fg_min':        loss_sc_recon_ss_fg_min * elastic_matching_layer_weight,
+                                'loss_ss_fg_recon_sc_attn_agg':   loss_ss_fg_recon_sc_attn_agg * elastic_matching_layer_weight,
+                                'loss_ss_fg_recon_sc_flow':       loss_ss_fg_recon_sc_flow * elastic_matching_layer_weight,
+                                'loss_ss_fg_recon_sc_min':        loss_ss_fg_recon_sc_min * elastic_matching_layer_weight,
+                                'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * elastic_matching_layer_weight })
+                
             if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
                 continue
             
@@ -2719,33 +2686,19 @@ class LatentDiffusion(DDPM):
 
             # Suppress the subj attention probs on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
-            # Some elements in subj_comp_subj_attn are negative. 
-            # We allow pushing them to -inf, doing which seems to perform better.
+            # sc_map_ss_fg_prob_below_mean: bg token should have fg attn probs below mean. Therefore
+            # these token are regarded as bg tokens.
             loss_layer_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
                                                            sc_map_ss_fg_prob_below_mean)
             loss_layer_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
                                                            mc_map_ss_fg_prob_below_mean)
 
-            loss_layers_comp_subj_bg_attn_suppress.append(loss_layer_subj_bg_attn_suppress * elastic_matching_layer_weight)
-            loss_layers_comp_cls_bg_attn_suppress.append(loss_layer_cls_bg_attn_suppress  * elastic_matching_layer_weight)
-
-        loss_subj_comp_map_single_align_with_cls    = sum(loss_layers_subj_comp_map_single_align_with_cls)
-        loss_sc_recon_ss_fg_attn_agg    = sum(loss_layers_sc_recon_ss_fg_attn_agg)
-        loss_sc_recon_ss_fg_flow        = sum(loss_layers_sc_recon_ss_fg_flow)
-        loss_sc_recon_ss_fg_min         = sum(loss_layers_sc_recon_ss_fg_min)
-        loss_ss_fg_recon_sc_attn_agg    = sum(loss_layers_ss_fg_recon_sc_attn_agg)
-        loss_ss_fg_recon_sc_flow        = sum(loss_layers_ss_fg_recon_sc_flow)
-        loss_ss_fg_recon_sc_min         = sum(loss_layers_ss_fg_recon_sc_min)
-        # loss_mc_ms_fg_match is disabled for efficiency.
-        loss_mc_ms_fg_match             = 0
-        loss_sc_mc_bg_match             = sum(loss_layers_sc_mc_bg_match)
-        loss_comp_subj_bg_attn_suppress = sum(loss_layers_comp_subj_bg_attn_suppress)
-        loss_comp_cls_bg_attn_suppress  = sum(loss_layers_comp_cls_bg_attn_suppress)
-
-        return loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
-               loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow, loss_ss_fg_recon_sc_min, \
-               loss_mc_ms_fg_match, loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress
-
+            add_dict_to_dict(loss_dict,
+                             { 'loss_subj_bg_attn_suppress': loss_layer_subj_bg_attn_suppress * elastic_matching_layer_weight,
+                               'loss_cls_bg_attn_suppress':  loss_layer_cls_bg_attn_suppress * elastic_matching_layer_weight })
+            
+        return loss_dict
+    
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
     # Data type of samples could be uint (0-25), or float (-1, 1) or (0, 1).
