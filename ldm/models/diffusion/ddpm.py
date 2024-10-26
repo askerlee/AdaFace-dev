@@ -2592,7 +2592,7 @@ class LatentDiffusion(DDPM):
             return 0, 0, 0, 0, 0, 0
 
         # Feature map spatial sizes are all 64*64.
-        elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
+        elastic_matching_layer_weights = { 23: 1, 24: 1, 
                                          }
         
         # Normalize the weights above so that each set sum to 1.
