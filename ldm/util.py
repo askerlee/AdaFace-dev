@@ -2004,16 +2004,16 @@ def backward_warp_by_flow(image2, flow1to2):
     return image1_recovered
 
 @torch.compile
-def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, fg_mask):
+def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask):
     # recon_sc_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
     # ** We only use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
-    # Because we rely on fg_mask to determine the fg area, which is only available for the subj single instance. 
+    # Because we rely on ss_fg_mask to determine the fg area, which is only available for the subj single instance. 
     # Then we can compare the values of the recon'ed subj single tokens with the original values at the fg area.
-    fg_mask_B, fg_mask_N = fg_mask.nonzero(as_tuple=True)
+    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
     # sc_map_ss_fg_prob: [1, 64, 64] => [1, 64, N_fg]
-    # filter with fg_mask_N, so that we only care about 
+    # filter with ss_fg_mask_N, so that we only care about 
     # the recon of the fg areas of the subj single instance.
-    sc_map_ss_fg_prob = sc_map_ss_prob[:, :, fg_mask_N]
+    sc_map_ss_fg_prob = sc_map_ss_prob[:, :, ss_fg_mask_N]
 
     # Weighted sum of the comp tokens (based on their matching probs) to reconstruct the single tokens.
     # sc_recon_ss_fg_feat: [1, 1280, 64] * [1, 64, N_fg] => [1, 1280, N_fg]
@@ -2025,42 +2025,44 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, fg_mask):
     return sc_recon_ss_fg_feat
         
 #@torch.compile
-def reconstruct_feat_with_matching_flow(flow_model, ss_q, sc_q, sc_feat, fg_mask, 
+def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_feat, ss_fg_mask, 
                                         H, W, num_flow_est_iters=12):
     if H*W != sc_feat.shape[-1]:
         breakpoint()
 
     # Remove background features to reduce noisy matching.
-    # ss_q: [1, 1280, 64]. fg_mask: [1, 64] -> [1, 1, 64]
-    ss_q = ss_q * fg_mask.unsqueeze(1)
+    # ss_q: [1, 1280, 64]. ss_fg_mask: [1, 64] -> [1, 1, 64]
+    ss_q = ss_q * ss_fg_mask.unsqueeze(1)
 
     # Restore the spatial dimensions of ss_q and sc_q, before doing pooling.
     ss_q = ss_q.reshape(*ss_q.shape[:2], H, W)
     sc_q = sc_q.reshape(*sc_q.shape[:2], H, W)
-    # Pooling smoothes ss_q and sc_q spatially, to get more continuous flow estimation.
+    # Pooling makes ss_q and sc_q spatially smoother, so that we'll get more continuous flow.
     ss_q = pool_feat_or_attn_mat(ss_q)
     sc_q = pool_feat_or_attn_mat(sc_q)
     H2, W2 = ss_q.shape[-2], ss_q.shape[-1]
 
-    # print(f"Layer {layer_idx}: q {H}x{W} -> {H2}x{W2}")
-    # Latent optical flow from subj single feature maps to subj comp feature maps.
-    # Enabling grad seems to lead to quite bad results. 
-    # Maybe updating q through flow is not a good idea.
-    with torch.no_grad():
-        s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2, num_iters=num_flow_est_iters, 
-                                                  corr_normalized_by_sqrt_dim=False)
-    s2c_flow = resize_flow(s2c_flow, H, W)
+    # If s2c_flow is not provided, estimate it using the flow model.
+    # Otherwise use the provided flow.
+    if s2c_flow is None:
+        # Latent optical flow from subj single feature maps to subj comp feature maps.
+        # Enabling grad seems to lead to quite bad results. 
+        # Maybe updating q through flow is not a good idea.
+        with torch.no_grad():
+            s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2, num_iters=num_flow_est_iters, 
+                                                      corr_normalized_by_sqrt_dim=False)
+        s2c_flow = resize_flow(s2c_flow, H, W)
 
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
     sc_recon_ss_feat    = backward_warp_by_flow(sc_feat, s2c_flow)
     # Collapse the spatial dimensions again.
     sc_recon_ss_feat    = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
 
-    # fg_mask's spatial dim is already collapsed. fg_mask: [1, 225]
-    # nonzero() returns (B, N) indices of True values as fg_mask_B, fg_mask_N.
-    # So we use fg_mask_N to index the last dim of sc_recon_ss_feat.
+    # ss_fg_mask's spatial dim is already collapsed. ss_fg_mask: [1, 225]
+    # nonzero() returns (B, N) indices of True values as ss_fg_mask_B, ss_fg_mask_N.
+    # So we use ss_fg_mask_N to index the last dim of sc_recon_ss_feat.
     '''
-    (Pdb) fg_mask_N
+    (Pdb) ss_fg_mask_N
     tensor([ 17,  18,  19,  20,  21,  22,  23,  24,  31,  32,  33,  34,  35,  36,
             37,  38,  39,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  61,
             62,  63,  64,  65,  66,  67,  68,  69,  70,  76,  77,  78,  79,  80,
@@ -2070,37 +2072,51 @@ def reconstruct_feat_with_matching_flow(flow_model, ss_q, sc_q, sc_feat, fg_mask
             154, 155, 156, 157, 158, 167, 168, 169, 170, 171, 172, 173, 182, 183,
             184, 185, 186, 187, 188], device='cuda:0')
     '''    
-    fg_mask_B, fg_mask_N    = fg_mask.nonzero(as_tuple=True)    
+    ss_fg_mask_B, ss_fg_mask_N    = ss_fg_mask.nonzero(as_tuple=True)    
     # sc_recon_ss_feat: [1, 1280, 64] -> [1, 64, 1280] -> [1, N_fg, 1280]
-    sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, fg_mask_N]
+    sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
 
-    return sc_recon_ss_fg_feat
+    return sc_recon_ss_fg_feat, s2c_flow
 
-def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_ss_prob, fg_mask, 
-                               ss_q, sc_q, H, W, num_flow_est_iters):
+# We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_map_ss_prob to ss_map_sc_prob, 
+# to get ss-recon-sc losses.
+def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_map_ss_prob, ss_fg_mask, 
+                               ss_q, sc_q, H, W, num_flow_est_iters, do_recon_feat_delta=False):
 
-    fg_mask_B, fg_mask_N = fg_mask.nonzero(as_tuple=True)
-    
+    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
+
     # sc_recon_ss_fg_feat*: [1, 1280, N_fg] => [1, N_fg, 1280]
     sc_recon_ss_fg_feat_attn_agg = \
-        reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, fg_mask)
-    if flow_model is not None:
-        sc_recon_ss_fg_feat_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, ss_q, sc_q, sc_feat, 
-                                                fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
+        reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask)
+    if flow_model is not None or s2c_flow is not None:
+        # If s2c_flow is not provided, estimate it using the flow model.
+        # Otherwise use the provided flow, and return the estimated s2c_flow.     
+        sc_recon_ss_fg_feat_flow, s2c_flow = \
+            reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_feat, 
+                                                ss_fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
     else:
+        s2c_flow = None
         sc_recon_ss_fg_feat_flow = None
         
     losses_sc_recon_ss_fg       = []
     all_token_losses_sc_recon_ss_fg = []
 
-    # fg_mask: bool of [1, 64] with N_fg True values.
+    # ss_fg_mask: bool of [1, 64] with N_fg True values.
     # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [1, N_fg, 1280]
-    ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, fg_mask_N]
+    ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
     # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
 
     loss_type_names = ['attn', 'flow']
-    print(f"Layer {layer_idx}: {H}x{W} sc-ss recon losses:", end=' ')
+    if not do_recon_feat_delta:
+        objective_name = 'sc-recon-ss-fg' 
+        cosine_exponent = 2
+    else:
+        # If do_recon_feat_delta, then ss_feat, sc_feat are actually ss_feat - ms_feat, sc_feat - mc_feat.
+        objective_name = 'sc-ss-fg-delta'
+        # If recon_feat_delta, the feat delta already second order, so we don't need to square the cosine.
+        cosine_exponent = 2
+
+    print(f"Layer {layer_idx}: {H}x{W} {objective_name} losses:", end=' ')
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:
@@ -2114,7 +2130,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
         # If reduction == 'mean', return a scalar loss.        
         token_losses_sc_recon_ss_fg = \
             calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                 exponent=2, do_demeans=[False, False],
+                                 exponent=cosine_exponent, do_demeans=[False, False],
                                  first_n_dims_into_instances=2, 
                                  ref_grad_scale=0, aim_to_align=True,
                                  reduction='none')
@@ -2141,14 +2157,86 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, sc_map_s
         print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}", end=' ')
     print()
 
-    return losses_sc_recon_ss_fg
+    return losses_sc_recon_ss_fg, s2c_flow
 
+def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat, ss_map_sc_prob, ss_fg_mask, 
+                               ss_q, sc_q, H, W, num_flow_est_iters):
+
+    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
+    
+    # ss_fg_recon_sc_feat*: [1, 1280, N_fg] => [1, N_fg, 1280]
+    ss_fg_recon_sc_feat_attn_agg = \
+        reconstruct_feat_with_attn_aggregation(sc_feat, ss_map_sc_prob, ss_fg_mask)
+    if flow_model is not None or c2s_flow is not None:
+        # If c2s_flow is not provided, estimate it using the flow model.
+        # Otherwise use the provided flow, and return the estimated c2s_flow.     
+        sc_recon_ss_fg_feat_flow, c2s_flow = \
+            reconstruct_feat_with_matching_flow(flow_model, c2s_flow, ss_q, sc_q, sc_feat, 
+                                                ss_fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
+    else:
+        ss_fg_recon_sc_feat_flow = None
+        c2s_flow = None
+        
+    losses_ss_fg_recon_sc       = []
+    all_token_losses_ss_fg_recon_sc = []
+
+    # ss_fg_mask: bool of [1, 64] with N_fg True values.
+    # Apply mask, permute features to the last dim. [1, 1280, 64] => [1, 64, 1280] => [1, N_fg, 1280]
+    ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
+    # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
+
+    loss_type_names = ['attn', 'flow']
+    print(f"Layer {layer_idx}: {H}x{W} ss-fg-recon-sc losses:", end=' ')
+
+    for i, ss_fg_recon_sc_feat in enumerate((ss_fg_recon_sc_feat_attn_agg, ss_fg_recon_sc_feat_flow)):
+        if ss_fg_recon_sc_feat is None:
+            losses_ss_fg_recon_sc.append(0)
+            continue
+
+        # We use cosine loss, so that when the reconstructed features are of different scales,
+        # the loss could still be small.
+        # ref_grad_scale=0: don't BP to ss_fg_feat.
+        # If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
+        # If reduction == 'mean', return a scalar loss.        
+        token_losses_ss_fg_recon_sc = \
+            calc_ref_cosine_loss(ss_fg_recon_sc_feat, ss_fg_feat, 
+                                 exponent=2, do_demeans=[False, False],
+                                 first_n_dims_into_instances=2, 
+                                 ref_grad_scale=0, aim_to_align=True,
+                                 reduction='none')
+
+        # Here loss_ss_fg_recon_sc (corresponding to loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow) 
+        # is only for debugging. 
+        # The optimized loss_ss_fg_recon_sc is loss_ss_fg_recon_sc_min, computed by 
+        # taking the tokenwise min of the two losses.
+        loss_ss_fg_recon_sc = token_losses_ss_fg_recon_sc.mean()
+        losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc)
+        all_token_losses_ss_fg_recon_sc.append(token_losses_ss_fg_recon_sc)
+
+        print(f"{loss_type_names[i]}: {loss_ss_fg_recon_sc.item():.03f}", end=' ')
+
+    # We have both attn and flow token losses.
+    if len(all_token_losses_ss_fg_recon_sc) > 1:
+        # all_token_losses_ss_fg_recon_sc: [2, 1, 1037]. 1037: number of fg tokens.
+        all_token_losses_ss_fg_recon_sc = torch.stack(all_token_losses_ss_fg_recon_sc, dim=0)
+        # Take the smaller loss tokenwise between attn and flow.
+        token_losses_ss_fg_recon_sc = all_token_losses_ss_fg_recon_sc.min(dim=0).values
+        loss_ss_fg_recon_sc_min = token_losses_ss_fg_recon_sc.mean()
+        losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
+
+        print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}", end=' ')
+    print()
+
+    return losses_ss_fg_recon_sc, c2s_flow
+
+# recon_feat_objectives: a list of strings, each is either 'feat' or 'delta'. 
+# Default reconstruct both.
 #@torch.compile
-def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask, H, W, fg_bg_cutoff_prob=0.25,
-                               num_flow_est_iters=12):
-    # fg_mask: [1, 1, 64] => [1, 64]
-    fg_mask = fg_mask.bool().squeeze(1)
-    if fg_mask.sum() == 0:
+def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
+                               num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta']):
+    # ss_fg_mask: [1, 1, 64] => [1, 64]
+    ss_fg_mask = ss_fg_mask.bool().squeeze(1)
+    if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
     # ca_q, ca_outfeat: [4, 1280, 64]
@@ -2185,25 +2273,52 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
     # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
     ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)
 
-    # Span fg_mask to become a mask for the (fg, fg) pairwise matching scores,
+    # Span ss_fg_mask to become a mask for the (fg, fg) pairwise matching scores,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
-    fg_mask_pairwise = fg_mask.unsqueeze(1) * fg_mask.unsqueeze(2)
+    ss_fg_mask_pairwise = ss_fg_mask.unsqueeze(1) * ss_fg_mask.unsqueeze(2)
     
-    loss_subj_comp_map_single_align_with_cls = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), fg_mask_pairwise)
+    loss_subj_comp_map_single_align_with_cls = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), ss_fg_mask_pairwise)
 
-    losses_sc_recon_ss_fg = calc_sc_recon_ss_fg_losses(layer_idx, flow_model, ss_feat, sc_feat, 
-                                                       sc_map_ss_prob, fg_mask, 
-                                                       ss_q, sc_q, H, W, num_flow_est_iters)
+    s2c_flow = None
+    losses_sc_recon_ss_fg_objs = []
+    for recon_feat_objective in recon_feat_objectives:
+        if recon_feat_objective == 'feat':
+            do_recon_feat_delta = False
+            ss_feat_obj = ss_feat
+            sc_feat_obj = sc_feat
+        elif recon_feat_objective == 'delta':
+            do_recon_feat_delta = True
+            ss_feat_obj = ss_feat - ms_feat
+            sc_feat_obj = sc_feat - mc_feat
+        else:
+            breakpoint()
+        losses_sc_recon_ss_fg_obj, s2c_flow = \
+            calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
+                                       sc_map_ss_prob, ss_fg_mask, 
+                                       ss_q, sc_q, H, W, num_flow_est_iters, 
+                                       do_recon_feat_delta=do_recon_feat_delta)
+        losses_sc_recon_ss_fg_objs.append(torch.tensor(losses_sc_recon_ss_fg_obj))
     
-    # fg_mask: [1, 64] => [1, 64, 1].
-    fg_mask = fg_mask.float().unsqueeze(2)
+    losses_sc_recon_ss_fg = torch.stack(losses_sc_recon_ss_fg_objs, dim=0).mean(dim=0)
+
+    '''
+    ss_map_sc_score = sc_map_ss_score.transpose(1, 2)
+    ss_map_sc_prob = F.softmax(ss_map_sc_score, dim=1)
+    losses_ss_fg_recon_sc = calc_ss_fg_recon_sc_losses(layer_idx, flow_model, ss_feat, sc_feat, 
+                                                       ss_map_sc_prob, ss_fg_mask, 
+                                                       ss_q, sc_q, H, W, num_flow_est_iters, name='ss-recon-sc')
+    '''
+    losses_ss_fg_recon_sc = [0, 0, 0]
+
+    # ss_fg_mask: [1, 64] => [1, 64, 1].
+    ss_fg_mask = ss_fg_mask.float().unsqueeze(2)
     # Sum up the mapping probs from comp instances to the fg area of the single instances, so that 
     # ** each entry is the total prob of each image token in the comp instance
     # ** maps to the whole fg area in the single instance.
     # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1] => [1, 1, 64].
-    # matmul() sums up over the ss tokens dim, filtered by fg_mask.
-    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, fg_mask).permute(0, 2, 1)
-    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, fg_mask).permute(0, 2, 1)
+    # matmul() sums up over the ss tokens dim, filtered by ss_fg_mask.
+    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, ss_fg_mask).permute(0, 2, 1)
+    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, ss_fg_mask).permute(0, 2, 1)
 
     # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64].
     # The total prob of each image token in the subj comp instance maps to fg areas 
@@ -2245,5 +2360,5 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, fg_mask,
                                                aim_to_align=True, 
                                                ref_grad_scale=0)
     
-    return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
+    return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, losses_ss_fg_recon_sc, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ms_fg_prob_below_mean
