@@ -1222,7 +1222,6 @@ def repeat_selected_instances(sel_indices, REPEAT, *args):
 
     return rep_args
 
-
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
     # If d is empty, do nothing.
@@ -1231,6 +1230,11 @@ def normalize_dict_values(d):
     
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
+
+def add_dict_to_dict(d1, d2):
+    for k, v in d2.items():
+        d1[k] = d1.get(k, 0) + v
+    return d1
 
 def filter_dict_by_key(d, key_container):
     d2 = { k: v for k, v in d.items() if k in key_container }
@@ -1581,8 +1585,7 @@ def extract_first_index_in_each_instance(token_indices):
 
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
 # indices are applied on the first 2 dims of attn_mat.
-def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, 
-                             do_sum=True, do_mean=False, do_sqrt_norm=False):
+def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=True, do_mean=False):
 
     indices_by_instance = split_indices_by_instance(indices)
 
@@ -1605,11 +1608,6 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None,
     elif do_mean:
         emb_attns   = [ emb_attns[i].mean(dim=1) for i in range(len(indices_by_instance)) ]
 
-    if do_sqrt_norm:
-        # Normalize each embedding by sqrt(K_bg_i).
-        emb_attns   = [ emb_attns[i] / np.sqrt(len(inst_indices[0])) \
-                        for i, inst_indices in enumerate(indices_by_instance) ]
-    
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
                 
@@ -1907,10 +1905,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
 # according to the feature map size.
-def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
-    if not enabled:
-        return feat_or_attn_mat
-    
+def pool_feat_or_attn_mat(feat_or_attn_mat, spatial_shape=None, flatten_spatial=False, debug=False):
     # feature map size -> [kernel size, stride size] of the pooler.
     # 16 -> 4, 2 (output 7), 32 -> 4, 2 (output 15),  64 -> 8, 4 (output 15).
     feat_size2pooler_spec = { 8: [2, 1], 16: [2, 1], 32: [4, 2], 64: [4, 2] }
@@ -1925,9 +1920,12 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
     # Attention matrix with the head dim.
     if feat_or_attn_mat.ndim == 3:
         do_unflatten = True
-        feat_or_attn_mat = feat_or_attn_mat.reshape(*feat_or_attn_mat.shape[:2], 
-                                                    int(np.sqrt(feat_or_attn_mat.shape[-1])), 
-                                                    int(np.sqrt(feat_or_attn_mat.shape[-1])))
+        if spatial_shape is not None:
+            H, W = spatial_shape
+        else:
+            H = W = int(np.sqrt(feat_or_attn_mat.shape[-1]))
+
+        feat_or_attn_mat = feat_or_attn_mat.reshape(*feat_or_attn_mat.shape[:2], H, W)
     else:
         do_unflatten = False
 
@@ -1944,9 +1942,11 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, enabled=True, debug=False):
     # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
     pooler = nn.AvgPool2d(pooler_kernel_size, stride=pooler_stride)
     feat_or_attn_mat2 = pooler(feat_or_attn_mat)
-    # Reverse the unflatten and unsqueeze operations.
-    if do_unflatten:
+    # If the spatial dims are unflattened, or if flatten_spatial=True,
+    # we flatten the spatial dims.
+    if feat_or_attn_mat2.ndim == 4 and (do_unflatten or flatten_spatial):
         feat_or_attn_mat2 = feat_or_attn_mat2.reshape(*feat_or_attn_mat2.shape[:2], -1)
+    # If the input is 2D, we should remove the extra dim unsqueezed above.
     if feat_or_attn_mat0.ndim == 2:
         feat_or_attn_mat2 = feat_or_attn_mat2.squeeze(1)
 
@@ -2034,14 +2034,6 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
     # ss_q: [1, 1280, 64]. ss_fg_mask: [1, 64] -> [1, 1, 64]
     ss_q = ss_q * ss_fg_mask.unsqueeze(1)
 
-    # Restore the spatial dimensions of ss_q and sc_q, before doing pooling.
-    ss_q = ss_q.reshape(*ss_q.shape[:2], H, W)
-    sc_q = sc_q.reshape(*sc_q.shape[:2], H, W)
-    # Pooling makes ss_q and sc_q spatially smoother, so that we'll get more continuous flow.
-    ss_q = pool_feat_or_attn_mat(ss_q)
-    sc_q = pool_feat_or_attn_mat(sc_q)
-    H2, W2 = ss_q.shape[-2], ss_q.shape[-1]
-
     # If s2c_flow is not provided, estimate it using the flow model.
     # Otherwise use the provided flow.
     if s2c_flow is None:
@@ -2049,9 +2041,9 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
         # Enabling grad seems to lead to quite bad results. 
         # Maybe updating q through flow is not a good idea.
         with torch.no_grad():
-            s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H2, W2, num_iters=num_flow_est_iters, 
+            s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, num_iters=num_flow_est_iters, 
                                                       corr_normalized_by_sqrt_dim=False)
-        s2c_flow = resize_flow(s2c_flow, H, W)
+        # s2c_flow = resize_flow(s2c_flow, H, W)
 
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
     sc_recon_ss_feat    = backward_warp_by_flow(sc_feat, s2c_flow)
@@ -2240,13 +2232,20 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
         return 0, 0, 0, None, None
 
     # ca_q, ca_outfeat: [4, 1280, 64]
+   
+    # Pooling makes ca_q spatially smoother, so that we'll get more continuous flow.
+    # We also pool ca_outfeat to make the reconstructed features smoother.
+    ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W))
+    ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
+    ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
+
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
-    # ss_*: subj single, sc_*: subj comp, ms_*: mix single, mc_*: class comp.
+    # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # NOTE: q is computed from x (input features), k and v are computed from prompt embeddings.
     # So we use q to compute image token matching scores and flow. 
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
     ss_q = ss_q.detach()
-   
+
     num_heads = 8
     # Similar to the scale of the attention scores.
     matching_score_scale = (ca_q.shape[1] / num_heads) ** -0.5
