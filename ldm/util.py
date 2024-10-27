@@ -2073,7 +2073,7 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_map_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
 def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_map_ss_prob, ss_fg_mask, 
-                               ss_q, sc_q, H, W, num_flow_est_iters, do_recon_feat_delta=False):
+                               ss_q, sc_q, H, W, num_flow_est_iters, objective_name):
 
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
 
@@ -2099,14 +2099,6 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
     # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
 
     loss_type_names = ['attn', 'flow']
-    if not do_recon_feat_delta:
-        objective_name = 'sc-recon-ss-fg' 
-        cosine_exponent = 2
-    else:
-        # If do_recon_feat_delta, then ss_feat, sc_feat are actually ss_feat - ms_feat, sc_feat - mc_feat.
-        objective_name = 'sc-ss-fg-delta'
-        # If recon_feat_delta, the feat delta already second order, so we don't need to square the cosine.
-        cosine_exponent = 2
 
     print(f"Layer {layer_idx}: {H}x{W} {objective_name} losses:", end=' ')
 
@@ -2121,7 +2113,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
             # If reduction == 'mean', return a scalar loss.        
             token_losses_sc_recon_ss_fg = \
                 calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                     exponent=cosine_exponent, do_demeans=[False, False],
+                                     exponent=2, do_demeans=[False, False],
                                      first_n_dims_into_instances=2, 
                                      ref_grad_scale=0, aim_to_align=True,
                                      reduction='none')
@@ -2225,38 +2217,38 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 # recon_feat_objectives: a list of strings, each is either 'feat' or 'delta'. 
 # Default reconstruct both.
 #@torch.compile
-def calc_elastic_matching_loss(layer_idx, flow_model, ca_recon_feat, ca_q, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
-                               num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta'], do_feat_attn_pooling=True):
+def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
+                               recon_feat_objectives={'attn_out': ['feat', 'delta'], 'outfeat': ['feat']}, 
+                               fg_bg_cutoff_prob=0.25, num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64] => [1, 64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
-    # ca_recon_feat: [4, 1280, 64]
+    # ca_outfeat: [4, 1280, 64]
    
     if do_feat_attn_pooling:
-        # Pooling makes ca_recon_feat spatially smoother, so that we'll get more continuous flow.
-        ca_recon_feat   = pool_feat_or_attn_mat(ca_recon_feat, (H, W), retain_spatial=True)
-        ca_q            = pool_feat_or_attn_mat(ca_q, (H, W))
-        ss_fg_mask      = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
-        H2, W2          = ca_recon_feat.shape[-2:]
-        ca_recon_feat   = ca_recon_feat.reshape(*ca_recon_feat.shape[:2], H2*W2)
+        # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
+        ca_attn_out  = pool_feat_or_attn_mat(ca_attn_out, (H, W))
+        ca_outfeat   = pool_feat_or_attn_mat(ca_outfeat,  (H, W), retain_spatial=True)
+        ca_q         = pool_feat_or_attn_mat(ca_q, (H, W))
+        ss_fg_mask   = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
+        H2, W2       = ca_outfeat.shape[-2:]
+        ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
     else:
         H2, W2      = H, W
 
-    ss_fg_mask = ss_fg_mask.bool().squeeze(1)
+    ss_fg_mask_2d = ss_fg_mask.bool().squeeze(1)
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
-    # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
-    ss_feat, sc_feat, ms_feat, mc_feat  = ca_recon_feat.chunk(4)
-    ss_q, sc_q, ms_q, mc_q              = ca_q.chunk(4)
-    ss_feat = ss_feat.detach()
-    ss_q    = ss_q.detach()
+    # ss_q, sc_q, ms_q, mc_q: [4, 1280, 64] => [1, 1280, 64].
+    ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
+    ss_q = ss_q.detach()
 
     num_heads = 8
     # Similar to the scale of the attention scores.
-    matching_score_scale = (ca_recon_feat.shape[1] / num_heads) ** -0.5
+    matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
-    # We use ca_recon_feat instead of ca_q to compute the correlation scores, so we scale it.
+    # We use ca_outfeat instead of ca_q to compute the correlation scores, so we scale it.
     # Moreover, sometimes sc_map_ss_score before scaling is 200~300, which is too large.
     # [64, 1280] * [1280, 64] => [64, 64].
     sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
@@ -2277,57 +2269,21 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_recon_feat, ca_q, ss_fg
     # Normalize among class comp tokens (mc dim).
     mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
 
-    # Span ss_fg_mask to become a mask for the (fg, fg) pairwise matching scores,
+    # Span ss_fg_mask_2d to become a mask for the (fg, fg) pairwise matching scores,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
-    ss_fg_mask_pairwise = ss_fg_mask.unsqueeze(1) * ss_fg_mask.unsqueeze(2)
+    ss_fg_mask_pairwise = ss_fg_mask_2d.unsqueeze(1) * ss_fg_mask_2d.unsqueeze(2)
     
     loss_subj_comp_map_single_align_with_cls = masked_mean((sc_map_ss_prob - mc_map_ms_prob).abs(), ss_fg_mask_pairwise)
 
-    s2c_flow = None
-    losses_sc_recon_ss_fg_objs = []
-    for recon_feat_objective in recon_feat_objectives:
-        if recon_feat_objective == 'feat':
-            do_recon_feat_delta = False
-            ss_feat_obj = ss_feat
-            sc_feat_obj = sc_feat
-        elif recon_feat_objective == 'delta':
-            do_recon_feat_delta = True
-            # ss_feat, sc_feat: [1, 1280, 64] => [1, 64, 1280].
-            # Do the subtraction in the last dim, i.e., the feature dim.
-            ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
-            ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
-            sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
-            ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
-            ss_feat_obj, sc_feat_obj = [ feat.permute(0, 2, 1) for feat in [ss_feat_obj, sc_feat_obj] ]
-        else:
-            breakpoint()
-        losses_sc_recon_ss_fg_obj, s2c_flow = \
-            calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
-                                       sc_map_ss_prob, ss_fg_mask, 
-                                       ss_q, sc_q, H2, W2, num_flow_est_iters, 
-                                       do_recon_feat_delta=do_recon_feat_delta)
-        losses_sc_recon_ss_fg_objs.append(torch.tensor(losses_sc_recon_ss_fg_obj))
-    
-    losses_sc_recon_ss_fg = torch.stack(losses_sc_recon_ss_fg_objs, dim=0).mean(dim=0)
-
-    '''
-    ss_map_sc_score = sc_map_ss_score.transpose(1, 2)
-    ss_map_sc_prob = F.softmax(ss_map_sc_score, dim=1)
-    losses_ss_fg_recon_sc = calc_ss_fg_recon_sc_losses(layer_idx, flow_model, ss_feat, sc_feat, 
-                                                       ss_map_sc_prob, ss_fg_mask, 
-                                                       ss_q, sc_q, H, W, num_flow_est_iters, name='ss-recon-sc')
-    '''
-    losses_ss_fg_recon_sc = [0, 0, 0]
-
-    # ss_fg_mask: [1, 64] => [1, 64, 1].
-    ss_fg_mask = ss_fg_mask.float().unsqueeze(2)
+    # ss_fg_mask_3d: [1, 64] => [1, 64, 1].
+    ss_fg_mask_3d = ss_fg_mask_2d.float().unsqueeze(2)
     # Sum up the mapping probs from comp instances to the fg area of the single instances, so that 
     # ** each entry is the total prob of each image token in the comp instance
     # ** maps to the whole fg area in the single instance.
     # sc_map_ss_fg_prob: [1, 64, 64] * [1, 64, 1] => [1, 64, 1] => [1, 1, 64].
-    # matmul() sums up over the ss tokens dim, filtered by ss_fg_mask.
-    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, ss_fg_mask).permute(0, 2, 1)
-    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, ss_fg_mask).permute(0, 2, 1)
+    # matmul() sums up over the ss tokens dim, filtered by ss_fg_mask_3d.
+    sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, ss_fg_mask_3d).permute(0, 2, 1)
+    mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, ss_fg_mask_3d).permute(0, 2, 1)
 
     # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64].
     # The total prob of each image token in the subj comp instance maps to fg areas 
@@ -2353,21 +2309,80 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_recon_feat, ca_q, ss_fg
     # sc_to_ss_bg_prob: [1, 1, 64] => [1, 64, 1]. values: 0 ~ fg_bg_cutoff_prob=0.25.
     sc_to_ss_bg_prob = sc_map_ss_fg_prob_below_mean.permute(0, 2, 1)
 
-    # We compute cosine loss on the features dim. 
-    # So we permute the features to the last dim.
-    # sc_feat, mc_feat: [1, 1280, 64] => [1, 64, 1280].
-    sc_feat = sc_feat.permute(0, 2, 1)
-    mc_feat = mc_feat.permute(0, 2, 1)
+    s2c_flow = None
+    losses_sc_recon_ss_fg   = []
+    loss_sc_mc_bg_match     = 0
+    num_bg_matching_losses  = 0
 
-    # ref_grad_scale=0: doesn't update through mc_feat (but since mc_feat is generated without
-    # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
-    # will be backpropagated to subj embeddings).
-    loss_sc_mc_bg_match = calc_ref_cosine_loss(sc_feat, mc_feat, 
-                                               emb_mask=sc_to_ss_bg_prob,
-                                               exponent=2, do_demeans=[False, False],
-                                               first_n_dims_into_instances=2, 
-                                               aim_to_align=True, 
-                                               ref_grad_scale=0)
+    for feat_type in recon_feat_objectives.keys():
+        if feat_type == 'attn_out':
+            feat_obj = ca_attn_out
+        elif feat_type == 'outfeat':
+            feat_obj = ca_outfeat
+
+        ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
+        ss_feat = ss_feat.detach()
+
+        #### Compute fg reconstruction losses. ####
+        for recon_feat_objective in recon_feat_objectives[feat_type]:
+            if recon_feat_objective == 'feat':
+                ss_feat_obj = ss_feat
+                sc_feat_obj = sc_feat
+            elif recon_feat_objective == 'delta':
+                # ss_feat, sc_feat: [1, 1280, 64] => [1, 64, 1280].
+                # Do the subtraction in the last dim, i.e., the feature dim.
+                ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
+                ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
+                sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
+                ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
+                ss_feat_obj, sc_feat_obj = [ feat.permute(0, 2, 1) for feat in [ss_feat_obj, sc_feat_obj] ]
+            else:
+                breakpoint()
+            
+            objective_name = f"{feat_type}-{recon_feat_objective}"
+            # Make the objective name have a fixed length by padding spaces.
+            if len(objective_name) < 14:
+                objective_name += ' ' * (14 - len(objective_name))
+
+            losses_sc_recon_ss_fg_obj, s2c_flow = \
+                calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
+                                           sc_map_ss_prob, ss_fg_mask_2d, 
+                                           ss_q, sc_q, H2, W2, num_flow_est_iters, 
+                                           objective_name=objective_name)
+            
+            losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
+
+        #### Compute bg matching losses. #### 
+        # We compute cosine loss on the features dim. 
+        # So we permute the features to the last dim.
+        # sc_feat, mc_feat: [1, 1280, 64] => [1, 64, 1280].
+        sc_feat = sc_feat.permute(0, 2, 1)
+        mc_feat = mc_feat.permute(0, 2, 1)
+
+        # ref_grad_scale=0: doesn't update through mc_feat (but since mc_feat is generated without
+        # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
+        # will be backpropagated to subj embeddings).
+        loss_sc_mc_bg_match_obj = calc_ref_cosine_loss(sc_feat, mc_feat, 
+                                                   emb_mask=sc_to_ss_bg_prob,
+                                                   exponent=2, do_demeans=[False, False],
+                                                   first_n_dims_into_instances=2, 
+                                                   aim_to_align=True, 
+                                                   ref_grad_scale=0)
+        
+        loss_sc_mc_bg_match    += loss_sc_mc_bg_match_obj
+        num_bg_matching_losses += 1
+
+    losses_sc_recon_ss_fg = torch.stack(losses_sc_recon_ss_fg, dim=0).mean(dim=0)
+    loss_sc_mc_bg_match   = loss_sc_mc_bg_match / num_bg_matching_losses
     
-    return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, losses_ss_fg_recon_sc, \
+    return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ms_fg_prob_below_mean
+
+
+    '''
+    ss_map_sc_score = sc_map_ss_score.transpose(1, 2)
+    ss_map_sc_prob = F.softmax(ss_map_sc_score, dim=1)
+    losses_ss_fg_recon_sc = calc_ss_fg_recon_sc_losses(layer_idx, flow_model, ss_feat, sc_feat, 
+                                                       ss_map_sc_prob, ss_fg_mask_2d, 
+                                                       ss_q, sc_q, H, W, num_flow_est_iters, name='ss-recon-sc')
+    '''

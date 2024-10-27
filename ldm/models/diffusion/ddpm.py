@@ -2040,15 +2040,15 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives=['feat', 'delta'],
+                                                     recon_feat_objectives={'attn_out': ['feat', 'delta'], 'outfeat': ['feat']},
                                                      do_feat_attn_pooling=True)
             
-            loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow',
-                           'loss_sc_recon_ss_fg_min', 'loss_ss_fg_recon_sc_attn_agg', 'loss_ss_fg_recon_sc_flow', 'loss_ss_fg_recon_sc_min',
-                           'loss_sc_mc_bg_match', 'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
+            loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
+                           'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+                           'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
             
-            loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, \
-            loss_sc_recon_ss_fg_min, loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow, loss_ss_fg_recon_sc_min, \
+            loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
+            loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
             loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
                 = [ comp_subj_bg_preserve_loss_dict.get(loss_name) for loss_name in loss_names ] 
 
@@ -2064,7 +2064,7 @@ class LatentDiffusion(DDPM):
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             sc_mc_bg_match_loss_scale = 3
             
-            loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min + loss_ss_fg_recon_sc_min
+            loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
             # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
             loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
                                         + (loss_sc_ss_fg_recon + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
@@ -2561,9 +2561,9 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
-    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_recon_feats, ca_qs, ca_attns, 
+    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE,
-                                        recon_feat_objectives=['feat', 'delta'],
+                                        recon_feat_objectives={'attn_out': ['feat', 'delta'], 'outfeat': ['feat']},
                                         do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
@@ -2601,32 +2601,30 @@ class LatentDiffusion(DDPM):
             ca_feat_h, ca_feat_w = ca_outfeat.shape[-2:]
 
             # ca_layer_q: [4, 1280, 64] -> [4, 1280, 8, 8]
-            ca_layer_q    = ca_qs[unet_layer_idx]
-            ca_recon_feat = ca_recon_feats[unet_layer_idx]
+            ca_layer_q  = ca_qs[unet_layer_idx]
+            ca_attn_out = ca_attn_outs[unet_layer_idx]
             # This way of calculation ca_q_h is to consider the case when the height and width might not be the same.
             ca_q_h = int(np.sqrt(ca_layer_q.shape[2] * ca_outfeat.shape[2] // ca_outfeat.shape[3]))
             ca_q_w = ca_layer_q.shape[2] // ca_q_h
             ca_layer_q = ca_layer_q.reshape(ca_layer_q.shape[0], -1, ca_q_h, ca_q_w)
 
-            # *** ca_recon_feat could be ca_outfeat (4D) or attn_out (direct output from CA layers before FFN).
-            if ca_recon_feat.ndim == 3:
-                # If ca_recon_feat is attn_out, it's [B, D, N] -> [B, D, H, W].
-                ca_recon_feat = ca_recon_feat.reshape(*ca_recon_feat.shape[:2], ca_feat_h, ca_feat_w)
+            # ca_attn_out: [B, D, N] -> [B, D, H, W].
+            ca_attn_out = ca_attn_out.reshape(*ca_attn_out.shape[:2], ca_feat_h, ca_feat_w)
 
-            # Some layers resize the input feature maps. So we need to resize ca_recon_feat to match ca_layer_q.
-            if ca_recon_feat.shape[2:] != ca_layer_q.shape[2:]:
-                ca_recon_feat = F.interpolate(ca_recon_feat, size=ca_layer_q.shape[2:], mode="bilinear", align_corners=False)
+            # Some layers resize the input feature maps. So we need to resize ca_outfeat to match ca_layer_q.
+            if ca_outfeat.shape[2:] != ca_layer_q.shape[2:]:
+                ca_outfeat = F.interpolate(ca_outfeat, size=ca_layer_q.shape[2:], mode="bilinear", align_corners=False)
                 
             ###### elastic matching loss ######
             # q of each layer is used to compute the correlation matrix between subject-single and subject-comp instances,
             # as well as class-single and class-comp instances.
-            # ca_recon_feat is used to compute the reconstruction loss between subject-single and subject-comp instances 
+            # ca_attn_out is used to compute the reconstruction loss between subject-single and subject-comp instances 
             # (using the correlation matrix), as well as class-single and class-comp instances.
-            # Flatten the spatial dimensions of ca_recon_feat.
-            # ca_layer_q:    [4, 1280, 8, 8] -> [4, 1280, 64].
-            # ca_recon_feat: [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_layer_q      = ca_layer_q.reshape(*ca_layer_q.shape[:2], -1)
-            ca_recon_feat   = ca_recon_feat.reshape(*ca_recon_feat.shape[:2], -1)
+            # Flatten the spatial dimensions of ca_attn_out.
+            # ca_layer_q, ca_attn_out, ca_outfeat: [4, 1280, 8, 8] -> [4, 1280, 64].
+            ca_layer_q  = ca_layer_q.reshape(*ca_layer_q.shape[:2], -1)
+            ca_attn_out = ca_attn_out.reshape(*ca_attn_out.shape[:2], -1)
+            ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
             # fg_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
             fg_mask_4b \
                 = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
@@ -2641,25 +2639,22 @@ class LatentDiffusion(DDPM):
             # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
             # sc_map_ss_fg_prob_below_mean and mc_map_ms_fg_prob_below_mean are used as fg/bg soft masks of comp instances
             # to suppress the activations on background areas.
-            loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, losses_ss_fg_recon_sc, \
+            loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
-                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_recon_feat, ca_layer_q, 
+                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, 
+                                             ca_layer_q, ca_attn_out, ca_outfeat, 
                                              ss_fg_mask, ca_feat_h, ca_feat_w, 
-                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
                                              recon_feat_objectives=recon_feat_objectives,
+                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
                                              do_feat_attn_pooling=do_feat_attn_pooling)
 
             loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
-            loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow, loss_ss_fg_recon_sc_min = losses_ss_fg_recon_sc
 
             add_dict_to_dict(loss_dict, 
                               { 'loss_subj_comp_map_single_align_with_cls': loss_layer_subj_comp_map_single_align_with_cls * elastic_matching_layer_weight,
                                 'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * elastic_matching_layer_weight,
                                 'loss_sc_recon_ss_fg_flow':       loss_sc_recon_ss_fg_flow * elastic_matching_layer_weight,
                                 'loss_sc_recon_ss_fg_min':        loss_sc_recon_ss_fg_min * elastic_matching_layer_weight,
-                                'loss_ss_fg_recon_sc_attn_agg':   loss_ss_fg_recon_sc_attn_agg * elastic_matching_layer_weight,
-                                'loss_ss_fg_recon_sc_flow':       loss_ss_fg_recon_sc_flow * elastic_matching_layer_weight,
-                                'loss_ss_fg_recon_sc_min':        loss_ss_fg_recon_sc_min * elastic_matching_layer_weight,
                                 'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * elastic_matching_layer_weight })
                 
             if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
