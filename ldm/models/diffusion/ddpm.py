@@ -2038,7 +2038,7 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives=['feat'],
+                                                     recon_feat_objectives=['feat', 'delta'],
                                                      do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow',

@@ -2256,6 +2256,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
     # We use ca_outfeat instead of ca_q to compute the correlation scores, so we scale it.
     # Moreover, sometimes sc_map_ss_score before scaling is 200~300, which is too large.
+    # [64, 1280] * [1280, 64] => [64, 64].
     sc_map_ss_score = torch.matmul(sc_feat.transpose(1, 2).contiguous(), ss_feat) * matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
@@ -2289,8 +2290,12 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
             sc_feat_obj = sc_feat
         elif recon_feat_objective == 'delta':
             do_recon_feat_delta = True
+            # ss_feat, sc_feat: [1, 1280, 64] => [1, 64, 1280].
+            # Do the subtraction in the last dim, i.e., the feature dim.
+            ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
             ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
             sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
+            ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
         else:
             breakpoint()
         losses_sc_recon_ss_fg_obj, s2c_flow = \
