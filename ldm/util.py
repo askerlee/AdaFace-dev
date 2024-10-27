@@ -2112,29 +2112,28 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:
-            losses_sc_recon_ss_fg.append(0)
-            continue
+            loss_sc_recon_ss_fg = torch.tensor(0, device=ss_feat.device)
+        else:
+            # We use cosine loss, so that when the reconstructed features are of different scales,
+            # the loss could still be small.
+            # ref_grad_scale=0: don't BP to ss_fg_feat.
+            # If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
+            # If reduction == 'mean', return a scalar loss.        
+            token_losses_sc_recon_ss_fg = \
+                calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
+                                    exponent=cosine_exponent, do_demeans=[False, False],
+                                    first_n_dims_into_instances=2, 
+                                    ref_grad_scale=0, aim_to_align=True,
+                                    reduction='none')
 
-        # We use cosine loss, so that when the reconstructed features are of different scales,
-        # the loss could still be small.
-        # ref_grad_scale=0: don't BP to ss_fg_feat.
-        # If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
-        # If reduction == 'mean', return a scalar loss.        
-        token_losses_sc_recon_ss_fg = \
-            calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                 exponent=cosine_exponent, do_demeans=[False, False],
-                                 first_n_dims_into_instances=2, 
-                                 ref_grad_scale=0, aim_to_align=True,
-                                 reduction='none')
+            # Here loss_sc_recon_ss_fg (corresponding to loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow) 
+            # is only for debugging. 
+            # The optimized loss_sc_recon_ss_fg is loss_sc_recon_ss_fg_min, computed by 
+            # taking the tokenwise min of the two losses.
+            loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
+            all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
-        # Here loss_sc_recon_ss_fg (corresponding to loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow) 
-        # is only for debugging. 
-        # The optimized loss_sc_recon_ss_fg is loss_sc_recon_ss_fg_min, computed by 
-        # taking the tokenwise min of the two losses.
-        loss_sc_recon_ss_fg = token_losses_sc_recon_ss_fg.mean()
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
-        all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
-
         print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}", end=' ')
 
     # We have both attn and flow token losses.
@@ -2144,10 +2143,11 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
         # Take the smaller loss tokenwise between attn and flow.
         token_losses_sc_recon_ss_fg = all_token_losses_sc_recon_ss_fg.min(dim=0).values
         loss_sc_recon_ss_fg_min = token_losses_sc_recon_ss_fg.mean()
-        losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
+    else:
+        loss_sc_recon_ss_fg_min = [ loss for loss in losses_sc_recon_ss_fg if loss != 0 ][0]
 
-        print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}", end=' ')
-    print()
+    losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
+    print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}", end=' ')
 
     return losses_sc_recon_ss_fg, s2c_flow
 
@@ -2169,7 +2169,7 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
         ss_fg_recon_sc_feat_flow = None
         c2s_flow = None
         
-    losses_ss_fg_recon_sc       = []
+    losses_ss_fg_recon_sc           = []
     all_token_losses_ss_fg_recon_sc = []
 
     # ss_fg_mask: bool of [1, 64] with N_fg True values.
@@ -2182,26 +2182,26 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 
     for i, ss_fg_recon_sc_feat in enumerate((ss_fg_recon_sc_feat_attn_agg, ss_fg_recon_sc_feat_flow)):
         if ss_fg_recon_sc_feat is None:
-            losses_ss_fg_recon_sc.append(0)
-            continue
+            loss_ss_fg_recon_sc = torch.tensor(0, device=ss_feat.device)
+        else:
+            # We use cosine loss, so that when the reconstructed features are of different scales,
+            # the loss could still be small.
+            # ref_grad_scale=0: don't BP to ss_fg_feat.
+            # If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
+            # If reduction == 'mean', return a scalar loss.        
+            token_losses_ss_fg_recon_sc = \
+                calc_ref_cosine_loss(ss_fg_recon_sc_feat, ss_fg_feat, 
+                                    exponent=2, do_demeans=[False, False],
+                                    first_n_dims_into_instances=2, 
+                                    ref_grad_scale=0, aim_to_align=True,
+                                    reduction='none')
 
-        # We use cosine loss, so that when the reconstructed features are of different scales,
-        # the loss could still be small.
-        # ref_grad_scale=0: don't BP to ss_fg_feat.
-        # If reduction == 'none', return a 2D loss tensor of [Batch, Instances].
-        # If reduction == 'mean', return a scalar loss.        
-        token_losses_ss_fg_recon_sc = \
-            calc_ref_cosine_loss(ss_fg_recon_sc_feat, ss_fg_feat, 
-                                 exponent=2, do_demeans=[False, False],
-                                 first_n_dims_into_instances=2, 
-                                 ref_grad_scale=0, aim_to_align=True,
-                                 reduction='none')
+            # Here loss_ss_fg_recon_sc (corresponding to loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow) 
+            # is only for debugging. 
+            # The optimized loss_ss_fg_recon_sc is loss_ss_fg_recon_sc_min, computed by 
+            # taking the tokenwise min of the two losses.
+            loss_ss_fg_recon_sc = token_losses_ss_fg_recon_sc.mean()
 
-        # Here loss_ss_fg_recon_sc (corresponding to loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow) 
-        # is only for debugging. 
-        # The optimized loss_ss_fg_recon_sc is loss_ss_fg_recon_sc_min, computed by 
-        # taking the tokenwise min of the two losses.
-        loss_ss_fg_recon_sc = token_losses_ss_fg_recon_sc.mean()
         losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc)
         all_token_losses_ss_fg_recon_sc.append(token_losses_ss_fg_recon_sc)
 
@@ -2214,6 +2214,8 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
         # Take the smaller loss tokenwise between attn and flow.
         token_losses_ss_fg_recon_sc = all_token_losses_ss_fg_recon_sc.min(dim=0).values
         loss_ss_fg_recon_sc_min = token_losses_ss_fg_recon_sc.mean()
+    else:
+        loss_ss_fg_recon_sc_min = [ loss for loss in losses_ss_fg_recon_sc if loss != 0 ][0]
         losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
 
         print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}", end=' ')
@@ -2234,7 +2236,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
    
     if do_feat_attn_pooling:
         # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
-        ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
+        ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W), retain_spatial=True)
         ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
         H2, W2      = ca_outfeat.shape[-2:]
         ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)

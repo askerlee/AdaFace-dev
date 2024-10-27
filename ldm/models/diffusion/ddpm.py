@@ -2038,7 +2038,8 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives=['feat'])
+                                                     recon_feat_objectives=['feat'],
+                                                     do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow',
                            'loss_sc_recon_ss_fg_min', 'loss_ss_fg_recon_sc_attn_agg', 'loss_ss_fg_recon_sc_flow', 'loss_ss_fg_recon_sc_min',
@@ -2673,7 +2674,7 @@ class LatentDiffusion(DDPM):
             cls_comp_subj_attn_gs_pos = cls_comp_subj_attn_gs.clamp(min=0)
 
             if do_feat_attn_pooling:
-                subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos, (ca_feat_h, ca_feat_w))
+                subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos,   (ca_feat_h, ca_feat_w))
                 cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_feat_h, ca_feat_w))
 
             # Suppress the subj attention probs on background areas in comp instances.
