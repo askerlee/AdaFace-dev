@@ -2225,25 +2225,24 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 # Default reconstruct both.
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
-                               num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta']):
+                               num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta'], do_feat_attn_pooling=False):
     # ss_fg_mask: [1, 1, 64] => [1, 64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
     # ca_q, ca_outfeat: [4, 1280, 64]
    
-    # Pooling makes ca_q spatially smoother, so that we'll get more continuous flow.
-    # We also pool ca_outfeat to make the reconstructed features smoother.
-    '''
-    ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W), retain_spatial=True)
-    ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
-    ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
-    H2, W2      = ca_q.shape[-2:]
-    ca_q        = ca_q.reshape(*ca_q.shape[:2], H2*W2)
-    '''
-
-    H2, W2      = H, W
-    ca_q        = ca_outfeat
+    if do_feat_attn_pooling:
+        # Pooling makes ca_q spatially smoother, so that we'll get more continuous flow.
+        # We also pool ca_outfeat to make the reconstructed features smoother.
+        ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W), retain_spatial=True)
+        ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
+        ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
+        H2, W2      = ca_q.shape[-2:]
+        ca_q        = ca_q.reshape(*ca_q.shape[:2], H2*W2)
+    else:
+        H2, W2      = H, W
+        ca_q        = ca_outfeat
 
     ss_fg_mask = ss_fg_mask.bool().squeeze(1)
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 

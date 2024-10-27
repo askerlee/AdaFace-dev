@@ -2561,7 +2561,8 @@ class LatentDiffusion(DDPM):
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_qs, ca_attns, 
                                         fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE,
-                                        recon_feat_objectives=['feat', 'delta']):
+                                        recon_feat_objectives=['feat', 'delta'],
+                                        do_feat_attn_pooling=False):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
@@ -2635,7 +2636,8 @@ class LatentDiffusion(DDPM):
                 = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q, 
                                              ca_outfeat, ss_fg_mask, ca_q_h, ca_q_w, 
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
-                                             recon_feat_objectives=recon_feat_objectives)
+                                             recon_feat_objectives=recon_feat_objectives,
+                                             do_feat_attn_pooling=do_feat_attn_pooling)
 
             loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
             loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow, loss_ss_fg_recon_sc_min = losses_ss_fg_recon_sc
@@ -2683,8 +2685,10 @@ class LatentDiffusion(DDPM):
             subj_comp_subj_attn_pos   = subj_comp_subj_attn.clamp(min=0)
             cls_comp_subj_attn_gs_pos = cls_comp_subj_attn_gs.clamp(min=0)
 
-            subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos, (ca_q_h, ca_q_w))
-            cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_q_h, ca_q_w))
+            if do_feat_attn_pooling:
+                subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos, (ca_q_h, ca_q_w))
+                cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_q_h, ca_q_w))
+
             # Suppress the subj attention probs on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
             # sc_map_ss_fg_prob_below_mean: bg token should have fg attn probs below mean. Therefore
