@@ -2121,10 +2121,10 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
             # If reduction == 'mean', return a scalar loss.        
             token_losses_sc_recon_ss_fg = \
                 calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                    exponent=cosine_exponent, do_demeans=[False, False],
-                                    first_n_dims_into_instances=2, 
-                                    ref_grad_scale=0, aim_to_align=True,
-                                    reduction='none')
+                                     exponent=cosine_exponent, do_demeans=[False, False],
+                                     first_n_dims_into_instances=2, 
+                                     ref_grad_scale=0, aim_to_align=True,
+                                     reduction='none')
 
             # Here loss_sc_recon_ss_fg (corresponding to loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow) 
             # is only for debugging. 
@@ -2147,7 +2147,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
         loss_sc_recon_ss_fg_min = [ loss for loss in losses_sc_recon_ss_fg if loss != 0 ][0]
 
     losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
-    print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}", end=' ')
+    print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}")
 
     return losses_sc_recon_ss_fg, s2c_flow
 
@@ -2191,10 +2191,10 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
             # If reduction == 'mean', return a scalar loss.        
             token_losses_ss_fg_recon_sc = \
                 calc_ref_cosine_loss(ss_fg_recon_sc_feat, ss_fg_feat, 
-                                    exponent=2, do_demeans=[False, False],
-                                    first_n_dims_into_instances=2, 
-                                    ref_grad_scale=0, aim_to_align=True,
-                                    reduction='none')
+                                     exponent=2, do_demeans=[False, False],
+                                     first_n_dims_into_instances=2, 
+                                     ref_grad_scale=0, aim_to_align=True,
+                                     reduction='none')
 
             # Here loss_ss_fg_recon_sc (corresponding to loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow) 
             # is only for debugging. 
@@ -2216,10 +2216,9 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
         loss_ss_fg_recon_sc_min = token_losses_ss_fg_recon_sc.mean()
     else:
         loss_ss_fg_recon_sc_min = [ loss for loss in losses_ss_fg_recon_sc if loss != 0 ][0]
-        losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
 
-        print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}", end=' ')
-    print()
+    losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
+    print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}")
 
     return losses_ss_fg_recon_sc, c2s_flow
 
@@ -2250,7 +2249,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
     ss_feat = ss_feat.detach()
 
     num_heads = 8
-    # Similar to the scale of the attention scores.
+    # Similar to the scale of the attention scores. ca_outfeat.shape[1]: dimensionality of features.
+    # There are no concept of "head" in ca_outfeat, and we just use it to make the scaling more moderate.
     matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
@@ -2296,6 +2296,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
             ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
             sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
             ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
+            ss_feat_obj, sc_feat_obj = [ feat.permute(0, 2, 1) for feat in [ss_feat_obj, sc_feat_obj] ]
         else:
             breakpoint()
         losses_sc_recon_ss_fg_obj, s2c_flow = \
