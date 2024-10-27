@@ -2325,6 +2325,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             feat_obj = ca_outfeat
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
+        # Cut off the gradients into the subj single instance.
+        # We don't need to cut off ms_feat, mc_feat, because they were generated with no_grad().
         ss_feat = ss_feat.detach()
 
         #### Compute fg reconstruction losses. ####
@@ -2334,7 +2336,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                 sc_feat_obj = sc_feat
             elif recon_feat_objective == 'delta':
                 # ss_feat, sc_feat: [1, 1280, 64] => [1, 64, 1280].
-                # Do the subtraction in the last dim, i.e., the feature dim.
+                # Do the subtraction in the last dim, i.e., the feature dim. 
+                # So we need to permute the features to the last dim.
                 ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
                 ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
                 sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
@@ -2367,11 +2370,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
         # will be backpropagated to subj embeddings).
         loss_sc_mc_bg_match_obj = calc_ref_cosine_loss(sc_feat, mc_feat, 
-                                                   emb_mask=sc_to_ss_bg_prob,
-                                                   exponent=2, do_demeans=[False, False],
-                                                   first_n_dims_into_instances=2, 
-                                                   aim_to_align=True, 
-                                                   ref_grad_scale=0)
+                                                       emb_mask=sc_to_ss_bg_prob,
+                                                       exponent=2, do_demeans=[False, False],
+                                                       first_n_dims_into_instances=2, 
+                                                       aim_to_align=True, 
+                                                       ref_grad_scale=0)
         
         loss_sc_mc_bg_match    += loss_sc_mc_bg_match_obj
         num_bg_matching_losses += 1

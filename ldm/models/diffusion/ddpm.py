@@ -2440,13 +2440,14 @@ class LatentDiffusion(DDPM):
 
             # Use subj_attn as a reference, and scale down grad to fg attn, 
             # to make fg embeddings more stable.
-            # fg_grad_scale: 0.1.
             loss_layer_subj_bg_complem = \
                 calc_ref_cosine_loss(bg_attn, subj_attn, 
                                      exponent=2,    
-                                     do_demeans=[False, False],
+                                     # Since we use attn probs for bg_attn and subj_attn, most of them are around the mean value.
+                                     # So we demean them to highlight the contrast.
+                                     do_demeans=[True, True],
                                      first_n_dims_into_instances=2, 
-                                     ref_grad_scale=fg_grad_scale,
+                                     ref_grad_scale=fg_grad_scale,  # fg_grad_scale: 0.1
                                      aim_to_align=False,
                                      debug=False)
 
