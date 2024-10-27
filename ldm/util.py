@@ -2321,6 +2321,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         ss_feat = ss_feat.detach()
 
         use_ortho_subtract = True
+        num_kept_objectives = 0
         #### Compute fg reconstruction losses. ####
         for recon_feat_objective in recon_feat_objectives[feat_type]:
             if recon_feat_objective == 'orig':
@@ -2334,9 +2335,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                 if use_ortho_subtract:
                     # Ideally, ss_feat should be aligned with ms_feat, and sc_feat should be aligned with mc_feat.
                     # We couldn't subtract sc_feat from ss_feat, as they are not spatially aligned.
-                    # But considering that there may be spatial shifting between two outfeats,
-                    # hence if feat_type == 'outfeat', discount the contribution of the class features by 0.5.
-                    # We couldn't ortho_subtract(ss_feat, ms_feat * 0.5), as ortho_subtract() is invarant
+                    # But considering that there may be spatial misalignment between two outfeats,
+                    # hence if feat_type == 'outfeat', discount the contribution of the class features by 0.8.
+                    # We couldn't ortho_subtract(ss_feat, ms_feat * 0.8), as ortho_subtract() is invarant
                     # to the scale of the second argument.
                     ss_feat_obj = ortho_subtract(ss_feat, ms_feat, b_discount=delta_discount)
                     sc_feat_obj = ortho_subtract(sc_feat, mc_feat, b_discount=delta_discount)
@@ -2360,13 +2361,19 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                            ss_q, sc_q, H2, W2, num_flow_est_iters, 
                                            objective_name=objective_name)
             
-            # If the recon loss is too large, it means there's spatial shifting between the two features.
+            # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
             to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
             if to_discard:
                 print(f"Discarding {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1].item():.03f}")
             else:
                 losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
+                num_kept_objectives += 1
+
+        # Skip bg matching loss if all fg recon objectives for this feature type are discarded.
+        if num_kept_objectives == 0:
+            print(f"All objectives for {feat_type} have been discarded. Skip bg matching loss.")
+            continue
 
         #### Compute bg matching losses. #### 
         # We compute cosine loss on the features dim. 
@@ -2394,7 +2401,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     else:
         losses_sc_recon_ss_fg = torch.stack(losses_sc_recon_ss_fg, dim=0).mean(dim=0)
 
-    loss_sc_mc_bg_match   = loss_sc_mc_bg_match / num_bg_matching_losses
+    if num_bg_matching_losses == 0:
+        loss_sc_mc_bg_match = torch.tensor(0, device=ss_feat.device)
+    else:
+        loss_sc_mc_bg_match = loss_sc_mc_bg_match / num_bg_matching_losses
     
     return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ms_fg_prob_below_mean
