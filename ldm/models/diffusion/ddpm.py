@@ -2401,7 +2401,7 @@ class LatentDiffusion(DDPM):
         bg_mf_suppress_scale                = 0.1
         subj_bg_emb_contrast_scale          = 0.05
         mfmb_contrast_attn_margin           = 0.4
-        subj_bg_contrast_at_mf_attn_margin  = 0.4 * K_subj / K_bg     # 0.9
+        subj_bg_contrast_at_mf_attn_margin  = 0.2 * K_subj / K_bg     # 1
         bg_subj_contrast_at_mb_attn_margin  = 0.4
 
         subj_attn_at_mf_grad_scale = 0.5
@@ -2516,7 +2516,7 @@ class LatentDiffusion(DDPM):
                                                             layer_bg_mf_suppress > 0, 
                                                             instance_weights=instance_mask)
                 # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations)
-                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 0.8 than
+                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 1 than
                 # bg_attn_at_mf at any foreground locations.
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_attn_at_mf 
                 # usually takes a much smaller value than avg_subj_attn_at_mf.
@@ -2526,7 +2526,7 @@ class LatentDiffusion(DDPM):
                                                                   layer_subj_bg_contrast_at_mf > 0, 
                                                                   instance_weights=instance_mask)
                 # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
-                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 0.2 than
+                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 1 than
                 # subj_attn_at_mb at any background locations.
                 layer_bg_subj_contrast_at_mb        = subj_attn_at_mb + bg_subj_contrast_at_mb_attn_margin - avg_bg_attn_at_mb
                 loss_layer_bg_subj_contrast_at_mb   = masked_mean(layer_bg_subj_contrast_at_mb, 
