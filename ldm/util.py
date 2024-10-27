@@ -2100,7 +2100,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 
     loss_type_names = ['attn', 'flow']
 
-    print(f"Layer {layer_idx}: {H}x{W} {objective_name} losses:", end=' ')
+    print(f"Layer {layer_idx}: {H}x{W} {objective_name} sc->ss-fg:", end=' ')
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:
@@ -2144,7 +2144,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
     return losses_sc_recon_ss_fg, s2c_flow
 
 def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat, ss_map_sc_prob, ss_fg_mask, 
-                               ss_q, sc_q, H, W, num_flow_est_iters):
+                               ss_q, sc_q, H, W, num_flow_est_iters, objective_name):
 
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
     
@@ -2170,7 +2170,7 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
     # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
 
     loss_type_names = ['attn', 'flow']
-    print(f"Layer {layer_idx}: {H}x{W} ss-fg-recon-sc losses:", end=' ')
+    print(f"Layer {layer_idx}: {H}x{W} {objective_name} ss-fg->sc:", end=' ')
 
     for i, ss_fg_recon_sc_feat in enumerate((ss_fg_recon_sc_feat_attn_agg, ss_fg_recon_sc_feat_flow)):
         if ss_fg_recon_sc_feat is None:
@@ -2214,11 +2214,15 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 
     return losses_ss_fg_recon_sc, c2s_flow
 
-# recon_feat_objectives: a list of strings, each is either 'feat' or 'delta'. 
-# Default reconstruct both.
+# recon_feat_objectives: a dict mapping feature map types to a list of objectives.
+# feature map type candidates: 'attn_out', 'outfeat'.
+# Objective candidates:        'orig',     'delta'. 
+# Default reconstruct both attn_out and outfeat, but only do delta for attn_out, not for outfeat.
+# Because there may be spatial shifting between attention and the CA output features, and
+# the delta of outfeat may be too noisy (manifested by the observation that it's 0.8~0.9).
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
-                               recon_feat_objectives={'attn_out': ['feat', 'delta'], 'outfeat': ['feat']}, 
+                               recon_feat_objectives={'attn_out': ['orig', 'delta'], 'outfeat': ['orig']}, 
                                fg_bg_cutoff_prob=0.25, num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64] => [1, 64]
     if ss_fg_mask.sum() == 0:
@@ -2325,7 +2329,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
         #### Compute fg reconstruction losses. ####
         for recon_feat_objective in recon_feat_objectives[feat_type]:
-            if recon_feat_objective == 'feat':
+            if recon_feat_objective == 'orig':
                 ss_feat_obj = ss_feat
                 sc_feat_obj = sc_feat
             elif recon_feat_objective == 'delta':
