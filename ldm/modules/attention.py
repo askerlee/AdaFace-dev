@@ -210,13 +210,15 @@ class CrossAttention(nn.Module):
             # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
             # So sqrt(self.scale) will scale the product of two qs by self.scale.
             # ANCHOR[id=attention_caching]
-            # self.cached_activations['q'] = rearrange(q,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
+            self.cached_activations['q']         = rearrange(q,   '(b h) n d -> b (h d) n', h=h).contiguous() * math.sqrt(self.scale)
             # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
             # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
             #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
             #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
-            self.cached_activations['attn'] = rearrange(attn, '(b h) i j -> b h i j', h=h).contiguous()
+            self.cached_activations['attn']      = rearrange(attn, '(b h) i j -> b h i j', h=h).contiguous()
             self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h).contiguous()
+            # attn_out: [b, n, h * d] -> [b, h * d, n]
+            self.cached_activations['attn_out']  = out.permute(0, 2, 1).contiguous()
 
         return out
 

@@ -930,7 +930,7 @@ class UNetModel(nn.Module):
             layer_idx += 1
 
         ca_layers_activations2 = {}
-        for key in ('outfeat', 'attn', 'attnscore'):
+        for key in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out'):
             # Collect each type of activations for all layers into a dict.
             ca_layers_activations2[key] = { layer_idx: ca_layers_activations[layer_idx][key] for layer_idx in ca_layers_activations }
         extra_info['ca_layers_activations']    = ca_layers_activations2

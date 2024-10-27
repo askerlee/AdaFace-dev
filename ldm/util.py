@@ -2003,7 +2003,7 @@ def backward_warp_by_flow(image2, flow1to2):
 
     return image1_recovered
 
-@torch.compile
+#@torch.compile
 def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask):
     # recon_sc_feat: [1, 1280, 64] * [1, 64, 64] => [1, 1280, 64]
     # ** We only use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
@@ -2121,10 +2121,10 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
             # If reduction == 'mean', return a scalar loss.        
             token_losses_sc_recon_ss_fg = \
                 calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
-                                    exponent=cosine_exponent, do_demeans=[False, False],
-                                    first_n_dims_into_instances=2, 
-                                    ref_grad_scale=0, aim_to_align=True,
-                                    reduction='none')
+                                     exponent=cosine_exponent, do_demeans=[False, False],
+                                     first_n_dims_into_instances=2, 
+                                     ref_grad_scale=0, aim_to_align=True,
+                                     reduction='none')
 
             # Here loss_sc_recon_ss_fg (corresponding to loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow) 
             # is only for debugging. 
@@ -2147,7 +2147,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
         loss_sc_recon_ss_fg_min = [ loss for loss in losses_sc_recon_ss_fg if loss != 0 ][0]
 
     losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
-    print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}", end=' ')
+    print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}")
 
     return losses_sc_recon_ss_fg, s2c_flow
 
@@ -2191,10 +2191,10 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
             # If reduction == 'mean', return a scalar loss.        
             token_losses_ss_fg_recon_sc = \
                 calc_ref_cosine_loss(ss_fg_recon_sc_feat, ss_fg_feat, 
-                                    exponent=2, do_demeans=[False, False],
-                                    first_n_dims_into_instances=2, 
-                                    ref_grad_scale=0, aim_to_align=True,
-                                    reduction='none')
+                                     exponent=2, do_demeans=[False, False],
+                                     first_n_dims_into_instances=2, 
+                                     ref_grad_scale=0, aim_to_align=True,
+                                     reduction='none')
 
             # Here loss_ss_fg_recon_sc (corresponding to loss_ss_fg_recon_sc_attn_agg, loss_ss_fg_recon_sc_flow) 
             # is only for debugging. 
@@ -2216,48 +2216,50 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
         loss_ss_fg_recon_sc_min = token_losses_ss_fg_recon_sc.mean()
     else:
         loss_ss_fg_recon_sc_min = [ loss for loss in losses_ss_fg_recon_sc if loss != 0 ][0]
-        losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
-
-        print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}", end=' ')
-    print()
+    
+    losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
+    print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}")
 
     return losses_ss_fg_recon_sc, c2s_flow
 
 # recon_feat_objectives: a list of strings, each is either 'feat' or 'delta'. 
 # Default reconstruct both.
 #@torch.compile
-def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
+def calc_elastic_matching_loss(layer_idx, flow_model, ca_recon_feat, ca_q, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
                                num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta'], do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64] => [1, 64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
-    # ca_outfeat: [4, 1280, 64]
+    # ca_recon_feat: [4, 1280, 64]
    
     if do_feat_attn_pooling:
-        # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
-        ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W), retain_spatial=True)
-        ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
-        H2, W2      = ca_outfeat.shape[-2:]
-        ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
+        # Pooling makes ca_recon_feat spatially smoother, so that we'll get more continuous flow.
+        ca_recon_feat   = pool_feat_or_attn_mat(ca_recon_feat, (H, W), retain_spatial=True)
+        ca_q            = pool_feat_or_attn_mat(ca_q, (H, W))
+        ss_fg_mask      = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
+        H2, W2          = ca_recon_feat.shape[-2:]
+        ca_recon_feat   = ca_recon_feat.reshape(*ca_recon_feat.shape[:2], H2*W2)
     else:
         H2, W2      = H, W
 
     ss_fg_mask = ss_fg_mask.bool().squeeze(1)
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
-    ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)
+    ss_feat, sc_feat, ms_feat, mc_feat  = ca_recon_feat.chunk(4)
+    ss_q, sc_q, ms_q, mc_q              = ca_q.chunk(4)
     ss_feat = ss_feat.detach()
+    ss_q    = ss_q.detach()
 
     num_heads = 8
-    # Similar to the scale of the attention scores.
-    matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
+    # Similar to the scale of the attention scores. ca_recon_feat.shape[1]: dimensionality of features.
+    matching_score_scale = (ca_recon_feat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
-    # We use ca_outfeat instead of ca_q to compute the correlation scores, so we scale it.
+    # We use ca_recon_feat instead of ca_q to compute the correlation scores, so we scale it.
     # Moreover, sometimes sc_map_ss_score before scaling is 200~300, which is too large.
     # [64, 1280] * [1280, 64] => [64, 64].
-    sc_map_ss_score = torch.matmul(sc_feat.transpose(1, 2).contiguous(), ss_feat) * matching_score_scale
+    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Dims 0, 1, 2 are the batch, sc, ss dims, respectively.
@@ -2271,7 +2273,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
     sc_map_ss_prob  = F.softmax(sc_map_ss_score, dim=1)
 
     # matmul() does multiplication on the last two dims.
-    mc_map_ms_score = torch.matmul(mc_feat.transpose(1, 2).contiguous(), ms_feat) * matching_score_scale
+    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
     # Normalize among class comp tokens (mc dim).
     mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
 
@@ -2296,12 +2298,13 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H,
             ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
             sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
             ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
+            ss_feat_obj, sc_feat_obj = [ feat.permute(0, 2, 1) for feat in [ss_feat_obj, sc_feat_obj] ]
         else:
             breakpoint()
         losses_sc_recon_ss_fg_obj, s2c_flow = \
             calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
                                        sc_map_ss_prob, ss_fg_mask, 
-                                       ss_feat, sc_feat, H2, W2, num_flow_est_iters, 
+                                       ss_q, sc_q, H2, W2, num_flow_est_iters, 
                                        do_recon_feat_delta=do_recon_feat_delta)
         losses_sc_recon_ss_fg_objs.append(torch.tensor(losses_sc_recon_ss_fg_obj))
     
