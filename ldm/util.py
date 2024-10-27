@@ -2216,9 +2216,10 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
         loss_ss_fg_recon_sc_min = token_losses_ss_fg_recon_sc.mean()
     else:
         loss_ss_fg_recon_sc_min = [ loss for loss in losses_ss_fg_recon_sc if loss != 0 ][0]
-    
-    losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
-    print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}")
+        losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
+
+        print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}", end=' ')
+    print()
 
     return losses_ss_fg_recon_sc, c2s_flow
 
@@ -2252,8 +2253,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_recon_feat, ca_q, ss_fg
     ss_q    = ss_q.detach()
 
     num_heads = 8
-    # Similar to the scale of the attention scores. ca_recon_feat.shape[1]: dimensionality of features.
-    matching_score_scale = (ca_recon_feat.shape[1] / num_heads) ** -0.5
+    # Similar to the scale of the attention scores.
+    matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
     # We use ca_recon_feat instead of ca_q to compute the correlation scores, so we scale it.
