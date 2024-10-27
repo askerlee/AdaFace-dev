@@ -2658,8 +2658,8 @@ class LatentDiffusion(DDPM):
             subj_attn_hw = subj_attn.reshape(*subj_attn.shape[:2], H, H)
             # At some layers, the output features are upsampled. So we need to 
             # upsample the attn map to match the output features.
-            if subj_attn_hw.shape[2:] != (ca_q_h, ca_q_w):
-                subj_attn_hw = F.interpolate(subj_attn_hw, size=(ca_q_h, ca_q_w), mode="bilinear", align_corners=False)
+            if subj_attn_hw.shape[2:] != (ca_feat_h, ca_feat_w):
+                subj_attn_hw = F.interpolate(subj_attn_hw, size=(ca_feat_h, ca_feat_w), mode="bilinear", align_corners=False)
 
             # subj_attn_hw: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
             subj_attn_flat = subj_attn_hw.reshape(*subj_attn_hw.shape[:2], -1)
@@ -2673,8 +2673,8 @@ class LatentDiffusion(DDPM):
             cls_comp_subj_attn_gs_pos = cls_comp_subj_attn_gs.clamp(min=0)
 
             if do_feat_attn_pooling:
-                subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos, (ca_q_h, ca_q_w))
-                cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_q_h, ca_q_w))
+                subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos, (ca_feat_h, ca_feat_w))
+                cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_feat_h, ca_feat_w))
 
             # Suppress the subj attention probs on background areas in comp instances.
             # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
