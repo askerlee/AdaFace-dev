@@ -2307,10 +2307,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     for feat_type in recon_feat_objectives.keys():
         if feat_type == 'attn_out':
             feat_obj = ca_attn_out
-            delta_discount = 1
+            delta_discount = 0.9
         elif feat_type == 'outfeat':
             feat_obj = ca_outfeat
-            delta_discount = 0.5
+            delta_discount = 0.8
         else:
             breakpoint()
 
