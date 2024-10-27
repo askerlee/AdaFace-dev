@@ -339,12 +339,12 @@ def parse_subject_file(subject_file_path):
     return subj_info, subj2attr
 
 # Orthogonal subtraction of b from a: the residual is orthogonal to b (on the last on_last_n_dims dims).
-# NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. b,
+# NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. (b * b_discount),
 # but scales proportionally to the scale of a.
 # a, b are n-dimensional tensors. Subtraction happens at the last on_last_n_dims dims.
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
-def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):
+def ortho_subtract(a, b, b_discount=1, on_last_n_dims=1, return_align_coeffs=False):
     assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
     if on_last_n_dims > 1:
         for i in range(-on_last_n_dims, 0):
@@ -369,7 +369,7 @@ def ortho_subtract(a, b, on_last_n_dims=1, return_align_coeffs=False):
     dot_b_b = (b2 * b2).sum(dim=-1)
 
     w_optimal = dot_a_b / (dot_b_b + 1e-6)
-    result = a2 - b2 * w_optimal.unsqueeze(-1)
+    result = a2 - b2 * w_optimal.unsqueeze(-1) * b_discount
 
     if on_last_n_dims > 1:
         result = result.reshape(orig_shape)
@@ -2307,8 +2307,12 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     for feat_type in recon_feat_objectives.keys():
         if feat_type == 'attn_out':
             feat_obj = ca_attn_out
+            delta_discount = 1
         elif feat_type == 'outfeat':
             feat_obj = ca_outfeat
+            delta_discount = 0.5
+        else:
+            breakpoint()
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
         # Cut off the gradients into the subj single instance.
@@ -2327,18 +2331,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                 # So we need to permute the features to the last dim.
                 ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
                 if use_ortho_subtract:
-                    if feat_type == 'outfeat':
-                        # Ideally, ss_feat should be aligned with ms_feat, and sc_feat should be aligned with mc_feat.
-                        # We couldn't subtract sc_feat from ss_feat, as they are not spatially aligned.
-                        ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
-                        sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
-                    else:
-                        # Discount the contribution of the class features by half.
-                        ss_feat_obj = ortho_subtract(ss_feat, ms_feat * 0.5)
-                        sc_feat_obj = ortho_subtract(sc_feat, mc_feat * 0.5)
+                    # Ideally, ss_feat should be aligned with ms_feat, and sc_feat should be aligned with mc_feat.
+                    # We couldn't subtract sc_feat from ss_feat, as they are not spatially aligned.
+                    # But considering that there may be spatial shifting between two outfeats,
+                    # hence if feat_type == 'outfeat', discount the contribution of the class features by 0.5.
+                    # We couldn't ortho_subtract(ss_feat, ms_feat * 0.5), as ortho_subtract() is invarant
+                    # to the scale of the second argument.
+                    ss_feat_obj = ortho_subtract(ss_feat, ms_feat, b_discount=delta_discount)
+                    sc_feat_obj = ortho_subtract(sc_feat, mc_feat, b_discount=delta_discount)
                 else:
-                    ss_feat_obj = ss_feat - ms_feat
-                    sc_feat_obj = sc_feat - mc_feat
+                    ss_feat_obj = ss_feat - ms_feat * delta_discount
+                    sc_feat_obj = sc_feat - mc_feat * delta_discount
 
                 ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
                 ss_feat_obj, sc_feat_obj = [ feat.permute(0, 2, 1) for feat in [ss_feat_obj, sc_feat_obj] ]
