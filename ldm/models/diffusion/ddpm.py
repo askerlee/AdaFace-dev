@@ -2040,7 +2040,8 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives={'attn_out': ['orig', 'delta'], 'outfeat': ['orig']},
+                                                     recon_feat_objectives={'attn_out': ['orig', 'delta'], 
+                                                                            'outfeat':  ['orig', 'delta']},
                                                      do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
@@ -2564,7 +2565,8 @@ class LatentDiffusion(DDPM):
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE,
-                                        recon_feat_objectives={'attn_out': ['orig', 'delta'], 'outfeat': ['orig']},
+                                        recon_feat_objectives={'attn_out': ['orig', 'delta'], 
+                                                               'outfeat':  ['orig']},
                                         do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
