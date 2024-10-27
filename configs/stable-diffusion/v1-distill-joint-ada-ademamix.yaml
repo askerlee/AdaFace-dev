@@ -50,7 +50,7 @@ model:
     # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
     perturb_face_id_embs_std_range:   [0.3, 0.6]
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
-    prompt_emb_delta_reg_weight:      1e-5
+    prompt_emb_delta_reg_weight:      1e-8
     # typical loss_comp_prompt_distill: 2~3, * weight -> 0.02~0.03.
     comp_prompt_distill_weight:       3e-3
     # Set cls_subj_mix_scale to 1 to use only class embeddings.

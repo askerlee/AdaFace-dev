@@ -1905,7 +1905,7 @@ def add_to_prob_mat_diagonal(prob_mat, p, renormalize_dim=None):
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
 # according to the feature map size.
-def pool_feat_or_attn_mat(feat_or_attn_mat, spatial_shape=None, flatten_spatial=False, debug=False):
+def pool_feat_or_attn_mat(feat_or_attn_mat, spatial_shape=None, retain_spatial=False, debug=False):
     # feature map size -> [kernel size, stride size] of the pooler.
     # 16 -> 4, 2 (output 7), 32 -> 4, 2 (output 15),  64 -> 8, 4 (output 15).
     feat_size2pooler_spec = { 8: [2, 1], 16: [2, 1], 32: [4, 2], 64: [4, 2] }
@@ -1942,9 +1942,9 @@ def pool_feat_or_attn_mat(feat_or_attn_mat, spatial_shape=None, flatten_spatial=
     # The smallest feat shape > 8x8 is 16x16 => 7x7 after pooling.
     pooler = nn.AvgPool2d(pooler_kernel_size, stride=pooler_stride)
     feat_or_attn_mat2 = pooler(feat_or_attn_mat)
-    # If the spatial dims are unflattened, or if flatten_spatial=True,
+    # If the spatial dims are unflattened and if retain_spatial=False,
     # we flatten the spatial dims.
-    if feat_or_attn_mat2.ndim == 4 and (do_unflatten or flatten_spatial):
+    if feat_or_attn_mat2.ndim == 4 and do_unflatten and not retain_spatial:
         feat_or_attn_mat2 = feat_or_attn_mat2.reshape(*feat_or_attn_mat2.shape[:2], -1)
     # If the input is 2D, we should remove the extra dim unsqueezed above.
     if feat_or_attn_mat0.ndim == 2:
@@ -2227,7 +2227,6 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
                                num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta']):
     # ss_fg_mask: [1, 1, 64] => [1, 64]
-    ss_fg_mask = ss_fg_mask.bool().squeeze(1)
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
@@ -2235,10 +2234,14 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
    
     # Pooling makes ca_q spatially smoother, so that we'll get more continuous flow.
     # We also pool ca_outfeat to make the reconstructed features smoother.
-    ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W))
+    ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W), retain_spatial=True)
     ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
     ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
 
+    H2, W2      = ca_q.shape[-2:]
+    ca_q        = ca_q.reshape(*ca_q.shape[:2], H2*W2)
+
+    ss_fg_mask = ss_fg_mask.bool().squeeze(1)
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # NOTE: q is computed from x (input features), k and v are computed from prompt embeddings.
@@ -2294,7 +2297,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
         losses_sc_recon_ss_fg_obj, s2c_flow = \
             calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
                                        sc_map_ss_prob, ss_fg_mask, 
-                                       ss_q, sc_q, H, W, num_flow_est_iters, 
+                                       ss_q, sc_q, H2, W2, num_flow_est_iters, 
                                        do_recon_feat_delta=do_recon_feat_delta)
         losses_sc_recon_ss_fg_objs.append(torch.tensor(losses_sc_recon_ss_fg_obj))
     

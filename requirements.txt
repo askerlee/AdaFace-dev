@@ -30,6 +30,7 @@ numpy>=1.24.0
 onnxruntime-gpu
 insightface
 deepface
+ftfy
 -e git+https://github.com/CompVis/taming-transformers.git@master#egg=taming-transformers
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
 -e .
