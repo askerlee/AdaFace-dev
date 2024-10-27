@@ -2216,10 +2216,9 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
         loss_ss_fg_recon_sc_min = token_losses_ss_fg_recon_sc.mean()
     else:
         loss_ss_fg_recon_sc_min = [ loss for loss in losses_ss_fg_recon_sc if loss != 0 ][0]
-        losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
 
-        print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}", end=' ')
-    print()
+    losses_ss_fg_recon_sc.append(loss_ss_fg_recon_sc_min)
+    print(f"min : {loss_ss_fg_recon_sc_min.item():.03f}")
 
     return losses_ss_fg_recon_sc, c2s_flow
 
