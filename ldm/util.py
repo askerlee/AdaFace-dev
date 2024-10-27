@@ -2254,7 +2254,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_recon_feat, ca_q, ss_fg
 
     num_heads = 8
     # Similar to the scale of the attention scores.
-    matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
+    matching_score_scale = (ca_recon_feat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
     # We use ca_recon_feat instead of ca_q to compute the correlation scores, so we scale it.
