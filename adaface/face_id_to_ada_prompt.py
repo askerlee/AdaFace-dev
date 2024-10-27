@@ -768,6 +768,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         self.name = 'jointIDs'        
         assert len(adaface_encoder_types) > 0, "adaface_encoder_types should not be empty."
         adaface_encoder_types2num_id_vecs = { 'arc2face': 16, 'consistentID': 4 }
+        # self.num_id_vecs is used in the parent class. So we need to initialize it here first.
         self.encoders_num_id_vecs = [ adaface_encoder_types2num_id_vecs[encoder_type] \
                                       for encoder_type in adaface_encoder_types ]
         self.num_id_vecs = sum(self.encoders_num_id_vecs)
@@ -1077,6 +1078,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # So its .device is the device of its parameters.
         device = self.id2ada_prompt_encoders[0].clip_image_encoder.device
         is_emb_averaged = kwargs.get('avg_at_stage', None) is not None
+        enable_static_img_suffix_embs = kwargs.get('enable_static_img_suffix_embs', False)
         BS = -1
 
         if face_id_embs is not None:
@@ -1131,8 +1133,12 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                                                                       all_img_prompt_embs[i],
                                                                       *args, **kwargs)
             
-            # adaface_subj_embs: [16, 768] or [4, 768].
+            # adaface_subj_embs: arc2face [16, 768] or consistentID [4, 768], 
+            # or arc2face [20, 768] or consistentID [8, 768] if enable_static_img_suffix_embs=True.
             N_ID = self.encoders_num_id_vecs[i]
+            if enable_static_img_suffix_embs:
+                N_ID += self.encoders_num_static_img_suffix_embs[i]
+                
             if adaface_subj_embs is None:
                 if not return_zero_embs_for_dropped_encoders:
                     continue

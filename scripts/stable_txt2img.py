@@ -252,7 +252,10 @@ def parse_args():
                         help="Position of the placeholder tokens in the prompt")
     parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.0,
                         help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
-    
+    # If enabled, the static image suffix embeddings will be used during inference.
+    parser.add_argument("--enable_static_img_suffix_embs", action="store_true",
+                        help="Enable the static image suffix embeddings during inference")
+
     args = parser.parse_args()
     return args
 
@@ -374,7 +377,7 @@ def main(opt):
                                           opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
                                           unet_types=None,
                                           main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
-                                          unet_weights=opt.unet_weights, 
+                                          unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
                                           device=device)
                 # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
                 adaface_subj_embs = \

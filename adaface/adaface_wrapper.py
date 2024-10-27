@@ -24,6 +24,7 @@ class AdaFaceWrapper(nn.Module):
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
+                 enable_static_img_suffix_embs=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -38,6 +39,7 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_ckpt_paths = adaface_ckpt_paths
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.enabled_encoders = enabled_encoders
+        self.enable_static_img_suffix_embs = enable_static_img_suffix_embs
         self.subject_string = subject_string
 
         self.num_inference_steps = num_inference_steps
@@ -62,7 +64,10 @@ class AdaFaceWrapper(nn.Module):
         self.initialize_pipeline()
         # During inference, we never use static image suffix embeddings. 
         # So num_id_vecs is the length of the returned adaface embeddings for each encoder.
-        self.encoders_num_id_vecs = self.id2ada_prompt_encoder.encoders_num_id_vecs
+        self.encoders_num_id_vecs = np.array(self.id2ada_prompt_encoder.encoders_num_id_vecs)
+        self.encoders_num_static_img_suffix_embs = np.array(self.id2ada_prompt_encoder.encoders_num_static_img_suffix_embs)
+        if self.enable_static_img_suffix_embs:
+            self.encoders_num_id_vecs += self.encoders_num_static_img_suffix_embs
         self.extend_tokenizer_and_text_encoder()
 
     def to(self, device):
@@ -76,7 +81,8 @@ class AdaFaceWrapper(nn.Module):
         self.id2ada_prompt_encoder = create_id2ada_prompt_encoder(self.adaface_encoder_types,
                                                                   self.adaface_ckpt_paths,
                                                                   self.adaface_encoder_cfg_scales,
-                                                                  self.enabled_encoders)
+                                                                  self.enabled_encoders,
+                                                                  num_static_img_suffix_embs=4)
 
         self.id2ada_prompt_encoder.to(self.device)
         print(f"adaface_encoder_cfg_scales: {self.adaface_encoder_cfg_scales}")
@@ -305,7 +311,7 @@ class AdaFaceWrapper(nn.Module):
                     avg_at_stage=avg_at_stage,
                     perturb_at_stage=perturb_at_stage,
                     perturb_std=perturb_std,
-                    enable_static_img_suffix_embs=False)
+                    enable_static_img_suffix_embs=self.enable_static_img_suffix_embs)
         
         if all_adaface_subj_embs is None:
             return None
