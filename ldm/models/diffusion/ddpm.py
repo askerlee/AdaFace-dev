@@ -1592,14 +1592,15 @@ class LatentDiffusion(DDPM):
             # all_subj_indices and all_bg_indices are used, instead of *_1b.
             # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
             loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
-                        self.calc_subj_bg_complementary_loss(extra_info['ca_layers_activations']['attn'],
-                                                             all_subj_indices,
-                                                             all_bg_indices,
-                                                             BLOCK_SIZE=BLOCK_SIZE,
-                                                             fg_grad_scale=0.1,
-                                                             fg_mask=fg_mask,
-                                                             instance_mask=batch_have_fg_mask
-                                                            )
+                        self.calc_subj_bg_complementary_loss(
+                            extra_info['ca_layers_activations']['attnscore'],
+                            all_subj_indices,
+                            all_bg_indices,
+                            BLOCK_SIZE=BLOCK_SIZE,
+                            fg_grad_scale=0.1,
+                            fg_mask=fg_mask,
+                            instance_mask=batch_have_fg_mask
+                        )
 
             if loss_subj_bg_complem > 0:
                 loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complem.mean().detach().item()})
@@ -2250,7 +2251,7 @@ class LatentDiffusion(DDPM):
 
         return loss_feat_delta_align, loss_subj_attn_norm_distill
 
-    def calc_subj_masked_bg_suppress_loss(self, ca_attns, subj_indices, 
+    def calc_subj_masked_bg_suppress_loss(self, ca_attnscore, subj_indices, 
                                           BLOCK_SIZE, fg_mask, instance_mask=None):
         if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
           or (instance_mask is not None and instance_mask.sum() == 0):
@@ -2283,7 +2284,7 @@ class LatentDiffusion(DDPM):
 
         loss_layers_subj_mb_suppress    = []
 
-        for unet_layer_idx, unet_attn in ca_attns.items():
+        for unet_layer_idx, unet_attn in ca_attnscore.items():
             if (unet_layer_idx not in attn_align_layer_weights):
                 continue
 
@@ -2357,7 +2358,7 @@ class LatentDiffusion(DDPM):
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch, i.e., BLOCK_SIZE = batch size.
     # bg_indices: we assume the bg tokens appear in all instances in the batch.
-    def calc_subj_bg_complementary_loss(self, ca_attns, subj_indices, bg_indices,
+    def calc_subj_bg_complementary_loss(self, ca_attnscores, subj_indices, bg_indices,
                                         BLOCK_SIZE, fg_grad_scale=0.1,
                                         fg_mask=None, instance_mask=None):
         
@@ -2366,7 +2367,7 @@ class LatentDiffusion(DDPM):
         
         if subj_indices is not None and bg_indices is None:
             loss_subj_mb_suppress = \
-                self.calc_subj_masked_bg_suppress_loss(ca_attns, subj_indices, 
+                self.calc_subj_masked_bg_suppress_loss(ca_attnscores, subj_indices, 
                                                        BLOCK_SIZE, fg_mask, instance_mask)
             
             return 0, loss_subj_mb_suppress, 0, 0
@@ -2399,9 +2400,9 @@ class LatentDiffusion(DDPM):
         subj_mb_suppress_scale              = 0.05
         bg_mf_suppress_scale                = 0.1
         subj_bg_emb_contrast_scale          = 0.05
-        mfmb_contrast_attn_margin           = 0.1
-        subj_bg_contrast_at_mf_attn_margin  = 0.1 * K_subj / K_bg     # 0.9
-        bg_subj_contrast_at_mb_attn_margin  = 0.1
+        mfmb_contrast_attn_margin           = 0.4
+        subj_bg_contrast_at_mf_attn_margin  = 0.4 * K_subj / K_bg     # 0.9
+        bg_subj_contrast_at_mb_attn_margin  = 0.4
 
         subj_attn_at_mf_grad_scale = 0.5
         subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
@@ -2414,7 +2415,7 @@ class LatentDiffusion(DDPM):
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
         subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
 
-        for unet_layer_idx, unet_attn in ca_attns.items():
+        for unet_layer_idx, unet_attn in ca_attnscores.items():
             if (unet_layer_idx not in attn_align_layer_weights):
                 continue
 
@@ -2446,7 +2447,7 @@ class LatentDiffusion(DDPM):
                                      exponent=2,    
                                      # Since we use attn probs for bg_attn and subj_attn, most of them are around the mean value.
                                      # So we demean them to highlight the contrast.
-                                     do_demeans=[True, True],
+                                     do_demeans=[False, False],
                                      first_n_dims_into_instances=2, 
                                      ref_grad_scale=fg_grad_scale,  # fg_grad_scale: 0.1
                                      aim_to_align=False,
