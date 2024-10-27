@@ -2035,7 +2035,6 @@ class LatentDiffusion(DDPM):
 
             comp_subj_bg_preserve_loss_dict = \
                 self.calc_comp_subj_bg_preserve_loss(ca_outfeats, 
-                                                     ca_layers_activations['q'],
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
@@ -2559,10 +2558,10 @@ class LatentDiffusion(DDPM):
     # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
-    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_qs, ca_attns, 
+    def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attns, 
                                         fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE,
                                         recon_feat_objectives=['feat', 'delta'],
-                                        do_feat_attn_pooling=False):
+                                        do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
@@ -2596,30 +2595,18 @@ class LatentDiffusion(DDPM):
             elastic_matching_layer_weight = elastic_matching_layer_weights[unet_layer_idx]
 
             # ca_outfeat: [4, 1280, 8, 8]
-            # ca_layer_q: [4, 8, 64, 160] -> [4, 8, 160, 64] -> [4, 8*160, 8, 8]
-            ca_layer_q = ca_qs[unet_layer_idx]
-            # This way of calculation ca_q_h is to consider the case when the height and width might not be the same.
-            ca_q_h = int(np.sqrt(ca_layer_q.shape[2] * ca_outfeat.shape[2] // ca_outfeat.shape[3]))
-            ca_q_w = ca_layer_q.shape[2] // ca_q_h
-            ca_layer_q = ca_layer_q.permute(0, 1, 3, 2).reshape(ca_layer_q.shape[0], -1, ca_q_h, ca_q_w)
-
-            # Some layers resize the input feature maps. So we need to resize ca_outfeat to match ca_layer_q.
-            if ca_outfeat.shape[2:] != ca_layer_q.shape[2:]:
-                ca_outfeat = F.interpolate(ca_outfeat, size=ca_layer_q.shape[2:], mode="bilinear", align_corners=False)
-
+            ca_feat_h, ca_feat_w = ca_outfeat.shape[-2:]
             ###### elastic matching loss ######
             # q of each layer is used to compute the correlation matrix between subject-single and subject-comp instances,
             # as well as class-single and class-comp instances.
             # ca_outfeat is used to compute the reconstruction loss between subject-single and subject-comp instances 
             # (using the correlation matrix), as well as class-single and class-comp instances.
-            # Flatten the spatial dimensions of ca_layer_q and ca_outfeat.
-            # ca_layer_q: [4, 1280, 8, 8] -> [4, 1280, 64].
+            # Flatten the spatial dimensions of ca_outfeat.
             # ca_outfeat: [4, 1280, 8, 8] -> [4, 1280, 64].
-            ca_layer_q   = ca_layer_q.reshape(*ca_layer_q.shape[:2], -1)
             ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
             # fg_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
             fg_mask_4b \
-                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", (ca_q_h, ca_q_w), 
+                = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
                                              mode="nearest|bilinear", warn_on_all_zero=False)
             # ss_fg_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
             ss_fg_mask = fg_mask_4b.chunk(4)[0]
@@ -2633,8 +2620,8 @@ class LatentDiffusion(DDPM):
             # to suppress the activations on background areas.
             loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, losses_ss_fg_recon_sc, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
-                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_layer_q, 
-                                             ca_outfeat, ss_fg_mask, ca_q_h, ca_q_w, 
+                = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, ca_outfeat, ss_fg_mask, 
+                                             ca_feat_h, ca_feat_w, 
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
                                              recon_feat_objectives=recon_feat_objectives,
                                              do_feat_attn_pooling=do_feat_attn_pooling)

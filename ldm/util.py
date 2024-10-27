@@ -2224,42 +2224,37 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 # recon_feat_objectives: a list of strings, each is either 'feat' or 'delta'. 
 # Default reconstruct both.
 #@torch.compile
-def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
-                               num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta'], do_feat_attn_pooling=False):
+def calc_elastic_matching_loss(layer_idx, flow_model, ca_outfeat, ss_fg_mask, H, W, fg_bg_cutoff_prob=0.25,
+                               num_flow_est_iters=12, recon_feat_objectives=['feat', 'delta'], do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64] => [1, 64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
 
-    # ca_q, ca_outfeat: [4, 1280, 64]
+    # ca_outfeat: [4, 1280, 64]
    
     if do_feat_attn_pooling:
-        # Pooling makes ca_q spatially smoother, so that we'll get more continuous flow.
-        # We also pool ca_outfeat to make the reconstructed features smoother.
-        ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W), retain_spatial=True)
+        # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
         ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
         ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
-        H2, W2      = ca_q.shape[-2:]
-        ca_q        = ca_q.reshape(*ca_q.shape[:2], H2*W2)
+        H2, W2      = ca_outfeat.shape[-2:]
+        ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
     else:
         H2, W2      = H, W
-        ca_q        = ca_outfeat
 
     ss_fg_mask = ss_fg_mask.bool().squeeze(1)
-    # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
-    # NOTE: q is computed from x (input features), k and v are computed from prompt embeddings.
-    # So we use q to compute image token matching scores and flow. 
-    ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
-    ss_q = ss_q.detach()
+    # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
+    ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)
+    ss_feat = ss_feat.detach()
 
     num_heads = 8
     # Similar to the scale of the attention scores.
-    matching_score_scale = (ca_q.shape[1] / num_heads) ** -0.5
+    matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
-    #LINK ldm/modules/attention.py#attention_caching
-    # Although ca_q has been scaled when caching in the attention module, it helps to scale it again here.
-    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
+    # We use ca_outfeat instead of ca_q to compute the correlation scores, so we scale it.
+    # Moreover, sometimes sc_map_ss_score before scaling is 200~300, which is too large.
+    sc_map_ss_score = torch.matmul(sc_feat.transpose(1, 2).contiguous(), ss_feat) * matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Dims 0, 1, 2 are the batch, sc, ss dims, respectively.
@@ -2273,12 +2268,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
     sc_map_ss_prob  = F.softmax(sc_map_ss_score, dim=1)
 
     # matmul() does multiplication on the last two dims.
-    mc_map_ms_score = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
+    mc_map_ms_score = torch.matmul(mc_feat.transpose(1, 2).contiguous(), ms_feat) * matching_score_scale
     # Normalize among class comp tokens (mc dim).
     mc_map_ms_prob  = F.softmax(mc_map_ms_score, dim=1)
-
-    # ss_feat, sc_feat, ms_feat, mc_feat: [4, 1280, 64] => [1, 1280, 64].
-    ss_feat, sc_feat, ms_feat, mc_feat = ca_outfeat.chunk(4)
 
     # Span ss_fg_mask to become a mask for the (fg, fg) pairwise matching scores,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
@@ -2302,7 +2294,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
         losses_sc_recon_ss_fg_obj, s2c_flow = \
             calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
                                        sc_map_ss_prob, ss_fg_mask, 
-                                       ss_q, sc_q, H2, W2, num_flow_est_iters, 
+                                       ss_feat, sc_feat, H2, W2, num_flow_est_iters, 
                                        do_recon_feat_delta=do_recon_feat_delta)
         losses_sc_recon_ss_fg_objs.append(torch.tensor(losses_sc_recon_ss_fg_obj))
     
