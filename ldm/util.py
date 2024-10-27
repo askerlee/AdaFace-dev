@@ -2234,12 +2234,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
    
     # Pooling makes ca_q spatially smoother, so that we'll get more continuous flow.
     # We also pool ca_outfeat to make the reconstructed features smoother.
+    '''
     ca_q        = pool_feat_or_attn_mat(ca_q,       (H, W), retain_spatial=True)
     ca_outfeat  = pool_feat_or_attn_mat(ca_outfeat, (H, W))
     ss_fg_mask  = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
-
     H2, W2      = ca_q.shape[-2:]
     ca_q        = ca_q.reshape(*ca_q.shape[:2], H2*W2)
+    '''
+
+    H2, W2      = H, W
+    ca_q        = ca_outfeat
 
     ss_fg_mask = ss_fg_mask.bool().squeeze(1)
     # ss_q, sc_q, ms_q, mc_q: [1, 1280, 64]. 
@@ -2256,7 +2260,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
     #LINK ldm/modules/attention.py#attention_caching
     # Although ca_q has been scaled when caching in the attention module, it helps to scale it again here.
-    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) #* matching_score_scale
+    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Dims 0, 1, 2 are the batch, sc, ss dims, respectively.
