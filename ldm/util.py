@@ -2209,7 +2209,8 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                recon_feat_objectives={'attn_out': ['orig', 'delta'], 
                                                       'outfeat':  ['orig']}, 
-                               fg_bg_cutoff_prob=0.25, num_flow_est_iters=12, do_feat_attn_pooling=True):
+                               recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
+                               num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
@@ -2359,7 +2360,13 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                            ss_q, sc_q, H2, W2, num_flow_est_iters, 
                                            objective_name=objective_name)
             
-            losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
+            # If the recon loss is too large, it means there's spatial shifting between the two features.
+            # Optimizing w.r.t. this loss may lead to degenerate results.
+            to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
+            if to_discard:
+                print(f"Discarding {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1].item():.03f}")
+            else:
+                losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
 
         #### Compute bg matching losses. #### 
         # We compute cosine loss on the features dim. 
@@ -2381,7 +2388,12 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         loss_sc_mc_bg_match    += loss_sc_mc_bg_match_obj
         num_bg_matching_losses += 1
 
-    losses_sc_recon_ss_fg = torch.stack(losses_sc_recon_ss_fg, dim=0).mean(dim=0)
+    # If all losses are discarded, return 3 x 0s.
+    if len(losses_sc_recon_ss_fg) == 0:
+        losses_sc_recon_ss_fg = torch.zeros(3, device=ss_feat.device)
+    else:
+        losses_sc_recon_ss_fg = torch.stack(losses_sc_recon_ss_fg, dim=0).mean(dim=0)
+
     loss_sc_mc_bg_match   = loss_sc_mc_bg_match / num_bg_matching_losses
     
     return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
