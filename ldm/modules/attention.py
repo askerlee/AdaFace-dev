@@ -196,8 +196,8 @@ class CrossAttention(nn.Module):
 
         # sim: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of
-        # NOTE: the normalization is done across tokens, not across pixels.
-        # So for each pixel, the sum of attention scores across tokens is 1.
+        # NOTE: the normalization is done across prompt tokens, not across pixels.
+        # So for each pixel, the sum of attention scores across prompt tokens is 1.
         attn = sim.softmax(dim=-1)
         # v: [64, 77, 40]. 40: dim of each head. out: [64, 4096, 40].
         out = einsum('b i j, b j d -> b i d', attn, v)
@@ -209,6 +209,7 @@ class CrossAttention(nn.Module):
             self.cached_activations = {}
             # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
             # So sqrt(self.scale) will scale the product of two qs by self.scale.
+            # ANCHOR[id=attention_caching]
             self.cached_activations['q'] = rearrange(q,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
             # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
             # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.

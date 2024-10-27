@@ -2254,7 +2254,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
     matching_score_scale = (ca_q.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 64, 64]. 
     # Pairwise matching scores (64 subj comp image tokens) -> (64 subj single image tokens).
-    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
+    #LINK ldm/modules/attention.py#attention_caching
+    # Although ca_q has been scaled when caching in the attention module, it helps to scale it again here.
+    sc_map_ss_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) #* matching_score_scale
     # sc_map_ss_prob:   [1, 64, 64]. 
     # Pairwise matching probs (9 subj comp image tokens) -> (9 subj single image tokens).
     # Dims 0, 1, 2 are the batch, sc, ss dims, respectively.
@@ -2290,8 +2292,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_outfeat, ss_fg_ma
             sc_feat_obj = sc_feat
         elif recon_feat_objective == 'delta':
             do_recon_feat_delta = True
-            ss_feat_obj = ss_feat - ms_feat
-            sc_feat_obj = sc_feat - mc_feat
+            ss_feat_obj = ortho_subtract(ss_feat, ms_feat)
+            sc_feat_obj = ortho_subtract(sc_feat, mc_feat)
         else:
             breakpoint()
         losses_sc_recon_ss_fg_obj, s2c_flow = \
