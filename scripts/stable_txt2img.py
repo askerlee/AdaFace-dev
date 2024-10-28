@@ -237,8 +237,6 @@ def parse_args():
     # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
-    parser.add_argument("--use_teacher_neg", action="store_true",
-                        help="Use the teacher's negative ID prompt embeddings, instead of the original SD1.5 negative embeddings")
     # Options below are only relevant for --diffusers --method adaface.
     parser.add_argument("--main_unet_filepath", type=str, default=None,
                         help="Path to the checkpoint of the main UNet model, if you want to replace the default UNet within --ckpt")
@@ -611,7 +609,6 @@ def main(opt):
                     elif opt.diffusers:
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
                         if opt.method == "adaface":                      
-                            teacher_neg_id_prompt_embs = teacher_neg_id_prompt_embs if opt.use_teacher_neg else None
                             x_samples_ddim = pipeline(noise, prompts[0], None, 
                                                       placeholder_tokens_pos=opt.placeholder_tokens_pos,
                                                       do_neg_id_prompt_weight=opt.do_neg_id_prompt_weight,

@@ -2365,7 +2365,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # Optimizing w.r.t. this loss may lead to degenerate results.
             to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
             if to_discard:
-                print(f"Discarding {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1].item():.03f}")
+                print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1].item():.03f}")
             else:
                 losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
                 num_kept_objectives += 1
