@@ -82,7 +82,7 @@ class FaceID2AdaPrompt(nn.Module):
         # the number of ada embeddings returned by the subject basis generator.
         # num_id_vecs will be set in each derived class.
         self.num_static_img_suffix_embs     = kwargs.get('num_static_img_suffix_embs', 0)
-        print(f'{self.name} Adaface uses {self.num_id_vecs} ID image embeddings and {self.num_static_img_suffix_embs} fixed image embeddings as input.')
+        print(f'{self.name} Adaface uses {self.num_id_vecs} ID image embeddings + {self.num_static_img_suffix_embs} fixed image embeddings as input.')
 
         self.id_img_prompt_max_length       = 77
         self.face_id_dim                    = 512
@@ -101,10 +101,10 @@ class FaceID2AdaPrompt(nn.Module):
         print(f'{len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules loaded.')
     
     # init_subj_basis_generator() can only be called after the derived class is initialized,
-    # when self.num_id_vecs, self.num_static_img_suffix_embs and self.clip_embedding_dim have been set.
+    # when self.num_id_vecs0, self.num_static_img_suffix_embs and self.clip_embedding_dim have been set.
     def init_subj_basis_generator(self):
         self.subj_basis_generator = \
-            SubjBasisGenerator(num_id_vecs = self.num_id_vecs,
+            SubjBasisGenerator(num_id_vecs = self.num_id_vecs0,
                                num_static_img_suffix_embs = self.num_static_img_suffix_embs,
                                bg_image_embedding_dim = self.clip_embedding_dim, 
                                output_dim = self.output_dim,
@@ -120,7 +120,7 @@ class FaceID2AdaPrompt(nn.Module):
             breakpoint()
 
         ckpt_subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
-        ckpt_subj_basis_generator.N_ID              = self.num_id_vecs
+        ckpt_subj_basis_generator.N_ID              = self.num_id_vecs0
         # Since we directly use the subject basis generator object from the ckpt,
         # fixing the number of static image suffix embeddings is much simpler.
         # Otherwise if we want to load the subject basis generator from its state_dict, 
@@ -499,7 +499,6 @@ class FaceID2AdaPrompt(nn.Module):
                                     perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                     perturb_std=0, enable_static_img_suffix_embs=None):
         
-        
         if enable_static_img_suffix_embs is None:
             enable_static_img_suffix_embs = self.default_enable_static_img_suffix_embs
         
@@ -558,6 +557,22 @@ class FaceID2AdaPrompt(nn.Module):
                                       out_id_embs_cfg_scale=self.out_id_embs_cfg_scale,
                                       is_face=True, 
                                       enable_static_img_suffix_embs=enable_static_img_suffix_embs)
+        
+        if self.num_id_vecs < self.num_id_vecs0:
+            adaface_subj_embs = adaface_subj_embs[:, :self.num_id_vecs, :]
+            '''
+            num_kept_seg = self.num_id_vecs // 2
+            num_avg_seg  = self.num_id_vecs - num_kept_seg
+            kept_id_vecs_seg = adaface_subj_embs[:, :num_kept_seg, :]
+            # avg_id_vecs_seg: [BS, num_id_vecs0 - num_kept_seg, 768].
+            avg_id_vecs_seg  = adaface_subj_embs[:, num_kept_seg:, :]
+            # If arc2face, adaface_subj_embs: [BS, 16, 768] -> [BS, 8, 768].
+            # NOTE: for simplicity, we assume num_avg_seg divides num_id_vecs0 - num_kept_seg.
+            # Otherwise the last chunked segment will be smaller, causing an error.
+            avg_id_vecs = torch.stack(avg_id_vecs_seg.chunk(num_avg_seg, dim=1), dim=1).mean(dim=2, keepdim=False)
+            adaface_subj_embs = torch.cat([kept_id_vecs_seg, avg_id_vecs], dim=1)
+            '''
+
         # During training,  img_prompt_avg_at_stage is None, and BS >= 1.
         # During inference, img_prompt_avg_at_stage is 'id_emb' or 'img_prompt_emb', and BS == 1.
         if img_prompt_avg_at_stage is not None:
@@ -567,11 +582,14 @@ class FaceID2AdaPrompt(nn.Module):
         return adaface_subj_embs, lens_subj_emb_segments
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
-    def __init__(self, *args, **kwargs):
-        self.name = 'arc2face'
-        self.num_id_vecs = 16
-        self.default_enable_static_img_suffix_embs = False
+    name = 'arc2face'
+    num_id_vecs0 = 16
+    # first 4 are kept, the rest 12 are averaged to another 4.
+    # Then concatenated to [8, 768].
+    num_id_vecs  = 16
+    default_enable_static_img_suffix_embs = False
 
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.clip_image_encoder = CLIPVisionModelWithMask.from_pretrained('openai/clip-vit-large-patch14')
@@ -621,7 +639,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
         print(f"{self.name} ada prompt encoder initialized, "
-              f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}.")
+              f"ID vecs: {self.num_id_vecs0}, static suffix: {self.num_static_img_suffix_embs}.")
 
     # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
@@ -675,11 +693,14 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     
 # ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
+    name = 'consistentID'
+    num_id_vecs0 = 4
+    # No compression for ConsistentID.
+    num_id_vecs  = 4
+    default_enable_static_img_suffix_embs = True
+    
     def __init__(self, pipe=None, base_model_path="models/sd15-dste8-vae.safetensors", 
                  *args, **kwargs):
-        self.name = 'consistentID'
-        self.num_id_vecs = 4
-        self.default_enable_static_img_suffix_embs = True
 
         super().__init__(*args, **kwargs)
         if pipe is None:
@@ -733,7 +754,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
         print(f"{self.name} ada prompt encoder initialized, "
-              f"ID vecs: {self.num_id_vecs}, static suffix: {self.num_static_img_suffix_embs}.")
+              f"ID vecs: {self.num_id_vecs0}, static suffix: {self.num_static_img_suffix_embs}.")
 
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
@@ -781,12 +802,17 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                  out_id_embs_cfg_scales=None, enabled_encoders=None,
                  *args, **kwargs):
         self.name = 'jointIDs'        
+        name2class = { 'arc2face': Arc2Face_ID2AdaPrompt, 'consistentID': ConsistentID_ID2AdaPrompt }
         assert len(adaface_encoder_types) > 0, "adaface_encoder_types should not be empty."
-        adaface_encoder_types2num_id_vecs = { 'arc2face': 16, 'consistentID': 4 }
-        # self.num_id_vecs is used in the parent class. So we need to initialize it here first.
-        self.encoders_num_id_vecs = [ adaface_encoder_types2num_id_vecs[encoder_type] \
+        adaface_encoder_types2num_id_vecs0 = { name: name2class[name].num_id_vecs0 for name in adaface_encoder_types }
+        adaface_encoder_types2num_id_vecs  = { name: name2class[name].num_id_vecs  for name in adaface_encoder_types }
+        # self.num_id_vecs0 is used in the parent class. So we need to initialize it here first.
+        self.encoders_num_id_vecs0 = [ adaface_encoder_types2num_id_vecs0[encoder_type] \
                                       for encoder_type in adaface_encoder_types ]
-        self.num_id_vecs = sum(self.encoders_num_id_vecs)
+        self.encoders_num_id_vecs  = [ adaface_encoder_types2num_id_vecs[encoder_type] \
+                                        for encoder_type in adaface_encoder_types ]
+        self.num_id_vecs0 = sum(self.encoders_num_id_vecs0)
+        self.num_id_vecs  = sum(self.encoders_num_id_vecs)
         # super() sets self.is_training.
         super().__init__(*args, **kwargs)
         
@@ -848,7 +874,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             self.load_adaface_ckpt(adaface_ckpt_paths)
         
         print(f"{self.name} ada prompt encoder initialized with {self.num_sub_encoders} sub-encoders. "
-              f"ID vecs: {self.num_id_vecs}, static suffix embs: {self.num_static_img_suffix_embs}.")
+              f"ID vecs: {self.num_id_vecs0}, static suffix embs: {self.num_static_img_suffix_embs}.")
         
         if enabled_encoders is not None:
             self.are_encoders_enabled = \
@@ -1074,7 +1100,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
 
             N_ID = self.encoders_num_id_vecs[i]
             if all_pos_prompt_embs[i] is None:
-                # Both pos_prompt_embs and neg_prompt_embs have N_ID == num_id_vecs embeddings.
+                # Both pos_prompt_embs and neg_prompt_embs have N_ID == num_id_vecs0 embeddings.
                 all_pos_prompt_embs[i] = torch.zeros((BS, N_ID, 768), dtype=torch.float16, device=device)
             if all_neg_prompt_embs[i] is None:
                 all_neg_prompt_embs[i] = torch.zeros((BS, N_ID, 768), dtype=torch.float16, device=device)
@@ -1110,9 +1136,9 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             all_face_id_embs = [None] * self.num_sub_encoders
         if img_prompt_embs is not None:
             BS = img_prompt_embs.shape[0] if BS == -1 else BS
-            if img_prompt_embs.shape[1] != self.num_id_vecs:
+            if img_prompt_embs.shape[1] != self.num_id_vecs0:
                 breakpoint()
-            all_img_prompt_embs = img_prompt_embs.split(self.encoders_num_id_vecs, dim=1)
+            all_img_prompt_embs = img_prompt_embs.split(self.encoders_num_id_vecs0, dim=1)
         else:
             all_img_prompt_embs = [None] * self.num_sub_encoders
         if image_paths is not None:
