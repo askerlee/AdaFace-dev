@@ -835,10 +835,11 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         # Fix compatability with the previous version.
         if not hasattr(self, 'bg_prompt_translator_has_to_out_proj'):
             self.bg_prompt_translator_has_to_out_proj = False
-        if not hasattr(self, 'num_out_embs'):
-            self.num_out_embs = -1
         if hasattr(self, 'num_id_vecs') and not hasattr(self, 'N_ID'):
             self.N_ID = self.num_id_vecs
+        # Update the number of output embeddings.
+        self.num_out_embs = self.N_ID + self.N_SFX
+
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'N_ID'):
             self.num_nonface_in_id_vecs = self.N_ID
         if not hasattr(self, 'dtype'):

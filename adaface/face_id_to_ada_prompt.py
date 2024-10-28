@@ -113,6 +113,9 @@ class FaceID2AdaPrompt(nn.Module):
                                bg_prompt_translator_has_to_out_proj=False)
 
     def load_adaface_ckpt(self, adaface_ckpt_path):
+        if isinstance(adaface_ckpt_path, (list, tuple, ListConfig)):
+            adaface_ckpt_path = adaface_ckpt_path[0]
+
         ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
@@ -120,6 +123,11 @@ class FaceID2AdaPrompt(nn.Module):
             breakpoint()
 
         ckpt_subj_basis_generator = string_to_subj_basis_generator_dict[self.subject_string]
+        if isinstance(ckpt_subj_basis_generator, nn.ModuleList):
+            name2idx = { 'consistentID': 0, 'arc2face': 1 }
+            subj_basis_generator_idx = name2idx[self.name]
+            ckpt_subj_basis_generator = ckpt_subj_basis_generator[subj_basis_generator_idx]
+
         ckpt_subj_basis_generator.N_ID              = self.num_id_vecs0
         # Since we directly use the subject basis generator object from the ckpt,
         # fixing the number of static image suffix embeddings is much simpler.
@@ -133,7 +141,7 @@ class FaceID2AdaPrompt(nn.Module):
         ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.num_static_img_suffix_embs, img_prompt_dim=self.output_dim)
         # Fix missing variables in old ckpt.
         ckpt_subj_basis_generator.patch_old_subj_basis_generator_ckpt()
-
+            
         self.subj_basis_generator.extend_prompt2token_proj_attention(\
             ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)
         ret = self.subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
@@ -1171,7 +1179,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
             if not are_encoders_enabled[i]:
                 adaface_subj_embs = None
-                print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
+                print(f"Encoder {id2ada_prompt_encoder.name} is disabled.")
                 N_ID = id2ada_prompt_encoder.num_id_vecs + enable_static_img_suffix_embs[i] \
                                                            * id2ada_prompt_encoder.num_static_img_suffix_embs
             else:

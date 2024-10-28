@@ -106,7 +106,8 @@ model:
                                               'unet_distill_iter':     0.4,
                                               'compos_distill_iter':   0.4 }
         adaface_ckpt_paths:                 null
-        adaface_encoder_types:              ['arc2face']
+        adaface_encoder_types:              ['consistentID', 'arc2face']
+        enabled_encoders:                   ['arc2face']
         # Probabilities for randomly dropping out each of the ada encoders.
         p_encoder_dropout:                  0
         # Load the ada components from these placeholders in the checkpoint.

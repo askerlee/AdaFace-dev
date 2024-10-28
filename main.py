@@ -171,9 +171,9 @@ def get_parser(**parser_kwargs):
         type=str, default=None,
         help="Path to save the cache of subject to person type mapping to")
 
-    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
+    parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=argparse.SUPPRESS,
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
-    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
+    parser.add_argument("--enabled_encoders", type=str, nargs="+", default=argparse.SUPPRESS,
                         choices=["arc2face", "consistentID"], 
                         help="List of enabled encoders (among the list of adaface_encoder_types)")
     
@@ -647,8 +647,25 @@ if __name__ == "__main__":
             config.data.params.max_steps = opt.max_steps
                     
         config.data.params.train.params.subject_string = opt.subject_string
+        if not hasattr(opt, 'adaface_encoder_types'):
+            # Use the setting in the config file.
+            opt.adaface_encoder_types = list(config.model.params.personalization_config.params.adaface_encoder_types)
+        else:
+            # Override the setting in the config file.
+            config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
 
-        opt.num_adaface_encoder_types = len(opt.adaface_encoder_types)
+        if not hasattr(opt, 'enabled_encoders'):
+            if hasattr(config.model.params.personalization_config.params, 'enabled_encoders'):
+                # Use the setting in the config file.
+                opt.enabled_encoders = list(config.model.params.personalization_config.params.enabled_encoders)
+            else:
+                # All the adaface_encoder_types are enabled by default.
+                opt.enabled_encoders = opt.adaface_encoder_types
+        else:
+            # Override the setting in the config file.
+            config.model.params.personalization_config.params.enabled_encoders = opt.enabled_encoders
+
+        opt.num_adaface_encoder_types = len(opt.enabled_encoders)
         # common_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix   = opt.common_placeholder_prefix
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
@@ -756,8 +773,6 @@ if __name__ == "__main__":
 
         # Personalization config
         config.model.params.personalization_config.params.adaface_ckpt_paths    = opt.adaface_ckpt_paths
-        config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
-        config.model.params.personalization_config.params.enabled_encoders      = opt.enabled_encoders
         config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
     
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])

@@ -143,6 +143,7 @@ class EmbeddingManager(nn.Module):
         self.id2ada_prompt_encoder = \
             create_id2ada_prompt_encoder(adaface_encoder_types, 
                                          num_static_img_suffix_embs=num_static_img_suffix_embs,
+                                         enabled_encoders=enabled_encoders,
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
                                          is_training=True)
