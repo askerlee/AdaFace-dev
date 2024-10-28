@@ -1,86 +1,110 @@
 model:
-  base_lr: 1e-05
+  base_lr: 2e-06
   weight_decay: 0.0
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
     # linear_start/linear_end: params for linear beta schedule.
-    beta_schedule: linear
-    linear_start: 0.00085
-    linear_end: 0.0120
-    log_every_t: 200
-    timesteps: 1000
-    first_stage_key: image
-    cond_stage_key: caption
-    image_size: 64
-    channels: 4
+    beta_schedule:    linear
+    linear_start:     0.00085
+    linear_end:       0.0120
+    log_every_t:      200
+    timesteps:        1000
+    first_stage_key:  image
+    cond_stage_key:   caption
+    image_size:       64
+    channels:         4
     # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
-    embedding_manager_trainable: True
-    monitor: train/loss
-    scale_factor: 0.18215
-    unfreeze_unet: False
-    unet_lr: 0.0
+    embedding_manager_trainable:      True
+    monitor:                          train/loss
+    scale_factor:                     0.18215
+    unfreeze_unet:                    False
+    unet_lr:                          0.0
     use_fp_trick:                     True
-    comp_distill_iter_gap:            -1
-    unet_teacher_types:               ['consistentID']
+    comp_distill_iter_gap:            4
+    unet_teacher_types:               ['consistentID'] #, 'arc2face']
+    p_unet_teacher_uses_cfg:          0.6
+    unet_teacher_cfg_scale_range:     [1.3, 2.0]
+    # Reduce p_unet_distill_uses_comp_prompt from 0.2 to 0.1, since the joint teachers
+    # only have weak compositionality and their outputs are not so informative.
+    p_unet_distill_uses_comp_prompt:  0.1
     # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
     # unet_distill_iter_gap = 2 means at 50% of the non-compositional iters, 
     # we use the unet teacher's output as the target (do_unet_distill).
     # at the other 50%, we use the original image as the target (do_normal_recon).
     unet_distill_iter_gap:            2
-    # Never generate random IDs for consistentID distillation, as
-    # consistentID relies on CLIP features of the input image, 
-    # which are not available when the IDs are random and there are no actual input images.
-    p_gen_id2img_rand_id:             0
+    unet_distill_weight:              4
+    # The ratio of the id2img_prompt_encoder's lr to the main model's lr. Only effective when trainable.
+    id2img_prompt_encoder_lr_ratio:   0.001
+    # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
+    # of the IDs (belonging to two face detectors) are not consistent. However, a small proportion
+    # of random face IDs may help force the arc2face Ada focuses on reconstructing the arc2face random ID,
+    # and the consistentID Ada focuses on reconstructing the consistentID random ID. Therefore, it may still
+    # be helpful to set a small p_gen_id2img_rand_id. (If both parts are reconstructed well, then their summation
+    # should match the mixture of the two teachers' outputs.)
+    p_gen_id2img_rand_id:             0.1
+    p_perturb_face_id_embs:           0.6
+    # ConsistentID image embeddings are quite robust to random perturbations, so we set
+    # a large std range of [0.5, 1].
+    perturb_face_id_embs_std_range:   [0.5, 1]
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
-    # typical loss_comp_prompt_distill: 0.06, * weight -> 6e-5.
-    comp_prompt_distill_weight:       1e-4
-    comp_fg_bg_preserve_loss_weight:  1e-3
-    # fg_bg_complementary loss: used in recon iters.
-    # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
+    # typical loss_comp_prompt_distill: 2~3, * weight -> 0.02~0.03.
+    comp_prompt_distill_weight:       3e-3
+    # Set cls_subj_mix_scale to 1 to use only class embeddings.
+    # 0.7: 0.7 * class embeddings + 0.3 * subj embeddings.
+    cls_subj_mix_scale:               0.7
+    comp_fg_bg_preserve_loss_weight:  3e-3
+    # fg_bg_complementary loss: used in recon / unet_distill iters.
+    # loss_fg_bg_complementary: 1.5,  * weight -> 7.5e-4
     fg_bg_complementary_loss_weight:  2e-4
 
-    optimizer_type: AdamW           # AdamW, Adam8bit, NAdam, Prodigy
-    grad_clip:  0.5
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
+    # AdEMAMix, AdEMAMixDistributedShampoo, OrthogonalNesterov
+    optimizer_type:           AdEMAMix
+    grad_clip:                0.5
     adam_config:
-      betas:    [0.9,  0.995]  # 0.995 corresponds to a half life of 138. 0.999 corresponds to a half life of 693.        
+      # Half life:
+      # 0.995  0.996  0.997  0.998  0.999
+      # 138    172    231    346    693
+      # We set beta2 to 0.995 for faster update of the estimated variances.
+      betas:                  [0.9,  0.995]  
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
           verbosity_interval: 0
-          warm_up_steps: 500
-          lr_start:      0.01
-          lr_max:        1.0
-          lr_min:        0.1
+          warm_up_steps:      500
+          lr_start:           0.01
+          lr_max:             1.0
+          lr_min:             0.1
 
     prodigy_config:
-      betas:    [0.985, 0.993]  # Faster to converge than zs_betas.
-      zs_betas: [0.9,  0.999]   # Slower to converge than betas.
-      d_coef:           2
+      betas:    [0.985, 0.993]   # Faster to converge than zs_betas.
+      zs_betas: [0.9,   0.999]   # Slower to converge than betas.
+      d_coef:           5
       warm_up_steps:    500
       # 1 cycle after the warm_up_steps.
       # Each cycle is linearly decreasing the LR from base_lr to 0.09*base.
-      scheduler_cycles: 1 #2
+      scheduler_cycles: 1
       # CyclicLR, CosineAnnealingWarmRestarts, Linear. 
       # Linear or CosineAnnealingWarmRestarts doesn't work well.
-      scheduler_type: 'Linear' #'CyclicLR'
+      scheduler_type: 'Linear'
       
     personalization_config:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
-        subject_strings:          ['z']
-        background_strings:       ['y']
-        subj_name_to_cls_delta_string: { 'z': "person", 'rand_id_to_img_prompt': 'person' }
-        token2num_vectors:         {'z': 4, 'y': 4}
-        training_begin_perturb_std_range:  [ 0.05, 0.1 ]
-        training_end_perturb_std_range:    [ 0.05, 0.1 ]
+        subject_strings:                    ['z']
+        background_strings:                 ['y']
+        subj_name_to_cls_delta_string:      { 'z': "person", 'rand_id_to_img_prompt': 'person' }
+        token2num_vectors:                  {'z': 4, 'y': 4}
+        training_begin_perturb_std_range:   [ 0.05, 0.1 ]
+        training_end_perturb_std_range:     [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively
-        training_perturb_prob:   { 'recon_iter':            0.6, 
-                                   'unet_distill_iter':     0.4,
-                                   'compos_distill_iter':   0.4 }
-        adaface_ckpt_paths:                null
-        adaface_encoder_types:       ['consistentID']
+        training_perturb_prob:              { 'recon_iter':            0.6, 
+                                              'unet_distill_iter':     0.4,
+                                              'compos_distill_iter':   0.4 }
+        adaface_ckpt_paths:                  null
+        adaface_encoder_types:              ['consistentID']
         # Load the ada components from these placeholders in the checkpoint.
 
     unet_config:
@@ -120,7 +144,6 @@ model:
           num_res_blocks: 2
           attn_resolutions: []
           dropout: 0.0
-          #attn_type: 'none'
 
         lossconfig:
           target: torch.nn.Identity
@@ -133,6 +156,8 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
+    # Since we optimize two subj basis generators, we can only afford a batch size of 2.
+    # Effective batch size is 2 * 2 GPUs * 4 accum_grad_batches = 16.
     batch_size:  3
     num_workers: 1
     wrap: false
@@ -154,7 +179,7 @@ lightning:
     benchmark: True
     max_steps: 60000
     num_sanity_val_steps: 0
-    limit_val_batches: 0  # Disable doing validation.
+    limit_val_batches:    0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
     accumulate_grad_batches: 2

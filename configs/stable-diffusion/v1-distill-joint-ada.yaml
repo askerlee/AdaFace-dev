@@ -33,6 +33,7 @@ model:
     # we use the unet teacher's output as the target (do_unet_distill).
     # at the other 50%, we use the original image as the target (do_normal_recon).
     unet_distill_iter_gap:            2
+    unet_distill_weight:              4
     # The ratio of the id2img_prompt_encoder's lr to the main model's lr. Only effective when trainable.
     id2img_prompt_encoder_lr_ratio:   0.001
     # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
@@ -42,7 +43,6 @@ model:
     # be helpful to set a small p_gen_id2img_rand_id. (If both parts are reconstructed well, then their summation
     # should match the mixture of the two teachers' outputs.)
     p_gen_id2img_rand_id:             0.1
-    # the delta recon loss is only computed when perturb_face_id_embs.
     p_perturb_face_id_embs:           0.6
     # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
     # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6]. 
@@ -53,15 +53,16 @@ model:
     # typical loss_comp_prompt_distill: 2~3, * weight -> 0.02~0.03.
     comp_prompt_distill_weight:       3e-3
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
-    # 0.8: 0.8 * class embeddings + 0.2 * subj embeddings.
-    cls_subj_mix_scale:               0.8
+    # 0.7: 0.7 * class embeddings + 0.3 * subj embeddings.
+    cls_subj_mix_scale:               0.7
     comp_fg_bg_preserve_loss_weight:  3e-3
     # fg_bg_complementary loss: used in recon / unet_distill iters.
     # loss_fg_bg_complementary: 1.5,  * weight -> 7.5e-4
     fg_bg_complementary_loss_weight:  2e-4
 
-    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
-    optimizer_type:           AdamW8bit
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
+    # AdEMAMix, AdEMAMixDistributedShampoo, OrthogonalNesterov
+    optimizer_type:           AdEMAMix
     grad_clip:                0.5
     adam_config:
       # Half life:
