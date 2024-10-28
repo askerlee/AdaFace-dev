@@ -248,10 +248,14 @@ def parse_args():
     parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
                         choices=["prepend", "append"],
                         help="Position of the placeholder tokens in the prompt")
-    # If enabled, the static image suffix embeddings will be used during inference.
+    # One value for each encoder. If enabled, the static image suffix embeddings of that encoder 
+    # will be used during inference.
     parser.add_argument("--enable_static_img_suffix_embs", type=str2bool, nargs="+", default=None,
                         help="Enable the static image suffix embeddings during inference")
-
+    parser.add_argument("--ablate_prompt_only_placeholders", type=str2bool,  
+                        const=True, nargs="?", default=False,
+                        help="Ablate the prompt to use only placeholders and no composition during inference")
+    
     args = parser.parse_args()
     return args
 
@@ -610,6 +614,7 @@ def main(opt):
                             x_samples_ddim = pipeline(noise, prompts[0], None, 
                                                       placeholder_tokens_pos=opt.placeholder_tokens_pos,
                                                       guidance_scale=opt.scale, out_image_count=batch_size, 
+                                                      ablate_prompt_only_placeholders=opt.ablate_prompt_only_placeholders,
                                                       verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []

@@ -545,7 +545,7 @@ class FaceID2AdaPrompt(nn.Module):
                     verbose=True)
             
             if face_image_count == 0:
-                return None, [0]
+                return None, lens_subj_emb_segments
         
         # No matter whether avg_at_stage is id_emb or img_prompt_emb, we average img_prompt_embs.
         elif avg_at_stage is not None and avg_at_stage.lower() != 'none':
@@ -1146,6 +1146,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             if not are_encoders_enabled[i]:
                 adaface_subj_embs = None
                 print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
+                N_ID = id2ada_prompt_encoder.num_id_vecs + enable_static_img_suffix_embs[i] \
+                                                           * id2ada_prompt_encoder.num_static_img_suffix_embs
             else:
                 kwargs['enable_static_img_suffix_embs'] = enable_static_img_suffix_embs[i]
                 # ddpm.embedding_manager.train() -> id2ada_prompt_encoder.train() -> each sub-enconder's train().
@@ -1157,10 +1159,10 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                                                                       all_img_prompt_embs[i],
                                                                       *args, **kwargs)
             
-            # adaface_subj_embs: arc2face [16, 768] or consistentID [4, 768], 
-            # or arc2face [20, 768] or consistentID [8, 768] if enable_static_img_suffix_embs=True.
-            N_ID = encoder_lens_subj_emb_segments[0]
-                
+                # adaface_subj_embs: arc2face [16, 768] or consistentID [4, 768], 
+                # or arc2face [20, 768] or consistentID [8, 768] if enable_static_img_suffix_embs=True.
+                N_ID = encoder_lens_subj_emb_segments[0]
+                    
             if adaface_subj_embs is None:
                 if not return_zero_embs_for_dropped_encoders:
                     continue

@@ -398,6 +398,7 @@ class AdaFaceWrapper(nn.Module):
     
     def encode_prompt(self, prompt, negative_prompt=None, 
                       placeholder_tokens_pos='append',
+                      ablate_prompt_only_placeholders=False,
                       device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
@@ -406,7 +407,11 @@ class AdaFaceWrapper(nn.Module):
             device = self.device
         
         plain_prompt = prompt
-        prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
+        if ablate_prompt_only_placeholders:
+            prompt = self.updated_placeholder_tokens_str
+        else:
+            prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
+
         if verbose:
             print(f"Subject prompt:\n{prompt}")
 
@@ -423,7 +428,9 @@ class AdaFaceWrapper(nn.Module):
     def forward(self, noise, prompt, negative_prompt=None, 
                 placeholder_tokens_pos='append',
                 guidance_scale=6.0, out_image_count=4, 
-                ref_img_strength=0.8, generator=None, verbose=False):
+                ref_img_strength=0.8, generator=None, 
+                ablate_prompt_only_placeholders=False,
+                verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
 
         if negative_prompt is None:
@@ -433,7 +440,9 @@ class AdaFaceWrapper(nn.Module):
             negative_pooled_prompt_embeds_ = \
                 self.encode_prompt(prompt, negative_prompt, 
                                    placeholder_tokens_pos=placeholder_tokens_pos,
-                                   device=self.device, verbose=verbose)
+                                   ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
+                                   device=self.device, 
+                                   verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
         if negative_prompt_embeds_ is not None:
