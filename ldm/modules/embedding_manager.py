@@ -374,10 +374,16 @@ class EmbeddingManager(nn.Module):
                     # as the whole batch is of the same subject.
                     id2img_prompt_embs = id2img_prompt_embs[[0]]
 
+                '''
                 # static_img_suffix_embs are supposed to narrow the domain gap between the teacher and student models.
                 # So we don't use them in compos_distill_iter or recon_iter.
                 enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
+                '''
+
                 # lens_subj_emb_segments: th length of subject embeddings in each encoder.
+                # enable_static_img_suffix_embs=None: use default settings, i.e.,
+                # consistentID enables  static_img_suffix_embs, 
+                # arc2face     disables static_img_suffix_embs.
                 adaface_subj_embs, lens_subj_emb_segments = \
                     self.id2ada_prompt_encoder.generate_adaface_embeddings(
                                           image_paths=None, face_id_embs=None,
@@ -389,7 +395,7 @@ class EmbeddingManager(nn.Module):
                                           # could be shorter than self.token2num_vectors[placeholder_string].
                                           return_zero_embs_for_dropped_encoders=False,
                                           avg_at_stage=None,
-                                          enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                                          enable_static_img_suffix_embs=None,
                                         )
                 # adaface_subj_embs should never be None, since we have made sure that not all encoders are dropped out,
                 # and the passed in id2img_prompt_embs are always valid (even if no faces are detected in the input image,
