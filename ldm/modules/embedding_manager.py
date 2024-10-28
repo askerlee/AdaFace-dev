@@ -377,7 +377,9 @@ class EmbeddingManager(nn.Module):
                 # static_img_suffix_embs are supposed to narrow the domain gap between the teacher and student models.
                 # So we don't use them in compos_distill_iter or recon_iter.
                 enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
-                adaface_subj_embs = self.id2ada_prompt_encoder.generate_adaface_embeddings(
+                # lens_subj_emb_segments: th length of subject embeddings in each encoder.
+                adaface_subj_embs, lens_subj_emb_segments = \
+                    self.id2ada_prompt_encoder.generate_adaface_embeddings(
                                           image_paths=None, face_id_embs=None,
                                           img_prompt_embs=id2img_prompt_embs,
                                           p_dropout=self.p_encoder_dropout if self.training else 0,

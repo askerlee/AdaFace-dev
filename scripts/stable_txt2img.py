@@ -253,7 +253,7 @@ def parse_args():
     parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.0,
                         help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
     # If enabled, the static image suffix embeddings will be used during inference.
-    parser.add_argument("--enable_static_img_suffix_embs", action="store_true",
+    parser.add_argument("--enable_static_img_suffix_embs", type=str2bool, nargs="+", default=None,
                         help="Enable the static image suffix embeddings during inference")
 
     args = parser.parse_args()
