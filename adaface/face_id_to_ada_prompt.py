@@ -73,6 +73,10 @@ class FaceID2AdaPrompt(nn.Module):
 
         self.use_clip_embs                          = False
         self.do_contrast_clip_embs_on_bg_features   = False
+        # Override the default setting in derived classes.
+        if 'enable_static_img_suffix_embs' in kwargs:
+            self.default_enable_static_img_suffix_embs = kwargs['enable_static_img_suffix_embs']
+
         # num_id_vecs is the output embeddings of the ID2ImgPrompt module.
         # If there's no static image suffix embeddings, then num_id_vecs is also
         # the number of ada embeddings returned by the subject basis generator.
@@ -487,12 +491,21 @@ class FaceID2AdaPrompt(nn.Module):
     # avg_at_stage == ada_prompt_emb usually produces the worst results.
     # avg_at_stage == id_emb is slightly better than img_prompt_emb, but sometimes img_prompt_emb is better.
     # p_dropout and return_zero_embs_for_dropped_encoders are only used by Joint_FaceID2AdaPrompt.
+    # enable_static_img_suffix_embs=None: use the default setting.
     def generate_adaface_embeddings(self, image_paths, face_id_embs=None, img_prompt_embs=None,
                                     p_dropout=0,
                                     return_zero_embs_for_dropped_encoders=True,
                                     avg_at_stage='id_emb', # id_emb, img_prompt_emb, or None.
                                     perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
-                                    perturb_std=0, enable_static_img_suffix_embs=False):
+                                    perturb_std=0, enable_static_img_suffix_embs=None):
+        
+        
+        if enable_static_img_suffix_embs is None:
+            enable_static_img_suffix_embs = self.default_enable_static_img_suffix_embs
+        
+        lens_subj_emb_segments = [ self.num_id_vecs + enable_static_img_suffix_embs \
+                                                      * self.num_static_img_suffix_embs ]
+
         if (avg_at_stage is None) or avg_at_stage.lower() == 'none':
             img_prompt_avg_at_stage = None
         else:
@@ -509,7 +522,7 @@ class FaceID2AdaPrompt(nn.Module):
                     id_batch_size = len(image_paths)
                 else:
                     id_batch_size = 1
-                
+
             # faceid_embeds: [BS, 512] is a batch of extracted face analysis embeddings. NOT used later.
             # NOTE: If face_id_embs, image_paths and image_objs are all None, 
             # then get_img_prompt_embs() generates random faceid_embeds/img_prompt_embs, 
@@ -532,7 +545,7 @@ class FaceID2AdaPrompt(nn.Module):
                     verbose=True)
             
             if face_image_count == 0:
-                return None
+                return None, [0]
         
         # No matter whether avg_at_stage is id_emb or img_prompt_emb, we average img_prompt_embs.
         elif avg_at_stage is not None and avg_at_stage.lower() != 'none':
@@ -551,12 +564,13 @@ class FaceID2AdaPrompt(nn.Module):
             # adaface_subj_embs: [1, 16, 768] -> [16, 768]
             adaface_subj_embs = adaface_subj_embs.squeeze(0)
 
-        return adaface_subj_embs
+        return adaface_subj_embs, lens_subj_emb_segments
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     def __init__(self, *args, **kwargs):
         self.name = 'arc2face'
         self.num_id_vecs = 16
+        self.default_enable_static_img_suffix_embs = False
 
         super().__init__(*args, **kwargs)
 
@@ -594,13 +608,13 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         if self.out_id_embs_cfg_scale == -1:
             self.out_id_embs_cfg_scale = 1
         #### Arc2Face pipeline specific configs ####
-        self.gen_neg_img_prompt             = False
+        self.gen_neg_img_prompt                     = False
         # bg CLIP features are used by the bg subject basis generator.
-        self.use_clip_embs                  = True
+        self.use_clip_embs                          = True
         self.do_contrast_clip_embs_on_bg_features   = True
         # self.num_static_img_suffix_embs is initialized in the parent class.
-        self.id_img_prompt_max_length       = 22
-        self.clip_embedding_dim             = 1024
+        self.id_img_prompt_max_length               = 22
+        self.clip_embedding_dim                     = 1024
 
         self.init_subj_basis_generator()
         if self.adaface_ckpt_path is not None:
@@ -665,7 +679,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
                  *args, **kwargs):
         self.name = 'consistentID'
         self.num_id_vecs = 4
-        
+        self.default_enable_static_img_suffix_embs = True
+
         super().__init__(*args, **kwargs)
         if pipe is None:
             # The base_model_path is kind of arbitrary, as the UNet and VAE in the model 
@@ -778,6 +793,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         self.num_sub_encoders = len(adaface_encoder_types)
         self.id2ada_prompt_encoders = nn.ModuleList()
         self.encoders_num_static_img_suffix_embs = []
+        self.default_enable_static_img_suffix_embs = []
 
         # TODO: apply adaface_encoder_cfg_scales to influence the final prompt embeddings.
         # Now they are just placeholders.
@@ -799,8 +815,10 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 encoder = ConsistentID_ID2AdaPrompt(*args, **kwargs)
             else:
                 breakpoint()
+
             self.id2ada_prompt_encoders.append(encoder)
             self.encoders_num_static_img_suffix_embs.append(encoder.num_static_img_suffix_embs)
+            self.default_enable_static_img_suffix_embs.append(encoder.default_enable_static_img_suffix_embs)
 
         self.num_static_img_suffix_embs     = sum(self.encoders_num_static_img_suffix_embs)
         # No need to set gen_neg_img_prompt, as we don't access it in this class, but rather
@@ -1078,7 +1096,11 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # So its .device is the device of its parameters.
         device = self.id2ada_prompt_encoders[0].clip_image_encoder.device
         is_emb_averaged = kwargs.get('avg_at_stage', None) is not None
-        enable_static_img_suffix_embs = kwargs.get('enable_static_img_suffix_embs', False)
+        if kwargs.get('enable_static_img_suffix_embs', None) is None:
+            enable_static_img_suffix_embs = self.default_enable_static_img_suffix_embs
+        else:
+            enable_static_img_suffix_embs = kwargs['enable_static_img_suffix_embs']
+
         BS = -1
 
         if face_id_embs is not None:
@@ -1118,16 +1140,18 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         self.curr_are_encoders_enabled = are_encoders_enabled
         all_adaface_subj_embs = []
         num_available_id_vecs = 0
+        lens_subj_emb_segments = []
 
         for i, id2ada_prompt_encoder in enumerate(self.id2ada_prompt_encoders):
             if not are_encoders_enabled[i]:
                 adaface_subj_embs = None
                 print(f"Encoder {id2ada_prompt_encoder.name} is dropped.")
             else:
+                kwargs['enable_static_img_suffix_embs'] = enable_static_img_suffix_embs[i]
                 # ddpm.embedding_manager.train() -> id2ada_prompt_encoder.train() -> each sub-enconder's train().
                 # -> each sub-enconder's subj_basis_generator.train(). 
                 # Therefore grad for the following call is enabled.
-                adaface_subj_embs = \
+                adaface_subj_embs, encoder_lens_subj_emb_segments = \
                     id2ada_prompt_encoder.generate_adaface_embeddings(image_paths,
                                                                       all_face_id_embs[i],
                                                                       all_img_prompt_embs[i],
@@ -1135,9 +1159,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             
             # adaface_subj_embs: arc2face [16, 768] or consistentID [4, 768], 
             # or arc2face [20, 768] or consistentID [8, 768] if enable_static_img_suffix_embs=True.
-            N_ID = self.encoders_num_id_vecs[i]
-            if enable_static_img_suffix_embs:
-                N_ID += self.encoders_num_static_img_suffix_embs[i]
+            N_ID = encoder_lens_subj_emb_segments[0]
                 
             if adaface_subj_embs is None:
                 if not return_zero_embs_for_dropped_encoders:
@@ -1151,10 +1173,12 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 all_adaface_subj_embs.append(adaface_subj_embs)
                 num_available_id_vecs += N_ID
 
+            lens_subj_emb_segments.append(N_ID)
+
         # No faces are found in the images, so return None embeddings.
         # We don't want to return an all-zero embedding, which is useless.
         if num_available_id_vecs == 0:
-            return None
+            return None, [0]
         
         # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then 
         # during inference, we average across the batch dim.
@@ -1164,7 +1188,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # all_adaface_subj_embs[0]: [BS, 4, 768]. all_adaface_subj_embs[1]: [BS, 16, 768].
         # all_adaface_subj_embs: [BS, 20, 768].
         all_adaface_subj_embs = torch.cat(all_adaface_subj_embs, dim=-2)
-        return all_adaface_subj_embs
+        return all_adaface_subj_embs, lens_subj_emb_segments
 
 
 '''

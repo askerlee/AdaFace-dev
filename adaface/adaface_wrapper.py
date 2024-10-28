@@ -24,7 +24,7 @@ class AdaFaceWrapper(nn.Module):
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
-                 enable_static_img_suffix_embs=False,
+                 enable_static_img_suffix_embs=None,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -66,8 +66,7 @@ class AdaFaceWrapper(nn.Module):
         # So num_id_vecs is the length of the returned adaface embeddings for each encoder.
         self.encoders_num_id_vecs = np.array(self.id2ada_prompt_encoder.encoders_num_id_vecs)
         self.encoders_num_static_img_suffix_embs = np.array(self.id2ada_prompt_encoder.encoders_num_static_img_suffix_embs)
-        if self.enable_static_img_suffix_embs:
-            self.encoders_num_id_vecs += self.encoders_num_static_img_suffix_embs
+        self.encoders_num_id_vecs += self.encoders_num_static_img_suffix_embs
         self.extend_tokenizer_and_text_encoder()
 
     def to(self, device):
@@ -234,6 +233,7 @@ class AdaFaceWrapper(nn.Module):
             self.placeholder_tokens_strs.append(placeholder_tokens_str)
 
         self.all_placeholder_tokens_str = " ".join(self.placeholder_tokens_strs)
+        self.updated_placeholder_tokens_str = self.all_placeholder_tokens_str
         # all_null_placeholder_tokens_str: ", , , , ..." (20 times).
         # It just contains the commas and spaces with the same length, but no actual tokens.
         self.all_null_placeholder_tokens_str = " ".join([", "] * len(self.all_placeholder_tokens))
@@ -258,14 +258,26 @@ class AdaFaceWrapper(nn.Module):
 
     # Extend pipeline.text_encoder with the adaface subject emeddings.
     # subj_embs: [16, 768].
-    def update_text_encoder_subj_embeddings(self, subj_embs):
+    def update_text_encoder_subj_embeddings(self, subj_embs, lens_subj_emb_segments):
         # Initialise the newly added placeholder token with the embeddings of the initializer token
         # token_embeds: [49412, 768]
         token_embeds = self.pipeline.text_encoder.get_input_embeddings().weight.data
+        updated_tokens = []
+        idx = 0
+        
         with torch.no_grad():
-            for i, token_id in enumerate(self.placeholder_token_ids):
-                token_embeds[token_id] = subj_embs[i]
-            print(f"Updated {len(self.placeholder_token_ids)} tokens ({self.all_placeholder_tokens_str}) in the text encoder.")
+            # sum of lens_subj_emb_segments are probably shorter than self.placeholder_token_ids,
+            # when some static_img_suffix_embs are disabled.
+            for i in range(len(self.adaface_encoder_types)):
+                for j in range(lens_subj_emb_segments[i]):
+                    placeholder_token = f"{self.subject_string}_{i}_{j}"
+                    token_id = self.pipeline.tokenizer.convert_tokens_to_ids(placeholder_token)
+                    token_embeds[token_id] = subj_embs[idx]
+                    updated_tokens.append(placeholder_token)
+                    idx += 1
+
+            self.updated_placeholder_tokens_str = " ".join(updated_tokens)
+            print(f"Updated {len(updated_tokens)} tokens ({self.updated_placeholder_tokens_str}) in the text encoder.")
 
     def update_prompt(self, prompt, placeholder_tokens_pos='append',
                       use_null_placeholders=False):
@@ -275,7 +287,7 @@ class AdaFaceWrapper(nn.Module):
         if use_null_placeholders:
             all_placeholder_tokens_str = self.all_null_placeholder_tokens_str
         else:
-            all_placeholder_tokens_str = self.all_placeholder_tokens_str
+            all_placeholder_tokens_str = self.updated_placeholder_tokens_str
 
         # Delete the subject_string from the prompt.
         prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
@@ -304,7 +316,7 @@ class AdaFaceWrapper(nn.Module):
                                    perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                    perturb_std=0, update_text_encoder=True):
 
-        all_adaface_subj_embs = \
+        all_adaface_subj_embs, lens_subj_emb_segments = \
             self.id2ada_prompt_encoder.generate_adaface_embeddings(\
                     image_paths, face_id_embs=face_id_embs, 
                     img_prompt_embs=None, 
@@ -324,7 +336,7 @@ class AdaFaceWrapper(nn.Module):
             all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0)
 
         if update_text_encoder:
-            self.update_text_encoder_subj_embeddings(all_adaface_subj_embs)
+            self.update_text_encoder_subj_embeddings(all_adaface_subj_embs, lens_subj_emb_segments)
         return all_adaface_subj_embs
 
     def diffusers_encode_prompts(self, prompt, plain_prompt, negative_prompt, device):
@@ -386,7 +398,6 @@ class AdaFaceWrapper(nn.Module):
     
     def encode_prompt(self, prompt, negative_prompt=None, 
                       placeholder_tokens_pos='append',
-                      do_neg_id_prompt_weight=0,
                       device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
@@ -399,40 +410,18 @@ class AdaFaceWrapper(nn.Module):
         if verbose:
             print(f"Subject prompt:\n{prompt}")
 
-        if do_neg_id_prompt_weight > 0:
-            # Use 'prepend' for the negative prompt, since it's long and we want to make sure
-            # the placeholder tokens are not cut off.
-            negative_prompt0 = negative_prompt
-            negative_prompt      = self.update_prompt(negative_prompt0, placeholder_tokens_pos='prepend')
-            null_negative_prompt = self.update_prompt(negative_prompt0, placeholder_tokens_pos='prepend',
-                                                      use_null_placeholders=True)
-            '''         if verbose:
-                            print(f"Negative prompt:\n{negative_prompt}")
-                            print(f"Null negative prompt:\n{null_negative_prompt}")
-
-            '''        
-        else:
-            null_negative_prompt = None
-
         # For some unknown reason, the text_encoder is still on CPU after self.pipeline.to(self.device).
         # So we manually move it to GPU here.
         self.pipeline.text_encoder.to(device)
 
         prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
             self.diffusers_encode_prompts(prompt, plain_prompt, negative_prompt, device)
-        
-        if 0 < do_neg_id_prompt_weight < 1:
-            _, negative_prompt_embeds_null, _, _ = \
-                self.diffusers_encode_prompts(prompt, plain_prompt, null_negative_prompt, device)
-            negative_prompt_embeds_ = negative_prompt_embeds_ * do_neg_id_prompt_weight + \
-                                      negative_prompt_embeds_null * (1 - do_neg_id_prompt_weight)
-            
+
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
     def forward(self, noise, prompt, negative_prompt=None, 
                 placeholder_tokens_pos='append',
-                do_neg_id_prompt_weight=0,
                 guidance_scale=6.0, out_image_count=4, 
                 ref_img_strength=0.8, generator=None, verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
@@ -444,7 +433,6 @@ class AdaFaceWrapper(nn.Module):
             negative_pooled_prompt_embeds_ = \
                 self.encode_prompt(prompt, negative_prompt, 
                                    placeholder_tokens_pos=placeholder_tokens_pos,
-                                   do_neg_id_prompt_weight=do_neg_id_prompt_weight,
                                    device=self.device, verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)

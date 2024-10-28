@@ -87,7 +87,6 @@ class DDPM(pl.LightningModule):
                  p_gen_id2img_rand_id=0.4,
                  p_perturb_face_id_embs=0.6,
                  perturb_face_id_embs_std_range=[0.5, 1.5],
-                 do_neg_id_prompt_weight=0,
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
                  ):
@@ -138,7 +137,6 @@ class DDPM(pl.LightningModule):
         self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
-        self.do_neg_id_prompt_weight                = do_neg_id_prompt_weight
 
         self.max_num_comp_distill_init_prep_denoising_steps = max_num_comp_distill_init_prep_denoising_steps
 

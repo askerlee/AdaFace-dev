@@ -28,8 +28,6 @@ parser.add_argument('--unet_weights', type=float, nargs="+", default=[1],
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
-parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.0,
-                    help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
 
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
@@ -74,7 +72,7 @@ def remove_back_to_files():
     return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True)
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, do_neg_id_prompt_weight, perturb_std,
+def generate_image(image_paths, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
                    seed, progress=gr.Progress(track_tqdm=True)):
 
@@ -100,7 +98,7 @@ def generate_image(image_paths, guidance_scale, do_neg_id_prompt_weight, perturb
     # Sometimes the pipeline is on CPU, although we've put it on CUDA (due to some offloading mechanism).
     # Therefore we set the generator to the correct device.
     generator = torch.Generator(device=device).manual_seed(seed)
-    print(f"Manual seed: {seed}. do_neg_id_prompt_weight: {do_neg_id_prompt_weight}.")
+    print(f"Manual seed: {seed}.")
     # Generate two images each time for the user to select from.
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
@@ -114,7 +112,6 @@ def generate_image(image_paths, guidance_scale, do_neg_id_prompt_weight, perturb
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
     samples = adaface(noise, prompt, negative_prompt, 
-                      do_neg_id_prompt_weight=do_neg_id_prompt_weight,
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, verbose=True)
     return samples
@@ -227,15 +224,6 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 value=args.guidance_scale,
             )
 
-            do_neg_id_prompt_weight = gr.Slider(
-                label="Weight of ID prompt in the negative prompt",
-                minimum=0.0,
-                maximum=0.3,
-                step=0.1,
-                value=args.do_neg_id_prompt_weight,
-                visible=True,
-            )
-
             model_style_type = gr.Dropdown(
                 label="Base Model Style Type",
                 info="Switching the base model type will take 10~20 seconds to reload the model",
@@ -285,7 +273,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             api_name=False,
         ).then(
             fn=generate_image,
-            inputs=[img_files, guidance_scale, do_neg_id_prompt_weight, perturb_std, num_images, 
+            inputs=[img_files, guidance_scale, perturb_std, num_images, 
                     prompt, negative_prompt, enhance_face, seed],
             outputs=[out_gallery]
         )

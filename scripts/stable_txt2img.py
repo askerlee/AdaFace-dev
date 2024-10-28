@@ -248,10 +248,8 @@ def parse_args():
     parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
                         choices=["prepend", "append"],
                         help="Position of the placeholder tokens in the prompt")
-    parser.add_argument("--do_neg_id_prompt_weight", type=float, default=0.0,
-                        help="The weight of added ID prompt embeddings into the negative prompt. Default: 0, disabled.")
     # If enabled, the static image suffix embeddings will be used during inference.
-    parser.add_argument("--enable_static_img_suffix_embs", action="store_true",
+    parser.add_argument("--enable_static_img_suffix_embs", type=str2bool, nargs="+", default=None,
                         help="Enable the static image suffix embeddings during inference")
 
     args = parser.parse_args()
@@ -611,7 +609,6 @@ def main(opt):
                         if opt.method == "adaface":                      
                             x_samples_ddim = pipeline(noise, prompts[0], None, 
                                                       placeholder_tokens_pos=opt.placeholder_tokens_pos,
-                                                      do_neg_id_prompt_weight=opt.do_neg_id_prompt_weight,
                                                       guidance_scale=opt.scale, out_image_count=batch_size, 
                                                       verbose=True)
                         elif opt.method == "pulid":
@@ -749,8 +746,6 @@ def main(opt):
                     subj_name_method_sig += "-" + unet_pardir
 
                 scale_sig = f"scale{opt.scale:.1f}"
-                if opt.do_neg_id_prompt_weight > 0:
-                    scale_sig += f"-negid{opt.do_neg_id_prompt_weight:.2f}"
                 experiment_sig = "-".join([date_sig, iter_sig, scale_sig])
 
                 if opt.bb_type:
