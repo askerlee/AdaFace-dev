@@ -268,7 +268,10 @@ class AdaFaceWrapper(nn.Module):
         with torch.no_grad():
             # sum of lens_subj_emb_segments are probably shorter than self.placeholder_token_ids,
             # when some static_img_suffix_embs are disabled.
-            for i in range(len(self.adaface_encoder_types)):
+            for i, encoder_type in enumerate(self.adaface_encoder_types):
+                if encoder_type not in self.enabled_encoders:
+                    idx += lens_subj_emb_segments[i]
+                    continue
                 for j in range(lens_subj_emb_segments[i]):
                     placeholder_token = f"{self.subject_string}_{i}_{j}"
                     token_id = self.pipeline.tokenizer.convert_tokens_to_ids(placeholder_token)
