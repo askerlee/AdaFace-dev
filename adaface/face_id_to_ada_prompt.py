@@ -908,68 +908,71 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                     param.requires_grad = True
                     
     def load_adaface_ckpt(self, adaface_ckpt_paths):
-        # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
-        # so we dereference the list to get the actual path and load the subj_basis_generators of all adaface encoders.
         if isinstance(adaface_ckpt_paths, (list, tuple, ListConfig)):
-            if len(adaface_ckpt_paths) == 1 and self.num_sub_encoders > 1:
+            # If multiple adaface ckpt paths are provided, then we assume they are the 
+            # ckpts of the sub-encoders.
+            if len(adaface_ckpt_paths) == self.num_sub_encoders:
+                for i, ckpt_path in enumerate(adaface_ckpt_paths):
+                    self.id2ada_prompt_encoders[i].load_adaface_ckpt(ckpt_path)
+                return            
+            # If only one adaface ckpt path is provided, then we assume it's the ckpt of the Joint_FaceID2AdaPrompt,
+            # so we dereference the list to get the actual path and load the subj_basis_generators of all adaface encoders.
+            elif len(adaface_ckpt_paths) == 1 and self.num_sub_encoders > 1:
                 adaface_ckpt_paths = adaface_ckpt_paths[0]
-
-        if isinstance(adaface_ckpt_paths, str):
-            # This is only applicable to newest ckpts of Joint_FaceID2AdaPrompt, where 
-            # the ckpt_subj_basis_generator is an nn.ModuleList of multiple subj_basis_generators. 
-            # Therefore, no need to patch missing variables. 
-            ckpt = torch.load(adaface_ckpt_paths, map_location='cpu')
-            string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
-            if self.subject_string not in string_to_subj_basis_generator_dict:
-                print(f"Subject '{self.subject_string}' not found in the embedding manager.")
+            else:
                 breakpoint()
 
-            ckpt_subj_basis_generators = string_to_subj_basis_generator_dict[self.subject_string]
-            if len(ckpt_subj_basis_generators) != self.num_sub_encoders:
-                print(f"Number of subj_basis_generators in the ckpt ({len(ckpt_subj_basis_generators)}) "
-                      f"doesn't match the number of adaface encoders ({self.num_sub_encoders}).")
-                breakpoint()
-
-            for i, subj_basis_generator in enumerate(self.subj_basis_generator):
-                ckpt_subj_basis_generator = ckpt_subj_basis_generators[i]
-                # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
-                ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.encoders_num_static_img_suffix_embs[i], 
-                                                                            img_prompt_dim=self.output_dim)
-
-                if subj_basis_generator.prompt2token_proj_attention_multipliers \
-                  == [1] * 12:
-                    subj_basis_generator.extend_prompt2token_proj_attention(\
-                        ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
-                elif subj_basis_generator.prompt2token_proj_attention_multipliers \
-                  != ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers:
-                    raise ValueError("Inconsistent prompt2token_proj_attention_multipliers.")
-                
-                assert subj_basis_generator.prompt2token_proj_attention_multipliers \
-                    == ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, \
-                    "Inconsistent prompt2token_proj_attention_multipliers."
-                subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict())
-
-                # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
-                # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
-                # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, 
-                # extend subj_basis_generator again.
-                if self.extend_prompt2token_proj_attention_multiplier > 1:
-                    # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
-                    # During training,  prompt2token_proj_ext_attention_perturb_ratio == 0.1.
-                    # During inference, prompt2token_proj_ext_attention_perturb_ratio == 0.
-                    subj_basis_generator.extend_prompt2token_proj_attention(\
-                        None, -1, -1, self.extend_prompt2token_proj_attention_multiplier,
-                        perturb_std=self.prompt2token_proj_ext_attention_perturb_ratio)
-
-                subj_basis_generator.freeze_prompt2token_proj()
-
-            print(f"{adaface_ckpt_paths}: {len(self.subj_basis_generator)} subj_basis_generators loaded for {self.name}.")
-
-        elif isinstance(adaface_ckpt_paths, (list, tuple, ListConfig)):
-            for i, ckpt_path in enumerate(adaface_ckpt_paths):
-                self.id2ada_prompt_encoders[i].load_adaface_ckpt(ckpt_path)
-        else:
+        adaface_ckpt_path = adaface_ckpt_paths
+        assert isinstance(adaface_ckpt_path, str), "adaface_ckpt_path should be a string."
+        # This is only applicable to newest ckpts of Joint_FaceID2AdaPrompt, where 
+        # the ckpt_subj_basis_generator is an nn.ModuleList of multiple subj_basis_generators. 
+        # Therefore, no need to patch missing variables. 
+        ckpt = torch.load(adaface_ckpt_paths, map_location='cpu')
+        string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
+        if self.subject_string not in string_to_subj_basis_generator_dict:
+            print(f"Subject '{self.subject_string}' not found in the embedding manager.")
             breakpoint()
+
+        ckpt_subj_basis_generators = string_to_subj_basis_generator_dict[self.subject_string]
+        if len(ckpt_subj_basis_generators) != self.num_sub_encoders:
+            print(f"Number of subj_basis_generators in the ckpt ({len(ckpt_subj_basis_generators)}) "
+                    f"doesn't match the number of adaface encoders ({self.num_sub_encoders}).")
+            breakpoint()
+
+        for i, subj_basis_generator in enumerate(self.subj_basis_generator):
+            ckpt_subj_basis_generator = ckpt_subj_basis_generators[i]
+            # Handle differences in num_static_img_suffix_embs between the current model and the ckpt.
+            ckpt_subj_basis_generator.initialize_static_img_suffix_embs(self.encoders_num_static_img_suffix_embs[i], 
+                                                                        img_prompt_dim=self.output_dim)
+
+            if subj_basis_generator.prompt2token_proj_attention_multipliers \
+                == [1] * 12:
+                subj_basis_generator.extend_prompt2token_proj_attention(\
+                    ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, -1, -1, 1, perturb_std=0)                
+            elif subj_basis_generator.prompt2token_proj_attention_multipliers \
+                != ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers:
+                raise ValueError("Inconsistent prompt2token_proj_attention_multipliers.")
+            
+            assert subj_basis_generator.prompt2token_proj_attention_multipliers \
+                == ckpt_subj_basis_generator.prompt2token_proj_attention_multipliers, \
+                "Inconsistent prompt2token_proj_attention_multipliers."
+            subj_basis_generator.load_state_dict(ckpt_subj_basis_generator.state_dict())
+
+            # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
+            # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
+            # If extend_prompt2token_proj_attention_multiplier > 1, then after loading state_dict, 
+            # extend subj_basis_generator again.
+            if self.extend_prompt2token_proj_attention_multiplier > 1:
+                # During this extension, the added noise does change the extra copies of attention weights, since they are not in the ckpt.
+                # During training,  prompt2token_proj_ext_attention_perturb_ratio == 0.1.
+                # During inference, prompt2token_proj_ext_attention_perturb_ratio == 0.
+                subj_basis_generator.extend_prompt2token_proj_attention(\
+                    None, -1, -1, self.extend_prompt2token_proj_attention_multiplier,
+                    perturb_std=self.prompt2token_proj_ext_attention_perturb_ratio)
+
+            subj_basis_generator.freeze_prompt2token_proj()
+
+        print(f"{adaface_ckpt_paths}: {len(self.subj_basis_generator)} subj_basis_generators loaded for {self.name}.")
 
     def extract_init_id_embeds_from_images(self, *args, **kwargs):
         total_faceless_img_count = 0

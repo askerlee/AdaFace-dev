@@ -289,7 +289,7 @@ class AdaFaceWrapper(nn.Module):
             print(f"Updated {len(all_encoders_updated_tokens)} tokens ({self.updated_tokens_str}) in the text encoder.")
 
     def update_prompt(self, prompt, placeholder_tokens_pos='append',
-                      repeat_prompt_for_each_encoder=False,
+                      repeat_prompt_for_each_encoder=True,
                       use_null_placeholders=False):
         if prompt is None:
             prompt = ""
@@ -425,7 +425,7 @@ class AdaFaceWrapper(nn.Module):
                       placeholder_tokens_pos='append',
                       ablate_prompt_only_placeholders=False,
                       ablate_prompt_no_placeholders=False,
-                      repeat_prompt_for_each_encoder=False,
+                      repeat_prompt_for_each_encoder=True,
                       device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
@@ -460,7 +460,7 @@ class AdaFaceWrapper(nn.Module):
                 ref_img_strength=0.8, generator=None, 
                 ablate_prompt_only_placeholders=False,
                 ablate_prompt_no_placeholders=False,
-                repeat_prompt_for_each_encoder=False,                
+                repeat_prompt_for_each_encoder=True,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
 

@@ -147,7 +147,8 @@ class EmbeddingManager(nn.Module):
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
                                          is_training=True)
-        
+        self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
+
         if self.cls_delta_string is not None:
             self.cls_delta_tokens = self.get_tokens_for_string(cls_delta_string)
             if cls_delta_token_weights is None:
@@ -281,27 +282,23 @@ class EmbeddingManager(nn.Module):
             tokenized_text,         # [B, N]. 
             embedded_text,          # [B, N, 768]. 
     ):
-        # When delta loss is used, B is not batch_size, but batch_size * 4.
-        # If bs=2, then B=8.
-        # In the iterations when ada delta loss is enabled, B=8.
-        B, N = tokenized_text.shape
-
         # placeholder_indices will be regenerated with update_placeholder_indices() 
-        # within get_static_embedding().
+        # within update_text_embeddings().
         self.clear_prompt_adhoc_info()
         
-        # We need to clone embedded_text, as the modification in get_static_embedding() 
+        # We need to clone embedded_text, as the modification in update_text_embeddings() 
         # will be in-place. 
         static_embeded_text, tokenized_text_repeated = \
-                self.get_static_embedding(tokenized_text, embedded_text.clone(), B, N)
+                self.update_text_embeddings(tokenized_text, embedded_text.clone())
 
         # Update the prompt token embedding mask.
         self.update_prompt_masks(tokenized_text, tokenized_text_repeated)
 
         return static_embeded_text
     
-    # N: length of sequence (including padding).
-    def get_static_embedding(self, tokenized_text, embedded_text, BS, N):
+    def update_text_embeddings(self, tokenized_text, embedded_text):
+        BS = tokenized_text.shape[0]
+
         # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
         # at that time.
         if self.rank == -1:
@@ -412,14 +409,34 @@ class EmbeddingManager(nn.Module):
             if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)
 
+            if self.iter_type == 'compos_distill_iter':
+                subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
+                self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
+                # In a compos_distill_iter, all subjects are the same. As implemented above, 
+                # we only use the first instance in the batch to generate the adaface_subj_embs,
+                # as the whole batch is of the same subject. Therefore, adaface_subj_embs0 
+                # is only the embeddings of the first instance.         
+                adaface_subj_embs0, lens_subj_emb_segments = \
+                    self.id2ada_prompt_encoder.generate_adaface_embeddings(
+                                          image_paths=None, face_id_embs=None,
+                                          img_prompt_embs=id2img_prompt_embs,
+                                          p_dropout=self.p_encoder_dropout if self.training else 0,
+                                          # If an encoder is dropped out, then the corresponding adaface_subj_embs
+                                          # will not be included in the returned adaface_subj_embs. 
+                                          # So the returned adaface_subj_embs only contain valid embeddings and 
+                                          # could be shorter than self.token2num_vectors[placeholder_string].
+                                          return_zero_embs_for_dropped_encoders=False,
+                                          avg_at_stage=None,
+                                          enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                                        )
+                self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
+                # Replace the first adaface_subj_embs with adaface_subj_embs0.
+                adaface_subj_embs[0] = adaface_subj_embs0[0]
+
             adaface_subj_embs = adaface_subj_embs.to(embedded_text.dtype)
             # adaface_subj_embs could be shorter than self.token2num_vectors[placeholder_string], but never longer.
             if adaface_subj_embs.shape[1] > self.token2num_vectors[placeholder_string]:
                 breakpoint()
-
-            if not placeholder_is_bg:
-                # id2img_prompt_embs: [BS, 16, 768] or [BS, 4, 768] is the ID2ImgPrompt embeddings. 
-                self.id2img_embs = id2img_prompt_embs
 
             # adaface_subj_embs could be shorter than self.token2num_vectors[placeholder_string],
             # due to random dropout of some adaface encoders.
@@ -586,8 +603,27 @@ class EmbeddingManager(nn.Module):
         self.subject_strings                = []
         self.background_strings             = []
 
-        # Load fg SubjBasisGenerators through id2ada_prompt_encoder.
-        self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths)
+        orig_adafaces_ckpt_paths = adaface_ckpt_paths
+        # If only one adaface_ckpt_path is provided, then load it into both 
+        # id2ada_prompt_encoder and subj_basis_generator_frozen.
+        if len(adaface_ckpt_paths) == 1:
+            adaface_ckpt_paths = adaface_ckpt_paths * 2
+
+        if len(adaface_ckpt_paths) == 2:
+            # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
+            self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
+            # Back up id2ada_prompt_encoder.subj_basis_generator.
+            subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
+            # Temporarily replace id2ada_prompt_encoder.subj_basis_generator with subj_basis_generator_frozen.
+            self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
+            # Load adaface_ckpt_paths[1] into subj_basis_generator_frozen.
+            self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[1])
+            # Restore id2ada_prompt_encoder.subj_basis_generator.
+            self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
+        else:
+            breakpoint()
+
+        adaface_ckpt_paths = orig_adafaces_ckpt_paths
 
         for adaface_ckpt_path in adaface_ckpt_paths:
             ckpt_path_parts = adaface_ckpt_path.split(":")
