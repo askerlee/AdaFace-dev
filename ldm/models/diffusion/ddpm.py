@@ -1684,19 +1684,25 @@ class LatentDiffusion(DDPM):
             if encoders_num_id_vecs is not None:
                 all_id2img_prompt_embs      = self.iter_flags['id2img_prompt_embs'].split(encoders_num_id_vecs, dim=1)
                 all_id2img_neg_prompt_embs  = self.iter_flags['id2img_neg_prompt_embs'].split(encoders_num_id_vecs, dim=1)
+                # If id2ada_prompt_encoder.name == 'jointIDs', the img_prompt_embs are ordered as such.
+                encoder_name2idx = { 'consistentID': 0, 'arc2face': 1 }
             else:
                 # Single FaceID2AdaPrompt encoder. No need to split id2img_prompt_embs/id2img_neg_prompt_embs.
                 all_id2img_prompt_embs      = [ self.iter_flags['id2img_prompt_embs'] ]
                 all_id2img_neg_prompt_embs  = [ self.iter_flags['id2img_neg_prompt_embs'] ]
-
-            for i, unet_teacher_type in enumerate(self.unet_teacher_types):
-                if unet_teacher_type not in ['arc2face', 'consistentID']:
+                encoder_name2idx = { self.unet_teacher_types[0]: 0 }
+                
+            for unet_teacher_type in self.unet_teacher_types:
+                if unet_teacher_type not in ['consistentID', 'arc2face']:
                     breakpoint()
+                
+                teacher_idx = encoder_name2idx[unet_teacher_type]
                 if unet_teacher_type == 'arc2face':
+                    # img_prompt_prefix_embs: the embeddings of a template prompt "photo of a"
                     # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
                     img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(x_start.shape[0], 1, 1)
                     # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
-                    teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[i]], dim=1)
+                    teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[teacher_idx]], dim=1)
 
                     if self.p_unet_teacher_uses_cfg > 0:
                         # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
@@ -1709,7 +1715,7 @@ class LatentDiffusion(DDPM):
                         teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
 
                 elif unet_teacher_type == 'consistentID':
-                    global_id_embeds = all_id2img_prompt_embs[i]
+                    global_id_embeds = all_id2img_prompt_embs[teacher_idx]
                     # global_id_embeds: [BS, 4,  768]
                     # cls_prompt_embs:  [BS, 77, 768]
                     cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
@@ -1720,7 +1726,7 @@ class LatentDiffusion(DDPM):
                     if self.p_unet_teacher_uses_cfg > 0:
                         # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
                         # to the teacher.
-                        global_neg_id_embs = all_id2img_neg_prompt_embs[i]
+                        global_neg_id_embs = all_id2img_neg_prompt_embs[teacher_idx]
                         # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
                         # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
                         cls_neg_prompt_embs = self.uncond_context[0][:1].repeat(teacher_context.shape[0], 1, 1)

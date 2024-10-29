@@ -2085,7 +2085,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 
     loss_type_names = ['attn', 'flow']
 
-    print(f"Layer {layer_idx}: {H}x{W} {objective_name} sc->ss-fg:", end=' ')
+    print(f"Layer {layer_idx}: {objective_name} sc->ss-fg:", end=' ')
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:

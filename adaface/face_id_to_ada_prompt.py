@@ -1134,6 +1134,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             enable_static_img_suffix_embs = self.default_enable_static_img_suffix_embs
         else:
             enable_static_img_suffix_embs = kwargs['enable_static_img_suffix_embs']
+            if isinstance(enable_static_img_suffix_embs, bool):
+                enable_static_img_suffix_embs = [enable_static_img_suffix_embs] * self.num_sub_encoders
 
         BS = -1
 
