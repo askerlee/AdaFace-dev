@@ -1672,6 +1672,11 @@ class LatentDiffusion(DDPM):
         if self.unet_teacher_types == ['unet_ensemble']:
             teacher_contexts = [student_prompt_embs]
         else:
+            # Only enable a subset of teachers. The whole set of teachers may have been initialized,
+            # if id2ada_prompt_encoder.name == 'jointIDs' by setting 
+            # personalization_config.params.adaface_encoder_types = ['consistentID', 'arc2face'])
+            # but some are disabled by setting
+            # personalization_config.params.enabled_encoders = ['consistentID'] or ['arc2face'].
             teacher_contexts = []
             encoders_num_id_vecs = self.iter_flags['encoders_num_id_vecs']
             # If id2ada_prompt_encoder.name == 'jointIDs',         then encoders_num_id_vecs is not None.
