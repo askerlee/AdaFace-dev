@@ -233,7 +233,7 @@ class AdaFaceWrapper(nn.Module):
             self.placeholder_tokens_strs.append(placeholder_tokens_str)
 
         self.all_placeholder_tokens_str = " ".join(self.placeholder_tokens_strs)
-        self.updated_placeholder_tokens_str = self.all_placeholder_tokens_str
+        self.updated_tokens_str = self.all_placeholder_tokens_str
         # all_null_placeholder_tokens_str: ", , , , ..." (20 times).
         # It just contains the commas and spaces with the same length, but no actual tokens.
         self.all_null_placeholder_tokens_str = " ".join([", "] * len(self.all_placeholder_tokens))
@@ -262,35 +262,45 @@ class AdaFaceWrapper(nn.Module):
         # Initialise the newly added placeholder token with the embeddings of the initializer token
         # token_embeds: [49412, 768]
         token_embeds = self.pipeline.text_encoder.get_input_embeddings().weight.data
-        updated_tokens = []
+        all_encoders_updated_tokens = []
+        all_encoders_updated_token_strs = []
         idx = 0
         
         with torch.no_grad():
             # sum of lens_subj_emb_segments are probably shorter than self.placeholder_token_ids,
             # when some static_img_suffix_embs are disabled.
             for i, encoder_type in enumerate(self.adaface_encoder_types):
-                if encoder_type not in self.enabled_encoders:
+                encoder_updated_tokens = []
+                if (self.enabled_encoders is not None) and (encoder_type not in self.enabled_encoders):
                     idx += lens_subj_emb_segments[i]
                     continue
                 for j in range(lens_subj_emb_segments[i]):
                     placeholder_token = f"{self.subject_string}_{i}_{j}"
                     token_id = self.pipeline.tokenizer.convert_tokens_to_ids(placeholder_token)
                     token_embeds[token_id] = subj_embs[idx]
-                    updated_tokens.append(placeholder_token)
+                    encoder_updated_tokens.append(placeholder_token)
                     idx += 1
 
-            self.updated_placeholder_tokens_str = " ".join(updated_tokens)
-            print(f"Updated {len(updated_tokens)} tokens ({self.updated_placeholder_tokens_str}) in the text encoder.")
+                all_encoders_updated_tokens.extend(encoder_updated_tokens)
+                all_encoders_updated_token_strs.append(" ".join(encoder_updated_tokens))
+
+            self.updated_tokens_str = " ".join(all_encoders_updated_token_strs)
+            self.all_encoders_updated_token_strs = all_encoders_updated_token_strs
+            print(f"Updated {len(all_encoders_updated_tokens)} tokens ({self.updated_tokens_str}) in the text encoder.")
 
     def update_prompt(self, prompt, placeholder_tokens_pos='append',
+                      repeat_prompt_for_each_encoder=False,
                       use_null_placeholders=False):
         if prompt is None:
             prompt = ""
 
         if use_null_placeholders:
             all_placeholder_tokens_str = self.all_null_placeholder_tokens_str
+            if not re.search(r"\b(man|woman|person|child|girl|boy)\b", prompt.lower()):
+                all_placeholder_tokens_str = "person " + all_placeholder_tokens_str
+            repeat_prompt_for_each_encoder = False
         else:
-            all_placeholder_tokens_str = self.updated_placeholder_tokens_str
+            all_placeholder_tokens_str = self.updated_tokens_str
 
         # Delete the subject_string from the prompt.
         prompt = re.sub(r'\b(a|an|the)\s+' + self.subject_string + r'\b,?', "", prompt)
@@ -300,12 +310,24 @@ class AdaFaceWrapper(nn.Module):
         # When we do joint training, seems both work better if they are appended to the prompt.
         # Therefore we simply appended all placeholder_tokens_str's to the prompt.
         # NOTE: Prepending them hurts compositional prompts.
-        if placeholder_tokens_pos == 'prepend':
-            prompt = all_placeholder_tokens_str + " " + prompt
-        elif placeholder_tokens_pos == 'append':
-            prompt = prompt + " " + all_placeholder_tokens_str
+        if repeat_prompt_for_each_encoder:
+            encoder_prompts = []
+            for encoder_updated_token_strs in self.all_encoders_updated_token_strs:
+                if placeholder_tokens_pos == 'prepend':
+                    encoder_prompt = encoder_updated_token_strs + " " + prompt
+                elif placeholder_tokens_pos == 'append':
+                    encoder_prompt = prompt + " " + encoder_updated_token_strs
+                else:
+                    breakpoint()
+                encoder_prompts.append(encoder_prompt)
+            prompt = ", ".join(encoder_prompts)
         else:
-            breakpoint()
+            if placeholder_tokens_pos == 'prepend':
+                prompt = all_placeholder_tokens_str + " " + prompt
+            elif placeholder_tokens_pos == 'append':
+                prompt = prompt + " " + all_placeholder_tokens_str
+            else:
+                breakpoint()
 
         return prompt
 
@@ -402,6 +424,8 @@ class AdaFaceWrapper(nn.Module):
     def encode_prompt(self, prompt, negative_prompt=None, 
                       placeholder_tokens_pos='append',
                       ablate_prompt_only_placeholders=False,
+                      ablate_prompt_no_placeholders=False,
+                      repeat_prompt_for_each_encoder=False,
                       device=None, verbose=False):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
@@ -411,9 +435,11 @@ class AdaFaceWrapper(nn.Module):
         
         plain_prompt = prompt
         if ablate_prompt_only_placeholders:
-            prompt = self.updated_placeholder_tokens_str
+            prompt = self.updated_tokens_str
         else:
-            prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos)
+            prompt = self.update_prompt(prompt, placeholder_tokens_pos=placeholder_tokens_pos,
+                                        repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
+                                        use_null_placeholders=ablate_prompt_no_placeholders)
 
         if verbose:
             print(f"Subject prompt:\n{prompt}")
@@ -433,6 +459,8 @@ class AdaFaceWrapper(nn.Module):
                 guidance_scale=6.0, out_image_count=4, 
                 ref_img_strength=0.8, generator=None, 
                 ablate_prompt_only_placeholders=False,
+                ablate_prompt_no_placeholders=False,
+                repeat_prompt_for_each_encoder=False,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
 
@@ -444,6 +472,8 @@ class AdaFaceWrapper(nn.Module):
                 self.encode_prompt(prompt, negative_prompt, 
                                    placeholder_tokens_pos=placeholder_tokens_pos,
                                    ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
+                                   ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
+                                   repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
                                    device=self.device, 
                                    verbose=verbose)
         # Repeat the prompt embeddings for all images in the batch.

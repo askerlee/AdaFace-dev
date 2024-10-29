@@ -255,6 +255,12 @@ def parse_args():
     parser.add_argument("--ablate_prompt_only_placeholders", type=str2bool,  
                         const=True, nargs="?", default=False,
                         help="Ablate the prompt to use only placeholders and no composition during inference")
+    parser.add_argument("--ablate_prompt_no_placeholders", type=str2bool,
+                        const=True, nargs="?", default=False,
+                        help="Ablate the prompt to use no placeholders during inference")
+    parser.add_argument("--repeat_prompt_for_each_encoder", type=str2bool,
+                        const=True, nargs="?", default=True,
+                        help="Repeat the prompt for each encoder during inference (default behavior)")
     
     args = parser.parse_args()
     return args
@@ -615,6 +621,8 @@ def main(opt):
                                                       placeholder_tokens_pos=opt.placeholder_tokens_pos,
                                                       guidance_scale=opt.scale, out_image_count=batch_size, 
                                                       ablate_prompt_only_placeholders=opt.ablate_prompt_only_placeholders,
+                                                      ablate_prompt_no_placeholders=opt.ablate_prompt_no_placeholders,
+                                                      repeat_prompt_for_each_encoder=opt.repeat_prompt_for_each_encoder,
                                                       verbose=True)
                         elif opt.method == "pulid":
                             x_samples_ddim = []

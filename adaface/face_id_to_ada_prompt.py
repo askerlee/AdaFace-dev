@@ -705,7 +705,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     num_id_vecs0 = 4
     # No compression for ConsistentID.
     num_id_vecs  = 4
-    default_enable_static_img_suffix_embs = True
+    default_enable_static_img_suffix_embs = False
     
     def __init__(self, pipe=None, base_model_path="models/sd15-dste8-vae.safetensors", 
                  *args, **kwargs):
