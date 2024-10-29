@@ -9,6 +9,7 @@ from diffusers import (
     #FluxPipeline,
     DDIMScheduler,
     AutoencoderKL,
+    LCMScheduler,
 )
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.util import UNetEnsemble
@@ -20,7 +21,7 @@ import numpy as np
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
                  adaface_ckpt_paths, adaface_encoder_cfg_scales=None, 
-                 enabled_encoders=None,
+                 enabled_encoders=None, use_lcm=False,
                  subject_string='z', num_inference_steps=50, negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
@@ -40,9 +41,10 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.enabled_encoders = enabled_encoders
         self.enable_static_img_suffix_embs = enable_static_img_suffix_embs
+        self.use_lcm = use_lcm
         self.subject_string = subject_string
 
-        self.num_inference_steps = num_inference_steps
+        self.num_inference_steps = num_inference_steps if not use_lcm else 4
         self.use_840k_vae = use_840k_vae
         self.use_ds_text_encoder = use_ds_text_encoder
         self.main_unet_filepath = main_unet_filepath
@@ -142,6 +144,16 @@ class AdaFaceWrapper(nn.Module):
                     safety_checker=None
                 )
         
+        if self.use_lcm:
+            lcm_path_dict = {
+                "text2img": "latent-consistency/lcm-lora-sdv1-5",
+            }
+            lcm_path = lcm_path_dict[self.pipeline_name]
+            pipeline.load_lora_weights(lcm_path)
+            pipeline.fuse_lora()
+            print(f"Loaded LCM weights from {lcm_path}.")
+            pipeline.scheduler = LCMScheduler.from_config(pipeline.scheduler.config)
+
         if self.main_unet_filepath is not None:
             print(f"Replacing the UNet with the UNet from {self.main_unet_filepath}.")
             ret = pipeline.unet.load_state_dict(self.load_unet_from_file(self.main_unet_filepath, device='cpu'))
@@ -172,7 +184,7 @@ class AdaFaceWrapper(nn.Module):
             pipeline.vae  = None
             print("Removed UNet and VAE from the pipeline.")
 
-        if self.pipeline_name not in ["text2imgxl", "text2img3", "flux"]:
+        if self.pipeline_name not in ["text2imgxl", "text2img3", "flux"] and not self.use_lcm:
             noise_scheduler = DDIMScheduler(
                 num_train_timesteps=1000,
                 beta_start=0.00085,
@@ -182,7 +194,8 @@ class AdaFaceWrapper(nn.Module):
                 set_alpha_to_one=False,
             )
             pipeline.scheduler = noise_scheduler
-        # Otherwise, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
+        # Otherwise, if not use_lcm, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
+        #            if     use_lcm, pipeline.scheduler == LCMScheduler
         self.pipeline = pipeline.to(self.device)
 
     def load_unet_from_file(self, unet_path, device=None):
@@ -463,6 +476,8 @@ class AdaFaceWrapper(nn.Module):
                 repeat_prompt_for_each_encoder=True,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
+        if self.use_lcm:
+            guidance_scale = 0
 
         if negative_prompt is None:
             negative_prompt = self.negative_prompt

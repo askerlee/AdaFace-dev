@@ -261,6 +261,8 @@ def parse_args():
     parser.add_argument("--repeat_prompt_for_each_encoder", type=str2bool,
                         const=True, nargs="?", default=True,
                         help="Repeat the prompt for each encoder during inference (default behavior)")
+    parser.add_argument("--use_lcm", type=str2bool, const=True, nargs="?", default=False,
+                        help="Use LCM to do quick inference")
     
     args = parser.parse_args()
     return args
@@ -379,7 +381,7 @@ def main(opt):
 
                 pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
                                           opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
-                                          opt.enabled_encoders,
+                                          opt.enabled_encoders, opt.use_lcm,
                                           opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
                                           unet_types=None,
                                           main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
