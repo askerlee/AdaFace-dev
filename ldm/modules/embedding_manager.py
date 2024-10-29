@@ -147,6 +147,8 @@ class EmbeddingManager(nn.Module):
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
                                          is_training=True)
+        # No need to explicity freeze the params of subj_basis_generator_frozen,
+        # as it's not included in the param list returned by .optimized_parameters().
         self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
 
         if self.cls_delta_string is not None:
@@ -409,6 +411,7 @@ class EmbeddingManager(nn.Module):
             if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)
 
+            # Replace the first adaface_subj_embs with adaface_subj_embs0 from a frozen encoder.
             if self.iter_type == 'compos_distill_iter':
                 subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
                 self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
@@ -431,6 +434,8 @@ class EmbeddingManager(nn.Module):
                                         )
                 self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
                 # Replace the first adaface_subj_embs with adaface_subj_embs0.
+                # adaface_subj_embs0: [1, 16, 768]. adaface_subj_embs: [2, 16, 768], 
+                # which has been repeated twice from [1, 16, 768] above.
                 adaface_subj_embs[0] = adaface_subj_embs0[0]
 
             adaface_subj_embs = adaface_subj_embs.to(embedded_text.dtype)
@@ -607,7 +612,7 @@ class EmbeddingManager(nn.Module):
         # If only one adaface_ckpt_path is provided, then load it into both 
         # id2ada_prompt_encoder and subj_basis_generator_frozen.
         if len(adaface_ckpt_paths) == 1:
-            adaface_ckpt_paths = adaface_ckpt_paths * 2
+            adaface_ckpt_paths = list(adaface_ckpt_paths) * 2
 
         if len(adaface_ckpt_paths) == 2:
             # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
@@ -618,6 +623,7 @@ class EmbeddingManager(nn.Module):
             self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
             # Load adaface_ckpt_paths[1] into subj_basis_generator_frozen.
             self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[1])
+            print(f"Loaded {adaface_ckpt_paths[0]} into frozen subj_basis_generator")
             # Restore id2ada_prompt_encoder.subj_basis_generator.
             self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
         else:
