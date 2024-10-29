@@ -1418,23 +1418,22 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_comp_prompt_distillation. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_recon, noise, masks, init_prep_context_type = \
+            x_recon, x_start2, noise, masks, init_prep_context_type = \
                 self.do_comp_prompt_denoising(cond_context, x_start, noise, text_prompt_adhoc_info,
-                                              masks, fg_noise_anneal_mean_range=(0.3, 0.3),
+                                              masks, fg_noise_amount=0.2,
                                               BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
 
-            # Log the training image (first image in the batch) and the denoised images for diagnosis.
+            # Log x_start2 (transformed version of the first image in the batch) 
+            # and the denoised images for diagnosis.
             # The four instances in iter_flags['image_unnorm'] are different,
-            # but only the first one is actually used. So we only log the first one.
-            # input_image: torch.uint8, 0~255, [1, 512, 512, 3] -> [1, 3, 512, 512].
-            input_image = self.iter_flags['image_unnorm'][[0]]
-            input_image = input_image.permute(0, 3, 1, 2)
+            # but only the first one is actually used. 
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # All of them are 1, indicating green.
-            log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
-            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=False)
+            log_image_colors = torch.ones(x_start2.shape[0], dtype=int, device=x_start.device)
+            x_start2_decoded = self.decode_first_stage(x_start2)
+            self.cache_and_log_generations(x_start2_decoded, log_image_colors, do_normalize=True)
             recon_images = self.decode_first_stage(x_recon)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # If using subj context to do init prep, then the color is green.
@@ -1843,7 +1842,7 @@ class LatentDiffusion(DDPM):
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
     def do_comp_prompt_denoising(self, cond_context, x_start, noise, text_prompt_adhoc_info,
-                                 masks, fg_noise_anneal_mean_range=(0.3, 0.3), BLOCK_SIZE=1):
+                                 masks, fg_noise_amount=0.2, BLOCK_SIZE=1):
         c_prompt_emb, c_in, extra_info = cond_context
 
         # Compositional iter.
@@ -1866,12 +1865,12 @@ class LatentDiffusion(DDPM):
             filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
             # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
             # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
-            # fg_noise_anneal_mean_range = (0.3, 0.3)
+            # fg_noise_amount = 0.2
             x_start, fg_mask, filtered_fg_mask = \
                 init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                                    self.training_percent,
-                                                    base_scale_range=(0.8, 1.0),
-                                                    fg_noise_anneal_mean_range=fg_noise_anneal_mean_range)
+                                                   self.training_percent,
+                                                   base_scale_range=(0.8, 1.0),
+                                                   fg_noise_amount=fg_noise_amount)
 
         else:
             # We have to use random noise for x_start, as the training images 
@@ -2018,7 +2017,7 @@ class LatentDiffusion(DDPM):
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_prompt_distillation. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_recon, noise, masks, init_prep_context_type
+        return x_recon, x_start, noise, masks, init_prep_context_type
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, batch_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):

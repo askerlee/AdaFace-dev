@@ -125,10 +125,10 @@ class AdaFaceWrapper(nn.Module):
         
         if self.base_model_path is None:
             base_model_path_dict = { 
-                'text2img':  'models/sd15-dste8-vae.safetensors',
-                'text2imgxl': 'stabilityai/stable-diffusion-xl-base-1.0',
-                'text2img3': 'stabilityai/stable-diffusion-3-medium-diffusers',
-                'flux':      'black-forest-labs/FLUX.1-schnell',
+                'text2img':     'models/sd15-dste8-vae.safetensors',
+                'text2imgxl':   'stabilityai/stable-diffusion-xl-base-1.0',
+                'text2img3':    'stabilityai/stable-diffusion-3-medium-diffusers',
+                'flux':         'black-forest-labs/FLUX.1-schnell',
             }
             self.base_model_path = base_model_path_dict[self.pipeline_name]
 
@@ -146,8 +146,12 @@ class AdaFaceWrapper(nn.Module):
         
         if self.use_lcm:
             lcm_path_dict = {
-                "text2img": "latent-consistency/lcm-lora-sdv1-5",
+                'text2img':     'latent-consistency/lcm-lora-sdv1-5',
+                'text2imgxl':   'latent-consistency/lcm-lora-sdxl',
             }
+            if self.pipeline_name not in lcm_path_dict:
+                raise ValueError(f"Pipeline {self.pipeline_name} does not support LCM.")
+            
             lcm_path = lcm_path_dict[self.pipeline_name]
             pipeline.load_lora_weights(lcm_path)
             pipeline.fuse_lora()

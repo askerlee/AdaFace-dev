@@ -1829,7 +1829,7 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
 # At scaled foreground, fill new x_start with noised scaled x_start. 
 def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
                                        training_percent, base_scale_range=(0.8, 1.0),
-                                       fg_noise_anneal_mean_range=(0.1, 0.5)):
+                                       fg_noise_amount=0.2):
     x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
     fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
     # print(fg_mask_percent)
@@ -1879,10 +1879,8 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
     # In fg area, x_start takes values from x_start_scaled_padded 
     # (the fg of x_start_scaled_padded is a scaled-down version of the fg of the original x_start).
     x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
-    # Gradually increase the fg area's noise amount with mean increasing from 0.1 to 0.5.
-    fg_noise_amount = rand_annealed(training_percent, final_percent=1, mean_range=fg_noise_anneal_mean_range)
-    # At the fg area, keep 90% (beginning of training) ~ 50% (end of training) 
-    # of the original x_start values and add 10% ~ 50% of noise. 
+    # Add noise to the fg area. Noise amount is fixed at 0.2.
+    # At the fg area, keep 80% of the original x_start values and add 20% of noise. 
     # x_start: [2, 4, 64, 64]
     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
     return x_start, fg_mask, filtered_fg_mask

@@ -841,6 +841,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
 
         # Note we don't pass the adaface_ckpt_paths to the base class, but instead,
         # we load them once and for all in self.load_adaface_ckpt().
+        # NOTE: during inference, num_static_img_suffix_embs is fixed to be 4 for each encoder.
+        # But we can still disable static_img_suffix_embs by setting enable_static_img_suffix_embs to False.
         for i, encoder_type in enumerate(adaface_encoder_types):
             kwargs['out_id_embs_cfg_scale'] = self.out_id_embs_cfg_scales[i]
             if encoder_type == 'arc2face':
