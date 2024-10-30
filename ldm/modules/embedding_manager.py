@@ -372,7 +372,7 @@ class EmbeddingManager(nn.Module):
                 if self.iter_type == 'compos_distill_iter':
                     # Only use the first instance in the batch to generate the adaface_subj_embs,
                     # as the whole batch is of the same subject.
-                    id2img_prompt_embs = id2img_prompt_embs[[0]]
+                    id2img_prompt_embs = id2img_prompt_embs[:1]
 
                 # static_img_suffix_embs are supposed to narrow the domain gap between the teacher and student models.
                 # So we don't use them in compos_distill_iter or recon_iter.
@@ -430,13 +430,15 @@ class EmbeddingManager(nn.Module):
                                           # could be shorter than self.token2num_vectors[placeholder_string].
                                           return_zero_embs_for_dropped_encoders=False,
                                           avg_at_stage=None,
-                                          enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                                          enable_static_img_suffix_embs=False,
                                         )
                 self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
                 # Replace the first adaface_subj_embs with adaface_subj_embs0.
                 # adaface_subj_embs0: [1, 16, 768]. adaface_subj_embs: [2, 16, 768], 
                 # which has been repeated twice from [1, 16, 768] above.
-                adaface_subj_embs[0] = adaface_subj_embs0[0]
+                # Still allow a small gradient into the unfrozen subj-single embeddings, 
+                # maybe this will make the images more natural?
+                adaface_subj_embs[:1] = adaface_subj_embs[:1] * 0.1 + adaface_subj_embs0 * 0.9
 
             adaface_subj_embs = adaface_subj_embs.to(embedded_text.dtype)
             # adaface_subj_embs could be shorter than self.token2num_vectors[placeholder_string], but never longer.

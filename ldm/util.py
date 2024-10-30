@@ -1828,11 +1828,10 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
 # At scaled background, fill new x_start with random values (100% noise). 
 # At scaled foreground, fill new x_start with noised scaled x_start. 
 def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
-                                       training_percent, base_scale_range=(0.8, 1.0),
+                                       base_scale_range=(0.8, 1.0),
                                        fg_noise_amount=0.2):
-    x_start_origsize = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
+    x_start_maskfilled = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
     fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
-    # print(fg_mask_percent)
     # print(fg_mask_percent)
     base_scale_range_lb, base_scale_range_ub = base_scale_range
 
@@ -1851,12 +1850,12 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
         scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
         fg_rand_scale = torch.rand(1).item() * (scale_range_ub - scale_range_lb) + scale_range_lb
     else:
-        # fg areas are small. Scale the fg area to 70%-100% of the original size.
+        # fg areas are small. Scale the fg area to 80%-100% of the original size.
         fg_rand_scale = torch.rand(1).item() * (base_scale_range_ub - base_scale_range_lb) + base_scale_range_lb
 
-    # Resize x_start_origsize and filtered_fg_mask by rand_scale. They have different numbers of channels,
+    # Resize x_start_maskfilled and filtered_fg_mask by rand_scale. They have different numbers of channels,
     # so we need to concatenate them at dim 1 before resizing.
-    x_mask = torch.cat([x_start_origsize, fg_mask, filtered_fg_mask], dim=1)
+    x_mask = torch.cat([x_start_maskfilled, fg_mask, filtered_fg_mask], dim=1)
     x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
 
     # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
@@ -1868,11 +1867,11 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
                                     (pad_w1, pad_w2, pad_h1, pad_h2),
                                     mode='constant', value=0)
 
+    C1, C2, C3 = x_start_maskfilled.shape[1], fg_mask.shape[1], filtered_fg_mask.shape[1]
     # Unpack x_start, fg_mask and filtered_fg_mask from x_mask_scaled_padded.
     # x_start_scaled_padded: [2, 4, 64, 64]. fg_mask/filtered_fg_mask: [2, 1, 64, 64].
     x_start_scaled_padded, fg_mask, filtered_fg_mask \
-        = x_mask_scaled_padded[:, :4], x_mask_scaled_padded[:, [4]], \
-            x_mask_scaled_padded[:, [5]]
+        = x_mask_scaled_padded.split([C1, C2, C3], dim=1)
 
     # In filtered_fg_mask, the padded areas are filled with 0. 
     # So these pixels always take values from the random tensor.
