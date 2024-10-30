@@ -1211,17 +1211,6 @@ def double_token_indices(token_indices, bs_offset):
     
     return token_indices_x2
 
-def repeat_selected_instances(sel_indices, REPEAT, *args):
-    rep_args = []
-    for arg in args:
-        if arg is not None:
-            arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
-        else:
-            arg2 = None
-        rep_args.append(arg2)
-
-    return rep_args
-
 def normalize_dict_values(d):
     value_sum = np.sum(list(d.values()))
     # If d is empty, do nothing.
@@ -1553,11 +1542,11 @@ def mix_cls_subj_embeddings(prompt_emb, subj_indices_1b_N, cls_subj_mix_scale=0.
 
     return prompt_emb_mixed 
 
-def repeat_selected_instances(sel_indices, REPEAT, *args):
+def select_and_repeat_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
         if arg is not None:
-            if isinstance(arg, torch.Tensor):
+            if isinstance(arg, (torch.Tensor, np.array)):
                 arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
             elif isinstance(arg, (list, tuple)):
                 arg2 = arg[sel_indices] * REPEAT

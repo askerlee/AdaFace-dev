@@ -18,7 +18,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
-                        join_dict_of_indices_with_key_filter, repeat_selected_instances, halve_token_indices, \
+                        join_dict_of_indices_with_key_filter, select_and_repeat_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
                         probably_anneal_int_tensor, count_optimized_params, count_params, add_dict_to_dict
 
@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_dirpaths=None,
                  unet_weights=None,
-                 p_gen_id2img_rand_id=0.4,
+                 p_gen_rand_id_for_id2img=0.4,
                  p_perturb_face_id_embs=0.6,
                  perturb_face_id_embs_std_range=[0.5, 1.5],
                  extend_prompt2token_proj_attention_multiplier=1,
@@ -134,7 +134,7 @@ class DDPM(pl.LightningModule):
         self.extra_unet_dirpaths                    = extra_unet_dirpaths
         self.unet_weights                           = unet_weights
         
-        self.p_gen_id2img_rand_id                   = p_gen_id2img_rand_id
+        self.p_gen_rand_id_for_id2img                   = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
 
@@ -295,7 +295,7 @@ class DDPM(pl.LightningModule):
         self.iter_flags = { 'calc_clip_loss':               False,
                             'do_normal_recon':              True,
                             'do_unet_distill':              False,
-                            'gen_id2img_rand_id':           False,
+                            'gen_rand_id_for_id2img':           False,
                             'id2img_prompt_embs':           None,
                             'id2img_neg_prompt_embs':       None,
                             'perturb_face_id_embs':         False,
@@ -854,7 +854,8 @@ class LatentDiffusion(DDPM):
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         if 'aug_mask' in batch:
-            # img_mask is another name of aug_mask.
+            # aug_mask indicates the valid region of the image, due to the augmentation.
+            # img_mask is just another name of aug_mask.
             img_mask = batch['aug_mask']
             # img_mask: [B, H, W] => [B, 1, H, W]
             img_mask = img_mask.unsqueeze(1).to(x_start.device)
@@ -863,6 +864,8 @@ class LatentDiffusion(DDPM):
             img_mask = None
 
         if 'fg_mask' in batch:
+            # fg_mask indicates the foreground region of the image. On face images,
+            # the human face and body regions are the foreground region. 
             fg_mask = batch['fg_mask']
             # fg_mask: [B, H, W] => [B, 1, H, W]
             fg_mask = fg_mask.unsqueeze(1).to(x_start.device)
@@ -882,20 +885,20 @@ class LatentDiffusion(DDPM):
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
             # will be repeated automatically. Therefore, we don't need to manually repeat them later.
             batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
-                repeat_selected_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
-                                          x_start, img_mask, fg_mask, batch_have_fg_mask)
+                select_and_repeat_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
+                                            x_start, img_mask, fg_mask, batch_have_fg_mask)
             self.iter_flags['same_subject_in_batch'] = True
         else:
             self.iter_flags['same_subject_in_batch'] = False
 
         # do_unet_distill and random() < unet_distill_iter_gap.
-        # p_gen_id2img_rand_id: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
+        # p_gen_rand_id_for_id2img: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
         # 0.1 if distilling on jointIDs.
-        if self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_gen_id2img_rand_id):
-            self.iter_flags['gen_id2img_rand_id'] = True
+        if self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_gen_rand_id_for_id2img):
+            self.iter_flags['gen_rand_id_for_id2img'] = True
             self.batch_subject_names = [ "rand_id_to_img_prompt" ] * len(batch['subject_name'])
         else:
-            self.iter_flags['gen_id2img_rand_id'] = False
+            self.iter_flags['gen_rand_id_for_id2img'] = False
             self.batch_subject_names = batch['subject_name']            
 
         batch_images_unnorm = batch["image_unnorm"]
@@ -904,13 +907,13 @@ class LatentDiffusion(DDPM):
         images = batch["image_unnorm"].permute(0, 3, 1, 2).to(x_start.device)
         image_paths = batch["image_path"]
 
-        # gen_id2img_rand_id. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
+        # gen_rand_id_for_id2img. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
         # Therefore, zs_clip_fgbg_features are not available and are randomly generated as well.
-        # gen_id2img_rand_id implies (not do_comp_prompt_distillation).
-        # NOTE: the faces generated with gen_id2img_rand_id are usually atypical outliers,
+        # gen_rand_id_for_id2img implies (not do_comp_prompt_distillation).
+        # NOTE: the faces generated with gen_rand_id_for_id2img are usually atypical outliers,
         # so adding a small proportion of them to the training data may help increase the authenticity on
         # atypical faces, but adding too much of them may harm the performance on typical faces.
-        if self.iter_flags['gen_id2img_rand_id']:
+        if self.iter_flags['gen_rand_id_for_id2img']:
             # FACE_ID_DIM: 512 for each encoder. 1024 for two encoders.
             # FACE_ID_DIM is the sum of all encoders' face ID dimensions.
             FACE_ID_DIM             = self.embedding_manager.id2ada_prompt_encoder.face_id_dim
@@ -924,14 +927,14 @@ class LatentDiffusion(DDPM):
             img_mask = None
             fg_mask  = None
             batch_have_fg_mask[:] = False
-            # In a gen_id2img_rand_id iteration, simply denoise a totally random x_start.
+            # In a gen_rand_id_for_id2img iteration, simply denoise a totally random x_start.
             x_start = torch.randn_like(x_start)
             self.iter_flags['faceless_img_count'] = 0
             # A batch of random faces share no similarity with each other, so same_subject_in_batch is False.
             self.iter_flags['same_subject_in_batch'] = False
 
-        # Not gen_id2img_rand_id. The recon/distillation is on real ID embeddings.
-        # 'gen_id2img_rand_id' is only True in do_unet_distill iters.
+        # Not gen_rand_id_for_id2img. The recon/distillation is on real ID embeddings.
+        # 'gen_rand_id_for_id2img' is only True in do_unet_distill iters.
         # So if not do_unet_distill, then this branch is always executed.
         #    If     do_unet_distill, then this branch is executed at 50% of the time.
         else:
@@ -999,10 +1002,10 @@ class LatentDiffusion(DDPM):
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
                 batch_have_fg_mask, self.batch_subject_names, \
                 id2img_prompt_embs, zs_clip_fgbg_features = \
-                    repeat_selected_instances(slice(0, 1), BS, 
-                                              x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                              batch_have_fg_mask, self.batch_subject_names, 
-                                              id2img_prompt_embs, zs_clip_fgbg_features)
+                    select_and_repeat_instances(slice(0, 1), BS, 
+                                                x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                batch_have_fg_mask, self.batch_subject_names, 
+                                                id2img_prompt_embs, zs_clip_fgbg_features)
                 
             # ** Perturb the zero-shot ID image prompt embeddings with probability 0.6. **
             # The noise is added to the image prompt embeddings instead of the initial face ID embeddings.
@@ -1051,7 +1054,7 @@ class LatentDiffusion(DDPM):
                 ## In that case, we need to discard the first few steps from loss computation.
                 ## HALF_BS = max(2, HALF_BS)
 
-                # REPEAT = 1 in repeat_selected_instances(), so that it **only selects** the 
+                # REPEAT = 1 in select_and_repeat_instances(), so that it **only selects** the 
                 # first HALF_BS elements without repeating.
                 # clip_bg_features is used by ConsistentID adaface encoder, 
                 # so we repeat zs_clip_fgbg_features as well.
@@ -1061,13 +1064,13 @@ class LatentDiffusion(DDPM):
                 id2img_prompt_embs, id2img_neg_prompt_embs, \
                 captions, subj_single_prompts, subj_comp_prompts, \
                 cls_single_prompts, cls_comp_prompts \
-                = repeat_selected_instances(slice(0, HALF_BS), 1, 
-                                            x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                            batch_have_fg_mask, self.batch_subject_names, 
-                                            zs_clip_fgbg_features,
-                                            id2img_prompt_embs, id2img_neg_prompt_embs,
-                                            captions, subj_single_prompts, subj_comp_prompts,
-                                            cls_single_prompts, cls_comp_prompts)
+                = select_and_repeat_instances(slice(0, HALF_BS), 1, 
+                                              x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                              batch_have_fg_mask, self.batch_subject_names, 
+                                              zs_clip_fgbg_features,
+                                              id2img_prompt_embs, id2img_neg_prompt_embs,
+                                              captions, subj_single_prompts, subj_comp_prompts,
+                                              cls_single_prompts, cls_comp_prompts)
                 
                 # Update delta_prompts to have the first HALF_BS prompts.
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
@@ -1862,7 +1865,7 @@ class LatentDiffusion(DDPM):
         c_prompt_emb, c_in, extra_info = cond_context
 
         # Although img_mask is not explicitly referred to in the following code,
-        # it's updated within repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks).
+        # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
         img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
 
         if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
@@ -1871,7 +1874,7 @@ class LatentDiffusion(DDPM):
             # the background in the training images, which is not desirable.
             # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
             # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
-            filtered_fg_mask    = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
+            filtered_fg_mask = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
             # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
             # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
             # fg_noise_amount = 0.2
@@ -1894,7 +1897,7 @@ class LatentDiffusion(DDPM):
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
         # Update masks to be a 1-repeat-4 structure.
-        masks = repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks)
+        masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
 
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.

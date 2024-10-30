@@ -40,9 +40,9 @@ model:
     # of the IDs (belonging to two face detectors) are not consistent. However, a small proportion
     # of random face IDs may help force the arc2face Ada focuses on reconstructing the arc2face random ID,
     # and the consistentID Ada focuses on reconstructing the consistentID random ID. Therefore, it may still
-    # be helpful to set a small p_gen_id2img_rand_id. (If both parts are reconstructed well, then their summation
+    # be helpful to set a small p_gen_rand_id_for_id2img. (If both parts are reconstructed well, then their summation
     # should match the mixture of the two teachers' outputs.)
-    p_gen_id2img_rand_id:             0.1
+    p_gen_rand_id_for_id2img:             0.1
     p_perturb_face_id_embs:           0.6
     # ConsistentID image embeddings are quite robust to random perturbations, so we set
     # a large std range of [0.5, 1].

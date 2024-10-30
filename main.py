@@ -212,7 +212,7 @@ def get_parser(**parser_kwargs):
                         help="Gradient scale of the prompt2token projection layer (Set to < 1 to reduce the update speed of SubjBasisGenerator)")
     parser.add_argument("--prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
-    parser.add_argument("--p_gen_id2img_rand_id", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--p_gen_rand_id_for_id2img", type=float, default=argparse.SUPPRESS,
                         help="Probability of generating random faces during arc2face distillation")
     parser.add_argument("--max_num_unet_distill_denoising_steps", type=int, default=3,
                         help="Maximum number of denoising steps (default 3)")    
@@ -689,8 +689,8 @@ if __name__ == "__main__":
         config.data.params.train.params.load_meta_subj2person_type_cache_path = opt.load_meta_subj2person_type_cache_path
         config.data.params.train.params.save_meta_subj2person_type_cache_path = opt.save_meta_subj2person_type_cache_path
 
-        if hasattr(opt, 'p_gen_id2img_rand_id'):
-            config.model.params.p_gen_id2img_rand_id    = opt.p_gen_id2img_rand_id
+        if hasattr(opt, 'p_gen_rand_id_for_id2img'):
+            config.model.params.p_gen_rand_id_for_id2img    = opt.p_gen_rand_id_for_id2img
             
         config.model.params.max_num_unet_distill_denoising_steps = opt.max_num_unet_distill_denoising_steps
         if hasattr(opt, 'p_perturb_face_id_embs'):
