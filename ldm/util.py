@@ -1154,35 +1154,6 @@ def split_indices_by_instance(indices, as_dict=False):
         indices_by_instance = { uib.item(): indices_N[indices_B == uib] for uib in unique_indices_B }
     return indices_by_instance
 
-def split_indices_by_block(indices, block_size):
-    indices_B, indices_N = indices
-    max_block_idx = indices_B.max() // block_size
-    for block_idx in range(max_block_idx + 1):
-        block_indices_B = indices_B[indices_B // block_size == block_idx]
-        block_indices_N = indices_N[indices_B // block_size == block_idx]
-        yield (block_indices_B, block_indices_N)
-
-# n: repeated times. If n = 0, no repeat. If n = 1, repeat once (double the length).
-# If n = 1, indices = ([0, 0], [1, 2]) => ([0, 0, 0, 0], [1, 2, 3, 4]).
-def extend_indices_N_by_n_times(indices, n):
-    if indices is None:
-        return None
-    
-    if n == 0:
-        return indices
-    
-    device = indices[0].device
-    indices_by_instance = split_indices_by_instance(indices)
-    indices_by_instance_B_ext, indices_by_instance_N_ext = [], []
-    for inst_indices_B, inst_indices_N in indices_by_instance:
-        indices_by_instance_B_ext += [ inst_indices_B, torch.ones(n, dtype=int, device=device) * inst_indices_B[0] ]
-        indices_by_instance_N_ext += [ inst_indices_N, torch.arange(1, n + 1, dtype=int, device=device) + inst_indices_N[-1] ]
-    
-    indices_B_ext = torch.cat(indices_by_instance_B_ext, dim=0)
-    indices_N_ext = torch.cat(indices_by_instance_N_ext, dim=0)
-
-    return (indices_B_ext, indices_N_ext)
-
 # n: repeated times.
 def extend_indices_B_by_n_times(indices, n, block_offset):
     if indices is None:
