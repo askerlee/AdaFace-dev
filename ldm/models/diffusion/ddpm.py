@@ -1418,15 +1418,15 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_comp_prompt_distillation. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_recon, x_start2, x_start3, noise, masks, init_prep_context_type = \
+            x_recon, x_start_maskfilled, x_start_final, noise, masks, init_prep_context_type = \
                 self.do_comp_prompt_denoising(cond_context, x_start, noise, text_prompt_adhoc_info,
                                               masks, fg_noise_amount=0.2,
                                               BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
 
-            # Log x_start2 (noisy and scaled version of the first image in the batch),
-            # x_start3 (denoising-prepared version of x_start2), and the denoised images for diagnosis.
+            # Log x_start_maskfilled (noisy and scaled version of the first image in the batch),
+            # x_start_final (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
             # The four instances in iter_flags['image_unnorm'] are different,
             # but only the first one is actually used. 
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
@@ -1439,15 +1439,15 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
             self.cache_and_log_generations(input_image, log_image_colors, do_normalize=False)
 
-            x_start2 = x_start2[[0]]
-            log_image_colors = torch.ones(x_start2.shape[0], dtype=int, device=x_start.device)
-            x_start2_decoded = self.decode_first_stage(x_start2)
-            self.cache_and_log_generations(x_start2_decoded, log_image_colors, do_normalize=True)
+            x_start_maskfilled = x_start_maskfilled[[0]]
+            log_image_colors = torch.ones(x_start_maskfilled.shape[0], dtype=int, device=x_start.device)
+            x_start_maskfilled_decoded = self.decode_first_stage(x_start_maskfilled)
+            self.cache_and_log_generations(x_start_maskfilled_decoded, log_image_colors, do_normalize=True)
 
-            x_start3 = x_start3.chunk(2)[0]
-            log_image_colors = torch.ones(x_start3.shape[0], dtype=int, device=x_start.device)
-            x_start3_decoded = self.decode_first_stage(x_start3)
-            self.cache_and_log_generations(x_start3_decoded, log_image_colors, do_normalize=True)
+            x_start_final = x_start_final.chunk(2)[0]
+            log_image_colors = torch.ones(x_start_final.shape[0], dtype=int, device=x_start.device)
+            x_start_final_decoded = self.decode_first_stage(x_start_final)
+            self.cache_and_log_generations(x_start_final_decoded, log_image_colors, do_normalize=True)
             
             recon_images = self.decode_first_stage(x_recon)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
@@ -1863,9 +1863,8 @@ class LatentDiffusion(DDPM):
         # Compositional iter.
         # In a compositional iter, we don't use the t passed into p_losses().
         # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
-        t_middle = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
-                                 (x_start.shape[0],), device=x_start.device)
-        t = t_middle
+        t_rear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+                               (BLOCK_SIZE,), device=x_start.device)
 
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within repeat_selected_instances(slice(0, BLOCK_SIZE), 4, *masks).
@@ -1895,9 +1894,9 @@ class LatentDiffusion(DDPM):
         # Make the 4 instances in x_start, noise and t the same.
         x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
         noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        t       = t[:BLOCK_SIZE].repeat(4)
+        t       = t_rear.repeat(4)
 
-        x_start2 = x_start
+        x_start_maskfilled = x_start
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
@@ -1933,7 +1932,7 @@ class LatentDiffusion(DDPM):
             num_sep_denoising_steps    = min(num_init_prep_denoising_steps, MAX_N_SEP)
             all_t_list = []
 
-            # First, do num_shared_denoising_steps of shared denoising steps.
+            # First, do num_shared_denoising_steps of shared denoising steps with the comp prompts.
             if num_shared_denoising_steps > 0:
                 # Class prep denoising: Denoise x_start_4 with the comp prompts 
                 # for num_shared_denoising_steps times, using self.comp_distill_init_prep_unet.
@@ -1960,12 +1959,12 @@ class LatentDiffusion(DDPM):
                                                         # From the outside, the unet ensemble is transparent, like a single unet.
                                                         teacher_context=[subj_double_context, cls_double_context], 
                                                         num_denoising_steps=num_shared_denoising_steps,
-                                                        # Same t across instances.
-                                                        uses_same_t=True)
+                                                        # Same t and noise across instances.
+                                                        same_t_noise_across_instances=True)
                 # Repeat the 1-instance denoised x_start_4 to 2-instance x_start_2, i.e., one single, one comp instances.
                 x_start_2   = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
                 t_2         = all_t[-1].repeat(2)
-                all_t_list  += [ t[0].item() for t in all_t ]
+                all_t_list  += [ ti[0].item() for ti in all_t ]
             else:
                 # Class prep denoising: Denoise x_start_2 with the class single/comp prompts 
                 # for num_sep_denoising_steps times, using self.comp_distill_init_prep_unet.
@@ -1983,6 +1982,7 @@ class LatentDiffusion(DDPM):
             subj_double_context = torch.cat([subj_prompt_emb, uncond_emb], dim=0)
             cls_double_context  = torch.cat([cls_prompt_emb,  uncond_emb], dim=0)
 
+            # Now do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
             # Since we always use CFG for class prep denoising,
             # we need to pass the negative prompt as well.
             # cfg_scale_range=[2, 4].
@@ -1995,10 +1995,10 @@ class LatentDiffusion(DDPM):
                                                     # From the outside, the unet ensemble is transparent, like a single unet.
                                                     teacher_context=[subj_double_context, cls_double_context], 
                                                     num_denoising_steps=num_sep_denoising_steps,
-                                                    # Same t across instances.
-                                                    uses_same_t=True)
+                                                    # Same t and noise across instances.
+                                                    same_t_noise_across_instances=True)
             
-            all_t_list += [ t[0].item() for t in all_t ]
+            all_t_list += [ ti[0].item() for ti in all_t ]
             print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
                   f"{num_init_prep_denoising_steps} subj-cls ensemble prep denoising steps {all_t_list}")
             
@@ -2016,10 +2016,15 @@ class LatentDiffusion(DDPM):
         noise       = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
         extra_info['capture_ca_layers_activations'] = True
 
+        # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
+        t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
+                                 (BLOCK_SIZE,), device=x_start.device)
+        t_mid = t_mid.repeat(4)
+
         # model_output is not used by the caller.
         # x_start will be added with noise to get x_noisy, on which the denoising is done to get model_output.
         model_output, x_recon = \
-            self.guided_denoise(x_start, noise, t, cond_context, 
+            self.guided_denoise(x_start, noise, t_mid, cond_context, 
                                 text_prompt_adhoc_info=text_prompt_adhoc_info,
                                 uncond_emb=uncond_emb,
                                 unet_has_grad='subject-half', 
@@ -2028,13 +2033,13 @@ class LatentDiffusion(DDPM):
                                 do_pixel_recon=True, cfg_scale=5)
 
         extra_info['capture_ca_layers_activations'] = False
-
+        x_start_final = x_start
         # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_prompt_distillation. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_recon, x_start2, x_start, noise, masks, init_prep_context_type
+        return x_recon, x_start_maskfilled, x_start_final, noise, masks, init_prep_context_type
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, batch_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):

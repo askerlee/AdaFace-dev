@@ -56,9 +56,9 @@ class UNetTeacher(pl.LightningModule):
     # to be initialized, which will unnecessarily complicate the code.
     # noise: the initial noise for the first iteration.
     # t: the initial t. We will sample additional (num_denoising_steps - 1) smaller t.
-    # uses_same_t: when sampling t, use the same t for all instances.
+    # same_t_noise_across_instances: when sampling t and noise, use the same t and noise for all instances.
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, 
-                num_denoising_steps=1, uses_same_t=False):
+                num_denoising_steps=1, same_t_noise_across_instances=False):
         assert num_denoising_steps <= 10
 
         if self.p_uses_cfg > 0:
@@ -110,7 +110,12 @@ class UNetTeacher(pl.LightningModule):
         else:
             if teacher_context.shape[0] != x_start.shape[0] * (1 + self.uses_cfg):
                 breakpoint()
-                
+        
+        if same_t_noise_across_instances:
+            # If same_t_noise_across_instances, we use the same t and noise for all instances.
+            t = t[0].repeat(x_start.shape[0])
+            noise = noise[[0]].repeat(x_start.shape[0])
+
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
         noises      = [ noise ]
@@ -159,15 +164,15 @@ class UNetTeacher(pl.LightningModule):
                     t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
+                    noise = torch.randn_like(pred_x0)
 
-                    if uses_same_t:
-                        # If uses_same_t, we use the same earlier_timesteps for all instances.
+                    if same_t_noise_across_instances:
+                        # If same_t_noise_across_instances, we use the same earlier_timesteps and noise for all instances.
                         earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
+                        noise = noise[[0]].repeat(x_start.shape[0])
 
                     # earlier_timesteps = ts[i+1] < ts[i].
                     ts.append(earlier_timesteps)
-
-                    noise = torch.randn_like(pred_x0)
                     noises.append(noise)
 
         return noise_preds, x_starts, noises, ts
