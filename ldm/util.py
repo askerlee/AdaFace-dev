@@ -1298,14 +1298,6 @@ def draw_annealed_bool(training_percent, final_percent, true_prob_range):
     # Flip a coin, with prob of true being true_p_annealed.    
     return (torch.rand(1) < true_p_annealed).item()
 
-def probably_draw_float(rand_range, default_value, default_prob=0.5):
-    lb, ub = rand_range
-    assert lb < ub
-    if torch.rand(1) < default_prob:
-        return default_value
-    else:
-        return torch.rand(1).item() * (ub - lb) + lb
-
 # t: original t. t_annealed: randomly scaled t, scaled according to ratio_range.
 # ratio_range: range of fluctuation ratios (could > 1 or < 1).
 # keep_prob_range: range of annealed prob of keeping the original t. If (0, 0.5),
@@ -1334,28 +1326,6 @@ def probably_anneal_int_tensor(t, training_percent, num_timesteps, ratio_range, 
 
     return t_annealed
 
-# init_ratio_range, final_ratio_range: ranges of fluctuation ratios (could > 1 or < 1).
-# Gradually shift ratio_range from init_ratio_range to final_ratio_range.
-def anneal_t_ratio(t, training_percent, num_timesteps, init_ratio_range, final_ratio_range):
-    t_annealed = t.clone()    
-    ratio_lb = anneal_value(training_percent, final_percent=1., value_range=(init_ratio_range[0], final_ratio_range[0]))
-    ratio_ub = anneal_value(training_percent, final_percent=1., value_range=(init_ratio_range[1], final_ratio_range[1]))
-    assert ratio_lb < ratio_ub
-
-    if t.ndim > 0:
-        for i, ti in enumerate(t):
-            ti_lowerbound = min(max(int(ti * ratio_lb), 0), num_timesteps - 1)
-            ti_upperbound = min(int(ti * ratio_ub) + 1, num_timesteps)
-            # Draw t_annealeded from [t, t*1.3], if ratio_range = (1, 1.3).
-            t_annealed[i] = torch.randint(ti_lowerbound, ti_upperbound, (1,)).item()
-    else:
-        t_lowerbound = min(max(int(t * ratio_lb), 0), num_timesteps - 1)
-        t_upperbound = min(int(t * ratio_ub) + 1, num_timesteps)
-        t_annealed = torch.tensor(torch.randint(t_lowerbound, t_upperbound, (1,)).item(), 
-                                  dtype=t.dtype, device=t.device)
-
-    return t_annealed
-
 '''
     Example:
     # Gradually increase the chance of taking 5 or 7 denoising steps.
@@ -1377,18 +1347,6 @@ def sample_num_denoising_steps(max_num_unet_distill_denoising_steps, p_num_denoi
     sample_idx = torch.multinomial(p_num_denoising_steps, 1).item()
     num_denoising_steps = cand_num_denoising_steps[sample_idx]
     return num_denoising_steps
-
-def select_piecewise_value(ranged_values, curr_pos, range_ub=1.0):
-    for i, (range_lb, value) in enumerate(ranged_values):
-        if i < len(ranged_values) - 1:
-            range_ub = ranged_values[i + 1][0]
-        else:
-            range_ub = 1.0
-
-        if range_lb <= curr_pos < range_ub:
-            return value
-
-    raise ValueError(f"curr_pos {curr_pos} is out of range.")
 
 # target_spatial_area: Either (H, W) or flattened H*W. If it's based on an attention map, then
 # its geometrical dimensions (H, W) have been flatten to H*W. In this case, we assume H = W.
@@ -1423,7 +1381,6 @@ def resize_mask_to_target_size(mask, mask_name, target_spatial_area, mode="neare
         print(f"WARNING: {mask_name} has all-zero masks.")
     
     return mask2
-
 
 # c1, c2: [32, 77, 768]. mix_indices: 1D index tensor.
 # mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
@@ -1575,7 +1532,6 @@ def extract_first_index_in_each_instance(token_indices):
 # If do_sum, returned emb_attns is 3D. Otherwise 4D.
 # indices are applied on the first 2 dims of attn_mat.
 def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=True, do_mean=False):
-
     indices_by_instance = split_indices_by_instance(indices)
 
     # emb_attns[0]: [1, 9, 8, 64]
@@ -1599,57 +1555,6 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
 
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
-                
-def gen_comp_extra_indices_by_block(prompt_emb_mask, list_indices_to_mask, block_size):
-    # prompt_emb_mask: [4, 77, 1] => [4, 77]
-    comp_extra_mask = prompt_emb_mask.squeeze(-1).clone()
-    # Mask out the foreground and background embeddings.
-    for indices_to_mask in list_indices_to_mask:
-        if indices_to_mask is not None:
-            comp_extra_mask[indices_to_mask] = 0
-
-    comp_extra_indices = comp_extra_mask.nonzero(as_tuple=True)
-    # split_indices_by_block() returns a generator. Convert to a list.
-    comp_extra_indices_by_block = split_indices_by_block(comp_extra_indices, block_size)
-    comp_extra_indices_by_block = list(comp_extra_indices_by_block)
-    return comp_extra_indices_by_block
-
-def replace_prompt_comp_extra(comp_prompts, single_prompts, new_comp_extras):
-    new_comp_prompts = []
-    for i in range(len(comp_prompts)):
-        assert comp_prompts[i].startswith(single_prompts[i])
-        if new_comp_extras[i] != '':
-            # Replace the compositional prompt with the new compositional part.
-            new_comp_prompts.append( single_prompts[i] + new_comp_extras[i] )
-        else:
-            # new_comp_extra is empty, i.e., the particular instance has no corresponding fg_mask.
-            # Keep the original compositional prompt.
-            new_comp_prompts.append( comp_prompts[i] )
-    
-    return new_comp_prompts
-
-def extract_last_chunk_of_indices(token_indices, total_num_chunks=3):
-    if token_indices is None:
-        return None
-    
-    indiv_indices = split_indices_by_instance(token_indices)
-    indiv_indices_half_B2, indiv_indices_half_N2 = [], []
-    for indices_B, indices_N in indiv_indices:
-        indices_B2_chunks = indices_B.chunk(total_num_chunks)
-        indices_N2_chunks = indices_N.chunk(total_num_chunks)
-        # Not enough chunks. Skip this instance.
-        if len(indices_B2_chunks) < total_num_chunks:
-            continue
-        indices_B2 = indices_B2_chunks[-1]
-        indices_N2 = indices_N2_chunks[-1]
-        indiv_indices_half_B2.append(indices_B2)
-        indiv_indices_half_N2.append(indices_N2)
-
-    # If token_indices contain 9 indices for each instance, 
-    # then the second chunk of 4 indices will be returned.
-    token_indices_half_B2 = torch.cat(indiv_indices_half_B2, dim=0)
-    token_indices_half_N2 = torch.cat(indiv_indices_half_N2, dim=0)
-    return (token_indices_half_B2, token_indices_half_N2)
 
 # Textual inversion is supported, where prompt_embeddings is only one embedding.
 # prompt_embeddings: size: [4, 16, 77, 768]. 4: batch_size. 16: number of UNet layers.
