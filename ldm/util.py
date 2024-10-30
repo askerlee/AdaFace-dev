@@ -393,50 +393,6 @@ def decomp_align_ortho(a, b, return_align_coeffs=False):
         align = a - ortho
         return align, ortho
 
-# Decompose a as ortho (w.r.t. b) and align (w.r.t. b) components.
-# Scale down the align component by align_suppress_scale.
-def directional_suppress(a, b, align_suppress_scale=1):
-    if align_suppress_scale == 1 or b.abs().sum() < 1e-6:
-        return a
-    else:
-        ortho = ortho_subtract(a, b)
-        align = a - ortho
-        return align * align_suppress_scale + ortho
-
-def align_suppressed_add(a, b, align_suppress_scale=1):
-    return a + directional_suppress(b, a, align_suppress_scale)
-
-def calc_align_coeffs(a, b, on_last_n_dims=1):
-    assert a.ndim == b.ndim, "Tensors a and b must have the same number of dimensions"
-    if on_last_n_dims > 1:
-        for i in range(-on_last_n_dims, 0):
-            assert a.shape[i] == b.shape[i] or a.shape[i] == 1 or b.shape[i] == 1, \
-              "Tensors a and b must have the same shape on non-singleton dims"
-        
-        # There could still be exceptions, if a and b have singleton dims at non-matching dims.
-        # Leave the check to torch.
-        if a.numel() < b.numel():
-            a = a.expand(b.shape)
-        elif b.numel() < a.numel():
-            b = b.expand(a.shape)
-
-        orig_shape = list(a.shape)
-        a2 = a.reshape(*a.shape[:-on_last_n_dims], -1)
-        b2 = b.reshape(*b.shape[:-on_last_n_dims], -1)
-    else:
-        a2 = a
-        b2 = b
-
-    dot_a_b = torch.einsum('...i,...i->...', a2, b2)
-    dot_b_b = torch.einsum('...i,...i->...', b2, b2)
-    w_optimal = dot_a_b / (dot_b_b + 1e-6)
-    # Append N=on_last_n_dims empty dimensions to w_optimal.
-    if on_last_n_dims > 1:
-        orig_shape[-on_last_n_dims:] = [1] * on_last_n_dims
-        w_optimal = w_optimal.reshape(orig_shape)
-
-    return w_optimal
-
 # ortho_subtract(a, b): the residual is orthogonal to b (on the last dimension).
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
@@ -472,13 +428,6 @@ def power_loss(a, exponent=2, rev_pow=False):
         loss = loss.pow(1/exponent)
     return loss
 
-def clamp_prompt_embedding(clamp_value, *embs):
-    if clamp_value <= 0:
-        return embs[0] if len(embs) == 1 else embs
-    
-    clamp = lambda e: torch.clamp(e, min=-clamp_value, max=clamp_value) if e is not None else None
-    return clamp(embs[0]) if len(embs) == 1 else [clamp(e) for e in embs]
-    
 def demean(x, demean_dims=[-1]):
     if demean_dims is not None:
         assert len(demean_dims) <= x.ndim, "demean_dims must be a subset of x's dims."
@@ -1042,33 +991,6 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
     extended_token_embeddings = torch.cat(extended_token_embeddings, dim=0)
 
     return extended_token_embeddings
-
-
-def calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                              initializer_string, initializer_word_weights):
-    if initializer_string is None:  
-        # The background embedding is not initialized with any word embedding.
-        # In this case,
-        # init_word_embeddings = None,    init_word_weights    = None,
-        # init_word_embeddings = None, avg_init_word_embedding = None.
-        return None, None, None, None
-    else:
-        init_word_tokens = get_tokens_for_string(initializer_string)
-        N = len(init_word_tokens)
-        if initializer_word_weights is not None:
-            init_word_weights = torch.tensor(initializer_word_weights, dtype=torch.float32)
-            # Increase the weight of the main class word. 
-            init_word_weights = init_word_weights ** 2
-            init_word_weights = init_word_weights / init_word_weights.sum()
-        else:
-            # Equal weights for all words.
-            init_word_weights = torch.ones(N, dtype=torch.float32) / N
-        
-        # init_word_embeddings: [2, 768]. avg_init_word_embedding: [1, 768].
-        init_word_embeddings = get_embeddings_for_tokens(init_word_tokens.cpu())
-        avg_init_word_embedding = (init_word_embeddings * init_word_weights.unsqueeze(1)).sum(dim=0, keepdim=True)
-
-        return init_word_tokens, init_word_weights, init_word_embeddings, avg_init_word_embedding
 
 def list_np_images_to_4d_tensor(list_np, dtype=np.uint8):
     tensors = []

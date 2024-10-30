@@ -12,10 +12,9 @@ from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
 import torch.nn.functional as F
 import numpy as np
 
-from ldm.util import extract_first_index_in_each_instance, \
-                     anneal_perturb_embedding, \
+from ldm.util import extract_first_index_in_each_instance, anneal_perturb_embedding, \
                      get_clip_tokens_for_string, get_embeddings_for_clip_tokens, \
-                     scan_cls_delta_strings, calc_init_word_embeddings
+                     scan_cls_delta_strings
                      
 from functools import partial
 from collections import OrderedDict
@@ -252,10 +251,7 @@ class EmbeddingManager(nn.Module):
 
         for subj_name in self.subj_name_to_cls_delta_string:
             cls_delta_string = self.subj_name_to_cls_delta_string[subj_name]
-            cls_delta_tokens, cls_delta_token_weights, _, _ = \
-                calc_init_word_embeddings(get_tokens_for_string, get_embeddings_for_tokens,
-                                          cls_delta_string, None)
-
+            cls_delta_tokens = get_tokens_for_string(cls_delta_string)
             num_cls_delta_tokens = len(cls_delta_tokens)
 
             # subj_idx_to_cls_delta_tokens is used to examine class prompts, 
