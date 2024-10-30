@@ -114,7 +114,7 @@ class UNetTeacher(pl.LightningModule):
         if same_t_noise_across_instances:
             # If same_t_noise_across_instances, we use the same t and noise for all instances.
             t = t[0].repeat(x_start.shape[0])
-            noise = noise[[0]].repeat(x_start.shape[0])
+            noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -169,7 +169,7 @@ class UNetTeacher(pl.LightningModule):
                     if same_t_noise_across_instances:
                         # If same_t_noise_across_instances, we use the same earlier_timesteps and noise for all instances.
                         earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
-                        noise = noise[[0]].repeat(x_start.shape[0])
+                        noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
 
                     # earlier_timesteps = ts[i+1] < ts[i].
                     ts.append(earlier_timesteps)
