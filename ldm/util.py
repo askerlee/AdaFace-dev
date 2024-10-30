@@ -382,52 +382,6 @@ def ortho_subtract(a, b, b_discount=1, on_last_n_dims=1, return_align_coeffs=Fal
     else:
         return result
 
-# Extract the components of a that aligns and orthos with b, respectively.
-def decomp_align_ortho(a, b, return_align_coeffs=False):
-    if return_align_coeffs:
-        ortho, align_coeffs = ortho_subtract(a, b, return_align_coeffs=True)
-        align = a - ortho
-        return align, ortho, align_coeffs
-    else:
-        ortho = ortho_subtract(a, b)
-        align = a - ortho
-        return align, ortho
-
-# ortho_subtract(a, b): the residual is orthogonal to b (on the last dimension).
-# ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
-# NOTE: always choose a to be something we care about, and b to be something as a reference.
-def ortho_l2loss(a, b, mean=True, do_sqrt=False):
-    residual = ortho_subtract(a, b)
-    # F.mse_loss() is taking the square of all elements in the residual, then mean.
-    # ortho_l2loss() keeps consistent with F.mse_loss().
-    loss = residual * residual
-    if mean:
-        loss = loss.mean()
-    if do_sqrt:
-        loss = loss.sqrt()
-    return loss
-
-def normalized_l2loss(a, b, mean=True):
-    a_norm = a.norm(dim=-1, keepdim=True) + 1e-6
-    b_norm = b.norm(dim=-1, keepdim=True) + 1e-6
-    a = a * (a_norm + b_norm) / (a_norm * 2)
-    b = b * (a_norm + b_norm) / (b_norm * 2)
-    diff = a - b
-    # F.mse_loss() is taking the square of all elements in the residual, then mean.
-    # normalized_l2loss() keeps consistent with F.mse_loss().
-    loss = diff * diff
-    if mean:
-        loss = loss.mean()
-    return loss
-
-def power_loss(a, exponent=2, rev_pow=False):
-    loss = a.abs().pow(exponent).abs().mean()
-    if rev_pow:
-        # pow(1/exponent): limit the scale of the loss. 
-        # Recommended to be True if exponent > 2.
-        loss = loss.pow(1/exponent)
-    return loss
-
 def demean(x, demean_dims=[-1]):
     if demean_dims is not None:
         assert len(demean_dims) <= x.ndim, "demean_dims must be a subset of x's dims."
