@@ -2204,8 +2204,8 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 # the delta of outfeat may be too noisy (manifested by the observation that it's 0.8~0.9).
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
-                               recon_feat_objectives={'attn_out': ['orig', 'delta'], 
-                                                      'outfeat':  ['orig']}, 
+                               recon_feat_objectives={'attn_out': ['orig', ], 
+                                                      'outfeat':  ['orig', ]}, 
                                recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
