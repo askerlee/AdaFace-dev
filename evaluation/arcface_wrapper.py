@@ -59,8 +59,12 @@ class ArcFaceWrapper(nn.Module):
     def calc_arcface_align_loss(self, images1, images2):
         embs1, failed_indices1 = self.embed_tensor(images1)
         embs2, failed_indices2 = self.embed_tensor(images2)
-        if len(failed_indices1) > 0 or len(failed_indices2) > 0:
+        if len(failed_indices1) > 0:
+            print(f"Failed to detect faces in images1-{failed_indices1}")
             return torch.tensor(0.0, device=images1.device)
-        
+        if len(failed_indices2) > 0:
+            print(f"Failed to detect faces in images2-{failed_indices2}")
+            return torch.tensor(0.0, device=images1.device)
+                                
         arcface_align_loss = F.cosine_embedding_loss(embs1, embs2, torch.ones(embs1.shape[0]).to(embs1.device))
         return arcface_align_loss
