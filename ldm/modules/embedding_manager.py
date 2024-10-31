@@ -615,13 +615,14 @@ class EmbeddingManager(nn.Module):
         if len(adaface_ckpt_paths) == 2:
             # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
             self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
+            print(f"Loaded {adaface_ckpt_paths[0]} into trainable subj_basis_generator")
             # Back up id2ada_prompt_encoder.subj_basis_generator.
             subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
             # Temporarily replace id2ada_prompt_encoder.subj_basis_generator with subj_basis_generator_frozen.
             self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
             # Load adaface_ckpt_paths[1] into subj_basis_generator_frozen.
             self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[1])
-            print(f"Loaded {adaface_ckpt_paths[0]} into frozen subj_basis_generator")
+            print(f"Loaded {adaface_ckpt_paths[1]} into frozen subj_basis_generator")
             # Restore id2ada_prompt_encoder.subj_basis_generator.
             self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
         else:
@@ -674,11 +675,8 @@ class EmbeddingManager(nn.Module):
                     except:
                         breakpoint()
                     if km2 in self.string_to_token_dict:
-                        if km2 in self.background_strings:
-                            print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
-                            continue
-
-                        raise ValueError(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}")
+                        print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
+                        continue
 
                     # Merge the (possibly substituted) subject strings from the ckpt with 
                     # self.subject_strings and self.background_strings.
