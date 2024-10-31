@@ -1606,7 +1606,8 @@ class LatentDiffusion(DDPM):
                 loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start0_recon, sc_recon)
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
-                    # arcface_align_loss_weight: 1e-3.
+                    # loss_arcface_align: 0.5-0.6. arcface_align_loss_weight: 1e-3 => 0.0005-0.0006.
+                    # This loss is around 1/200 of recon/distill losses (0.1).
                     loss += loss_arcface_align * self.arcface_align_loss_weight
 
         if torch.isnan(loss) and self.trainer.global_rank == 0:

@@ -56,7 +56,7 @@ class RetinaFaceClient(nn.Module):
         # will put the model on the correct GPU.
         self.model = get_model("biubug6", max_size=1024, device=device)
 
-    def detect_faces(self, img: np.ndarray) -> List[FacialAreaRegion]:
+    def detect_faces(self, img: np.ndarray, T=20) -> List[FacialAreaRegion]:
         """
         Detect and align face with retinaface
 
@@ -69,6 +69,7 @@ class RetinaFaceClient(nn.Module):
         resp = []
 
         objs = self.model.predict_jsons(img, confidence_threshold=0.9)
+        H, W = img.shape[:2]
 
         for identity in objs:
             detection = identity["bbox"]
@@ -76,10 +77,15 @@ class RetinaFaceClient(nn.Module):
                 # No face detected
                 continue
 
-            y = detection[1]
-            h = detection[3] - y
-            x = detection[0]
-            w = detection[2] - x
+            # clip detection box to image size
+            y1, y2 = max(detection[1], 0), min(detection[3], H)
+            x1, x2 = max(detection[0], 0), min(detection[2], W)
+            h = y2 - y1
+            w = x2 - x1
+
+            if h <= T or w <= T:
+                # Face too small
+                continue
 
             # retinaface sets left and right eyes with respect to the person
             # The landmark seems to be mirrored compared with deepface detectors.
@@ -96,8 +102,8 @@ class RetinaFaceClient(nn.Module):
             confidence = identity["score"]
 
             facial_area = FacialAreaRegion(
-                x=x,
-                y=y,
+                x=x1,
+                y=y1,
                 w=w,
                 h=h,
                 left_eye=left_eye,
@@ -111,7 +117,7 @@ class RetinaFaceClient(nn.Module):
 
     # Find facial areas of given image tensors and crop them.
     # Output: [BS, 3, 128, 128]
-    def crop_faces(self, images_ts, out_size=(128, 128)):
+    def crop_faces(self, images_ts, out_size=(128, 128), T=20):
         face_crops = []
         failed_indices = []
 
@@ -122,7 +128,7 @@ class RetinaFaceClient(nn.Module):
             image_np = ((image_np + 1) * 127.5).astype(np.uint8)
 
             # .detect_faces() doesn't require grad.
-            facial_areas = self.detect_faces(image_np)
+            facial_areas = self.detect_faces(image_np, T=T)
             if len(facial_areas) == 0:
                 # No face detected
                 failed_indices.append(i)
