@@ -18,6 +18,7 @@ from torchvision.utils import make_grid, draw_bounding_boxes
 import math, sys, re, cv2
 
 from safetensors.torch import load_file as safetensors_load_file
+from evaluation import retinaface_pytorch
 
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode

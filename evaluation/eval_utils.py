@@ -14,7 +14,6 @@ import time
 from evaluation.clip_eval import CLIPImagesEvaluator
 from evaluation.dino_eval import DINOEvaluator
 from evaluation.community_prompts import community_prompt_list
-from insightface.app import FaceAnalysis
 from ldm.data.personalized import PersonalizedBase
 from adaface.util import pad_image_obj_to_square
 
@@ -151,6 +150,7 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
         import deepface.modules.modeling
         # Monkey patch deepface.models.face_detection.RetinaFace with the pytorch version.
         # The original RetinaFace is in tensorflow, which is very slow.
+        # NOTE: RetinaFace is only for face detection, not for embedding, which is done in DeepFace.represent().
         sys.modules['deepface.models.face_detection.RetinaFace'] = retinaface_pytorch
         tasks = ['facial_recognition', 'spoofing', 'facial_attribute', 'face_detector']
         if 'cached_models' not in deepface.modules.modeling.__dict__:
@@ -251,6 +251,7 @@ def insightface_embed_images(insightface_app, image_paths, gpu_id=0, size=(512, 
 
     # Only for one-off call. Otherwise it will be very slow.
     if insightface_app is None:
+        from insightface.app import FaceAnalysis
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
         insightface_app = FaceAnalysis(name='antelopev2', root='models/insightface', providers=['CPUExecutionProvider'])
@@ -282,6 +283,7 @@ def insightface_embed_images(insightface_app, image_paths, gpu_id=0, size=(512, 
             all_embeddings.append([])
 
     return all_embeddings
+
 
 # src_embeds: N1 * embed_dim, dst_embeds: N2 * embed_dim
 # return a similarity matrix of N1 * N2.

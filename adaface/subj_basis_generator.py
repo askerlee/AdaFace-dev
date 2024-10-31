@@ -439,7 +439,7 @@ class ImgPrompt2TextPrompt(nn.Module):
                     else:
                         breakpoint()
                 else:
-                    # len(face_prompt_embs) == 1, this occurs when same_subject_in_batch == True, e.g. in do_comp_prompt_distillation.
+                    # len(face_prompt_embs) == 1, this occurs when same_subject_in_batch == True, e.g. in do_feat_distill_on_comp_prompt.
                     # But list_extra_words always corresponds to the actual batch size. So we only take the first element.
                     list_extra_words = list_extra_words[:1]
                     

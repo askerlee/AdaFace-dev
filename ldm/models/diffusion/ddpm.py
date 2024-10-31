@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import os
 import numpy as np
@@ -37,6 +36,8 @@ import copy
 from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
+from evaluation.arcface_wrapper import ArcFaceWrapper
+
 import sys
 
 class DDPM(pl.LightningModule):
@@ -89,6 +90,8 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.5, 1.5],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
+                 use_arcface_loss=True,
+                 arcface_align_loss_weight=1e-3,
                  ):
         
         super().__init__()
@@ -156,6 +159,8 @@ class DDPM(pl.LightningModule):
         self.adam_config = adam_config
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
+        self.use_arcface_loss = use_arcface_loss
+        self.arcface_align_loss_weight = arcface_align_loss_weight
 
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
@@ -301,7 +306,7 @@ class DDPM(pl.LightningModule):
                             'perturb_face_id_embs':         False,
                             'faceless_img_count':           0,
                             'num_denoising_steps':          1,
-                            'do_comp_prompt_distillation':  False,
+                            'do_feat_distill_on_comp_prompt':  False,
                             'do_prompt_emb_delta_reg':      False,
                             'unet_distill_uses_comp_prompt': False,
                             'use_background_token':         False,
@@ -323,12 +328,12 @@ class DDPM(pl.LightningModule):
         # If N_CAND_REGS == 0, then no prompt distillation/regularizations, 
         # and the flags below take the default False value.
         if self.comp_distill_iter_gap > 0 and self.global_step % self.comp_distill_iter_gap == 0:
-            self.iter_flags['do_comp_prompt_distillation']  = True
+            self.iter_flags['do_feat_distill_on_comp_prompt']  = True
             self.iter_flags['do_normal_recon']              = False
             self.iter_flags['do_unet_distill']              = False
             self.iter_flags['do_prompt_emb_delta_reg']      = self.do_prompt_emb_delta_reg
         else:
-            self.iter_flags['do_comp_prompt_distillation']  = False
+            self.iter_flags['do_feat_distill_on_comp_prompt']  = False
             self.non_comp_iter_counter += 1
             if self.unet_distill_iter_gap > 0 and self.non_comp_iter_counter % self.unet_distill_iter_gap == 0:
                 self.iter_flags['do_normal_recon']  = False
@@ -492,6 +497,11 @@ class LatentDiffusion(DDPM):
         else:
             self.flow_model = None
 
+        if self.use_arcface_loss:
+            self.arcface = ArcFaceWrapper('cpu')
+        else:
+            self.arcface = None
+
         self.generation_cache = []
         self.generation_cache_img_colors = []
         self.cache_start_iter = 0
@@ -561,7 +571,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # Number of calls to get_text_conditioning() during training:
-    # If do_comp_prompt_distillation, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
+    # If do_feat_distill_on_comp_prompt, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
     # If do_normal_recon / do_unet_distll with delta loss, then 2 calls (one on delta prompts, one on subject single prompts). 
     # NOTE: the delta prompts consumes extram RAM.
     # If do_normal_recon / do_unet_distll without delta loss, then 1 call.
@@ -582,7 +592,7 @@ class LatentDiffusion(DDPM):
             self.cond_stage_model.sample_last_layers_skip_weights()
             
         if text_conditioning_iter_type is None:
-            if self.iter_flags['do_comp_prompt_distillation']:
+            if self.iter_flags['do_feat_distill_on_comp_prompt']:
                 text_conditioning_iter_type = 'compos_distill_iter'
             elif self.iter_flags['do_unet_distill']:
                 text_conditioning_iter_type = 'unet_distill_iter'
@@ -765,7 +775,7 @@ class LatentDiffusion(DDPM):
         # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
         # so fp_trick won't be used.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
-            if self.iter_flags['do_comp_prompt_distillation']:
+            if self.iter_flags['do_feat_distill_on_comp_prompt']:
                 p_use_fp_trick = 1
             # If compositional distillation is enabled, then in normal recon iterations,
             # we use the fp_trick most of the time, to better reconstructing single-face input images.
@@ -783,8 +793,8 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
-        if self.iter_flags['do_comp_prompt_distillation'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # If do_comp_prompt_distillation, comp_init_fg_from_training_image is always enabled.
+        if self.iter_flags['do_feat_distill_on_comp_prompt'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+            # If do_feat_distill_on_comp_prompt, comp_init_fg_from_training_image is always enabled.
             # It's OK, since when do_zero_shot, we have a large diverse set of training images,
             # and always initializing from training images won't lead to overfitting.
             p_comp_init_fg_from_training_image = 1
@@ -805,7 +815,7 @@ class LatentDiffusion(DDPM):
             # We lower p_use_background_token from the previous value 0.9 to 0.3 to avoid the background token
             # taking too much of the foreground (i.e., capturing the subject features).
             p_use_background_token  = 0.3
-        elif self.iter_flags['do_comp_prompt_distillation']:
+        elif self.iter_flags['do_feat_distill_on_comp_prompt']:
             # When doing compositional distillation, the background is quite different between 
             # single prompts and comp prompts. So using a background token is probably not a good idea.
             p_use_background_token  = 0
@@ -836,8 +846,8 @@ class LatentDiffusion(DDPM):
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt_bg'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt_bg'
             CLS_COMP_PROMPT    = 'cls_comp_prompt_bg'
-        # Either do_comp_prompt_distillation but not use_fp_trick_iter, 
-        # or recon/unet_distill iters (not do_comp_prompt_distillation) and not use_background_token.
+        # Either do_feat_distill_on_comp_prompt but not use_fp_trick_iter, 
+        # or recon/unet_distill iters (not do_feat_distill_on_comp_prompt) and not use_background_token.
         # We don't use_fp_trick on training images. 
         else:
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
@@ -877,9 +887,9 @@ class LatentDiffusion(DDPM):
         print(f"Rank {self.trainer.global_rank}: {batch['subject_name']}")
 
         BS = len(batch['subject_name'])
-        # If do_comp_prompt_distillation, we repeat the instances in the batch, 
+        # If do_feat_distill_on_comp_prompt, we repeat the instances in the batch, 
         # so that all instances are the same.
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
@@ -909,7 +919,7 @@ class LatentDiffusion(DDPM):
 
         # gen_rand_id_for_id2img. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
         # Therefore, zs_clip_fgbg_features are not available and are randomly generated as well.
-        # gen_rand_id_for_id2img implies (not do_comp_prompt_distillation).
+        # gen_rand_id_for_id2img implies (not do_feat_distill_on_comp_prompt).
         # NOTE: the faces generated with gen_rand_id_for_id2img are usually atypical outliers,
         # so adding a small proportion of them to the training data may help increase the authenticity on
         # atypical faces, but adding too much of them may harm the performance on typical faces.
@@ -942,7 +952,7 @@ class LatentDiffusion(DDPM):
             # Otherwise:                                    zs_clip_fgbg_features: [3, 514, 1280]. face_id_embs: [3, 512].
             # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_fgbg_features and face_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-            # If do_comp_prompt_distillation, then we have repeated the instances in the batch, 
+            # If do_feat_distill_on_comp_prompt, then we have repeated the instances in the batch, 
             # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
             # ** We don't cache and provide zs_clip_neg_features later, as it is constant and
             # is cached in the FaceID2AdaPrompt object.
@@ -957,11 +967,11 @@ class LatentDiffusion(DDPM):
             # If do_normal_recon, then we have to change the iteration type to do_unet_distill. Otherwise there'll 
             # be a large recon error, as the face ID embeddings don't correspond to input images.
             # If this is an compositional distillation iteration, then it's OK to use random ID embeddings.
-            if faceless_img_count > 0 and self.iter_flags['do_normal_recon']:
+            if faceless_img_count > 0:
                 self.iter_flags['do_normal_recon'] = False
                 self.iter_flags['do_unet_distill'] = True
-                # Disable do_prompt_emb_delta_reg during unet distillation.
-                self.iter_flags['do_prompt_emb_delta_reg']  = False
+                # Disable do_feat_distill_on_comp_prompt during unet distillation.
+                self.iter_flags['do_feat_distill_on_comp_prompt']  = False
 
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
         # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -979,7 +989,7 @@ class LatentDiffusion(DDPM):
         if id2img_neg_prompt_embs is not None:
             id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
 
-        # If do_comp_prompt_distillation, then we don't add noise to the zero-shot ID embeddings, 
+        # If do_feat_distill_on_comp_prompt, then we don't add noise to the zero-shot ID embeddings, 
         # to avoid distorting the ID information.
         p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
         # p_perturb_face_id_embs: default 0.6.
@@ -1097,7 +1107,7 @@ class LatentDiffusion(DDPM):
         # In get_text_conditioning(), text_conditioning_iter_type will be set again.
         # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
         # whose behavior depends on the correct text_conditioning_iter_type.
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:
             text_conditioning_iter_type = 'compos_distill_iter'
         elif self.iter_flags['do_unet_distill']:
             text_conditioning_iter_type = 'unet_distill_iter'
@@ -1134,7 +1144,7 @@ class LatentDiffusion(DDPM):
         #if self.iter_flags['use_background_token']:
         #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         
-        if self.iter_flags['do_comp_prompt_distillation']:                        
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:                        
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE  = 1
             # Only keep the first half of batched prompts to save RAM.
@@ -1206,7 +1216,7 @@ class LatentDiffusion(DDPM):
                                   cls_single_emb,  cls_comp_emb], dim=0)
         extra_info['c_prompt_emb_4b'] = c_prompt_emb
 
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:
             # c_in = delta_prompts is used to generate ada embeddings.
             # c_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
             # The cls_single_prompts/cls_comp_prompts within c_in will only be used to 
@@ -1394,7 +1404,7 @@ class LatentDiffusion(DDPM):
                                                                    self.embedding_manager.subject_string_dict)
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.background_string_dict)
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:
             # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
@@ -1410,9 +1420,9 @@ class LatentDiffusion(DDPM):
 
         noise = torch.randn_like(x_start) 
 
-        # If do_comp_prompt_distillation, we prepare the attention activations 
+        # If do_feat_distill_on_comp_prompt, we prepare the attention activations 
         # for computing distillation losses.
-        if self.iter_flags['do_comp_prompt_distillation']:
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
@@ -1420,7 +1430,7 @@ class LatentDiffusion(DDPM):
             # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
             # We return noise to make the gt_target up-to-date, which is the recon objective.
             # But gt_target is probably not referred to in the following loss computations,
-            # since the current iteration is do_comp_prompt_distillation. We update it just in case.
+            # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             x_recon, x_start_maskfilled, x_start_final, noise, masks, init_prep_context_type = \
                 self.do_comp_prompt_denoising(cond_context, x_start, noise, text_prompt_adhoc_info,
@@ -1511,9 +1521,9 @@ class LatentDiffusion(DDPM):
                                     uncond_emb=None,
                                     unet_has_grad='all', 
                                     # Reconstruct the images at the pixel level for CLIP loss.
-                                    # do_pixel_recon is enabled only when do_comp_prompt_distillation.
+                                    # do_pixel_recon is enabled only when do_feat_distill_on_comp_prompt.
                                     # This is to cache the denoised images as future initialization.
-                                    do_pixel_recon=self.iter_flags['do_comp_prompt_distillation'],
+                                    do_pixel_recon=self.iter_flags['do_feat_distill_on_comp_prompt'],
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
                                     cfg_scale=-1)
@@ -1563,8 +1573,8 @@ class LatentDiffusion(DDPM):
             # prompt_emb_delta_reg_weight: 1e-5.
             loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
-        ###### begin of do_comp_prompt_distillation ######
-        if self.iter_flags['do_comp_prompt_distillation']:
+        ###### begin of do_feat_distill_on_comp_prompt ######
+        if self.iter_flags['do_feat_distill_on_comp_prompt']:
             loss_comp_prompt_distill, loss_comp_fg_bg_preserve = \
                 self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, batch_have_fg_mask, 
                                                    all_subj_indices_1b, all_subj_indices_2b, 
@@ -1584,6 +1594,15 @@ class LatentDiffusion(DDPM):
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
             # comp_prompt_distill_weight: 1e-2. loss_comp_prompt_distill: 2-3.
             loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
+
+            if self.use_arcface_loss and self.arcface is not None:
+                # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
+                # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
+                loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start[:1], x_recon)
+                if loss_arcface_align > 0:
+                    loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
+                    # arcface_align_loss_weight: 1e-3.
+                    loss += loss_arcface_align * self.arcface_align_loss_weight
 
         if torch.isnan(loss) and self.trainer.global_rank == 0:
             print('NaN loss detected.')
@@ -2038,7 +2057,7 @@ class LatentDiffusion(DDPM):
         # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
         # But gt_target is probably not referred to in the following loss computations,
-        # since the current iteration is do_comp_prompt_distillation. We update it just in case.
+        # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_recon, x_start_maskfilled, x_start_final, noise, masks, init_prep_context_type
     
@@ -2152,7 +2171,7 @@ class LatentDiffusion(DDPM):
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
     def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
-        # do_comp_prompt_distillation iterations. No ordinary image reconstruction loss.
+        # do_feat_distill_on_comp_prompt iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
@@ -2749,7 +2768,7 @@ class LatentDiffusion(DDPM):
     # If (-1, 1), then we should set do_normalize=True.
     # img_colors: a single 1D torch tensor, indexing colors = [ None, 'green', 'red', 'purple' ]
     # For raw output from raw output from SD decode_first_stage(),
-    # samples are be between [-1, 1], so we set do_normalize=True.
+    # samples are be between [-1, 1], so we set do_normalize=True, which will convert and clamp to [0, 1].
     @rank_zero_only
     def cache_and_log_generations(self, samples, img_colors, do_normalize=True, max_cache_size=48):
         if isinstance(samples, np.ndarray):
