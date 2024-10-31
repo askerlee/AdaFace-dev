@@ -2141,8 +2141,8 @@ class LatentDiffusion(DDPM):
             scale = -0.5 * 0.01 + 0.01 = 0.005
         """    
         subj_attn_norm_distill_loss_scale = \
-            calc_dyn_loss_scale(loss_subj_attn_norm_distill, base_loss_and_scale=(0.4, 0.02),
-                                ref_loss_and_scale=(0.6, 0.04), rel_scale_range=(-0.5, 10))
+            calc_dyn_loss_scale(loss_subj_attn_norm_distill, base_loss_and_scale=(0.4, 0.015),
+                                ref_loss_and_scale=(0.6, 0.03), rel_scale_range=(-0.5, 10))
 
         # loss_feat_delta_align: 0.02~0.03, loss_subj_attn_norm_distill: 0.25 -> 0.0025.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
