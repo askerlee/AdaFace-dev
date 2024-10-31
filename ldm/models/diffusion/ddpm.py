@@ -1389,6 +1389,7 @@ class LatentDiffusion(DDPM):
         # of the subject and background tokens for the attention loss computation.
         # join_dict_of_indices_with_key_filter(): separate the indices of the subject tokens from those of 
         # the background tokens, using subject_string_dict and background_string_dict as the filters, separately.
+        # Then combine all subject indices into all_subj_indices, and all background indices into all_bg_indices.
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.subject_string_dict)
         all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],

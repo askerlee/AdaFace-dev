@@ -747,6 +747,9 @@ def scan_cls_delta_strings(tokenized_text, placeholder_indices_1st,
 
     return cls_delta_string_indices
 
+# Scan prompt_embedding to find the cls delta tokens, and combine them to 1 token.
+# Once merged, that token can be distributed to M tokens by distribute_embedding_to_M_tokens(),
+# to align with the subject tokens.
 def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices):
     # No cls delta strings found in the prompt.
     if cls_delta_string_indices is None or len(cls_delta_string_indices) == 0:
@@ -1350,7 +1353,7 @@ def select_and_repeat_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
         if arg is not None:
-            if isinstance(arg, (torch.Tensor, np.array)):
+            if isinstance(arg, (torch.Tensor, np.ndarray)):
                 arg2 = arg[sel_indices].repeat([REPEAT] + [1] * (arg.ndim - 1))
             elif isinstance(arg, (list, tuple)):
                 arg2 = arg[sel_indices] * REPEAT
