@@ -499,6 +499,9 @@ class LatentDiffusion(DDPM):
 
         if self.use_arcface_loss:
             self.arcface = ArcFaceWrapper('cpu')
+            # Disable training mode, as this mode 
+            # doesn't accept only 1 image as input.
+            self.arcface.train = disabled_train
         else:
             self.arcface = None
 
@@ -1432,7 +1435,8 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_recon, x_start_maskfilled, x_start_final, noise, masks, init_prep_context_type = \
+            x_recon, x_start_maskfilled, x_start_final, noise, masks, \
+            init_prep_context_type, num_init_prep_denoising_steps = \
                 self.do_comp_prompt_denoising(cond_context, x_start, noise, text_prompt_adhoc_info,
                                               masks, fg_noise_amount=0.2,
                                               BLOCK_SIZE=BLOCK_SIZE)
@@ -1591,11 +1595,15 @@ class LatentDiffusion(DDPM):
             # comp_prompt_distill_weight: 1e-2. loss_comp_prompt_distill: 2-3.
             loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
 
-            if self.use_arcface_loss and self.arcface is not None:
+            # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
+            # to compute arcface_align_loss.
+            if self.use_arcface_loss and (self.arcface is not None) and (num_init_prep_denoising_steps > 1):
                 # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
                 # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
-                x_start0_recon = self.decode_first_stage(x_start[:1])
-                loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start0_recon, x_recon)
+                x_start0_recon  = self.decode_first_stage(x_start.chunk(4)[0])
+                # subj-comp instance.
+                sc_recon        = self.decode_first_stage(x_recon.chunk(4)[1])
+                loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start0_recon, sc_recon)
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
                     # arcface_align_loss_weight: 1e-3.
@@ -2056,7 +2064,8 @@ class LatentDiffusion(DDPM):
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_recon, x_start_maskfilled, x_start_final, noise, masks, init_prep_context_type
+        return x_recon, x_start_maskfilled, x_start_final, noise, masks, \
+                init_prep_context_type, num_init_prep_denoising_steps
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, batch_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):

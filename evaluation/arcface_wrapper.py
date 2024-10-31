@@ -41,7 +41,7 @@ class ArcFaceWrapper(nn.Module):
         self.retinaface.to(device)
 
     # Suppose images_ts has been normalized to [-1, 1].
-    def embed_tensor(self, images_ts):
+    def embed_image_tensor(self, images_ts):
         # retina_crop_face() crops on the input tensor, so that computation graph is preserved.
         faces, failed_indices = self.retinaface.crop_faces(images_ts, out_size=(128, 128))
         # No face detected in any instances in the batch.
@@ -57,8 +57,8 @@ class ArcFaceWrapper(nn.Module):
         return faces_emb, failed_indices
 
     def calc_arcface_align_loss(self, images1, images2):
-        embs1, failed_indices1 = self.embed_tensor(images1)
-        embs2, failed_indices2 = self.embed_tensor(images2)
+        embs1, failed_indices1 = self.embed_image_tensor(images1)
+        embs2, failed_indices2 = self.embed_image_tensor(images2)
         if len(failed_indices1) > 0:
             print(f"Failed to detect faces in images1-{failed_indices1}")
             return torch.tensor(0.0, device=images1.device)
@@ -67,4 +67,5 @@ class ArcFaceWrapper(nn.Module):
             return torch.tensor(0.0, device=images1.device)
                                 
         arcface_align_loss = F.cosine_embedding_loss(embs1, embs2, torch.ones(embs1.shape[0]).to(embs1.device))
+        print(f"Arcface align loss: {arcface_align_loss.item():.2f}")
         return arcface_align_loss

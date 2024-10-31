@@ -72,6 +72,9 @@ class RetinaFaceClient(nn.Module):
 
         for identity in objs:
             detection = identity["bbox"]
+            if len(detection) != 4:
+                # No face detected
+                continue
 
             y = detection[1]
             h = detection[3] - y
