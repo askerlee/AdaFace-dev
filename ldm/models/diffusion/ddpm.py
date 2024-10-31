@@ -1477,10 +1477,6 @@ class LatentDiffusion(DDPM):
 
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
-            # x_recon is not used for comp prompt distillation loss computation.
-            # Only the captured attention matrics are used. So we can release x_recon.
-            del x_recon
-
         ###### Begin of loss computation. ######
         loss_dict = {}
         session_prefix = 'train' if self.training else 'val'
@@ -1598,7 +1594,8 @@ class LatentDiffusion(DDPM):
             if self.use_arcface_loss and self.arcface is not None:
                 # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
                 # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
-                loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start[:1], x_recon)
+                x_start0_recon = self.decode_first_stage(x_start[:1])
+                loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start0_recon, x_recon)
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
                     # arcface_align_loss_weight: 1e-3.

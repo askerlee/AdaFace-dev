@@ -22,7 +22,7 @@ def load_image_for_arcface(img_path, device='cpu'):
     return image_ts
 
 class ArcFaceWrapper(nn.Module):
-    def __init__(self, ckpt_path='models/arcface-resnet18_110.pth', device='cpu'):
+    def __init__(self, device='cpu', ckpt_path='models/arcface-resnet18_110.pth'):
         super(ArcFaceWrapper, self).__init__()
         self.arcface = resnet_face18(False)
         ckpt_state_dict = torch.load(ckpt_path, map_location='cpu')
@@ -53,8 +53,8 @@ class ArcFaceWrapper(nn.Module):
         faces_gray = (faces * rgb_to_gray_weights).sum(dim=1, keepdim=True)
         # Resize to (128, 128)
         faces_gray = F.interpolate(faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
-        face_emb = self.arcface(faces_gray)
-        return face_emb, failed_indices
+        faces_emb = self.arcface(faces_gray)
+        return faces_emb, failed_indices
 
     def calc_arcface_align_loss(self, images1, images2):
         embs1, failed_indices1 = self.embed_tensor(images1)

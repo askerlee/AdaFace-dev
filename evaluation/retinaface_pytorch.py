@@ -112,14 +112,14 @@ class RetinaFaceClient(nn.Module):
         face_crops = []
         failed_indices = []
 
-        for i, img_ts in enumerate(images_ts):
+        for i, image_ts in enumerate(images_ts):
             # [3, H, W] -> [H, W, 3]
-            img_np = img_ts.cpu().numpy().transpose(1, 2, 0)
+            image_np = image_ts.cpu().numpy().transpose(1, 2, 0)
             # [-1, 1] -> [0, 255]
-            img_np = ((img_np + 1) * 127.5).astype(np.uint8)
+            image_np = ((image_np + 1) * 127.5).astype(np.uint8)
 
             # .detect_faces() doesn't require grad.
-            facial_areas = self.detect_faces(img_np)
+            facial_areas = self.detect_faces(image_np)
             if len(facial_areas) == 0:
                 # No face detected
                 failed_indices.append(i)
@@ -133,8 +133,8 @@ class RetinaFaceClient(nn.Module):
 
             # Extract detected face without alignment
             # Crop on the input tensor, so that computation graph is preserved.
-            face_crop = images_ts[:, int(y) : int(y + h), int(x) : int(x + w)]
-            # resize to (128, 128)
+            face_crop = image_ts[:, int(y) : int(y + h), int(x) : int(x + w)]
+            # resize to (1, 3, 128, 128)
             face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
             face_crops.append(face_crop)
         
