@@ -2029,7 +2029,7 @@ class LatentDiffusion(DDPM):
             
             all_t_list += [ ti[0].item() for ti in all_t ]
             print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                  f"{num_init_prep_denoising_steps} subj-cls ensemble prep denoising steps {all_t_list}")
+                  f"subj-cls ensemble prep denoising {num_init_prep_denoising_steps} steps {all_t_list}")
             
             # The last init_prep_x_start is the final denoised image (with the smallest t).
             # So we use it as the x_start to be denoised by the 4-type prompt set.
