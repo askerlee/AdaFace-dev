@@ -92,7 +92,7 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=False,
                  sc_mc_bg_align_loss_scheme='L2',
                  use_arcface_loss=True,
-                 arcface_align_loss_weight=1e-3,
+                 arcface_align_loss_weight=4e-3,
                  ):
         
         super().__init__()
@@ -2131,8 +2131,7 @@ class LatentDiffusion(DDPM):
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
             # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
             loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
-                                        + (loss_sc_ss_fg_recon + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
-                                            * elastic_matching_loss_scale \
+                                        + loss_sc_ss_fg_recon + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale \
                                         + (loss_comp_subj_bg_attn_suppress + loss_comp_cls_bg_attn_suppress) \
                                             * comp_subj_bg_attn_suppress_loss_scale
         else:
