@@ -1113,8 +1113,8 @@ def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
         return (ts * instance_weights * mask).sum(dim=dim, keepdim=keepdim) / mask_sum
 
 # Masked L2 loss on a 3D or 4D tensor.
-# If 3D: (B, N, C), N: number of image tokens.
-# If 4D: (B, C, H, W).
+# If 3D: (B, N, C), N: number of image tokens. mask: (B, N, 1).
+# If 4D: (B, C, H, W). mask: (B, 1, H, W).
 def masked_l2_loss(predictions, targets, mask):
     # Ensure the mask has the correct dimension.
     if mask.ndim != predictions.ndim:
@@ -1130,8 +1130,9 @@ def masked_l2_loss(predictions, targets, mask):
     # Sum the loss over the spatial dimensions (H, W) or N, and the channel dimension (C).
     loss_per_batch = masked_loss.sum(dim=non_batch_dims)
 
-    # Normalize by the number of unmasked elements in each batch
-    mask_sum = mask.sum(dim=non_batch_dims)
+    # Normalize by the number of unmasked elements in each batch.
+    # NOTE: scale up mask_sum by the repeat factor due to broadcasting.
+    mask_sum = mask.sum(dim=non_batch_dims) * predictions.shape[1:].numel() / mask.shape[1:].numel()
     loss_per_batch = loss_per_batch / (mask_sum + 1e-8)  # Adding a small epsilon to avoid division by zero
 
     # Take the mean across the batch
