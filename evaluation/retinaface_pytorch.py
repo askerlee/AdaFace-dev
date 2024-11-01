@@ -123,7 +123,7 @@ class RetinaFaceClient(nn.Module):
 
         for i, image_ts in enumerate(images_ts):
             # [3, H, W] -> [H, W, 3]
-            image_np = image_ts.cpu().numpy().transpose(1, 2, 0)
+            image_np = image_ts.detach().cpu().numpy().transpose(1, 2, 0)
             # [-1, 1] -> [0, 255]
             image_np = ((image_np + 1) * 127.5).astype(np.uint8)
 

@@ -1601,13 +1601,14 @@ class LatentDiffusion(DDPM):
                 # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
                 # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
                 x_start0_recon  = self.decode_first_stage(x_start.chunk(4)[0])
-                # subj-comp instance.
-                sc_recon        = self.decode_first_stage(x_recon.chunk(4)[1])
+                # subj-comp instance. 
+                # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
+                sc_recon        = self.decode_first_stage_with_grad(x_recon.chunk(4)[1])
                 loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start0_recon, sc_recon)
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
-                    # loss_arcface_align: 0.5-0.6. arcface_align_loss_weight: 1e-3 => 0.0005-0.0006.
-                    # This loss is around 1/200 of recon/distill losses (0.1).
+                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                    # This loss is around 1/150 of recon/distill losses (0.1).
                     loss += loss_arcface_align * self.arcface_align_loss_weight
 
         if torch.isnan(loss) and self.trainer.global_rank == 0:
