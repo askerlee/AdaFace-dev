@@ -90,6 +90,7 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.5, 1.5],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
+                 sc_mc_bg_align_loss_scheme='L2',
                  use_arcface_loss=True,
                  arcface_align_loss_weight=1e-3,
                  ):
@@ -159,6 +160,7 @@ class DDPM(pl.LightningModule):
         self.adam_config = adam_config
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
+        self.sc_mc_bg_align_loss_scheme = sc_mc_bg_align_loss_scheme
         self.use_arcface_loss = use_arcface_loss
         self.arcface_align_loss_weight = arcface_align_loss_weight
 
@@ -2099,8 +2101,9 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, batch_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives={'attn_out': ['orig', ], 
-                                                                            'outfeat':  ['orig', ]},
+                                                     recon_feat_objectives={'attn_out': ['orig'], 
+                                                                            'outfeat':  ['orig']},
+                                                     bg_align_loss_scheme=self.sc_mc_bg_align_loss_scheme,
                                                      do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
@@ -2122,7 +2125,8 @@ class LatentDiffusion(DDPM):
             # But this loss is always very small, so no need to scale it up.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            sc_mc_bg_match_loss_scale = 3
+            sc_mc_bg_match_loss_scale_dict = { 'L2': 1, 'cosine': 3 }
+            sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict[self.sc_mc_bg_align_loss_scheme]
             
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
             # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
@@ -2623,9 +2627,9 @@ class LatentDiffusion(DDPM):
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE,
-                                        recon_feat_objectives={'attn_out': ['orig', ], 
-                                                               'outfeat':  ['orig', ]},
-                                        do_feat_attn_pooling=True):
+                                        recon_feat_objectives={'attn_out': ['orig'], 
+                                                               'outfeat':  ['orig']},
+                                        bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or batch_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
@@ -2707,6 +2711,7 @@ class LatentDiffusion(DDPM):
                                              ss_fg_mask, ca_feat_h, ca_feat_w, 
                                              recon_feat_objectives=recon_feat_objectives,
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
+                                             bg_align_loss_scheme=bg_align_loss_scheme,
                                              do_feat_attn_pooling=do_feat_attn_pooling)
 
             loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg

@@ -1112,10 +1112,13 @@ def masked_mean(ts, mask, instance_weights=None, dim=None, keepdim=False):
         mask_sum = torch.maximum( mask_sum, torch.ones_like(mask_sum) * 1e-6 )
         return (ts * instance_weights * mask).sum(dim=dim, keepdim=keepdim) / mask_sum
 
+# Masked L2 loss on a 3D or 4D tensor.
+# If 3D: (B, N, C), N: number of image tokens.
+# If 4D: (B, C, H, W).
 def masked_l2_loss(predictions, targets, mask):
-    # Ensure the mask has the correct shape (B, 1, H, W)
-    if mask.shape[1] != 1:
-        raise ValueError("Mask should have shape (B, 1, H, W)")
+    # Ensure the mask has the correct dimension.
+    if mask.ndim != predictions.ndim:
+        breakpoint()
 
     # Calculate L2 loss without reduction (element-wise squared difference)
     l2_loss = (predictions - targets) ** 2
@@ -1123,11 +1126,12 @@ def masked_l2_loss(predictions, targets, mask):
     # Apply mask: broadcast mask across the channel dimension
     masked_loss = l2_loss * mask
 
-    # Sum the loss only over the spatial dimensions (H, W)
-    loss_per_batch = masked_loss.sum(dim=(1, 2, 3))
+    non_batch_dims = tuple(range(1, mask.ndim))
+    # Sum the loss over the spatial dimensions (H, W) or N, and the channel dimension (C).
+    loss_per_batch = masked_loss.sum(dim=non_batch_dims)
 
     # Normalize by the number of unmasked elements in each batch
-    mask_sum = mask.sum(dim=(1, 2, 3))
+    mask_sum = mask.sum(dim=non_batch_dims)
     loss_per_batch = loss_per_batch / (mask_sum + 1e-8)  # Adding a small epsilon to avoid division by zero
 
     # Take the mean across the batch
@@ -1966,18 +1970,18 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 
 # recon_feat_objectives: a dict mapping feature map types to a list of objectives.
 # feature map type candidates: 'attn_out', 'outfeat'.
-# Objective candidates:        'orig',     'delta'. 
+# Objective candidates:        'orig'    'delta'. 
 # Default reconstruct both attn_out and outfeat, but only do delta for attn_out, not for outfeat.
 # Because there may be spatial shifting between attention and the CA output features, and
 # the delta of outfeat may be too noisy (manifested by the observation that it's 0.8~0.9).
 # bg_align_loss_scheme: 'cosine' or 'L2'.
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
-                               recon_feat_objectives={'attn_out': ['orig', ], 
-                                                      'outfeat':  ['orig', ]}, 
+                               recon_feat_objectives={'attn_out': ['orig'], 
+                                                      'outfeat':  ['orig']}, 
                                recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
-                               num_flow_est_iters=12, do_feat_attn_pooling=True,
-                               bg_align_loss_scheme='cosine'):
+                               num_flow_est_iters=12, bg_align_loss_scheme='cosine', 
+                               do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
@@ -2154,13 +2158,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
             # will be backpropagated to subj embeddings).
             loss_sc_mc_bg_match_obj = calc_ref_cosine_loss(sc_feat, mc_feat, 
-                                                        emb_mask=sc_to_ss_bg_prob,
-                                                        exponent=2, do_demeans=[False, False],
-                                                        first_n_dims_into_instances=2, 
-                                                        aim_to_align=True, 
-                                                        ref_grad_scale=0)
+                                                           emb_mask=sc_to_ss_bg_prob,
+                                                           exponent=2, do_demeans=[False, False],
+                                                           first_n_dims_into_instances=2, 
+                                                           aim_to_align=True, 
+                                                           ref_grad_scale=0)
         elif bg_align_loss_scheme == 'L2':
-            loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob)
+            # sc_feat, mc_feat: [1, 961, 1280]. sc_to_ss_bg_prob: [1, 961, 1].
+            L2_loss_boost = 1
+            loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob) \
+                                      * L2_loss_boost            
         else:
             breakpoint()
 
