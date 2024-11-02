@@ -67,7 +67,6 @@ class DDPM(pl.LightningModule):
                  comp_distill_iter_gap=-1,
                  cls_subj_mix_scale=0.8,
                  prompt_emb_delta_reg_weight=0.,
-                 comp_prompt_distill_weight=1e-4,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
                  enable_background_token=True,
@@ -107,7 +106,6 @@ class DDPM(pl.LightningModule):
 
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
-        self.comp_prompt_distill_weight             = comp_prompt_distill_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
@@ -1575,13 +1573,11 @@ class LatentDiffusion(DDPM):
 
         ###### begin of do_feat_distill_on_comp_prompt ######
         if self.iter_flags['do_feat_distill_on_comp_prompt']:
-            loss_comp_prompt_distill, loss_comp_fg_bg_preserve = \
+            loss_comp_fg_bg_preserve = \
                 self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, batch_have_fg_mask, 
                                                    all_subj_indices_1b, all_subj_indices_2b, 
                                                    BLOCK_SIZE, loss_dict, session_prefix)
             
-            if loss_comp_prompt_distill > 0:
-                loss_dict.update({f'{session_prefix}/comp_prompt_distill':  loss_comp_prompt_distill.mean().detach().item() })
             # loss_comp_fg_bg_preserve = 0 if comp_init_fg_from_training_image and there's a valid fg_mask.
             if loss_comp_fg_bg_preserve > 0:
                 loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
@@ -1592,8 +1588,6 @@ class LatentDiffusion(DDPM):
 
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
-            # comp_prompt_distill_weight: 1e-2. loss_comp_prompt_distill: 2-3.
-            loss += loss_comp_prompt_distill * self.comp_prompt_distill_weight
 
             # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
             # to compute arcface_align_loss.
@@ -2122,7 +2116,7 @@ class LatentDiffusion(DDPM):
             # But this loss is always very small, so no need to scale it up.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            sc_mc_bg_match_loss_scale_dict = { 'L2': 100, 'cosine': 3 }
+            sc_mc_bg_match_loss_scale_dict = { 'L2': 50, 'cosine': 3 }
             sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict["L2"]
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
@@ -2135,34 +2129,30 @@ class LatentDiffusion(DDPM):
         else:
             loss_comp_fg_bg_preserve = 0
 
-        feat_delta_align_scale = 0.01 #0.2
+        # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
+        # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
+        # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
+        # NOTE: loss_feat_delta_align is disabled. It doesn't have spatial correspondance when 
+        # doing the feature delta calculation.
+        # These two losses are only used for monitoring the training process.
 
-        # loss_comp_fg_bg_preserve should supercede loss_comp_prompt_distill, 
-        # as it should be more accurate (?).
-        # So if loss_comp_fg_bg_preserve is active, then loss_comp_prompt_distill is halved.
         # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
         # to index subj single and subj comp embeddings.
         # The indices will be shifted along the batch dimension (size doubled) 
         # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
-        loss_feat_delta_align, loss_subj_attn_norm_distill \
-            = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_layers_activations['attn'], 
-                                                      all_subj_indices_2b, BLOCK_SIZE)
+        with torch.no_grad():
+            loss_feat_delta_align, loss_subj_attn_norm_distill \
+                = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_layers_activations['attn'], 
+                                                        all_subj_indices_2b, BLOCK_SIZE)
 
+        # loss_feat_delta_align: 0.02~0.03. 
         if loss_feat_delta_align > 0:
             loss_dict.update({f'{session_prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
+        # loss_subj_attn_norm_distill: 0.3~0.5.
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
-
-        # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
-        # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
-        # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
-        subj_attn_norm_distill_loss_scale = 0
-
-        # loss_feat_delta_align: 0.02~0.03. loss_subj_attn_norm_distill: 0.25 -> 0.
-        loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
-                                   + loss_feat_delta_align       * feat_delta_align_scale
         
-        return loss_comp_prompt_distill, loss_comp_fg_bg_preserve
+        return loss_comp_fg_bg_preserve
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
     def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
