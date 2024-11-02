@@ -2307,10 +2307,6 @@ class LatentDiffusion(DDPM):
         subj_mb_suppress_scale      = 0.05
         mfmb_contrast_attn_margin   = 0.4
 
-        # Protect subject emb activations on fg areas.
-        subj_attn_at_mf_grad_scale  = 0.1
-        subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
-
         # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
@@ -2353,7 +2349,8 @@ class LatentDiffusion(DDPM):
                 continue
 
             subj_attn_at_mf = subj_attn * fg_mask3
-            subj_attn_at_mf = subj_attn_at_mf_grad_scaler(subj_attn_at_mf)
+            # Protect subject emb activations on fg areas.
+            subj_attn_at_mf = subj_attn_at_mf.detach()
             # subj_attn_at_mb: [BLOCK_SIZE, 8, 64].
             # mb: mask foreground locations, mask background locations.
             subj_attn_at_mb = subj_attn * bg_mask3
@@ -2444,10 +2441,6 @@ class LatentDiffusion(DDPM):
         subj_bg_contrast_at_mf_attn_margin  = 0.2 * K_subj / K_bg     # 1
         bg_subj_contrast_at_mb_attn_margin  = 0.4
 
-        # Protect subject emb activations on fg areas.
-        subj_attn_at_mf_grad_scale  = 0.1
-        subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
-
         # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
@@ -2490,7 +2483,8 @@ class LatentDiffusion(DDPM):
                                      # we don't need to demean them to highlight the contrast.
                                      do_demeans=[False, False],
                                      first_n_dims_into_instances=2, 
-                                     ref_grad_scale=fg_grad_scale,  # fg_grad_scale: 0.1
+                                     # fg_grad_scale: 0.01, to protect fg activations on the whole image.
+                                     ref_grad_scale=fg_grad_scale,  
                                      aim_to_align=False,
                                      debug=False)
 
@@ -2521,7 +2515,7 @@ class LatentDiffusion(DDPM):
                 # mf,   mb: mask foreground locations, mask background locations.
                 subj_attn_at_mf = subj_attn * fg_mask3
                 # Protect subject emb activations on fg areas.
-                subj_attn_at_mf = subj_attn_at_mf_grad_scaler(subj_attn_at_mf)
+                subj_attn_at_mf = subj_attn_at_mf.detach()
 
                 bg_attn_at_mf   = bg_attn   * fg_mask3
                 subj_attn_at_mb = subj_attn * bg_mask3
