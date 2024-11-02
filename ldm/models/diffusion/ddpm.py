@@ -69,7 +69,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 enable_background_token=True,
+                 enable_background_string=True,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
         # posing too large losses to the subject embeddings.
         self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
-        self.enable_background_token                = enable_background_token
+        self.enable_background_string                = enable_background_string
         self.use_fp_trick                           = use_fp_trick
         self.unet_distill_iter_gap                  = unet_distill_iter_gap if self.training else 0
         self.unet_distill_weight                    = unet_distill_weight
@@ -307,7 +307,7 @@ class DDPM(pl.LightningModule):
                             'do_feat_distill_on_comp_prompt':  False,
                             'do_prompt_emb_delta_reg':      False,
                             'unet_distill_uses_comp_prompt': False,
-                            'use_background_token':         False,
+                            'use_background_string':         False,
                             'use_fp_trick':                 False,
                             'comp_init_fg_from_training_image': False,
                           }
@@ -806,49 +806,49 @@ class LatentDiffusion(DDPM):
             = (torch.rand(1) < p_comp_init_fg_from_training_image).item()
         
         if self.iter_flags['do_unet_distill']:
-            # If do_unet_distill, then only use the background tokens in a small percentage of the iterations.
+            # If do_unet_distill, then DISABLE the background string.
             # Because for ConsistentID, the background is a bit noisy, but there has been 
             # 4 prompt embeddings serving as the background tokens to absorb the background noise.
             # For Arc2face, the background is simple and we probably don't need to absorb the 
             # background noise with background tokens.
-            p_use_background_token  = 0.1
+            p_use_background_string  = 0
         elif self.iter_flags['do_normal_recon']:
-            # We lower p_use_background_token from the previous value 0.9 to 0.3 to avoid the background token
+            # We lower p_use_background_string from the previous value 0.9 to 0.5 to avoid the background token
             # taking too much of the foreground (i.e., capturing the subject features).
-            p_use_background_token  = 0.3
+            p_use_background_string  = 0.5
         elif self.iter_flags['do_feat_distill_on_comp_prompt']:
             # When doing compositional distillation, the background is quite different between 
             # single prompts and comp prompts. So using a background token is probably not a good idea.
-            p_use_background_token  = 0
+            p_use_background_string  = 0
         else:
             breakpoint()
 
-        # enable_background_token is True, as long as background token is specified in 
+        # enable_background_string is True, as long as background token is specified in 
         # the command line of train.py.
-        self.iter_flags['use_background_token'] = self.enable_background_token \
-                                                    and (torch.rand(1) < p_use_background_token)
+        self.iter_flags['use_background_string'] = self.enable_background_string \
+                                                    and (torch.rand(1) < p_use_background_string)
 
         # ** use_fp_trick is only for compositional iterations. **
-        if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_token']:
+        if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_string']:
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp_bg'
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp_bg'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp_bg'
             CLS_COMP_PROMPT    = 'cls_comp_prompt_fp_bg'
-        # use_fp_trick but not use_background_token.
+        # use_fp_trick but not use_background_string.
         elif self.iter_flags['use_fp_trick']:
             # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
             CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
-        # not use_fp_trick and use_background_token.
-        elif self.iter_flags['use_background_token']:
+        # not use_fp_trick and use_background_string.
+        elif self.iter_flags['use_background_string']:
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt_bg'
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt_bg'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt_bg'
             CLS_COMP_PROMPT    = 'cls_comp_prompt_bg'
         # Either do_feat_distill_on_comp_prompt but not use_fp_trick_iter, 
-        # or recon/unet_distill iters (not do_feat_distill_on_comp_prompt) and not use_background_token.
+        # or recon/unet_distill iters (not do_feat_distill_on_comp_prompt) and not use_background_string.
         # We don't use_fp_trick on training images. 
         else:
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
@@ -1142,7 +1142,7 @@ class LatentDiffusion(DDPM):
         delta_prompts = self.iter_flags['delta_prompts']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
-        #if self.iter_flags['use_background_token']:
+        #if self.iter_flags['use_background_string']:
         #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
         
         if self.iter_flags['do_feat_distill_on_comp_prompt']:                        
@@ -1530,13 +1530,13 @@ class LatentDiffusion(DDPM):
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
-            if not self.iter_flags['use_background_token']:
+            if not self.iter_flags['use_background_string']:
                 # bg loss is almost completely ignored. But giving it a little weight may help suppress 
                 # subj embeddings' contribution to the background (serving as a contrast to the fg).
                 bg_pixel_weight = 0 #0.01
             else:
-                # use_background_token == True. bg loss is somewhat discounted.
-                # p_use_background_token = 0.1 if do_unet_distill. 
+                # use_background_string == True. bg loss is somewhat discounted.
+                # p_use_background_string = 0.1 if do_unet_distill. 
                 bg_pixel_weight = 0.1
                                 
             loss_fg_bg_contrast, loss_recon = \
@@ -1574,7 +1574,8 @@ class LatentDiffusion(DDPM):
         ###### begin of do_feat_distill_on_comp_prompt ######
         if self.iter_flags['do_feat_distill_on_comp_prompt']:
             loss_comp_fg_bg_preserve = \
-                self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, instances_have_fg_mask, 
+                self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, 
+                                                   instances_have_fg_mask, 
                                                    all_subj_indices_1b, all_subj_indices_2b, 
                                                    BLOCK_SIZE, loss_dict, session_prefix)
             
@@ -1623,7 +1624,7 @@ class LatentDiffusion(DDPM):
         loss_fg_bg_contrast = 0
 
         if self.fg_bg_complementary_loss_weight > 0:
-            # NOTE: Do not check iter_flags['use_background_token'] here. If use_background_token, 
+            # NOTE: Do not check iter_flags['use_background_string'] here. If use_background_string, 
             # then loss_subj_bg_complem, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
             # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
             # all_subj_indices and all_bg_indices are used, instead of *_1b.
