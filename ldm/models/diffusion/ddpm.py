@@ -2122,11 +2122,12 @@ class LatentDiffusion(DDPM):
             # But this loss is always very small, so no need to scale it up.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            sc_mc_bg_match_loss_scale_dict = { 'L2': 30, 'cosine': 3 }
+            sc_mc_bg_match_loss_scale_dict = { 'L2': 100, 'cosine': 3 }
             sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict["L2"]
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
             # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
+            # loss_sc_mc_bg_match: 0.005~0.008 -> 0.5~0.8.
             loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
                                         + loss_sc_ss_fg_recon + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale \
                                         + (loss_comp_subj_bg_attn_suppress + loss_comp_cls_bg_attn_suppress) \
