@@ -239,7 +239,9 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
-
+    parser.add_argument("--gen_ss_from_frozen_subj_basis_generator", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to generate the subject-single ada embeddings from the frozen subject basis generator")
+    
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
@@ -665,6 +667,8 @@ if __name__ == "__main__":
             # Override the setting in the config file.
             config.model.params.personalization_config.params.enabled_encoders = opt.enabled_encoders
 
+        config.model.params.personalization_config.params.gen_ss_from_frozen_subj_basis_generator = opt.gen_ss_from_frozen_subj_basis_generator
+        
         opt.num_adaface_encoder_types = len(opt.enabled_encoders)
         # common_placeholder_prefix
         config.data.params.train.params.common_placeholder_prefix   = opt.common_placeholder_prefix

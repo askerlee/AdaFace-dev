@@ -64,12 +64,14 @@ class EmbeddingManager(nn.Module):
             # During training,  prompt2token_proj_ext_attention_perturb_ratio is 0.1.
             # During inference, prompt2token_proj_ext_attention_perturb_ratio is 0. 
             prompt2token_proj_ext_attention_perturb_ratio=0, 
+            # The following arguments are to be set in main.py or stable_txt2img.py.
             adaface_ckpt_paths=None,
-            adaface_encoder_types=['consistentID', 'arc2face'],
-            enabled_encoders=['consistentID', 'arc2face'],
+            adaface_encoder_types=None, 
+            enabled_encoders=None,
             extend_prompt2token_proj_attention_multiplier=1,
             num_static_img_suffix_embs=0,
-            p_encoder_dropout=0.1,
+            p_encoder_dropout=0,
+            gen_ss_from_frozen_subj_basis_generator=True,
     ):
         super().__init__()
 
@@ -146,9 +148,15 @@ class EmbeddingManager(nn.Module):
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
                                          is_training=True)
-        # No need to explicity freeze the params of subj_basis_generator_frozen,
+        # gen_ss_from_frozen_subj_basis_generator: generate subject-single ada embeddings from a frozen encoder,
+        # to avoid the encoder from slowly degenerating during training.
+        self.gen_ss_from_frozen_subj_basis_generator = gen_ss_from_frozen_subj_basis_generator
+        # No need to explicity set the params of subj_basis_generator_frozen to be requires_grad = False,
         # as it's not included in the param list returned by .optimized_parameters().
-        self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
+        if self.gen_ss_from_frozen_subj_basis_generator:
+            self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
+        else:
+            self.subj_basis_generator_frozen = None
 
         if self.cls_delta_string is not None:
             self.cls_delta_tokens = self.get_tokens_for_string(cls_delta_string)
@@ -408,26 +416,28 @@ class EmbeddingManager(nn.Module):
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)
 
             # Replace the first adaface_subj_embs with adaface_subj_embs0 from a frozen encoder.
-            if self.iter_type == 'compos_distill_iter':
+            if self.iter_type == 'compos_distill_iter' and self.gen_ss_from_frozen_subj_basis_generator:
                 subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
                 self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
                 # In a compos_distill_iter, all subjects are the same. As implemented above, 
                 # we only use the first instance in the batch to generate the adaface_subj_embs,
                 # as the whole batch is of the same subject. Therefore, adaface_subj_embs0 
-                # is only the embeddings of the first instance.         
-                adaface_subj_embs0, lens_subj_emb_segments = \
-                    self.id2ada_prompt_encoder.generate_adaface_embeddings(
-                                          image_paths=None, face_id_embs=None,
-                                          img_prompt_embs=id2img_prompt_embs,
-                                          p_dropout=self.p_encoder_dropout if self.training else 0,
-                                          # If an encoder is dropped out, then the corresponding adaface_subj_embs
-                                          # will not be included in the returned adaface_subj_embs. 
-                                          # So the returned adaface_subj_embs only contain valid embeddings and 
-                                          # could be shorter than self.token2num_vectors[placeholder_string].
-                                          return_zero_embs_for_dropped_encoders=False,
-                                          avg_at_stage=None,
-                                          enable_static_img_suffix_embs=False,
-                                        )
+                # is only the embeddings of the first instance.
+                # Since subj_basis_generator_frozen is frozen, there's no point to enable gradient flow.
+                with torch.no_grad():
+                    adaface_subj_embs0, lens_subj_emb_segments = \
+                        self.id2ada_prompt_encoder.generate_adaface_embeddings(
+                                            image_paths=None, face_id_embs=None,
+                                            img_prompt_embs=id2img_prompt_embs,
+                                            p_dropout=self.p_encoder_dropout if self.training else 0,
+                                            # If an encoder is dropped out, then the corresponding adaface_subj_embs
+                                            # will not be included in the returned adaface_subj_embs. 
+                                            # So the returned adaface_subj_embs only contain valid embeddings and 
+                                            # could be shorter than self.token2num_vectors[placeholder_string].
+                                            return_zero_embs_for_dropped_encoders=False,
+                                            avg_at_stage=None,
+                                            enable_static_img_suffix_embs=False,
+                                            )
                 self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
                 # Replace the first adaface_subj_embs with adaface_subj_embs0.
                 # adaface_subj_embs0: [1, 16, 768]. adaface_subj_embs: [2, 16, 768], 
@@ -606,29 +616,26 @@ class EmbeddingManager(nn.Module):
         self.subject_strings                = []
         self.background_strings             = []
 
-        orig_adafaces_ckpt_paths = adaface_ckpt_paths
-        # If only one adaface_ckpt_path is provided, then load it into both 
-        # id2ada_prompt_encoder and subj_basis_generator_frozen.
-        if len(adaface_ckpt_paths) == 1:
-            adaface_ckpt_paths = list(adaface_ckpt_paths) * 2
+        # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
+        self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
+        print(f"Loaded {adaface_ckpt_paths[0]} into trainable subj_basis_generator")
 
-        if len(adaface_ckpt_paths) == 2:
-            # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
-            self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
-            print(f"Loaded {adaface_ckpt_paths[0]} into trainable subj_basis_generator")
+        if self.gen_ss_from_frozen_subj_basis_generator:
+            if len(adaface_ckpt_paths) >= 2:
+                frozen_ckpt_path = adaface_ckpt_paths[1]
+            else:
+                # Use the same ckpt as the frozen subj_basis_generator.
+                frozen_ckpt_path = adaface_ckpt_paths[0]
+
             # Back up id2ada_prompt_encoder.subj_basis_generator.
             subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
             # Temporarily replace id2ada_prompt_encoder.subj_basis_generator with subj_basis_generator_frozen.
             self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
-            # Load adaface_ckpt_paths[1] into subj_basis_generator_frozen.
-            self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[1])
-            print(f"Loaded {adaface_ckpt_paths[1]} into frozen subj_basis_generator")
+            # Load frozen_ckpt_path into id2ada_prompt_encoder.subj_basis_generator.
+            self.id2ada_prompt_encoder.load_adaface_ckpt(frozen_ckpt_path)
+            print(f"Loaded {frozen_ckpt_path} into trainable subj_basis_generator")
             # Restore id2ada_prompt_encoder.subj_basis_generator.
             self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
-        else:
-            breakpoint()
-
-        adaface_ckpt_paths = orig_adafaces_ckpt_paths
 
         for adaface_ckpt_path in adaface_ckpt_paths:
             ckpt_path_parts = adaface_ckpt_path.split(":")

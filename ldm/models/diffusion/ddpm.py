@@ -90,7 +90,6 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.5, 1.5],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
-                 sc_mc_bg_align_loss_scheme='L2',
                  use_arcface_loss=True,
                  arcface_align_loss_weight=4e-3,
                  ):
@@ -160,7 +159,6 @@ class DDPM(pl.LightningModule):
         self.adam_config = adam_config
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
-        self.sc_mc_bg_align_loss_scheme = sc_mc_bg_align_loss_scheme
         self.use_arcface_loss = use_arcface_loss
         self.arcface_align_loss_weight = arcface_align_loss_weight
 
@@ -2103,7 +2101,7 @@ class LatentDiffusion(DDPM):
                                                      all_subj_indices_1b, BLOCK_SIZE,
                                                      recon_feat_objectives={'attn_out': ['orig'], 
                                                                             'outfeat':  ['orig']},
-                                                     bg_align_loss_scheme=self.sc_mc_bg_align_loss_scheme,
+                                                     bg_align_loss_scheme="L2",
                                                      do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
@@ -2120,13 +2118,12 @@ class LatentDiffusion(DDPM):
                     loss_name2 = loss_name.replace('loss_', '')
                     loss_dict.update({f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
-            elastic_matching_loss_scale = 1
             # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so its magnitude is small.
             # But this loss is always very small, so no need to scale it up.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             sc_mc_bg_match_loss_scale_dict = { 'L2': 30, 'cosine': 3 }
-            sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict[self.sc_mc_bg_align_loss_scheme]
+            sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict["L2"]
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
             # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
@@ -2155,26 +2152,12 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
 
-        # DO NOT DISABLE loss_subj_attn_norm_distill, otherwise 
-        # the subject token attention will dominate the whole image, reducing compositionality.
-        """        
-        Given base_loss_and_scale=(0.4, 0.01), ref_loss_and_scale=(0.6, 0.02), rel_scale_range=(-0.5, 10).
-        Each loss_delta = ref_loss - base_loss = 0.6 - 0.4 = 0.2, corresponds to a scale_delta of 0.01.
-        - When loss = 0.8:
-            relative_scale = (0.8 - 0.4) / 0.2 = 2
-            scale_delta = 0.01
-            scale = 2 * 0.01 + 0.01 = 0.03
+        # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
+        # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
+        # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
+        subj_attn_norm_distill_loss_scale = 0
 
-        - When loss = 0.1:
-            relative_scale = (0.1 - 0.4) / 0.2 = -1.5
-            relative_scale (clamped) = -0.5
-            scale = -0.5 * 0.01 + 0.01 = 0.005
-        """    
-        subj_attn_norm_distill_loss_scale = \
-            calc_dyn_loss_scale(loss_subj_attn_norm_distill, base_loss_and_scale=(0.4, 0.015),
-                                ref_loss_and_scale=(0.6, 0.03), rel_scale_range=(-0.5, 10))
-
-        # loss_feat_delta_align: 0.02~0.03, loss_subj_attn_norm_distill: 0.25 -> 0.0025.
+        # loss_feat_delta_align: 0.02~0.03. loss_subj_attn_norm_distill: 0.25 -> 0.
         loss_comp_prompt_distill =   loss_subj_attn_norm_distill * subj_attn_norm_distill_loss_scale \
                                    + loss_feat_delta_align       * feat_delta_align_scale
         
