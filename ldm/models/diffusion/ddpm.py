@@ -757,13 +757,13 @@ class LatentDiffusion(DDPM):
         # Update the training_percent of embedding_manager.
         self.embedding_manager.training_percent = self.training_percent
 
-        batch_have_fg_mask  = batch['has_fg_mask']
+        instances_have_fg_mask  = batch['has_fg_mask']
         # Temporarily disable fg_mask for debugging.
         disable_fg_mask = False #True
         if disable_fg_mask:
-            batch_have_fg_mask[:] = False
+            instances_have_fg_mask[:] = False
 
-        self.iter_flags['fg_mask_avail_ratio']  = batch_have_fg_mask.sum() / batch_have_fg_mask.shape[0]
+        self.iter_flags['fg_mask_avail_ratio']  = instances_have_fg_mask.sum() / instances_have_fg_mask.shape[0]
 
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
@@ -895,9 +895,9 @@ class LatentDiffusion(DDPM):
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
             # will be repeated automatically. Therefore, we don't need to manually repeat them later.
-            batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, batch_have_fg_mask = \
+            batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, instances_have_fg_mask = \
                 select_and_repeat_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
-                                            x_start, img_mask, fg_mask, batch_have_fg_mask)
+                                            x_start, img_mask, fg_mask, instances_have_fg_mask)
             self.iter_flags['same_subject_in_batch'] = True
         else:
             self.iter_flags['same_subject_in_batch'] = False
@@ -937,7 +937,7 @@ class LatentDiffusion(DDPM):
             # On random IDs, we don't need to consider img_mask and fg_mask.
             img_mask = None
             fg_mask  = None
-            batch_have_fg_mask[:] = False
+            instances_have_fg_mask[:] = False
             # In a gen_rand_id_for_id2img iteration, simply denoise a totally random x_start.
             x_start = torch.randn_like(x_start)
             self.iter_flags['faceless_img_count'] = 0
@@ -1011,11 +1011,11 @@ class LatentDiffusion(DDPM):
                 # clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
                 # We don't repeat id2img_neg_prompt_embs, as it's constant and identical for different instances.
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
-                batch_have_fg_mask, self.batch_subject_names, \
+                instances_have_fg_mask, self.batch_subject_names, \
                 id2img_prompt_embs, zs_clip_fgbg_features = \
                     select_and_repeat_instances(slice(0, 1), BS, 
                                                 x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                                batch_have_fg_mask, self.batch_subject_names, 
+                                                instances_have_fg_mask, self.batch_subject_names, 
                                                 id2img_prompt_embs, zs_clip_fgbg_features)
                 
             # ** Perturb the zero-shot ID image prompt embeddings with probability 0.6. **
@@ -1070,14 +1070,14 @@ class LatentDiffusion(DDPM):
                 # clip_bg_features is used by ConsistentID adaface encoder, 
                 # so we repeat zs_clip_fgbg_features as well.
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
-                batch_have_fg_mask, self.batch_subject_names, \
+                instances_have_fg_mask, self.batch_subject_names, \
                 zs_clip_fgbg_features, \
                 id2img_prompt_embs, id2img_neg_prompt_embs, \
                 captions, subj_single_prompts, subj_comp_prompts, \
                 cls_single_prompts, cls_comp_prompts \
                 = select_and_repeat_instances(slice(0, HALF_BS), 1, 
                                               x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                              batch_have_fg_mask, self.batch_subject_names, 
+                                              instances_have_fg_mask, self.batch_subject_names, 
                                               zs_clip_fgbg_features,
                                               id2img_prompt_embs, id2img_neg_prompt_embs,
                                               captions, subj_single_prompts, subj_comp_prompts,
@@ -1089,7 +1089,7 @@ class LatentDiffusion(DDPM):
         # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']                 = img_mask
         self.iter_flags['fg_mask']                  = fg_mask
-        self.iter_flags['batch_have_fg_mask']       = batch_have_fg_mask
+        self.iter_flags['instances_have_fg_mask']       = instances_have_fg_mask
         self.iter_flags['delta_prompts']            = delta_prompts
         self.iter_flags['image_unnorm']             = batch_images_unnorm
 
@@ -1391,7 +1391,7 @@ class LatentDiffusion(DDPM):
         cond_context = (c_prompt_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
-        batch_have_fg_mask  = self.iter_flags['batch_have_fg_mask']
+        instances_have_fg_mask  = self.iter_flags['instances_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
         placeholder2indices = extra_info['placeholder2indices']
         prompt_emb_mask     = extra_info['prompt_emb_mask']
@@ -1427,7 +1427,7 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
+            masks = (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask)
             # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
             # We return noise to make the gt_target up-to-date, which is the recon objective.
             # But gt_target is probably not referred to in the following loss computations,
@@ -1439,8 +1439,8 @@ class LatentDiffusion(DDPM):
                                               masks, fg_noise_amount=0.2,
                                               BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
-            img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
-            self.iter_flags['fg_mask_avail_ratio'] = batch_have_fg_mask.float().mean()
+            img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask = masks
+            self.iter_flags['fg_mask_avail_ratio'] = instances_have_fg_mask.float().mean()
 
             # Log x_start_maskfilled (noisy and scaled version of the first image in the batch),
             # x_start_final (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
@@ -1542,7 +1542,7 @@ class LatentDiffusion(DDPM):
             loss_fg_bg_contrast, loss_recon = \
                 self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
                                                    all_subj_indices, all_bg_indices,
-                                                   img_mask, fg_mask, batch_have_fg_mask,
+                                                   img_mask, fg_mask, instances_have_fg_mask,
                                                    bg_pixel_weight,
                                                    x_start.shape[0], loss_dict, session_prefix)
             loss += loss_recon + loss_fg_bg_contrast
@@ -1574,7 +1574,7 @@ class LatentDiffusion(DDPM):
         ###### begin of do_feat_distill_on_comp_prompt ######
         if self.iter_flags['do_feat_distill_on_comp_prompt']:
             loss_comp_fg_bg_preserve = \
-                self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, batch_have_fg_mask, 
+                self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, instances_have_fg_mask, 
                                                    all_subj_indices_1b, all_subj_indices_2b, 
                                                    BLOCK_SIZE, loss_dict, session_prefix)
             
@@ -1618,7 +1618,7 @@ class LatentDiffusion(DDPM):
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
                                       all_subj_indices, all_bg_indices,
-                                      img_mask, fg_mask, batch_have_fg_mask, 
+                                      img_mask, fg_mask, instances_have_fg_mask, 
                                       bg_pixel_weight, BLOCK_SIZE, loss_dict, session_prefix):
         loss_fg_bg_contrast = 0
 
@@ -1634,9 +1634,9 @@ class LatentDiffusion(DDPM):
                             all_subj_indices,
                             all_bg_indices,
                             BLOCK_SIZE=BLOCK_SIZE,
-                            fg_grad_scale=0.1,
+                            fg_grad_scale=0.01,
                             fg_mask=fg_mask,
-                            instance_mask=batch_have_fg_mask
+                            instance_has_fg_mask=instances_have_fg_mask
                         )
 
             if loss_subj_bg_complem > 0:
@@ -1653,7 +1653,9 @@ class LatentDiffusion(DDPM):
             # loss_subj_bg_complem encourages the attention of subject tokens and bg tokens to be
             # spatially complementary with each other. Although this loss seems not to drop during optimization,
             # it prevents bg tokens from absorbing subject features. Therefore, it is necessary.
+            # loss_subj_bg_complem: 0.3~0.5 -> 0.06~0.1.
             loss_subj_bg_complem_scale = 0.2
+            # fg_bg_complementary_loss_weight: 2e-4.
             loss_fg_bg_contrast += (loss_subj_bg_complem * loss_subj_bg_complem_scale + loss_subj_mb_suppress \
                                     + loss_bg_mf_suppress + loss_subj_bg_mask_contrast) \
                                    * self.fg_bg_complementary_loss_weight
@@ -1877,7 +1879,7 @@ class LatentDiffusion(DDPM):
         return loss_unet_distill
 
     # Do denoising, collect the attention activations for computing the losses later.
-    # masks: (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask). 
+    # masks: (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask). 
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
@@ -1887,15 +1889,15 @@ class LatentDiffusion(DDPM):
 
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
-        img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask = masks
+        img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask = masks
 
         if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
             # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
             # the background in the training images, which is not desirable.
             # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
-            # fg_mask is 4D (added 1D in shared_step()). So expand batch_have_fg_mask to 4D.
-            filtered_fg_mask = fg_mask.to(x_start.dtype) * batch_have_fg_mask.view(-1, 1, 1, 1)
+            # fg_mask is 4D (added 1D in shared_step()). So expand instances_have_fg_mask to 4D.
+            filtered_fg_mask = fg_mask.to(x_start.dtype) * instances_have_fg_mask.view(-1, 1, 1, 1)
             # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
             # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
             # fg_noise_amount = 0.2
@@ -1916,7 +1918,7 @@ class LatentDiffusion(DDPM):
         x_start_maskfilled = x_start
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
-        masks = (img_mask, fg_mask, filtered_fg_mask, batch_have_fg_mask)
+        masks = (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask)
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
 
@@ -2063,7 +2065,7 @@ class LatentDiffusion(DDPM):
         return x_recon, x_start_maskfilled, x_start_final, noise, masks, \
                 init_prep_context_type, num_init_prep_denoising_steps
     
-    def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, batch_have_fg_mask,
+    def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, instances_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
         # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
         # It contains the 12 specified cross-attention layers of UNet.
@@ -2091,7 +2093,7 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn_out'],
                                                      ca_layers_activations['q'],
                                                      ca_layers_activations['attn'], 
-                                                     filtered_fg_mask, batch_have_fg_mask,
+                                                     filtered_fg_mask, instances_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
                                                      recon_feat_objectives={'attn_out': ['orig'], 
                                                                             'outfeat':  ['orig']},
@@ -2120,12 +2122,13 @@ class LatentDiffusion(DDPM):
             sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict["L2"]
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
-            # No need to scale down loss_comp_cls_bg_attn_suppress, as it's on a 0.05-gs'ed attn map.
-            # loss_sc_mc_bg_match: 0.005~0.008 -> 0.5~0.8.
+            # loss_sc_mc_bg_match: 0.005~0.008 -> 0.25~0.4.
+            # loss_comp_subj_bg_attn_suppress: 0.1~0.2 -> 0.002~0.004.
+            # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.
+            # Therefore, we use a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
             loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
                                         + loss_sc_ss_fg_recon + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale \
-                                        + (loss_comp_subj_bg_attn_suppress + loss_comp_cls_bg_attn_suppress) \
-                                            * comp_subj_bg_attn_suppress_loss_scale
+                                        + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
         else:
             loss_comp_fg_bg_preserve = 0
 
@@ -2286,9 +2289,9 @@ class LatentDiffusion(DDPM):
         return loss_feat_delta_align, loss_subj_attn_norm_distill
 
     def calc_subj_masked_bg_suppress_loss(self, ca_attnscore, subj_indices, 
-                                          BLOCK_SIZE, fg_mask, instance_mask=None):
+                                          BLOCK_SIZE, fg_mask, instance_has_fg_mask=None):
         if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
-          or (instance_mask is not None and instance_mask.sum() == 0):
+          or (instance_has_fg_mask is not None and instance_has_fg_mask.sum() == 0):
             return 0
 
         # Discard the first few bottom layers from alignment.
@@ -2305,7 +2308,7 @@ class LatentDiffusion(DDPM):
         mfmb_contrast_attn_margin   = 0.4
 
         # Protect subject emb activations on fg areas.
-        subj_attn_at_mf_grad_scale  = 0.5
+        subj_attn_at_mf_grad_scale  = 0.1
         subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_subj times as many elements as bg_indices.
@@ -2377,7 +2380,7 @@ class LatentDiffusion(DDPM):
             # activations conform to the margin restrictions.
             loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
                                                         layer_subj_mb_excess > 0, 
-                                                        instance_weights=instance_mask)
+                                                        instance_weights=instance_has_fg_mask)
 
             # loss_layer_subj_bg_contrast_at_mf is usually 0, 
             # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
@@ -2389,12 +2392,15 @@ class LatentDiffusion(DDPM):
     
         return loss_subj_mb_suppress
     
+    # calc_subj_bg_complementary_loss() is only called in do_normal_recon iterations.
+    # In such iterations, fg_mask is always accurate (if available).
+    # instance_has_fg_mask: whether each instance has a valid fg_mask.
     # Only compute the loss on the first block. If it's a normal_recon iter, 
     # the first block is the whole batch, i.e., BLOCK_SIZE = batch size.
     # bg_indices: we assume the bg tokens appear in all instances in the batch.
     def calc_subj_bg_complementary_loss(self, ca_attnscores, subj_indices, bg_indices,
-                                        BLOCK_SIZE, fg_grad_scale=0.1,
-                                        fg_mask=None, instance_mask=None):
+                                        BLOCK_SIZE, fg_grad_scale=0.01,
+                                        fg_mask=None, instance_has_fg_mask=None):
         
         if subj_indices is None:
             return 0, 0, 0, 0
@@ -2402,7 +2408,7 @@ class LatentDiffusion(DDPM):
         if subj_indices is not None and bg_indices is None:
             loss_subj_mb_suppress = \
                 self.calc_subj_masked_bg_suppress_loss(ca_attnscores, subj_indices, 
-                                                       BLOCK_SIZE, fg_mask, instance_mask)
+                                                       BLOCK_SIZE, fg_mask, instance_has_fg_mask)
             
             return 0, loss_subj_mb_suppress, 0, 0
 
@@ -2438,7 +2444,8 @@ class LatentDiffusion(DDPM):
         subj_bg_contrast_at_mf_attn_margin  = 0.2 * K_subj / K_bg     # 1
         bg_subj_contrast_at_mb_attn_margin  = 0.4
 
-        subj_attn_at_mf_grad_scale = 0.5
+        # Protect subject emb activations on fg areas.
+        subj_attn_at_mf_grad_scale  = 0.1
         subj_attn_at_mf_grad_scaler = gen_gradient_scaler(subj_attn_at_mf_grad_scale)
 
         # In each instance, subj_indices has K_subj times as many elements as bg_indices.
@@ -2479,8 +2486,8 @@ class LatentDiffusion(DDPM):
             loss_layer_subj_bg_complem = \
                 calc_ref_cosine_loss(bg_attn, subj_attn, 
                                      exponent=2,    
-                                     # Since we use attn probs for bg_attn and subj_attn, most of them are around the mean value.
-                                     # So we demean them to highlight the contrast.
+                                     # Since we use attn scores for bg_attn and subj_attn, 
+                                     # we don't need to demean them to highlight the contrast.
                                      do_demeans=[False, False],
                                      first_n_dims_into_instances=2, 
                                      ref_grad_scale=fg_grad_scale,  # fg_grad_scale: 0.1
@@ -2490,7 +2497,7 @@ class LatentDiffusion(DDPM):
             # loss_subj_bg_complem doesn't need fg_mask.
             loss_layers_subj_bg_complem.append(loss_layer_subj_bg_complem * attn_align_layer_weight)
 
-            if (fg_mask is not None) and (instance_mask is None or instance_mask.sum() > 0):
+            if (fg_mask is not None) and (instance_has_fg_mask is None or instance_has_fg_mask.sum() > 0):
                 fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
                                                       mode="nearest|bilinear")
                 # Repeat 8 times to match the number of attention heads (for normalization).
@@ -2520,14 +2527,12 @@ class LatentDiffusion(DDPM):
                 subj_attn_at_mb = subj_attn * bg_mask3
                 bg_attn_at_mb   = bg_attn   * bg_mask3
 
-                # fg_mask3:             [BLOCK_SIZE, 8, 64]
+                # fg_mask3:            [BLOCK_SIZE, 8, 64]
                 # avg_subj_attn_at_mf: [BLOCK_SIZE, 1, 1]
                 # keepdim=True, since attn probs at all locations will use them as references (subtract them).
                 # sum(dim=(1,2)): avoid summing across the batch dimension. 
                 # It's meaningless to average among the instances.
                 avg_subj_attn_at_mf = masked_mean(subj_attn_at_mf, fg_mask3, dim=(1,2), keepdim=True)
-                avg_subj_attn_at_mb = masked_mean(subj_attn_at_mb, bg_mask3, dim=(1,2), keepdim=True)
-                avg_bg_attn_at_mf   = masked_mean(bg_attn_at_mf,   fg_mask3, dim=(1,2), keepdim=True)
                 avg_bg_attn_at_mb   = masked_mean(bg_attn_at_mb,   bg_mask3, dim=(1,2), keepdim=True)
 
                 # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations) 
@@ -2535,12 +2540,12 @@ class LatentDiffusion(DDPM):
                 # subj_attn_at_mb at any background locations.
                 # If not, clamp() > 0, incurring a loss.
                 # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
-                layer_subj_mb_excess    = subj_attn_at_mb + mfmb_contrast_attn_margin - avg_subj_attn_at_mf
+                layer_subj_mb_excess = subj_attn_at_mb + mfmb_contrast_attn_margin - avg_subj_attn_at_mf
                 # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
                 # activations conform to the margin restrictions.
                 loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
                                                             layer_subj_mb_excess > 0, 
-                                                            instance_weights=instance_mask)
+                                                            instance_weights=instance_has_fg_mask)
                 # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
                 # to be at least larger by mfmb_contrast_attn_margin = 1 than
                 # bg_attn_at_mf at any foreground locations.
@@ -2548,7 +2553,7 @@ class LatentDiffusion(DDPM):
                 layer_bg_mf_suppress          = bg_attn_at_mf + mfmb_contrast_attn_margin - avg_bg_attn_at_mb
                 loss_layer_bg_mf_suppress     = masked_mean(layer_bg_mf_suppress, 
                                                             layer_bg_mf_suppress > 0, 
-                                                            instance_weights=instance_mask)
+                                                            instance_weights=instance_has_fg_mask)
                 # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations)
                 # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 1 than
                 # bg_attn_at_mf at any foreground locations.
@@ -2558,14 +2563,14 @@ class LatentDiffusion(DDPM):
                 layer_subj_bg_contrast_at_mf        = bg_attn_at_mf + subj_bg_contrast_at_mf_attn_margin - avg_subj_attn_at_mf
                 loss_layer_subj_bg_contrast_at_mf   = masked_mean(layer_subj_bg_contrast_at_mf, 
                                                                   layer_subj_bg_contrast_at_mf > 0, 
-                                                                  instance_weights=instance_mask)
+                                                                  instance_weights=instance_has_fg_mask)
                 # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
                 # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 1 than
                 # subj_attn_at_mb at any background locations.
                 layer_bg_subj_contrast_at_mb        = subj_attn_at_mb + bg_subj_contrast_at_mb_attn_margin - avg_bg_attn_at_mb
                 loss_layer_bg_subj_contrast_at_mb   = masked_mean(layer_bg_subj_contrast_at_mb, 
                                                                   layer_bg_subj_contrast_at_mb > 0, 
-                                                                  instance_weights=instance_mask)
+                                                                  instance_weights=instance_has_fg_mask)
                 # loss_layer_subj_bg_contrast_at_mf is usually 0, 
                 # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
                 # subj_mb_suppress_scale: 0.05.
@@ -2573,7 +2578,7 @@ class LatentDiffusion(DDPM):
                                                     * attn_align_layer_weight * subj_mb_suppress_scale)
                 # bg_mf_suppress_scale: 0.1. More penalty of bg emb activations on fg areas.
                 loss_layers_bg_mf_suppress.append(loss_layer_bg_mf_suppress \
-                                                    * attn_align_layer_weight * bg_mf_suppress_scale)
+                                                  * attn_align_layer_weight * bg_mf_suppress_scale)
                 # subj_bg_emb_contrast_scale: 0.05. Balanced penalty of fg emb activation 
                 # contrast on fg and bg areas.
                 loss_layers_subj_bg_mask_contrast.append((loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
@@ -2599,12 +2604,12 @@ class LatentDiffusion(DDPM):
     # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
-                                        fg_mask, batch_have_fg_mask, subj_indices, BLOCK_SIZE,
+                                        fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
                                         recon_feat_objectives={'attn_out': ['orig'], 
                                                                'outfeat':  ['orig']},
                                         bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
-        if fg_mask is None or batch_have_fg_mask.sum() == 0:
+        if fg_mask is None or instances_have_fg_mask.sum() == 0:
             return 0, 0, 0, 0, 0, 0
 
         # Feature map spatial sizes are all 64*64.
@@ -2614,9 +2619,9 @@ class LatentDiffusion(DDPM):
         # Normalize the weights above so that each set sum to 1.
         elastic_matching_layer_weights  = normalize_dict_values(elastic_matching_layer_weights)
         
-        # fg_mask is 4D. So expand batch_have_fg_mask to 4D.
+        # fg_mask is 4D. So expand instances_have_fg_mask to 4D.
         # *_4b means it corresponds to a 4-block batch (batch size = 4 * BLOCK_SIZE).
-        fg_mask_4b = fg_mask * batch_have_fg_mask.view(-1, 1, 1, 1)
+        fg_mask_4b = fg_mask * instances_have_fg_mask.view(-1, 1, 1, 1)
 
         # K_subj: 4, number of embeddings per subject token.
         K_subj   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
@@ -2738,9 +2743,9 @@ class LatentDiffusion(DDPM):
             # sc_map_ss_fg_prob_below_mean: bg token should have fg attn probs below mean. Therefore
             # these token are regarded as bg tokens.
             loss_layer_comp_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
-                                                           sc_map_ss_fg_prob_below_mean)
+                                                                sc_map_ss_fg_prob_below_mean)
             loss_layer_comp_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
-                                                           mc_map_ss_fg_prob_below_mean)
+                                                                mc_map_ss_fg_prob_below_mean)
 
             add_dict_to_dict(loss_dict,
                              { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * elastic_matching_layer_weight,
