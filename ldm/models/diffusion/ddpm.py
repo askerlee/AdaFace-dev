@@ -12,7 +12,7 @@ import bitsandbytes as bnb
 from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
-                        ortho_subtract, calc_dyn_loss_scale, gen_gradient_scaler, calc_ref_cosine_loss, \
+                        ortho_subtract, gen_gradient_scaler, calc_ref_cosine_loss, \
                         calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
                         save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, \
@@ -1545,7 +1545,7 @@ class LatentDiffusion(DDPM):
                                                    img_mask, fg_mask, instances_have_fg_mask,
                                                    bg_pixel_weight,
                                                    x_start.shape[0], loss_dict, session_prefix)
-            loss += loss_recon + loss_fg_bg_contrast
+            loss += loss_recon + loss_fg_bg_contrast * self.fg_bg_complementary_loss_weight
             v_loss_recon = loss_recon.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
@@ -1621,45 +1621,42 @@ class LatentDiffusion(DDPM):
                                       all_subj_indices, all_bg_indices,
                                       img_mask, fg_mask, instances_have_fg_mask, 
                                       bg_pixel_weight, BLOCK_SIZE, loss_dict, session_prefix):
-        loss_fg_bg_contrast = 0
+        
+        # NOTE: If use_background_string, then loss_subj_bg_complem, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
+        # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
+        # all_subj_indices and all_bg_indices are used, instead of *_1b.
+        # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
+        loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
+                    self.calc_subj_bg_complementary_loss(
+                        extra_info['ca_layers_activations']['attnscore'],
+                        all_subj_indices,
+                        all_bg_indices,
+                        BLOCK_SIZE=BLOCK_SIZE,
+                        fg_grad_scale=0.01,
+                        fg_mask=fg_mask,
+                        instance_has_fg_mask=instances_have_fg_mask
+                    )
 
-        if self.fg_bg_complementary_loss_weight > 0:
-            # NOTE: Do not check iter_flags['use_background_string'] here. If use_background_string, 
-            # then loss_subj_bg_complem, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
-            # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
-            # all_subj_indices and all_bg_indices are used, instead of *_1b.
-            # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
-            loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
-                        self.calc_subj_bg_complementary_loss(
-                            extra_info['ca_layers_activations']['attnscore'],
-                            all_subj_indices,
-                            all_bg_indices,
-                            BLOCK_SIZE=BLOCK_SIZE,
-                            fg_grad_scale=0.01,
-                            fg_mask=fg_mask,
-                            instance_has_fg_mask=instances_have_fg_mask
-                        )
+        if loss_subj_bg_complem > 0:
+            loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complem.mean().detach().item()})
+        # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
+        if loss_subj_mb_suppress > 0:
+            loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
+        if loss_bg_mf_suppress > 0:
+            loss_dict.update({f'{session_prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach().item()})
+        if loss_subj_bg_mask_contrast > 0:
+            loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_subj_bg_mask_contrast.mean().detach().item()})
 
-            if loss_subj_bg_complem > 0:
-                loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complem.mean().detach().item()})
-            # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
-            if loss_subj_mb_suppress > 0:
-                loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
-            if loss_bg_mf_suppress > 0:
-                loss_dict.update({f'{session_prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach().item()})
-            if loss_subj_bg_mask_contrast > 0:
-                loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_subj_bg_mask_contrast.mean().detach().item()})
-
-            # DO NOT DISABLE loss_subj_bg_complem.
-            # loss_subj_bg_complem encourages the attention of subject tokens and bg tokens to be
-            # spatially complementary with each other. Although this loss seems not to drop during optimization,
-            # it prevents bg tokens from absorbing subject features. Therefore, it is necessary.
-            # loss_subj_bg_complem: 0.3~0.5 -> 0.06~0.1.
-            loss_subj_bg_complem_scale = 0.2
-            # fg_bg_complementary_loss_weight: 2e-4.
-            loss_fg_bg_contrast += (loss_subj_bg_complem * loss_subj_bg_complem_scale + loss_subj_mb_suppress \
-                                    + loss_bg_mf_suppress + loss_subj_bg_mask_contrast) \
-                                   * self.fg_bg_complementary_loss_weight
+        # DO NOT DISABLE loss_subj_bg_complem.
+        # loss_subj_bg_complem encourages the attention of subject tokens and bg tokens to be
+        # spatially complementary with each other. Although this loss seems not to drop during optimization,
+        # it prevents bg tokens from absorbing subject features. Therefore, it is necessary.
+        # loss_subj_bg_complem: 0.3~0.5 -> 0.06~0.1.
+        loss_subj_bg_complem_scale = 0.2
+        # loss_bg_mf_suppress: 0.05~0.1.
+        # loss_fg_bg_contrast will be weighted by fg_bg_complementary_loss_weight = 2e-4.
+        loss_fg_bg_contrast = loss_subj_bg_complem * loss_subj_bg_complem_scale + loss_subj_mb_suppress \
+                               + loss_bg_mf_suppress + loss_subj_bg_mask_contrast
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
@@ -2105,6 +2102,10 @@ class LatentDiffusion(DDPM):
                            'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
                            'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
             
+            # loss_sc_recon_ss_fg_attn_agg and loss_sc_recon_ss_fg_flow, loss_comp_cls_bg_attn_suppress 
+            # are returned to be monitored, not to be optimized.
+            # Only their counterparts -- loss_sc_recon_ss_fg_min, loss_comp_subj_bg_attn_suppress 
+            # are optimized.
             loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
             loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
             loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
@@ -2116,11 +2117,11 @@ class LatentDiffusion(DDPM):
                     loss_dict.update({f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
             # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so its magnitude is small.
-            # But this loss is always very small, so no need to scale it up.
+            # But this loss is very small from the beginning, so no need to scale it up to further penalize it.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            sc_mc_bg_match_loss_scale_dict = { 'L2': 50, 'cosine': 3 }
-            sc_mc_bg_match_loss_scale = sc_mc_bg_match_loss_scale_dict["L2"]
+            # loss_sc_mc_bg_match is L2 loss, which is very small. So we scale it up by 50x.
+            sc_mc_bg_match_loss_scale = 50
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
             # loss_sc_mc_bg_match: 0.005~0.008 -> 0.25~0.4.
