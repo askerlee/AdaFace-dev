@@ -208,8 +208,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
                         help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
 
-    parser.add_argument("--prompt2token_proj_grad_scale", type=float, default=1,
-                        help="Gradient scale of the prompt2token projection layer (Set to < 1 to reduce the update speed of SubjBasisGenerator)")
     parser.add_argument("--prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_rand_id_for_id2img", type=float, default=argparse.SUPPRESS,
@@ -702,7 +700,6 @@ if __name__ == "__main__":
         gpus = opt.gpus.strip(",").split(',')
         device = f"cuda:{gpus[0]}" if len(gpus) > 0 else "cpu"
 
-        config.model.params.personalization_config.params.prompt2token_proj_grad_scale = opt.prompt2token_proj_grad_scale
         config.model.params.personalization_config.params.prompt2token_proj_ext_attention_perturb_ratio = opt.prompt2token_proj_ext_attention_perturb_ratio
 
         if hasattr(opt, 'unet_distill_iter_gap'):

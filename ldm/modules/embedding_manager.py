@@ -60,7 +60,6 @@ class EmbeddingManager(nn.Module):
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             cls_delta_string='person',
             cls_delta_token_weights=None,
-            prompt2token_proj_grad_scale=1,
             # During training,  prompt2token_proj_ext_attention_perturb_ratio is 0.1.
             # During inference, prompt2token_proj_ext_attention_perturb_ratio is 0. 
             prompt2token_proj_ext_attention_perturb_ratio=0, 
@@ -135,7 +134,6 @@ class EmbeddingManager(nn.Module):
             self.num_vectors_each_bg = 0
 
         self.cls_delta_string  = cls_delta_string
-        self.prompt2token_proj_grad_scale = prompt2token_proj_grad_scale
         self.prompt2token_proj_ext_attention_perturb_ratio = prompt2token_proj_ext_attention_perturb_ratio
 
         self.adaface_encoder_types = adaface_encoder_types
@@ -192,7 +190,6 @@ class EmbeddingManager(nn.Module):
                                        bg_image_embedding_dim = self.id2ada_prompt_encoder.clip_embedding_dim, 
                                        output_dim = out_emb_dim,
                                        placeholder_is_bg = True,
-                                       prompt2token_proj_grad_scale = self.prompt2token_proj_grad_scale,
                                        bg_prompt_translator_has_to_out_proj=False,
                                        num_static_img_suffix_embs = 0)
             else:
