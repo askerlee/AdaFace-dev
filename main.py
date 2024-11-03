@@ -303,7 +303,9 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
 
         for background_string in dataset.background_strings[:1]:
             personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-
+    else:
+        config.model.params.enable_background_string = False
+        
     # subjects_are_faces are always available in dataset.
     personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
     

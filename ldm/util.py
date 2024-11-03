@@ -2079,9 +2079,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
     for feat_type in recon_feat_objectives.keys():
         if feat_type == 'attn_out':
+            # ca_attn_out: output of the CA layer, i.e., attention-aggregated v.
             feat_obj = ca_attn_out
             delta_discount = 0.9
         elif feat_type == 'outfeat':
+            # outfeat: output of the transformer layer, i.e., attn_out transformed by a FFN.
             feat_obj = ca_outfeat
             delta_discount = 0.8
         else:

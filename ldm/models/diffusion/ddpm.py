@@ -69,7 +69,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 enable_background_string=True,
+                 enable_background_string=False,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
         # posing too large losses to the subject embeddings.
         self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
-        self.enable_background_string                = enable_background_string
+        self.enable_background_string               = enable_background_string
         self.use_fp_trick                           = use_fp_trick
         self.unet_distill_iter_gap                  = unet_distill_iter_gap if self.training else 0
         self.unet_distill_weight                    = unet_distill_weight
@@ -815,7 +815,7 @@ class LatentDiffusion(DDPM):
         elif self.iter_flags['do_normal_recon']:
             # We lower p_use_background_string from the previous value 0.9 to 0.5 to avoid the background token
             # taking too much of the foreground (i.e., capturing the subject features).
-            p_use_background_string  = 0.5
+            p_use_background_string  = 0
         elif self.iter_flags['do_feat_distill_on_comp_prompt']:
             # When doing compositional distillation, the background is quite different between 
             # single prompts and comp prompts. So using a background token is probably not a good idea.
