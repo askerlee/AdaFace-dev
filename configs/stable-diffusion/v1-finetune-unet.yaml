@@ -41,9 +41,9 @@ model:
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     comp_fg_bg_preserve_loss_weight:  1e-3
-    # fg_bg_complementary loss: used in recon iters.
-    # loss_fg_bg_complementary: 1.5,      * weight -> 7.5e-4
-    fg_bg_complementary_loss_weight:  2e-4
+    # subj_bg_suppress loss used in recon iters.
+    # loss_recon_subj_bg_suppress: 1.5, * weight -> 7.5e-4
+    recon_subj_bg_suppress_loss_weight:  2e-4
 
     # Finetuning the u-net consumes a huge amount of RAM. Even if we have BS=1,
     # using optimizers other than Adam8bit and "--max_num_unet_distill_denoising_steps 2" will cause OOM.

@@ -68,7 +68,7 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_scale=0.8,
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
-                 fg_bg_complementary_loss_weight=0.,
+                 recon_subj_bg_suppress_loss_weight=0.,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
-        self.fg_bg_complementary_loss_weight        = fg_bg_complementary_loss_weight
+        self.recon_subj_bg_suppress_loss_weight        = recon_subj_bg_suppress_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -1489,13 +1489,13 @@ class LatentDiffusion(DDPM):
             # bg loss is completely ignored. 
             bg_pixel_weight = 0 
 
-            loss_fg_bg_contrast, loss_recon = \
+            loss_recon_subj_bg_suppress, loss_recon = \
                 self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
                                                    all_subj_indices,
                                                    img_mask, fg_mask, instances_have_fg_mask,
                                                    bg_pixel_weight,
                                                    x_start.shape[0], loss_dict, session_prefix)
-            loss += loss_recon + loss_fg_bg_contrast * self.fg_bg_complementary_loss_weight
+            loss += loss_recon + loss_recon_subj_bg_suppress * self.recon_subj_bg_suppress_loss_weight
             v_loss_recon = loss_recon.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
@@ -1565,7 +1565,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # Major losses for normal_recon iterations (loss_recon, loss_fg_bg_contrast, etc.).
+    # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_bg_suppress, etc.).
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
                                       all_subj_indices,
@@ -1582,15 +1582,15 @@ class LatentDiffusion(DDPM):
         if loss_subj_mb_suppress > 0:
             loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
 
-        # loss_fg_bg_contrast will be weighted by fg_bg_complementary_loss_weight = 2e-4.
-        loss_fg_bg_contrast = loss_subj_mb_suppress
+        # loss_recon_subj_bg_suppress will be weighted by recon_subj_bg_suppress_loss_weight = 2e-4.
+        loss_recon_subj_bg_suppress = loss_subj_mb_suppress
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
                                              fg_pixel_weight=1,
                                              bg_pixel_weight=bg_pixel_weight)
 
-        return loss_fg_bg_contrast, loss_recon
+        return loss_recon_subj_bg_suppress, loss_recon
 
     # pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
     # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
