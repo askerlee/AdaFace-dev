@@ -247,7 +247,7 @@ def get_parser(**parser_kwargs):
     # are all equavalent.
     parser.add_argument("--use_fp_trick", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the 'face portrait' trick for the subject")
-    parser.add_argument("--use_face_flow_for_sc_matching_loss", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--use_face_flow_for_sc_matching_loss", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use face flow for the single-composition matching loss")
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
