@@ -136,18 +136,15 @@ class PersonalizedBase(Dataset):
                  rand_scale_range=None,
                  set_name="train",
                  subject_string="z",
-                 background_string="y",
                  # placeholder_prefix for all types of prompts. Could be a list of strings, separated by ",".
                  common_placeholder_prefix=None,   
                  # cls string used to compute the delta loss.
                  # default_cls_delta_string is the same as subj init string.
                  default_cls_delta_string=None,  
-                 bg_init_string=None,
                 # num_vectors_per_subj_token: how many vectors in each layer are allocated to model 
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
                  num_vectors_per_subj_token=1,
-                 num_vectors_per_bg_token=1,
                  center_crop=False,
                  load_meta_subj2person_type_cache_path=None,
                  save_meta_subj2person_type_cache_path=None,
@@ -322,9 +319,8 @@ class PersonalizedBase(Dataset):
             self._length = self.num_images 
 
         subj2attr = {}
-        # NOTE: if do_zero_shot, all subjects share the same subject/background placeholders and embedders.
-        self.subject_strings        = [ subject_string ]         * self.num_subjects
-        self.background_strings     = [ background_string ]      * self.num_subjects
+        # NOTE: if do_zero_shot, all subjects share the same subject placeholders and embedders.
+        self.subject_strings = [ subject_string ] * self.num_subjects
 
         # placeholder_prefix could be a list of strings, separated by ",".
         if common_placeholder_prefix is not None:
@@ -356,9 +352,7 @@ class PersonalizedBase(Dataset):
 
             self.subjects_are_faces.append(is_face)
 
-        self.bg_initializer_strings     = [ bg_init_string ] * self.num_subjects
         self.num_vectors_per_subj_token = num_vectors_per_subj_token
-        self.num_vectors_per_bg_token   = num_vectors_per_bg_token
         self.center_crop = center_crop
 
         self.size = size
@@ -610,14 +604,11 @@ class PersonalizedBase(Dataset):
 
     def generate_prompts(self, example, subject_idx):
         # If there are multiple subjects, then subject_string is like: 'z0', 'z1', ....
-        # the background_string is like: 'y0', 'y1', ....
-        # Otherwise, subject_string is simply 'z', and background_string is simply 'y'.
+        # Otherwise, subject_string is simply 'z'.
         # subject_name is unique across different subjects, but subject_string is the same when do_zero_shot.
         subject_name        = self.subject_names[subject_idx]
         subject_string      = self.subject_strings[subject_idx]
-        background_string   = self.background_strings[subject_idx]        
         cls_delta_string    = self.cls_delta_strings[subject_idx]
-        cls_bg_delta_string = self.bg_initializer_strings[subject_idx]
         is_animal           = True
 
         example["subject_name"] = subject_name
@@ -629,21 +620,11 @@ class PersonalizedBase(Dataset):
         if self.num_vectors_per_subj_token > 1:
             subject_string      += ", " * (self.num_vectors_per_subj_token - 1)
             cls_delta_string    += ", " * (self.num_vectors_per_subj_token - 1)
-        if self.num_vectors_per_bg_token > 1 and background_string is not None:
-            background_string   += ", " * (self.num_vectors_per_bg_token - 1)
-            cls_bg_delta_string += ", " * (self.num_vectors_per_bg_token - 1)
 
         if self.common_placeholder_prefixes is not None:
             common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
             subject_string          = common_placeholder_prefix + " " + subject_string
             cls_delta_string        = common_placeholder_prefix + " " + cls_delta_string
-
-        bg_suffix     = " with background {}".format(background_string)   if background_string   is not None else ""
-        # If background_string is None, then cls_bg_delta_string is None as well, thus cls_bg_suffix is "".
-        cls_bg_suffix = " with background {}".format(cls_bg_delta_string) if cls_bg_delta_string is not None else ""
-        # bug_suffix: " with background y". cls_bg_suffix: " with background grass/rock".
-        subject_string_with_bg   = subject_string     + bg_suffix
-        cls_delta_string_with_bg = cls_delta_string   + cls_bg_suffix
 
         if is_animal:
             subj_type = "animal" 
@@ -669,24 +650,12 @@ class PersonalizedBase(Dataset):
         example["subj_comp_prompt"]     = comp_prompt_tmpl.format(  subject_string) 
         example["cls_comp_prompt"]      = comp_prompt_tmpl.format(  cls_delta_string)
 
-        if bg_suffix:
-            example["subj_single_prompt_bg"] = single_prompt_tmpl.format( subject_string_with_bg)
-            example["subj_comp_prompt_bg"]   = comp_prompt_tmpl.format(   subject_string_with_bg)
-            example["cls_single_prompt_bg"]  = single_prompt_tmpl.format( cls_delta_string_with_bg)
-            example["cls_comp_prompt_bg"]    = comp_prompt_tmpl.format(   cls_delta_string_with_bg)
-
         # Delta loss requires subj_single_prompt/cls_single_prompt to be token-wise aligned
         # with subj_comp_prompt/cls_comp_prompt, so we need to specify them in the dataloader as well.
         example["subj_single_prompt_fp"] = single_fp_prompt_tmpl.format(   subject_string)
         example["subj_comp_prompt_fp"]   = subj_comp_fp_prompt_tmpl.format(subject_string)
         example["cls_single_prompt_fp"]  = single_fp_prompt_tmpl.format(   cls_delta_string)
         example["cls_comp_prompt_fp"]    = cls_comp_fp_prompt_tmpl.format( cls_delta_string)
-
-        if bg_suffix:
-            example["subj_single_prompt_fp_bg"] = single_fp_prompt_tmpl.format(   subject_string_with_bg)
-            example["subj_comp_prompt_fp_bg"]   = subj_comp_fp_prompt_tmpl.format(subject_string_with_bg)
-            example["cls_single_prompt_fp_bg"]  = single_fp_prompt_tmpl.format(   cls_delta_string_with_bg)
-            example["cls_comp_prompt_fp_bg"]    = cls_comp_fp_prompt_tmpl.format( cls_delta_string_with_bg)
 
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.

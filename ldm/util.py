@@ -1426,7 +1426,7 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
     # Apply token weights.
     emb_attns = [ emb_attns[i] * token_weights[i] for i in range(len(indices_by_instance)) ]
 
-    # sum among K_bg_i bg embeddings -> [1, 8, 64]
+    # sum among K_subj_i subj embeddings -> [1, 8, 64]
     if do_sum:
         emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
     elif do_mean:

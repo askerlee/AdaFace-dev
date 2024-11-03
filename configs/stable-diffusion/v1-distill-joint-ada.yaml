@@ -93,9 +93,8 @@ model:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         subject_strings:                    ['z']
-        background_strings:                 ['y']
         subj_name_to_cls_delta_string:      { 'z': "person", 'rand_id_to_img_prompt': 'person' }
-        token2num_vectors:                  {'z': 20, 'y': 4}
+        token2num_vectors:                  {'z': 20}
         training_begin_perturb_std_range:   [ 0.05, 0.1 ]
         training_end_perturb_std_range:     [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively

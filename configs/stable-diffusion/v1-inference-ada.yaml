@@ -20,8 +20,7 @@ model:
       target: ldm.modules.embedding_manager.EmbeddingManager
       params:
         subject_strings:     ["z"]
-        background_strings:  ["y"]
-        token2num_vectors:   {'z': 16, 'y': 4}
+        token2num_vectors:   {'z': 16}
 
     unet_config:
       target: ldm.modules.diffusionmodules.openaimodel.UNetModel

@@ -42,12 +42,9 @@ class EmbeddingManager(nn.Module):
             self,
             text_embedder,   
             subject_strings,
-            # If background_strings are specified, they are part of the list placeholder_strings.
-            background_strings=None,
             subj_name_to_cls_delta_string=None,
             # token2num_vectors: how many vectors in each layer are allocated to model 
-            # the subject (represented as the subject token) and the background. 
-            # token2num_vectors is a dict.
+            # the subject (represented as the subject token). token2num_vectors is a dict.
             token2num_vectors={},
             loading_token2num_vectors_from_ckpt=False,
             out_emb_dim=768,
@@ -83,14 +80,9 @@ class EmbeddingManager(nn.Module):
         self.num_unet_ca_layers                  = num_unet_ca_layers
 
         self.subject_strings = subject_strings
-        if background_strings is not None:
-            self.background_strings = list(background_strings)
-        else:
-            self.background_strings = []
 
-        self.background_string_dict = { s: True for s in self.background_strings }
         self.subject_string_dict    = { s: True for s in self.subject_strings }
-        self.placeholder_strings    = list(subject_strings) + self.background_strings
+        self.placeholder_strings    = list(subject_strings)
 
         self.set_training_perturb_specs(training_begin_perturb_std_range, 
                                         training_end_perturb_std_range,
@@ -128,10 +120,6 @@ class EmbeddingManager(nn.Module):
         self.placeholder_token_to_idx       = {}
 
         self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0])
-        if len(self.background_strings) > 0:
-            self.num_vectors_each_bg = self.token2num_vectors.get(self.background_strings[0], 4)
-        else:
-            self.num_vectors_each_bg = 0
 
         self.cls_delta_string  = cls_delta_string
         self.prompt2token_proj_ext_attention_perturb_ratio = prompt2token_proj_ext_attention_perturb_ratio
@@ -172,42 +160,26 @@ class EmbeddingManager(nn.Module):
             self.cls_delta_token_weights = None
 
         for placeholder_idx, placeholder_string in enumerate(self.placeholder_strings):
-            placeholder_is_bg =  (placeholder_string in self.background_string_dict)
             # get_tokens_for_string <= get_clip_tokens_for_string.
             # force_single_token = True, as there should be only one token in placeholder_string.
             placeholder_token = self.get_tokens_for_string(placeholder_string, force_single_token=True)[0].item()
             self.string_to_token_dict[placeholder_string] = placeholder_token
 
-            # num_id_vecs: 16 if fg or 4 if bg. 
-            num_id_vecs = self.number_vectors_each_subj if not placeholder_is_bg else self.num_vectors_each_bg
-
-            if placeholder_is_bg:
-                # Only initialize the bg SubjBasisGenerator here.
-                subj_basis_generator = \
-                    SubjBasisGenerator(num_id_vecs = num_id_vecs,
-                                       # bg_image_embedding_dim: laion: 1280, openai: 1024.
-                                       # OpenAI CLIP output dim is 768, but the dim of the second last layer is 1024.
-                                       bg_image_embedding_dim = self.id2ada_prompt_encoder.clip_embedding_dim, 
-                                       output_dim = out_emb_dim,
-                                       placeholder_is_bg = True,
-                                       bg_prompt_translator_has_to_out_proj=False,
-                                       num_static_img_suffix_embs = 0)
-            else:
-                # The subject SubjBasisGenerator will be initialized in self.id2ada_prompt_encoder.
-                # If adaface_encoder_types contains multiple encoders (i.e, an actual type of 'jointIDs')
-                # then .subj_basis_generator is not a SubjBasisGenerator instance,
-                # but rather an nn.ModuleList of SubjBasisGenerator instances.
-                # Such an instance should not be called to get the adaface_subj_embs, but only be used for save/load.
-                subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
+            # The subject SubjBasisGenerator will be initialized in self.id2ada_prompt_encoder.
+            # If adaface_encoder_types contains multiple encoders (i.e, an actual type of 'jointIDs')
+            # then .subj_basis_generator is not a SubjBasisGenerator instance,
+            # but rather an nn.ModuleList of SubjBasisGenerator instances.
+            # Such an instance should not be called to get the adaface_subj_embs, but only be used for save/load.
+            subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
 
             self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
-        # self.load() loads both fg and bg SubjBasisGenerators.
+        # self.load() loads subj SubjBasisGenerators.
         # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
         # but instead use self.load().
         if adaface_ckpt_paths is not None:
-            self.load(adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=False)
+            self.load(adaface_ckpt_paths)
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, self.get_embeddings_for_tokens, 
@@ -230,8 +202,8 @@ class EmbeddingManager(nn.Module):
         # which needs to be translated by a bg SubjBasisGenerator.
         self.image_prompt_dict = {}
 
-        print("EmbeddingManager on subj={}, bg={} init with {} vec(s)".format(
-               self.subject_strings, self.background_strings, self.token2num_vectors))
+        print("EmbeddingManager on subj={}, init with {} vec(s)".format(
+               self.subject_strings, self.token2num_vectors))
         
         # Add the search span by 1, just to be safe.
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
@@ -321,7 +293,6 @@ class EmbeddingManager(nn.Module):
             if placeholder_indices[0].numel() == 0:
                 continue
             
-            placeholder_is_bg = (placeholder_string in self.background_string_dict)
             # If multiple occurrences are found in a prompt, only keep the first as the subject.
             # Other occurrences are treated as part of the background prompt (this may happen if
             # composition image overlay is used).
@@ -351,56 +322,40 @@ class EmbeddingManager(nn.Module):
 
             # Generate the actual adaface_subj_embs on the fly.
             # adaface_subj_embs: [BS, K, 768] or [1, K, 768].
-            if placeholder_is_bg:
-                clip_features        = self.image_prompt_dict['bg']
-                subj_basis_generator = self.string_to_subj_basis_generator_dict[placeholder_string]
-                                
-                # clip_features: [BS, 257, 1280]
-                # adaface_subj_embs:   [BS, 4, 768] for bg.
-                # NOTE: Static image suffix embeddings are used to adjust the student model to 
-                # match the pecularities of the teacher model. Its role is similar to background embeddings.
-                # used to match weird background objects in the images generated by the teacher model.
-                # If it's a recon_iter, there are few weird background objects in the groundtruth images,
-                # so we don't append the static image suffix embeddings.
-                adaface_subj_embs = \
-                        subj_basis_generator(faceid2img_prompt_embs=None,
-                                             clip_features=clip_features, raw_id_embs=None, 
-                                             out_id_embs_cfg_scale=1, is_face=self.curr_subj_is_face,
-                                             enable_static_img_suffix_embs=False)
-            else:
-                # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
-                id2img_prompt_embs  = self.image_prompt_dict['subj'] if self.curr_subj_is_face else None
-                if self.iter_type == 'compos_distill_iter':
-                    # Only use the first instance in the batch to generate the adaface_subj_embs,
-                    # as the whole batch is of the same subject.
-                    id2img_prompt_embs = id2img_prompt_embs[:1]
 
-                # static_img_suffix_embs are supposed to narrow the domain gap between the teacher and student models.
-                # So we don't use them in compos_distill_iter or recon_iter.
-                enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
+            # id2img_embs (ID embeddings only): [BS, 16, 768] or [BS, 4, 768].
+            id2img_prompt_embs  = self.image_prompt_dict['subj'] if self.curr_subj_is_face else None
+            if self.iter_type == 'compos_distill_iter':
+                # Only use the first instance in the batch to generate the adaface_subj_embs,
+                # as the whole batch is of the same subject.
+                id2img_prompt_embs = id2img_prompt_embs[:1]
 
-                # lens_subj_emb_segments: th length of subject embeddings in each encoder.
-                # enable_static_img_suffix_embs=None: use default settings, i.e.,
-                # consistentID enables  static_img_suffix_embs, 
-                # arc2face     disables static_img_suffix_embs.
-                adaface_subj_embs, lens_subj_emb_segments = \
-                    self.id2ada_prompt_encoder.generate_adaface_embeddings(
-                                          image_paths=None, face_id_embs=None,
-                                          img_prompt_embs=id2img_prompt_embs,
-                                          p_dropout=self.p_encoder_dropout if self.training else 0,
-                                          # If an encoder is dropped out, then the corresponding adaface_subj_embs
-                                          # will not be included in the returned adaface_subj_embs. 
-                                          # So the returned adaface_subj_embs only contain valid embeddings and 
-                                          # could be shorter than self.token2num_vectors[placeholder_string].
-                                          return_zero_embs_for_dropped_encoders=False,
-                                          avg_at_stage=None,
-                                          enable_static_img_suffix_embs=enable_static_img_suffix_embs,
-                                        )
-                # adaface_subj_embs should never be None, since we have made sure that not all encoders are dropped out,
-                # and the passed in id2img_prompt_embs are always valid (even if no faces are detected in the input image,
-                # we fill in random values). The following is just in case.
-                if adaface_subj_embs is None:
-                    adaface_subj_embs = torch.zeros(REAL_OCCURS_IN_BATCH, self.out_emb_dim, device=embedded_text.device)
+            # static_img_suffix_embs are supposed to narrow the domain gap between the teacher and student models.
+            # So we don't use them in compos_distill_iter or recon_iter.
+            enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
+
+            # lens_subj_emb_segments: th length of subject embeddings in each encoder.
+            # enable_static_img_suffix_embs=None: use default settings, i.e.,
+            # consistentID enables  static_img_suffix_embs, 
+            # arc2face     disables static_img_suffix_embs.
+            adaface_subj_embs, lens_subj_emb_segments = \
+                self.id2ada_prompt_encoder.generate_adaface_embeddings(
+                                        image_paths=None, face_id_embs=None,
+                                        img_prompt_embs=id2img_prompt_embs,
+                                        p_dropout=self.p_encoder_dropout if self.training else 0,
+                                        # If an encoder is dropped out, then the corresponding adaface_subj_embs
+                                        # will not be included in the returned adaface_subj_embs. 
+                                        # So the returned adaface_subj_embs only contain valid embeddings and 
+                                        # could be shorter than self.token2num_vectors[placeholder_string].
+                                        return_zero_embs_for_dropped_encoders=False,
+                                        avg_at_stage=None,
+                                        enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                                    )
+            # adaface_subj_embs should never be None, since we have made sure that not all encoders are dropped out,
+            # and the passed in id2img_prompt_embs are always valid (even if no faces are detected in the input image,
+            # we fill in random values). The following is just in case.
+            if adaface_subj_embs is None:
+                adaface_subj_embs = torch.zeros(REAL_OCCURS_IN_BATCH, self.out_emb_dim, device=embedded_text.device)
 
             # adaface_subj_embs: [BS, K, 768].
             # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
@@ -478,8 +433,6 @@ class EmbeddingManager(nn.Module):
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
             # But we need them without repetitions for mix prompt distillation.
             # If num_vectors_per_subj_token > 1, then repeat the indices and add to offsets.
-            # If background_strings is None, then always update the indices. Otherwise, 
-            # skip updating placeholder indices of the background string.
             self.update_placeholder_indices(orig_tokenized_text, placeholder_string, placeholder_token, 
                                             adaface_subj_embs.shape[1])
 
@@ -598,20 +551,18 @@ class EmbeddingManager(nn.Module):
                         "token2num_vectors":                    self.token2num_vectors,
                         "placeholder_strings":                  self.placeholder_strings,
                         "subject_strings":                      self.subject_strings,
-                        "background_strings":                   self.background_strings,
                      }
         
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=False):
+    def load(self, adaface_ckpt_paths):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         token2num_vectors                   = {}
         self.string_to_token_dict           = {}
 
         self.subject_strings                = []
-        self.background_strings             = []
 
         # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
         self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
@@ -647,25 +598,6 @@ class EmbeddingManager(nn.Module):
 
             ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
 
-            if "background_strings" in ckpt:
-                ckpt_background_strings = ckpt["background_strings"]
-            else:
-                ckpt_background_strings = []
-
-            for km, ckpt_subj_basis_generator in ckpt["string_to_subj_basis_generator_dict"].items():
-                if hasattr(ckpt_subj_basis_generator, 'placeholder_is_bg') and ckpt_subj_basis_generator.placeholder_is_bg:
-                    print(f"Loading {repr(ckpt_subj_basis_generator)}")
-                    if not skip_loading_bg_subj_basis_generator:
-                        ret = self.string_to_subj_basis_generator_dict[km].load_state_dict(ckpt_subj_basis_generator.state_dict(), strict=False)
-                        if ret is not None and len(ret.missing_keys) > 0:
-                            print(f"Missing keys: {ret.missing_keys}")
-                        if ret is not None and len(ret.unexpected_keys) > 0:
-                            print(f"Unexpected keys: {ret.unexpected_keys}")
-
-                # Since we load fg SubjBasisGenerators through id2ada_prompt_encoder, we skip loading them here.
-                else:
-                    continue
-
             if "placeholder_strings" in ckpt:
                 for token_idx, km in enumerate(ckpt["placeholder_strings"]):
                     # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
@@ -682,16 +614,10 @@ class EmbeddingManager(nn.Module):
                         print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
                         continue
 
-                    # Merge the (possibly substituted) subject strings from the ckpt with 
-                    # self.subject_strings and self.background_strings.
-                    if km in ckpt_background_strings:
-                        self.background_strings = list(set(self.background_strings + [km2]))
-                        print("Add background string", km2)
-                    elif km not in self.background_strings:
-                        # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
-                        # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
-                        self.subject_strings = list(set(self.subject_strings + [km2]))
-                        print("Add subject string", km2)
+                    # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
+                    # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
+                    self.subject_strings = list(set(self.subject_strings + [km2]))
+                    print("Add subject string", km2)
 
                     # The mapping in string_to_token_dict is determined by the tokenizer. 
                     # Shouldn't do the km->km2 mapping on string_to_token_dict.
@@ -705,12 +631,11 @@ class EmbeddingManager(nn.Module):
             if "token2num_vectors" in ckpt and self.loading_token2num_vectors_from_ckpt:
                 self.set_num_vectors_per_subj_token(token2num_vectors)
 
-        self.placeholder_strings = self.subject_strings + self.background_strings
+        self.placeholder_strings = self.subject_strings
 
-        # Regenerate subject_string_dict, background_string_dict 
-        # in case subject_strings or background_strings have been changed.
-        self.subject_string_dict    = { s: True for s in self.subject_strings }
-        self.background_string_dict = { s: True for s in self.background_strings }
+        # Regenerate subject_string_dict 
+        # in case subject_strings have been changed.
+        self.subject_string_dict = { s: True for s in self.subject_strings }
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.

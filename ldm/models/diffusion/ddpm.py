@@ -69,7 +69,6 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  fg_bg_complementary_loss_weight=0.,
-                 enable_background_string=False,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -113,7 +112,6 @@ class DDPM(pl.LightningModule):
         # posing too large losses to the subject embeddings.
         self.cls_subj_mix_scale                     = cls_subj_mix_scale
 
-        self.enable_background_string               = enable_background_string
         self.use_fp_trick                           = use_fp_trick
         self.unet_distill_iter_gap                  = unet_distill_iter_gap if self.training else 0
         self.unet_distill_weight                    = unet_distill_weight
@@ -295,20 +293,19 @@ class DDPM(pl.LightningModule):
         return x
 
     def init_iteration_flags(self):
-        self.iter_flags = { 'calc_clip_loss':               False,
-                            'do_normal_recon':              True,
-                            'do_unet_distill':              False,
+        self.iter_flags = { 'calc_clip_loss':                   False,
+                            'do_normal_recon':                  True,
+                            'do_unet_distill':                  False,
                             'gen_rand_id_for_id2img':           False,
-                            'id2img_prompt_embs':           None,
-                            'id2img_neg_prompt_embs':       None,
-                            'perturb_face_id_embs':         False,
-                            'faceless_img_count':           0,
-                            'num_denoising_steps':          1,
-                            'do_feat_distill_on_comp_prompt':  False,
-                            'do_prompt_emb_delta_reg':      False,
-                            'unet_distill_uses_comp_prompt': False,
-                            'use_background_string':         False,
-                            'use_fp_trick':                 False,
+                            'id2img_prompt_embs':               None,
+                            'id2img_neg_prompt_embs':           None,
+                            'perturb_face_id_embs':             False,
+                            'faceless_img_count':               0,
+                            'num_denoising_steps':              1,
+                            'do_feat_distill_on_comp_prompt':   False,
+                            'do_prompt_emb_delta_reg':          False,
+                            'unet_distill_uses_comp_prompt':    False,
+                            'use_fp_trick':                     False,
                             'comp_init_fg_from_training_image': False,
                           }
         
@@ -804,51 +801,16 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['comp_init_fg_from_training_image'] \
             = (torch.rand(1) < p_comp_init_fg_from_training_image).item()
-        
-        if self.iter_flags['do_unet_distill']:
-            # If do_unet_distill, then DISABLE the background string.
-            # Because for ConsistentID, the background is a bit noisy, but there has been 
-            # 4 prompt embeddings serving as the background tokens to absorb the background noise.
-            # For Arc2face, the background is simple and we probably don't need to absorb the 
-            # background noise with background tokens.
-            p_use_background_string  = 0
-        elif self.iter_flags['do_normal_recon']:
-            # We lower p_use_background_string from the previous value 0.9 to 0.5 to avoid the background token
-            # taking too much of the foreground (i.e., capturing the subject features).
-            p_use_background_string  = 0
-        elif self.iter_flags['do_feat_distill_on_comp_prompt']:
-            # When doing compositional distillation, the background is quite different between 
-            # single prompts and comp prompts. So using a background token is probably not a good idea.
-            p_use_background_string  = 0
-        else:
-            breakpoint()
-
-        # enable_background_string is True, as long as background token is specified in 
-        # the command line of train.py.
-        self.iter_flags['use_background_string'] = self.enable_background_string \
-                                                    and (torch.rand(1) < p_use_background_string)
 
         # ** use_fp_trick is only for compositional iterations. **
-        if self.iter_flags['use_fp_trick'] and self.iter_flags['use_background_string']:
-            SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp_bg'
-            SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp_bg'
-            CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp_bg'
-            CLS_COMP_PROMPT    = 'cls_comp_prompt_fp_bg'
-        # use_fp_trick but not use_background_string.
-        elif self.iter_flags['use_fp_trick']:
-            # Never use_fp_trick for recon iters. So no need to have "caption_fp" or "caption_fp_bg".
+        if self.iter_flags['use_fp_trick']:
+            # Never use_fp_trick for recon iters. So no need to have "caption_fp".
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
             CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
-        # not use_fp_trick and use_background_string.
-        elif self.iter_flags['use_background_string']:
-            SUBJ_SINGLE_PROMPT = 'subj_single_prompt_bg'
-            SUBJ_COMP_PROMPT   = 'subj_comp_prompt_bg'
-            CLS_SINGLE_PROMPT  = 'cls_single_prompt_bg'
-            CLS_COMP_PROMPT    = 'cls_comp_prompt_bg'
         # Either do_feat_distill_on_comp_prompt but not use_fp_trick_iter, 
-        # or recon/unet_distill iters (not do_feat_distill_on_comp_prompt) and not use_background_string.
+        # or recon/unet_distill iters (not do_feat_distill_on_comp_prompt).
         # We don't use_fp_trick on training images. 
         else:
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
@@ -1142,9 +1104,7 @@ class LatentDiffusion(DDPM):
         delta_prompts = self.iter_flags['delta_prompts']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
-        #if self.iter_flags['use_background_string']:
-        #print(subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
-        
+
         if self.iter_flags['do_feat_distill_on_comp_prompt']:                        
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE  = 1
@@ -1227,7 +1187,7 @@ class LatentDiffusion(DDPM):
             # are manually mixed into their embeddings.
             c_in = delta_prompts
             # The prompts are either (subj single, subj comp, cls single, cls comp).
-            # So the first 2 sub-blocks always contain the subject/background tokens, and we use *_2b.    
+            # So the first 2 sub-blocks always contain the subject tokens, and we use *_2b.    
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
         else:
             # do_normal_recon or do_unet_distill.
@@ -1396,15 +1356,11 @@ class LatentDiffusion(DDPM):
         placeholder2indices = extra_info['placeholder2indices']
         prompt_emb_mask     = extra_info['prompt_emb_mask']
         
-        # all_subj_indices, all_bg_indices are used to extract the attention weights
-        # of the subject and background tokens for the attention loss computation.
-        # join_dict_of_indices_with_key_filter(): separate the indices of the subject tokens from those of 
-        # the background tokens, using subject_string_dict and background_string_dict as the filters, separately.
-        # Then combine all subject indices into all_subj_indices, and all background indices into all_bg_indices.
+        # all_subj_indices are used to extract the attention weights
+        # of the subject tokens for the attention loss computation.
+        # Then combine all subject indices into all_subj_indices.
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.subject_string_dict)
-        all_bg_indices      = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
-                                                                   self.embedding_manager.background_string_dict)
         if self.iter_flags['do_feat_distill_on_comp_prompt']:
             # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
@@ -1530,18 +1486,12 @@ class LatentDiffusion(DDPM):
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
-            if not self.iter_flags['use_background_string']:
-                # bg loss is almost completely ignored. But giving it a little weight may help suppress 
-                # subj embeddings' contribution to the background (serving as a contrast to the fg).
-                bg_pixel_weight = 0 #0.01
-            else:
-                # use_background_string == True. bg loss is somewhat discounted.
-                # p_use_background_string = 0.1 if do_unet_distill. 
-                bg_pixel_weight = 0.1
-                                
+            # bg loss is completely ignored. 
+            bg_pixel_weight = 0 
+
             loss_fg_bg_contrast, loss_recon = \
                 self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
-                                                   all_subj_indices, all_bg_indices,
+                                                   all_subj_indices,
                                                    img_mask, fg_mask, instances_have_fg_mask,
                                                    bg_pixel_weight,
                                                    x_start.shape[0], loss_dict, session_prefix)
@@ -1615,48 +1565,25 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    # Major losses for normal_recon iterations (loss_recon, loss_subj_bg_complem, etc.).
+    # Major losses for normal_recon iterations (loss_recon, loss_fg_bg_contrast, etc.).
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, extra_info,
-                                      all_subj_indices, all_bg_indices,
+                                      all_subj_indices,
                                       img_mask, fg_mask, instances_have_fg_mask, 
                                       bg_pixel_weight, BLOCK_SIZE, loss_dict, session_prefix):
-        
-        # NOTE: If use_background_string, then loss_subj_bg_complem, loss_bg_mf_suppress, loss_subj_bg_mask_contrast 
-        # will be nonzero. Otherwise, they are zero, and only loss_subj_mb_suppress is computed.
-        # all_subj_indices and all_bg_indices are used, instead of *_1b.
-        # But only the indices to the first block are extracted in calc_subj_bg_complementary_loss().
-        loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast = \
-                    self.calc_subj_bg_complementary_loss(
-                        extra_info['ca_layers_activations']['attnscore'],
-                        all_subj_indices,
-                        all_bg_indices,
-                        BLOCK_SIZE=BLOCK_SIZE,
-                        fg_grad_scale=0.01,
-                        fg_mask=fg_mask,
-                        instance_has_fg_mask=instances_have_fg_mask
-                    )
 
-        if loss_subj_bg_complem > 0:
-            loss_dict.update({f'{session_prefix}/fg_bg_complem': loss_subj_bg_complem.mean().detach().item()})
+        loss_subj_mb_suppress = \
+            self.calc_subj_masked_bg_suppress_loss(
+                extra_info['ca_layers_activations']['attnscore'],
+                all_subj_indices,
+                BLOCK_SIZE, fg_mask, instances_have_fg_mask)
+        
         # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
         if loss_subj_mb_suppress > 0:
             loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
-        if loss_bg_mf_suppress > 0:
-            loss_dict.update({f'{session_prefix}/bg_mf_suppress': loss_bg_mf_suppress.mean().detach().item()})
-        if loss_subj_bg_mask_contrast > 0:
-            loss_dict.update({f'{session_prefix}/fg_bg_mask_contrast': loss_subj_bg_mask_contrast.mean().detach().item()})
 
-        # DO NOT DISABLE loss_subj_bg_complem.
-        # loss_subj_bg_complem encourages the attention of subject tokens and bg tokens to be
-        # spatially complementary with each other. Although this loss seems not to drop during optimization,
-        # it prevents bg tokens from absorbing subject features. Therefore, it is necessary.
-        # loss_subj_bg_complem: 0.3~0.5 -> 0.06~0.1.
-        loss_subj_bg_complem_scale = 0.2
-        # loss_bg_mf_suppress: 0.05~0.1.
         # loss_fg_bg_contrast will be weighted by fg_bg_complementary_loss_weight = 2e-4.
-        loss_fg_bg_contrast = loss_subj_bg_complem * loss_subj_bg_complem_scale + loss_subj_mb_suppress \
-                               + loss_bg_mf_suppress + loss_subj_bg_mask_contrast
+        loss_fg_bg_contrast = loss_subj_mb_suppress
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
@@ -2309,12 +2236,8 @@ class LatentDiffusion(DDPM):
         subj_mb_suppress_scale      = 0.05
         mfmb_contrast_attn_margin   = 0.4
 
-        # In each instance, subj_indices has K_subj times as many elements as bg_indices.
         # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
         #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # bg_indices: ([0, 1, 2, 3], [11, 12, 34, 29]).
-        # BLOCK_SIZE = 2, so we only keep instances indexed by [0, 1].
-        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
         subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
 
         loss_layers_subj_mb_suppress    = []
@@ -2390,205 +2313,6 @@ class LatentDiffusion(DDPM):
         loss_subj_mb_suppress = sum(loss_layers_subj_mb_suppress)
     
         return loss_subj_mb_suppress
-    
-    # calc_subj_bg_complementary_loss() is only called in do_normal_recon iterations.
-    # In such iterations, fg_mask is always accurate (if available).
-    # instance_has_fg_mask: whether each instance has a valid fg_mask.
-    # Only compute the loss on the first block. If it's a normal_recon iter, 
-    # the first block is the whole batch, i.e., BLOCK_SIZE = batch size.
-    # bg_indices: we assume the bg tokens appear in all instances in the batch.
-    def calc_subj_bg_complementary_loss(self, ca_attnscores, subj_indices, bg_indices,
-                                        BLOCK_SIZE, fg_grad_scale=0.01,
-                                        fg_mask=None, instance_has_fg_mask=None):
-        
-        if subj_indices is None:
-            return 0, 0, 0, 0
-        
-        if subj_indices is not None and bg_indices is None:
-            loss_subj_mb_suppress = \
-                self.calc_subj_masked_bg_suppress_loss(ca_attnscores, subj_indices, 
-                                                       BLOCK_SIZE, fg_mask, instance_has_fg_mask)
-            
-            return 0, loss_subj_mb_suppress, 0, 0
-
-        # Discard the first few bottom layers from alignment.
-        # attn_align_layer_weights: relative weight of each layer. 
-        # Feature map spatial sizes are all 64*64.
-        attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
-                                   }
-        # 16-18: feature maps 16x16.
-        # 19-21: feature maps 32x32.
-        # 22-24: feature maps 64x64.
-        # The weight is inversely proportional to the feature map size.
-        # The larger the feature map, the more details the layer captures, and 
-        # subj/bg loss hurts more high-frequency details, therefore it has a smalll weight.
-
-        # Normalize the weights above so that each set sum to 1.
-        attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
-
-        # K_subj: 9, number of embeddings per subject token.
-        K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-        # K_bg: 4, number of embeddings per background token.
-        K_bg = len(bg_indices[0]) // len(torch.unique(bg_indices[0]))
-
-        loss_layers_subj_bg_complem         = []
-        loss_layers_subj_mb_suppress        = []
-        loss_layers_bg_mf_suppress          = []
-        loss_layers_subj_bg_mask_contrast   = []
-
-        subj_mb_suppress_scale              = 0.05
-        bg_mf_suppress_scale                = 0.1
-        subj_bg_emb_contrast_scale          = 0.05
-        mfmb_contrast_attn_margin           = 0.4
-        subj_bg_contrast_at_mf_attn_margin  = 0.2 * K_subj / K_bg     # 1
-        bg_subj_contrast_at_mb_attn_margin  = 0.4
-
-        # In each instance, subj_indices has K_subj times as many elements as bg_indices.
-        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
-        #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
-        # bg_indices: ([0, 1, 2, 3], [11, 12, 34, 29]).
-        # BLOCK_SIZE = 2, so we only keep instances indexed by [0, 1].
-        # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1], [5, 6, 7, 8, 6, 7, 8, 9]).
-        subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
-
-        for unet_layer_idx, unet_attn in ca_attnscores.items():
-            if (unet_layer_idx not in attn_align_layer_weights):
-                continue
-
-            # [2, 8, 256, 77] / [2, 8, 64, 77] =>
-            # [2, 77, 8, 256] / [2, 77, 8, 64]
-            attn_mat = unet_attn.permute(0, 3, 1, 2)
-            # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
-            subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, do_sum=True, do_mean=False)
-            
-            # sel_emb_attns_by_indices will split bg_indices to multiple instances,
-            # and select the corresponding attention rows for each instance.
-            # bg_attn: 3D
-            bg_attn   = sel_emb_attns_by_indices(attn_mat, bg_indices, do_sum=True, do_mean=False)
-
-            attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
-
-            # aim_to_align=False: push bg_attn to be orthogonal with subj_attn, 
-            # so that the two attention maps are complementary.
-            # exponent = 2: exponent is 3 by default, which lets the loss focus on large activations.
-            # But we don't want to only focus on large activations. So set it to 2.
-            # ref_grad_scale = 0.05: small gradients will be BP-ed to the subject embedding,
-            # to make the two attention maps more complementary (expect the loss pushes the 
-            # subject embedding to a more accurate point).
-
-            # Use subj_attn as a reference, and scale down grad to fg attn, 
-            # to make fg embeddings more stable.
-            loss_layer_subj_bg_complem = \
-                calc_ref_cosine_loss(bg_attn, subj_attn, 
-                                     exponent=2,    
-                                     # Since we use attn scores for bg_attn and subj_attn, 
-                                     # we don't need to demean them to highlight the contrast.
-                                     do_demeans=[False, False],
-                                     first_n_dims_into_instances=2, 
-                                     # fg_grad_scale: 0.01, to protect fg activations on the whole image.
-                                     ref_grad_scale=fg_grad_scale,  
-                                     aim_to_align=False,
-                                     debug=False)
-
-            # loss_subj_bg_complem doesn't need fg_mask.
-            loss_layers_subj_bg_complem.append(loss_layer_subj_bg_complem * attn_align_layer_weight)
-
-            if (fg_mask is not None) and (instance_has_fg_mask is None or instance_has_fg_mask.sum() > 0):
-                fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
-                                                      mode="nearest|bilinear")
-                # Repeat 8 times to match the number of attention heads (for normalization).
-                fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
-                fg_mask3 = torch.zeros_like(fg_mask2)
-                fg_mask3[fg_mask2 >  1e-6] = 1.
-
-                bg_mask3 = (1 - fg_mask3)
-
-                if (fg_mask3.sum(dim=(1, 2)) == 0).any():
-                    # Very rare cases. Safe to skip.
-                    print("WARNING: fg_mask3 has all-zero masks.")
-                    continue
-                if (bg_mask3.sum(dim=(1, 2)) == 0).any():
-                    # Very rare cases. Safe to skip.
-                    print("WARNING: bg_mask3 has all-zero masks.")
-                    continue
-
-                # subj_attn_at_mf: [BLOCK_SIZE, 8, 64].
-                # subj, bg: subject embedding,         background embedding.
-                # mf,   mb: mask foreground locations, mask background locations.
-                subj_attn_at_mf = subj_attn * fg_mask3
-                # Protect subject emb activations on fg areas.
-                subj_attn_at_mf = subj_attn_at_mf.detach()
-
-                bg_attn_at_mf   = bg_attn   * fg_mask3
-                subj_attn_at_mb = subj_attn * bg_mask3
-                bg_attn_at_mb   = bg_attn   * bg_mask3
-
-                # fg_mask3:            [BLOCK_SIZE, 8, 64]
-                # avg_subj_attn_at_mf: [BLOCK_SIZE, 1, 1]
-                # keepdim=True, since attn probs at all locations will use them as references (subtract them).
-                # sum(dim=(1,2)): avoid summing across the batch dimension. 
-                # It's meaningless to average among the instances.
-                avg_subj_attn_at_mf = masked_mean(subj_attn_at_mf, fg_mask3, dim=(1,2), keepdim=True)
-                avg_bg_attn_at_mb   = masked_mean(bg_attn_at_mb,   bg_mask3, dim=(1,2), keepdim=True)
-
-                # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations) 
-                # to be at least larger by mfmb_contrast_attn_margin = 0.4 than 
-                # subj_attn_at_mb at any background locations.
-                # If not, clamp() > 0, incurring a loss.
-                # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
-                layer_subj_mb_excess = subj_attn_at_mb + mfmb_contrast_attn_margin - avg_subj_attn_at_mf
-                # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
-                # activations conform to the margin restrictions.
-                loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
-                                                            layer_subj_mb_excess > 0, 
-                                                            instance_weights=instance_has_fg_mask)
-                # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
-                # to be at least larger by mfmb_contrast_attn_margin = 1 than
-                # bg_attn_at_mf at any foreground locations.
-                # If not, clamp() > 0, incurring a loss.
-                layer_bg_mf_suppress          = bg_attn_at_mf + mfmb_contrast_attn_margin - avg_bg_attn_at_mb
-                loss_layer_bg_mf_suppress     = masked_mean(layer_bg_mf_suppress, 
-                                                            layer_bg_mf_suppress > 0, 
-                                                            instance_weights=instance_has_fg_mask)
-                # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations)
-                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 1 than
-                # bg_attn_at_mf at any foreground locations.
-                # loss_layer_subj_bg_contrast_at_mf is usually 0, as avg_bg_attn_at_mf 
-                # usually takes a much smaller value than avg_subj_attn_at_mf.
-                # avg_subj_attn_at_mf.item(): protect subj fg activations.
-                layer_subj_bg_contrast_at_mf        = bg_attn_at_mf + subj_bg_contrast_at_mf_attn_margin - avg_subj_attn_at_mf
-                loss_layer_subj_bg_contrast_at_mf   = masked_mean(layer_subj_bg_contrast_at_mf, 
-                                                                  layer_subj_bg_contrast_at_mf > 0, 
-                                                                  instance_weights=instance_has_fg_mask)
-                # Encourage avg_bg_attn_at_mb (bg_attn averaged at background locations)
-                # to be at least larger by subj_bg_contrast_at_mf_attn_margin = 1 than
-                # subj_attn_at_mb at any background locations.
-                layer_bg_subj_contrast_at_mb        = subj_attn_at_mb + bg_subj_contrast_at_mb_attn_margin - avg_bg_attn_at_mb
-                loss_layer_bg_subj_contrast_at_mb   = masked_mean(layer_bg_subj_contrast_at_mb, 
-                                                                  layer_bg_subj_contrast_at_mb > 0, 
-                                                                  instance_weights=instance_has_fg_mask)
-                # loss_layer_subj_bg_contrast_at_mf is usually 0, 
-                # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
-                # subj_mb_suppress_scale: 0.05.
-                loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress \
-                                                    * attn_align_layer_weight * subj_mb_suppress_scale)
-                # bg_mf_suppress_scale: 0.1. More penalty of bg emb activations on fg areas.
-                loss_layers_bg_mf_suppress.append(loss_layer_bg_mf_suppress \
-                                                  * attn_align_layer_weight * bg_mf_suppress_scale)
-                # subj_bg_emb_contrast_scale: 0.05. Balanced penalty of fg emb activation 
-                # contrast on fg and bg areas.
-                loss_layers_subj_bg_mask_contrast.append((loss_layer_subj_bg_contrast_at_mf + loss_layer_bg_subj_contrast_at_mb) \
-                                                         * attn_align_layer_weight * subj_bg_emb_contrast_scale)
-                #print(f'layer {unet_layer_idx}')
-                #print(f'subj_contrast: {loss_layer_subj_contrast:.4f}, subj_bg_contrast_at_mf: {loss_layer_subj_bg_contrast_at_mf:.4f},')
-                #print(f"bg_contrast:   {loss_layer_bg_contrast:.4f},   subj_bg_contrast_at_mb: {loss_layer_subj_bg_contrast_at_mb:.4f}")
-
-        loss_subj_bg_complem        = sum(loss_layers_subj_bg_complem)
-        loss_subj_mb_suppress       = sum(loss_layers_subj_mb_suppress)
-        loss_bg_mf_suppress         = sum(loss_layers_bg_mf_suppress)
-        loss_subj_bg_mask_contrast  = sum(loss_layers_subj_bg_mask_contrast)
-
-        return loss_subj_bg_complem, loss_subj_mb_suppress, loss_bg_mf_suppress, loss_subj_bg_mask_contrast
 
     # Intuition of comp_fg_bg_preserve_loss: 
     # In distillation iterations, if comp_init_fg_from_training_image, then at fg_mask areas, x_start is initialized with 

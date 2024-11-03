@@ -183,16 +183,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
-    parser.add_argument("--background_string", 
-        type=str, default="y",
-        help="Background placeholder string used in prompts to represent the background in training images.")
     parser.add_argument("--common_placeholder_prefix",
         type=str, default=None,
         help="Prefix of the placeholder string for all types of prompts. Default: None.")
-
-    parser.add_argument("--bg_init_string", 
-        type=str, default="unknown",    # 'unknown' is a wild-card word to match various actual background patterns.
-        help="Words used to initialize background embedding")
 
     # default_cls_delta_string is also used as subj_init_string.
     parser.add_argument("--default_cls_delta_string",
@@ -202,9 +195,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--num_vectors_per_subj_token",
         type=int, default=argparse.SUPPRESS,
         help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
-    parser.add_argument("--num_vectors_per_bg_token",
-        type=int, default=argparse.SUPPRESS,
-        help="Number of vectors for the background token. If > 1, use multiple embeddings to represent the background.")
     parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
                         help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
 
@@ -243,10 +233,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
         help="Prompt delta regularization weight")
-
-    parser.add_argument("--comp_fg_bg_preserve_loss_weight",
-        type=float, default=argparse.SUPPRESS,
-        help="Weight of the composition foreground-background preservation loss")
 
     parser.add_argument("--rand_scale_range",
                         type=float, nargs=2, 
@@ -287,7 +273,7 @@ def nondefault_trainer_args(opt):
 # personalization_config_params = config.model.params.personalization_config.params.
 # dataset: data.datasets['train'].
 def set_placeholders_info(personalization_config_params, opt, dataset):
-    # Only keep the first subject and background placeholder.
+    # Only keep the first subject placeholder.
     personalization_config_params.subject_strings               = dataset.subject_strings[:1]
     personalization_config_params.subj_name_to_cls_delta_string = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
     personalization_config_params.token2num_vectors             = dict()
@@ -295,15 +281,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
         personalization_config_params.token2num_vectors[subject_string] = \
             opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_adaface_encoder_types
 
-    if opt.background_string is not None:
-        config.model.params.enable_background_string = True
-        personalization_config_params.background_strings = dataset.background_strings[:1]
-
-        for background_string in dataset.background_strings[:1]:
-            personalization_config_params.token2num_vectors[background_string] = opt.num_vectors_per_bg_token
-    else:
-        config.model.params.enable_background_string = False
-        
     # subjects_are_faces are always available in dataset.
     personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
     
@@ -672,12 +649,6 @@ if __name__ == "__main__":
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
         config.data.params.train.params.num_vectors_per_subj_token  = \
             opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_adaface_encoder_types
-        config.data.params.train.params.num_vectors_per_bg_token    = opt.num_vectors_per_bg_token
-
-        if opt.background_string is not None:
-            config.data.params.train.params.background_string       = opt.background_string
-            config.data.params.train.params.bg_init_string          = opt.bg_init_string
-
         config.data.params.train.params.rand_scale_range = opt.rand_scale_range
         
         # config.data:
@@ -749,8 +720,6 @@ if __name__ == "__main__":
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):
             config.model.params.prompt_emb_delta_reg_weight     = opt.prompt_emb_delta_reg_weight
 
-        if hasattr(opt, 'comp_fg_bg_preserve_loss_weight'):
-            config.model.params.comp_fg_bg_preserve_loss_weight = opt.comp_fg_bg_preserve_loss_weight
         if hasattr(opt, 'comp_distill_iter_gap'):   
             config.model.params.comp_distill_iter_gap = opt.comp_distill_iter_gap
 

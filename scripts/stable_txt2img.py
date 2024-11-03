@@ -195,16 +195,10 @@ def parse_args():
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
-    parser.add_argument("--background_string", 
-                        type=str, default="y",
-                        help="Background placeholder string used in prompts to denote the background in training images.")
-                    
+
     parser.add_argument("--num_vectors_per_subj_token",
                         type=int, default=20,
                         help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-    parser.add_argument("--num_vectors_per_bg_token",
-                        type=int, default=4,
-                        help="Number of vectors per background token. If > 1, use multiple embeddings to represent a background.")
     parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
                         help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
               
@@ -336,20 +330,17 @@ def main(opt):
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.personalization_config.params.cls_delta_string   = 'person'
         config.model.params.personalization_config.params.subject_strings    = [opt.subject_string]
-        config.model.params.personalization_config.params.background_strings = [opt.background_string]
         config.model.params.personalization_config.params.token2num_vectors  = {} 
 
         # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
         config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
-        # Command line --num_vectors_per_bg_token doesn't override the checkpoint setting.
-        config.model.params.personalization_config.params.token2num_vectors[opt.background_string] = opt.num_vectors_per_bg_token
         config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = False
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
 
         model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
-            model.embedding_manager.load(opt.adaface_ckpt_paths, skip_loading_bg_subj_basis_generator=True)
+            model.embedding_manager.load(opt.adaface_ckpt_paths)
             model.embedding_manager.eval()
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
