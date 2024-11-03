@@ -369,7 +369,7 @@ class CrossAttention(nn.Module):
 
 
 class ImgPrompt2TextPrompt(nn.Module):
-    def __init__(self, placeholder_is_bg, num_id_vecs, dtype=torch.float32, *args, **kwargs):
+    def __init__(self, placeholder_is_bg, num_id_vecs, dtype=torch.float16, *args, **kwargs):
         super().__init__()
         self.N_ID  = num_id_vecs
         # If not placeholder_is_bg, then N_SFX will be updated in initialize_text_components().
@@ -564,6 +564,7 @@ class ImgPrompt2TextPrompt(nn.Module):
 class SubjBasisGenerator(ImgPrompt2TextPrompt):
     def __init__(
         self,
+        dtype=torch.float16,
         # number of cross-attention heads of the bg prompt translator. 
         # Taken as a half of the number of heads 12 of OpenAI clip-vit-large-patch14:
         # https://huggingface.co/openai/clip-vit-large-patch14/blob/main/config.json
@@ -585,8 +586,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
     ):
 
         # If not placeholder_is_bg, then it calls initialize_text_components() in the superclass.
-        super().__init__(placeholder_is_bg=placeholder_is_bg, num_id_vecs=num_id_vecs, max_prompt_length=77, 
-                         num_static_img_suffix_embs=num_static_img_suffix_embs, img_prompt_dim=output_dim)
+        super().__init__(placeholder_is_bg=placeholder_is_bg, num_id_vecs=num_id_vecs, dtype=dtype,
+                         max_prompt_length=77, num_static_img_suffix_embs=num_static_img_suffix_embs, 
+                         img_prompt_dim=output_dim)
 
         self.placeholder_is_bg  = placeholder_is_bg
         self.num_ca_layers      = num_ca_layers
@@ -859,7 +861,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         if not hasattr(self, 'num_nonface_in_id_vecs') and hasattr(self, 'N_ID'):
             self.num_nonface_in_id_vecs = self.N_ID
         if not hasattr(self, 'dtype'):
-            self.dtype = torch.float32
+            self.dtype = torch.float16
         if not hasattr(self, 'num_ca_layers'):
             self.num_ca_layers = 16
             

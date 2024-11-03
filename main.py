@@ -227,7 +227,7 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--gen_ss_from_frozen_subj_basis_generator", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--gen_ss_from_frozen_subj_basis_generator", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to generate the subject-single ada embeddings from the frozen subject basis generator")
     
     parser.add_argument("--prompt_emb_delta_reg_weight",

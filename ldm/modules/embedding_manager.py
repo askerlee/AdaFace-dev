@@ -141,6 +141,8 @@ class EmbeddingManager(nn.Module):
         # as it's not included in the param list returned by .optimized_parameters().
         if self.gen_ss_from_frozen_subj_basis_generator:
             self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
+            self.subj_basis_generator_frozen.half()
+            self.subj_basis_generator_frozen.dtype = torch.float16
         else:
             self.subj_basis_generator_frozen = None
 
