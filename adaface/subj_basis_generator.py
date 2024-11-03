@@ -559,7 +559,6 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
         obj_embedding_dim=384,                      # DINO object feature dimension for objects.
         output_dim=768,                             # CLIP text embedding input dimension.
         placeholder_is_bg: bool = False,            # Whether the placeholder is for the image background tokens.
-        prompt2token_proj_grad_scale: float = 0.4,  # Gradient scale for prompt2token_proj.
         learnable_hidden_state_weights_scheme: str = 'per-layer',   # none, per-layer.
         bg_prompt_translator_has_to_out_proj: bool = False,         # Whether the prompt_trans_layers have a to_out projection.
     ):
@@ -589,11 +588,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             clip_dropout_config     = None #CLIPTextConfig.from_pretrained('openai/clip-vit-large-patch14', attention_dropout=0.05, dropout=0.05)
             self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14',
                                                                            config=clip_dropout_config)
-            self.prompt2token_proj_grad_scale   = prompt2token_proj_grad_scale
-            self.prompt2token_proj_grad_scaler  = gen_gradient_scaler(prompt2token_proj_grad_scale)
-            print(f"Subj prompt2token_proj initialized with grad scale of {prompt2token_proj_grad_scale}.")            
-            # If prompt2token_proj_grad_scale is 0, freeze all params in prompt2token_proj.
-            # Otherwise, only freeze token and positional embeddings of the original CLIPTextModel.
+
+            print(f"Subj prompt2token_proj initialized.")            
+            # Only freeze token and positional embeddings of the original CLIPTextModel.
             self.freeze_prompt2token_proj()
 
             # These multipliers are relative to the original CLIPTextModel.
@@ -686,7 +683,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
 
                 # faceid2img_prompt_embs -> ada_id_embs: image prompt space -> text prompt space.
-                with torch.set_grad_enabled(self.training and self.prompt2token_proj_grad_scale != 0):
+                with torch.set_grad_enabled(self.training):
                     # If list_extra_words is not None, then ada_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                     # and (at most) two extra words in adaface_prompt_embs, without BOS and EOS.
                     # If list_extra_words is None, then ada_id_embs: [BS, 16, 768], the 16 identity tokens in adaface_prompt_embs.
@@ -700,7 +697,6 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                                                      return_emb_types=['core'], 
                                                      hidden_state_layer_weights=hidden_state_layer_weights,
                                                      enable_static_img_suffix_embs=enable_static_img_suffix_embs)
-                ada_id_embs = self.prompt2token_proj_grad_scaler(ada_id_embs)
             elif raw_id_embs is not None:
                 # id_embs: [BS, 384] -> [BS, 18, 768].
                 # obj_proj_in is expected to project the DINO object features to 
@@ -814,12 +810,8 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             return
         # If bg, then prompt2token_proj is set to None. Therefore no need to freeze it.
         # Then we don't have to check whether it's for subj or bg.
-        if self.prompt2token_proj_grad_scale == 0:
-            frozen_components_name = 'all'
-            frozen_param_set = self.prompt2token_proj.named_parameters()
-        else:
-            frozen_components_name = 'token_pos_embeddings'
-            frozen_param_set = self.prompt2token_proj.text_model.embeddings.named_parameters()
+        frozen_components_name = 'token_pos_embeddings'
+        frozen_param_set = self.prompt2token_proj.text_model.embeddings.named_parameters()
 
         if self.prompt2token_proj is not None:
             frozen_param_names = []

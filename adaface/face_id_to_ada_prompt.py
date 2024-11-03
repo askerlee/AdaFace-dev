@@ -109,7 +109,6 @@ class FaceID2AdaPrompt(nn.Module):
                                bg_image_embedding_dim = self.clip_embedding_dim, 
                                output_dim = self.output_dim,
                                placeholder_is_bg = False,
-                               prompt2token_proj_grad_scale = 1,
                                bg_prompt_translator_has_to_out_proj=False)
 
     def load_adaface_ckpt(self, adaface_ckpt_path):
