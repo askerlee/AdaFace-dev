@@ -2047,10 +2047,12 @@ class LatentDiffusion(DDPM):
             # But this loss is very small from the beginning, so no need to scale it up to further penalize it.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            # loss_sc_mc_bg_match is L2 loss, which is very small. So we scale it up by 50x.
-            sc_mc_bg_match_loss_scale = 50
+            # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
+            # which are very small. So we scale them up by 50x.
+            sc_mc_bg_match_loss_scale     = 50
+            sc_recon_ss_fg_min_loss_scale = 50
 
-            loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min
+            loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
             # loss_sc_mc_bg_match: 0.005~0.008 -> 0.25~0.4.
             # loss_comp_subj_bg_attn_suppress: 0.1~0.2 -> 0.002~0.004.
             # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.

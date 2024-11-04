@@ -1828,7 +1828,7 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_map_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
 def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_map_ss_prob, ss_fg_mask, 
-                               ss_q, sc_q, H, W, num_flow_est_iters, objective_name):
+                               ss_q, sc_q, H, W, num_flow_est_iters, objective_name, fg_align_loss_scheme='L2'):
 
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
 
@@ -1872,6 +1872,22 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
                                      first_n_dims_into_instances=2, 
                                      ref_grad_scale=0, aim_to_align=True,
                                      reduction='none')
+
+            if fg_align_loss_scheme == 'cosine':
+                # ref_grad_scale=0: doesn't update through mc_feat (but since mc_feat is generated without
+                # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
+                # will be backpropagated to subj embeddings).
+                token_losses_sc_recon_ss_fg = \
+                    calc_ref_cosine_loss(sc_recon_ss_fg_feat, ss_fg_feat, 
+                                         exponent=2, do_demeans=[False, False],
+                                         first_n_dims_into_instances=2, 
+                                         ref_grad_scale=0, aim_to_align=True,
+                                         reduction='none')
+            elif fg_align_loss_scheme == 'L2':
+                # ss_feat has been detached. So no need to cut off the gradients of ss_feat.
+                token_losses_sc_recon_ss_fg = F.mse_loss(sc_recon_ss_fg_feat, ss_fg_feat, reduction='none')
+            else:
+                breakpoint()
 
             # Here loss_sc_recon_ss_fg (corresponding to loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow) 
             # is only for debugging. 
@@ -2168,9 +2184,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                                            ref_grad_scale=0)
         elif bg_align_loss_scheme == 'L2':
             # sc_feat, mc_feat: [1, 961, 1280]. sc_to_ss_bg_prob: [1, 961, 1].
-            L2_loss_boost = 1
-            loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob) \
-                                      * L2_loss_boost            
+            loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob)
         else:
             breakpoint()
 
