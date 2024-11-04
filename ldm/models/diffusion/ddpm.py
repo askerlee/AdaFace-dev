@@ -2562,6 +2562,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = Prodigy
         elif self.optimizer_type == 'AdEMAMix':
             OptimizerClass = AdEMAMix
+        elif self.optimizer_type == 'AdEMAMix8bit':
+            OptimizerClass = bnb.optim.AdEMAMix8bit
         elif self.optimizer_type == 'AdEMAMixDistributedShampoo':
             OptimizerClass = AdEMAMixDistributedShampoo
         else:
@@ -2593,11 +2595,11 @@ class LatentDiffusion(DDPM):
             if 'adam' in self.optimizer_type.lower():
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                     betas=self.adam_config.betas)
-            # AdEMAMix, AdEMAMixDistributedShampoo.
+            # AdEMAMix, AdEMAMix8bit, AdEMAMixDistributedShampoo.
             if 'AdEMAMix' in self.optimizer_type:
                 # AdEMAMix uses three betas. We use the default 0.9999 for the third beta.
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                     betas=self.adam_config.betas + (0.9999,))
+                                     betas=(0.9, 0.999, 0.9999))
                 
             elif self.optimizer_type == 'OrthogonalNesterov':
                 adam_config = {'betas': self.adam_config.betas, 'weight_decay': self.weight_decay}
