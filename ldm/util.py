@@ -1768,7 +1768,7 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask):
     # sc_map_ss_fg_prob: [1, 961, 961] => [1, 961, N_fg]
     # filter with ss_fg_mask_N, so that we only care about 
     # the recon of the fg areas of the subj single instance.
-    sc_map_ss_fg_prob = sc_map_ss_prob[:, :, ss_fg_mask_N]
+    sc_map_ss_fg_prob = sc_map_ss_prob[:, :, ss_fg_mask_N].detach()
 
     # Weighted sum of the comp tokens (based on their matching probs) to reconstruct the single tokens.
     # sc_recon_ss_fg_feat: [1, 1280, 961] * [1, 961, N_fg] => [1, 1280, N_fg]

@@ -183,9 +183,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
-    parser.add_argument("--common_placeholder_prefix",
-        type=str, default=None,
-        help="Prefix of the placeholder string for all types of prompts. Default: None.")
 
     # default_cls_delta_string is also used as subj_init_string.
     parser.add_argument("--default_cls_delta_string",
@@ -644,8 +641,6 @@ if __name__ == "__main__":
         config.model.params.personalization_config.params.gen_ss_from_frozen_subj_basis_generator = opt.gen_ss_from_frozen_subj_basis_generator
         
         opt.num_adaface_encoder_types = len(opt.enabled_encoders)
-        # common_placeholder_prefix
-        config.data.params.train.params.common_placeholder_prefix   = opt.common_placeholder_prefix
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
         config.data.params.train.params.num_vectors_per_subj_token  = \
             opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_adaface_encoder_types

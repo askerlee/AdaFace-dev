@@ -4,13 +4,10 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset, Sampler
 from torchvision import transforms
-from transformers import CLIPTokenizer
 from torchvision.transforms import InterpolationMode
 from .compositions import sample_compositions
 import random
 import torch
-import regex as re
-from ldm.util import parse_subject_file
 import torch.distributed as dist
 from queue import Queue
 import json
@@ -136,8 +133,6 @@ class PersonalizedBase(Dataset):
                  rand_scale_range=None,
                  set_name="train",
                  subject_string="z",
-                 # placeholder_prefix for all types of prompts. Could be a list of strings, separated by ",".
-                 common_placeholder_prefix=None,   
                  # cls string used to compute the delta loss.
                  # default_cls_delta_string is the same as subj init string.
                  default_cls_delta_string=None,  
@@ -321,12 +316,6 @@ class PersonalizedBase(Dataset):
         subj2attr = {}
         # NOTE: if do_zero_shot, all subjects share the same subject placeholders and embedders.
         self.subject_strings = [ subject_string ] * self.num_subjects
-
-        # placeholder_prefix could be a list of strings, separated by ",".
-        if common_placeholder_prefix is not None:
-            self.common_placeholder_prefixes   = re.split(r"\s*,\s*", common_placeholder_prefix)
-        else:
-            self.common_placeholder_prefixes   = None
 
         self.cls_delta_strings = []
         self.subjects_are_faces = []
@@ -620,11 +609,6 @@ class PersonalizedBase(Dataset):
         if self.num_vectors_per_subj_token > 1:
             subject_string      += ", " * (self.num_vectors_per_subj_token - 1)
             cls_delta_string    += ", " * (self.num_vectors_per_subj_token - 1)
-
-        if self.common_placeholder_prefixes is not None:
-            common_placeholder_prefix = random.choice(self.common_placeholder_prefixes)
-            subject_string          = common_placeholder_prefix + " " + subject_string
-            cls_delta_string        = common_placeholder_prefix + " " + cls_delta_string
 
         if is_animal:
             subj_type = "animal" 
