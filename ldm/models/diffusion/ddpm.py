@@ -2051,7 +2051,7 @@ class LatentDiffusion(DDPM):
             # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
             # which are very small. So we scale them up by 50x.
             sc_mc_bg_match_loss_scale     = 50
-            sc_recon_ss_fg_min_loss_scale = 50
+            sc_recon_ss_fg_min_loss_scale = 10
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
             # loss_sc_mc_bg_match: 0.005~0.008 -> 0.25~0.4.

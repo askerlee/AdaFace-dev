@@ -1993,7 +1993,7 @@ def calc_ss_fg_recon_sc_losses(layer_idx, flow_model, c2s_flow, ss_feat, sc_feat
 # Because there may be spatial shifting between attention and the CA output features, and
 # the delta of outfeat may be too noisy (manifested by the observation that it's 0.8~0.9).
 # bg_align_loss_scheme: 'cosine' or 'L2'.
-#@torch.compile
+@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                recon_feat_objectives={'attn_out': ['orig'], 
                                                       'outfeat':  ['orig']}, 
