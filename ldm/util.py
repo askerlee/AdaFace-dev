@@ -1827,8 +1827,9 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
 
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_map_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
-def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_map_ss_prob, ss_fg_mask, 
-                               ss_q, sc_q, H, W, num_flow_est_iters, objective_name, fg_align_loss_scheme='L2'):
+def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_map_ss_prob, 
+                               ss_fg_mask, ss_q, sc_q, H, W, num_flow_est_iters, objective_name, 
+                               fg_align_loss_scheme='L2'):
 
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
 
@@ -1997,8 +1998,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                recon_feat_objectives={'attn_out': ['orig'], 
                                                       'outfeat':  ['orig']}, 
                                recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
-                               num_flow_est_iters=12, bg_align_loss_scheme='cosine', 
-                               do_feat_attn_pooling=True):
+                               num_flow_est_iters=12, fg_align_loss_scheme='L2', 
+                               bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
@@ -2149,7 +2150,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                 calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
                                            sc_map_ss_prob, ss_fg_mask_2d, 
                                            ss_q, sc_q, H2, W2, num_flow_est_iters, 
-                                           objective_name=objective_name)
+                                           objective_name=objective_name,
+                                           fg_align_loss_scheme=fg_align_loss_scheme)
             
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.

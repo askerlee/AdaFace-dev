@@ -2022,7 +2022,8 @@ class LatentDiffusion(DDPM):
                                                      all_subj_indices_1b, BLOCK_SIZE,
                                                      recon_feat_objectives={'attn_out': ['orig'], 
                                                                             'outfeat':  ['orig']},
-                                                     bg_align_loss_scheme="L2",
+                                                     fg_align_loss_scheme='L2',
+                                                     bg_align_loss_scheme='L2',
                                                      do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
@@ -2329,6 +2330,7 @@ class LatentDiffusion(DDPM):
                                         fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
                                         recon_feat_objectives={'attn_out': ['orig'], 
                                                                'outfeat':  ['orig']},
+                                        fg_align_loss_scheme='L2',
                                         bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or instances_have_fg_mask.sum() == 0:
@@ -2411,6 +2413,7 @@ class LatentDiffusion(DDPM):
                                              ss_fg_mask, ca_feat_h, ca_feat_w, 
                                              recon_feat_objectives=recon_feat_objectives,
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
+                                             fg_align_loss_scheme=fg_align_loss_scheme,
                                              bg_align_loss_scheme=bg_align_loss_scheme,
                                              do_feat_attn_pooling=do_feat_attn_pooling)
 
