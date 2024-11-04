@@ -1899,7 +1899,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
             all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
-        print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg.item():.03f}", end=' ')
+        print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg}", end=' ')
 
     # We have both attn and flow token losses.
     if len(all_token_losses_sc_recon_ss_fg) > 1:
@@ -1912,7 +1912,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
         loss_sc_recon_ss_fg_min = [ loss for loss in losses_sc_recon_ss_fg if loss != 0 ][0]
 
     losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
-    print(f"min : {loss_sc_recon_ss_fg_min.item():.03f}")
+    print(f"min : {loss_sc_recon_ss_fg_min}")
 
     return losses_sc_recon_ss_fg, s2c_flow
 
@@ -1923,6 +1923,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # Because there may be spatial shifting between attention and the CA output features, and
 # the delta of outfeat may be too noisy (manifested by the observation that it's 0.8~0.9).
 # bg_align_loss_scheme: 'cosine' or 'L2'.
+@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                recon_feat_objectives={'attn_out': ['orig'], 
                                                       'outfeat':  ['orig']}, 
@@ -2086,7 +2087,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # Optimizing w.r.t. this loss may lead to degenerate results.
             to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
             if to_discard:
-                print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1].item():.03f}")
+                print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1]}")
             else:
                 losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
                 num_kept_objectives += 1

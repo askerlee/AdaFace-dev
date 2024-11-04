@@ -39,6 +39,7 @@ from safetensors.torch import save_file as safetensors_save_file
 from evaluation.arcface_wrapper import ArcFaceWrapper
 
 import sys
+torch.set_printoptions(precision=3, sci_mode=False)
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -2417,6 +2418,7 @@ class LatentDiffusion(DDPM):
             # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
             # sc_map_ss_fg_prob_below_mean and mc_map_ms_fg_prob_below_mean are used as fg/bg soft masks of comp instances
             # to suppress the activations on background areas.
+            
             loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
             loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
                 = calc_elastic_matching_loss(unet_layer_idx, self.flow_model, 

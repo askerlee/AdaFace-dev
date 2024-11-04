@@ -21,8 +21,8 @@ from collections import OrderedDict
 import copy
 
 # When debugging, make the printed tensors less messy.
-torch.set_printoptions(precision=4, sci_mode=False)
-np.set_printoptions(precision=4, suppress=True)
+torch.set_printoptions(precision=3, sci_mode=False)
+np.set_printoptions(precision=3, suppress=True)
 
 def reg_loss(x, loss_type='l2', selector=None):
     if selector is not None:
