@@ -1840,7 +1840,8 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
     if flow_model is not None or s2c_flow is not None:
         # If s2c_flow is not provided, estimate it using the flow model.
         # Otherwise use the provided flow, and return the estimated s2c_flow.     
-        sc_recon_ss_fg_feat_flow, s2c_flow = \
+        with torch._dynamo.disable():
+            sc_recon_ss_fg_feat_flow, s2c_flow = \
             reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_feat, 
                                                 ss_fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
     else:

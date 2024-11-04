@@ -12,7 +12,7 @@ def create_unet_teacher(teacher_type, device='cpu', **kwargs):
         teacher_type = teacher_type[0]
 
     if teacher_type == "arc2face":
-        return Arc2FaceTeacher(**kwargs)
+        teacher = Arc2FaceTeacher(**kwargs)
     elif teacher_type == "unet_ensemble":
         # unet, extra_unet_dirpaths and unet_weights are passed in kwargs.
         # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
@@ -22,20 +22,24 @@ def create_unet_teacher(teacher_type, device='cpu', **kwargs):
         # However, since the __call__ method of the ddpm unet takes different formats of params, 
         # for simplicity, we still use the diffusers unet.
         # unet_teacher is put on CPU first, then moved to GPU when DDPM is moved to GPU.
-        return UNetEnsembleTeacher(device=device, **kwargs)
+        teacher = UNetEnsembleTeacher(device=device, **kwargs)
     elif teacher_type == "consistentID":
-        return ConsistentIDTeacher(**kwargs)
+        teacher = ConsistentIDTeacher(**kwargs)
     elif teacher_type == "simple_unet":
-        return SimpleUNetTeacher(**kwargs)
+        teacher = SimpleUNetTeacher(**kwargs)
     # Since we've dereferenced the list if it has only one element, 
     # this holding implies the list has more than one element. Therefore it's UNetEnsembleTeacher.
     elif isinstance(teacher_type, (tuple, list, ListConfig)):
         # teacher_type is a list of teacher types. So it's UNetEnsembleTeacher.
-        return UNetEnsembleTeacher(unet_types=teacher_type, device=device, **kwargs)
+        teacher = UNetEnsembleTeacher(unet_types=teacher_type, device=device, **kwargs)
     else:
         raise NotImplementedError(f"Teacher type {teacher_type} not implemented.")
     
-class UNetTeacher(pl.LightningModule):
+    for param in teacher.parameters():
+        param.requires_grad = False
+    return teacher
+
+class UNetTeacher(nn.Module):
     def __init__(self, **kwargs):
         super().__init__()
         self.name = None
@@ -204,12 +208,9 @@ class ConsistentIDTeacher(UNetTeacher):
         # In contrast to Arc2FaceTeacher or UNetEnsembleTeacher, ConsistentIDPipeline is not a torch.nn.Module.
         # We couldn't initialize the ConsistentIDPipeline to CPU first and wait it to be automatically moved to GPU.
         # Instead, we have to initialize it to GPU directly.
-        pipe = create_consistentid_pipeline(base_model_path)
-        # Compatible with the UNetTeacher interface.
-        self.unet = pipe.unet
-        # Release VAE and text_encoder to save memory. UNet is still needed for denoising 
+        # Release VAE and text_encoder to save memory. UNet is needed for denoising 
         # (the unet is implemented in diffusers in fp16, so probably faster than the LDM unet).
-        pipe.release_components(["vae", "text_encoder"])
+        self.unet = create_consistentid_pipeline(base_model_path, unet_only=True)
 
 # We use the default cfg_scale_range=[1.3, 2] for SimpleUNetTeacher.
 # Note p_uses_cfg=0.5 will also be passed in in kwargs.
