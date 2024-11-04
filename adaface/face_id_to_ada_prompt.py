@@ -53,6 +53,7 @@ class FaceID2AdaPrompt(nn.Module):
         self.text_to_image_prompt_encoder   = None
         self.tokenizer                      = None
         self.dtype                          = kwargs.get('dtype', torch.float16)
+        self.img2txt_dtype                  = kwargs.get('img2txt_dtype', torch.float16)
 
         # Load Img2Ada SubjectBasisGenerator.
         self.subject_string                 = kwargs.get('subject_string', 'z')
@@ -100,11 +101,12 @@ class FaceID2AdaPrompt(nn.Module):
             module.load_state_dict(state_dict)
         print(f'{len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules loaded.')
     
-    # init_subj_basis_generator() can only be called after the derived class is initialized,
+    # init_img2txt_projection() can only be called after the derived class is initialized,
     # when self.num_id_vecs0, self.num_static_img_suffix_embs and self.clip_embedding_dim have been set.
-    def init_subj_basis_generator(self):
+    def init_img2txt_projection(self):
         self.subj_basis_generator = \
-            SubjBasisGenerator(num_id_vecs = self.num_id_vecs0,
+            SubjBasisGenerator(dtype=self.img2txt_dtype,
+                               num_id_vecs = self.num_id_vecs0,
                                num_static_img_suffix_embs = self.num_static_img_suffix_embs,
                                bg_image_embedding_dim = self.clip_embedding_dim, 
                                output_dim = self.output_dim,
@@ -641,7 +643,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         self.id_img_prompt_max_length               = 22
         self.clip_embedding_dim                     = 1024
 
-        self.init_subj_basis_generator()
+        self.init_img2txt_projection()
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
@@ -756,7 +758,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.s_scale                        = 1.0
         self.shortcut                       = False
 
-        self.init_subj_basis_generator()
+        self.init_img2txt_projection()
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 

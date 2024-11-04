@@ -133,7 +133,8 @@ class EmbeddingManager(nn.Module):
                                          enabled_encoders=enabled_encoders,
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
-                                         is_training=True)
+                                         is_training=True, img2txt_dtype=torch.float32)
+        
         # gen_ss_from_frozen_subj_basis_generator: generate subject-single ada embeddings from a frozen encoder,
         # to avoid the encoder from slowly degenerating during training.
         self.gen_ss_from_frozen_subj_basis_generator = gen_ss_from_frozen_subj_basis_generator
@@ -141,8 +142,6 @@ class EmbeddingManager(nn.Module):
         # as it's not included in the param list returned by .optimized_parameters().
         if self.gen_ss_from_frozen_subj_basis_generator:
             self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
-            self.subj_basis_generator_frozen.half()
-            self.subj_basis_generator_frozen.dtype = torch.float16
         else:
             self.subj_basis_generator_frozen = None
 
@@ -336,6 +335,9 @@ class EmbeddingManager(nn.Module):
             # So we don't use them in compos_distill_iter or recon_iter.
             enable_static_img_suffix_embs = (self.iter_type == 'unet_distill_iter')
 
+            #for subj_basis_generator in self.id2ada_prompt_encoder.subj_basis_generator:
+            #    subj_basis_generator.prompt2token_proj.to(torch.float16)
+                
             # lens_subj_emb_segments: th length of subject embeddings in each encoder.
             # enable_static_img_suffix_embs=None: use default settings, i.e.,
             # consistentID enables  static_img_suffix_embs, 
@@ -358,6 +360,7 @@ class EmbeddingManager(nn.Module):
             # we fill in random values). The following is just in case.
             if adaface_subj_embs is None:
                 adaface_subj_embs = torch.zeros(REAL_OCCURS_IN_BATCH, self.out_emb_dim, device=embedded_text.device)
+                breakpoint()
 
             # adaface_subj_embs: [BS, K, 768].
             # In a mix prompt batch (either compos_distill_iter or recon_iter with delta loss), 
@@ -393,6 +396,7 @@ class EmbeddingManager(nn.Module):
                                             enable_static_img_suffix_embs=False,
                                             )
                 self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
+
                 # Replace the first adaface_subj_embs with adaface_subj_embs0.
                 # adaface_subj_embs0: [1, 16, 768]. adaface_subj_embs: [2, 16, 768], 
                 # which has been repeated twice from [1, 16, 768] above.

@@ -9,7 +9,7 @@ import torch
 from torch import nn
 from einops import rearrange
 from einops.layers.torch import Rearrange
-from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextConfig
+from transformers import CLIPTokenizer, CLIPTextModel
 
 from torch import einsum
 from adaface.util import gen_gradient_scaler
@@ -369,22 +369,24 @@ class CrossAttention(nn.Module):
 
 
 class ImgPrompt2TextPrompt(nn.Module):
-    def __init__(self, placeholder_is_bg, num_id_vecs, dtype=torch.float16, *args, **kwargs):
+    def __init__(self, placeholder_is_bg, num_id_vecs, num_static_img_suffix_embs, 
+                 max_prompt_length=77, img_prompt_dim=768, dtype=torch.float16):
         super().__init__()
         self.N_ID  = num_id_vecs
         # If not placeholder_is_bg, then N_SFX will be updated in initialize_text_components().
         self.N_SFX = 0
+        self.dtype = dtype
 
         if not placeholder_is_bg:
-            self.initialize_text_components(*args, **kwargs)
+            self.initialize_static_img_suffix_embs(num_static_img_suffix_embs, img_prompt_dim)
+            self.initialize_text_components(max_prompt_length)
 
         # prompt2token_proj: arc2face_models.py CLIPTextModelWrapper instance with **custom weights**.
         # prompt2token_proj is with the same architecture as the original arc2face text encoder, 
         # but retrained to do inverse mapping.
         # To be initialized in the subclass.
         self.prompt2token_proj = None
-        self.dtype = dtype
-
+ 
     def initialize_static_img_suffix_embs(self, num_static_img_suffix_embs, img_prompt_dim=768):
         self.N_SFX = num_static_img_suffix_embs
         # We always take the first num_static_img_suffix_embs embeddings out of static_img_suffix_embs.
@@ -395,11 +397,11 @@ class ImgPrompt2TextPrompt(nn.Module):
                 print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs ({self.N_SFX} required). Skip initialization.")
             elif self.static_img_suffix_embs.shape[1] < self.N_SFX:
                 print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs (< {self.N_SFX} required). Reinitialize.")
-                self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.N_SFX, img_prompt_dim))
+                self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.N_SFX, img_prompt_dim, dtype=self.dtype))
             elif self.N_SFX > 0:
                 # self.static_img_suffix_embs.shape[1] > self.N_SFX > 0.
                 print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs (> {self.N_SFX} required). Truncate.")
-                self.static_img_suffix_embs = nn.Parameter(self.static_img_suffix_embs[:, :self.N_SFX])
+                self.static_img_suffix_embs = nn.Parameter(self.static_img_suffix_embs[:, :self.N_SFX].to(dtype=self.dtype))
             else:
                 # self.static_img_suffix_embs.shape[1] > self.N_SFX == 0.
                 print(f"static_img_suffix_embs had been initialized to be {self.static_img_suffix_embs.shape[1]} vecs (0 required). Erase.")
@@ -410,7 +412,7 @@ class ImgPrompt2TextPrompt(nn.Module):
                 # or it's initialized but has fewer than num_static_img_suffix_embs embeddings (this situation should be very rare, 
                 # so we don't consider to reuse and extend a shorter static_img_suffix_embs).
                 # So we reinitialize it.
-                self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.N_SFX, img_prompt_dim))
+                self.static_img_suffix_embs = nn.Parameter(torch.randn(1, self.N_SFX, img_prompt_dim, dtype=self.dtype))
             else:
                 # If static_img_suffix_embs had been initialized, then it will be set to None, i.e., erased from the SubjBasisGenerator instance.
                 self.static_img_suffix_embs = None
@@ -418,9 +420,7 @@ class ImgPrompt2TextPrompt(nn.Module):
     # Implement a separate initialization function, so that it can be called from SubjBasisGenerator
     # after the SubjBasisGenerator is initialized. This can be used to fix old SubjBasisGenerator 
     # ckpts which were not subclassed from ImgPrompt2TextPrompt.
-    def initialize_text_components(self, max_prompt_length=77, num_id_vecs=16, 
-                                   num_static_img_suffix_embs=0, img_prompt_dim=768):
-        self.initialize_static_img_suffix_embs(num_static_img_suffix_embs, img_prompt_dim)
+    def initialize_text_components(self, max_prompt_length=77):
         self.max_prompt_length = max_prompt_length
         self.tokenizer       = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
         # clip_text_embeddings: CLIPTextEmbeddings instance.
@@ -435,7 +435,7 @@ class ImgPrompt2TextPrompt(nn.Module):
         # pad_embeddings is still on CPU. But should be moved to GPU automatically.
         # Note: detach pad_embeddings from the computation graph, otherwise 
         # deepcopy() in embedding_manager.py:make_frozen_copy_of_subj_basis_generators() will fail.
-        self.pad_embeddings = clip_text_embeddings(pad_tokens)[0].detach()
+        self.pad_embeddings = clip_text_embeddings(pad_tokens)[0].detach().to(self.dtype)
 
     # image prompt space -> text prompt space.
     # return_emb_types: a list of strings, each string is among 
@@ -586,9 +586,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
     ):
 
         # If not placeholder_is_bg, then it calls initialize_text_components() in the superclass.
-        super().__init__(placeholder_is_bg=placeholder_is_bg, num_id_vecs=num_id_vecs, dtype=dtype,
-                         max_prompt_length=77, num_static_img_suffix_embs=num_static_img_suffix_embs, 
-                         img_prompt_dim=output_dim)
+        super().__init__(placeholder_is_bg=placeholder_is_bg, num_id_vecs=num_id_vecs, 
+                         num_static_img_suffix_embs=num_static_img_suffix_embs, 
+                         max_prompt_length=77, img_prompt_dim=output_dim, dtype=dtype)
 
         self.placeholder_is_bg  = placeholder_is_bg
         self.num_ca_layers      = num_ca_layers
@@ -609,9 +609,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             # self.prompt2token_proj: [1, 16, 768] -> [1, 77, 768] (with paddings) or [1, 16, 768] (without paddings).
             # If self.placeholder_is_bg: prompt2token_proj is set to None.
             # Use an attention dropout of 0.2 to increase robustness.
-            clip_dropout_config     = None #CLIPTextConfig.from_pretrained('openai/clip-vit-large-patch14', attention_dropout=0.05, dropout=0.05)
-            self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14',
-                                                                           config=clip_dropout_config)
+            self.prompt2token_proj  = CLIPTextModelWrapper.from_pretrained('openai/clip-vit-large-patch14')
+            self.prompt2token_proj.to(dtype=self.dtype)
+                
             if use_layerwise_proj:
                 # MLPProjWithSkip: MLP with skip connection.
                 # [BS, 4, 768] -> [BS, 16, 4, 768]. Extra 16: 16 layers.
@@ -658,6 +658,9 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                                identity_to_out=identity_to_out,
                                out_has_skip=out_has_skip)
             
+            if self.dtype == torch.float16:
+                self.prompt_translator = self.prompt_translator.half()
+
             self.output_scale = output_dim ** -0.5
             
             ''' 
@@ -713,6 +716,7 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
                 hidden_state_layer_weights = self.hidden_state_layer_weights_grad_scaler(self.hidden_state_layer_weights)
 
                 # faceid2img_prompt_embs -> ada_id_embs: image prompt space -> text prompt space.
+                # inverse_img_prompt_embs() applies self.prompt2token_proj to faceid2img_prompt_embs.
                 # If list_extra_words is not None, then ada_id_embs: [BS, 18, 768], three leading words, the 16 identity tokens 
                 # and (at most) two extra words in adaface_prompt_embs, without BOS and EOS.
                 # If list_extra_words is None, then ada_id_embs: [BS, 16, 768], the 16 identity tokens in adaface_prompt_embs.
@@ -862,6 +866,11 @@ class SubjBasisGenerator(ImgPrompt2TextPrompt):
             self.num_nonface_in_id_vecs = self.N_ID
         if not hasattr(self, 'dtype'):
             self.dtype = torch.float16
+            if not self.placeholder_is_bg:
+                self.prompt2token_proj.to(dtype=self.dtype)
+            else:
+                self.prompt_translator.half()
+                
         if not hasattr(self, 'num_ca_layers'):
             self.num_ca_layers = 16
             

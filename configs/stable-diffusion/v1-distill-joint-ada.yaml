@@ -4,6 +4,7 @@ model:
 
   target: ldm.models.diffusion.ddpm.LatentDiffusion
   params:
+    automatic_optimization: True
     # linear_start/linear_end: params for linear beta schedule.
     beta_schedule:    linear
     linear_start:     0.00085
@@ -60,7 +61,7 @@ model:
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
     # AdEMAMix, AdEMAMixDistributedShampoo, OrthogonalNesterov
-    optimizer_type:           AdEMAMix
+    optimizer_type:           AdamW8bit #AdEMAMix
     grad_clip:                0.5
     adam_config:
       # Half life:
@@ -183,3 +184,6 @@ lightning:
     deterministic: False
     replace_sampler_ddp: False
     accumulate_grad_batches: 2
+    # clip gradients' global norm to <=0.5 using gradient_clip_algorithm='norm' by default    
+    gradient_clip_val: 0.5
+    

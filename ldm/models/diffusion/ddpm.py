@@ -44,6 +44,7 @@ class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
                  unet_config,
+                 automatic_optimization=True,
                  timesteps=1000,
                  beta_schedule="linear",
                  loss_type="l2",
@@ -93,6 +94,8 @@ class DDPM(pl.LightningModule):
                  ):
         
         super().__init__()
+        self.automatic_optimization = automatic_optimization
+
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
         self.parameterization = parameterization
         print(f"{self.__class__.__name__}: Running in {self.parameterization}-prediction mode")
@@ -350,6 +353,14 @@ class DDPM(pl.LightningModule):
         optimizer = self.optimizers()
         lr = optimizer.param_groups[0]['lr']
         self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
+
+        if not self.automatic_optimization:
+            self.manual_backward(loss)
+            self.clip_gradients(optimizer, gradient_clip_val=self.grad_clip, gradient_clip_algorithm="norm")
+
+            if (batch_idx + 1) % 2 == 0:
+                optimizer.step()
+                optimizer.zero_grad()
 
         return loss
 

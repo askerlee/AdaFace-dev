@@ -1,6 +1,6 @@
 import torch
+from torch import nn
 import numpy as np
-import pytorch_lightning as pl
 from diffusers import UNet2DConditionModel
 from adaface.util import UNetEnsemble, create_consistentid_pipeline
 from diffusers import UNet2DConditionModel

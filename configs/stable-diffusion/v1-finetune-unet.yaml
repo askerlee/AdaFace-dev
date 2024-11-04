@@ -164,4 +164,6 @@ lightning:
     deterministic: False
     replace_sampler_ddp: False
     accumulate_grad_batches: 8
-    
+    # clip gradients' global norm to <=0.5 using gradient_clip_algorithm='norm' by default    
+    gradient_clip_val: 0.5
+   
