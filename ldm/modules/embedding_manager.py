@@ -67,7 +67,7 @@ class EmbeddingManager(nn.Module):
             extend_prompt2token_proj_attention_multiplier=1,
             num_static_img_suffix_embs=0,
             p_encoder_dropout=0,
-            gen_ss_from_frozen_subj_basis_generator=True,
+            gen_ss_from_frozen_subj_basis_generator=False,
     ):
         super().__init__()
 
