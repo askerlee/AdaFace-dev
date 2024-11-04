@@ -66,7 +66,10 @@ class ArcFaceWrapper(nn.Module):
         if len(failed_indices2) > 0:
             print(f"Failed to detect faces in images2-{failed_indices2}")
             return torch.tensor(0.0, device=images1.device)
-                                
+
+        if len(embs1) < len(embs2):
+            embs1 = embs1.repeat(len(embs2)//len(embs1), 1)
+            
         arcface_align_loss = F.cosine_embedding_loss(embs1, embs2, torch.ones(embs1.shape[0]).to(embs1.device))
         print(f"Arcface align loss: {arcface_align_loss.item():.2f}")
         return arcface_align_loss
