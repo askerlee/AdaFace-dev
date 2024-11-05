@@ -1799,8 +1799,7 @@ class LatentDiffusion(DDPM):
                                      img_mask, fg_mask, fg_pixel_weight=1,
                                      bg_pixel_weight=bg_pixel_weight)
 
-            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}",
-                  end='')
+            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
             
             losses_unet_distill.append(loss_unet_distill)
 

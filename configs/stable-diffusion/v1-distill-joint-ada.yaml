@@ -62,13 +62,14 @@ model:
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
     # AdEMAMix, AdEMAMix8bit, AdEMAMixDistributedShampoo, OrthogonalNesterov
     optimizer_type:           AdamW8bit #AdEMAMix
+    # This grad_clip is used when manual optimization is enabled.
     grad_clip:                0.5
     adam_config:
       # Half life:
       # 0.995  0.996  0.997  0.998  0.999
       # 138    172    231    346    693
       # We set beta2 to 0.995 for faster update of the estimated variances.
-      betas:                  [0.9,  0.995]  
+      betas:                  [0.9,  0.999]  
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
