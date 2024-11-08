@@ -345,11 +345,9 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
 
         loss, loss_dict = self.shared_step(batch)
-        self.log_dict(loss_dict, prog_bar=True,
-                      logger=True, on_step=True, on_epoch=True)
+        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
-        self.log("global_step", self.global_step,
-                 prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        self.log("global_step", self.global_step, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
         optimizer = self.optimizers()
         lr = optimizer.param_groups[0]['lr']
@@ -2741,6 +2739,7 @@ class LatentDiffusion(DDPM):
                 safetensors_save_file(state_dict2, unet_save_path)
                 print(f"Saved {unet_save_path}")
 
+# The old LDM diffusion wrapper.
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config):
         super().__init__()
@@ -2753,3 +2752,10 @@ class DiffusionWrapper(pl.LightningModule):
         out = self.diffusion_model(x, t, context=c_prompt_emb, context_in=c_in, extra_info=extra_info)
 
         return out
+
+# The new diffusers diffusion wrapper.
+class DiffusersDiffusionWrapper(pl.LightningModule):
+    def __init__(self, diffusers_model_config):
+        super().__init__()
+        self.diffusers_model = instantiate_from_config(diffusers_model_config)
+        

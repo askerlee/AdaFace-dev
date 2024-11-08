@@ -120,6 +120,7 @@ model:
         num_res_blocks: 2
         channel_mult: [ 1, 2, 4, 4 ]
         num_heads: 8
+        # The spatial transformer is just a transformer applied on 4D (BCHW) inputs.
         use_spatial_transformer: True
         transformer_depth: 1
         context_dim: 768
