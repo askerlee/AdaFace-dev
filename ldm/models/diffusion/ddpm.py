@@ -2119,7 +2119,7 @@ class LatentDiffusion(DDPM):
         # feature map distillation only uses delta loss on the features to reduce the 
         # class polluting the subject features.
         # Feature map spatial sizes are all 64*64.
-        feat_distill_layer_weights = { 22: 1, 23: 1, 24: 1, 
+        feat_distill_layer_weights = { 23: 1, 24: 1, 
                                      }
 
         # attn norm distillation is applied to almost all conditioning layers.
@@ -2242,7 +2242,7 @@ class LatentDiffusion(DDPM):
         # Discard the first few bottom layers from alignment.
         # attn_align_layer_weights: relative weight of each layer. 
         # Feature map spatial sizes are all 64*64.
-        attn_align_layer_weights = { 22: 1, 23: 1, 24: 1, 
+        attn_align_layer_weights = { 23: 1, 24: 1, 
                                    }
                 
         # Normalize the weights above so that each set sum to 1.
@@ -2350,7 +2350,9 @@ class LatentDiffusion(DDPM):
             return 0, 0, 0, 0, 0, 0
 
         # Feature map spatial sizes are all 64*64.
-        elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
+        # Remove layer 22, as the losses at this layer are often too large 
+        # and are discarded at a high percentage.
+        elastic_matching_layer_weights = { 23: 1, 24: 1, 
                                          }
         
         # Normalize the weights above so that each set sum to 1.
