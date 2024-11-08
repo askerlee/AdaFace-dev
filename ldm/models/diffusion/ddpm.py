@@ -1867,12 +1867,14 @@ class LatentDiffusion(DDPM):
         # set to None in extra_info).
         extra_info['img_mask']  = None
 
-        # num_init_prep_denoising_steps iterates from 1 to 5.
-        # Note 5 is co-prime with comp_distill_iter_gap == 2, 3 or 4.
-        # Therefore, this will be a uniform distribution of 1 to 5.
-        # Otherwise say, if num_denoising_steps == self.global_step % 6, then since for comp_distill_iterations,
-        # the global_step is always a multiple of 3, then num_denoising_steps will always be 0 or 3, which is not desired.
-        num_init_prep_denoising_steps = self.global_step % 5 + 1
+        # num_init_prep_denoising_steps iterates from 2 to 5.
+        # NOTE: self.global_step // self.comp_distill_iter_gap gets the actual number of 
+        # comp distillation iterations. So we don't need to consider whether 
+        # the divisor 3 is co-prime with comp_distill_iter_gap or not.
+        # 3 is co-prime with comp_distill_iter_gap == 2.
+        # Consequently, num_init_prep_denoising_steps will always follow 
+        # a uniform distribution of [2, 3, 4, 5].
+        num_init_prep_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % 4 + 2
 
         # Always True
         if num_init_prep_denoising_steps > 0:
