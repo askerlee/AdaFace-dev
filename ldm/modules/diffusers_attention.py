@@ -3,15 +3,37 @@ import torch.nn.functional as F
 from typing import Callable, List, Optional, Tuple, Union
 from diffusers.models.attention_processor import Attention
 from diffusers.utils import deprecate
+from einops import rearrange
+import math
 
-class AttnProcessor2_0:
+# Revised from pytorch/tests/test_transformers.py: sdp_ref().
+# This may be slower than F.scaled_dot_product_attention, 
+# but we need attn_score and attn.
+def sdp_slow(q, k, v, attn_mask=None, dropout_p=0.0):
+    E = q.size(-1)
+    q = q / math.sqrt(E)
+    # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)
+    if attn_mask is not None:
+        attn = torch.baddbmm(attn_mask, q, k.transpose(-2, -1))
+    else:
+        attn = torch.bmm(q, k.transpose(-2, -1))
+
+    attn_score = attn
+    attn = torch.nn.functional.softmax(attn, dim=-1)
+    if dropout_p > 0.0:
+        attn = torch.nn.functional.dropout(attn, p=dropout_p)
+    # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
+    output = torch.bmm(attn, v)
+    return output, attn_score, attn
+
+class AttnProcessor_Capture:
     r"""
     Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
     """
 
     def __init__(self):
-        if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("AttnProcessor2_0 requires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
+        self.save_attn_vars     = False
+        self.cached_activations = None
 
     def __call__(
         self,
@@ -75,9 +97,14 @@ class AttnProcessor2_0:
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
         # TODO: add support for attn.scale when we move to Torch 2.1
+        '''
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
+        '''
+
+        query, key, value = map(lambda t: rearrange(t, 'b h n d -> (b h) n d').contiguous(), (query, key, value))
+        hidden_states, attn_score, attn_prob  = sdp_slow(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
@@ -94,6 +121,21 @@ class AttnProcessor2_0:
             hidden_states = hidden_states + residual
 
         hidden_states = hidden_states / attn.rescale_output_factor
+
+        if self.save_attn_vars:
+            self.cached_activations = {}
+            # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
+            # So sqrt(self.scale) will scale the product of two qs by self.scale.
+            # ANCHOR[id=attention_caching]
+            self.cached_activations['q']         = rearrange(query,   '(b h) n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(self.scale)
+            # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
+            # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
+            #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
+            #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
+            self.cached_activations['attn']      = rearrange(attn_prob, '(b h) i j -> b h i j', h=attn.heads).contiguous()
+            self.cached_activations['attnscore'] = rearrange(attn_score,  '(b h) i j -> b h i j', h=attn.heads).contiguous()
+            # attn_out: [b, n, h * d] -> [b, h * d, n]
+            self.cached_activations['attn_out']  = hidden_states.permute(0, 2, 1).contiguous()
 
         return hidden_states
 

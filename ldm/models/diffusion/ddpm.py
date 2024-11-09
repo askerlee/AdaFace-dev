@@ -23,6 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
+from ldm.modules.diffusers_attention import AttnProcessor_Capture
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -92,6 +93,8 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=False,
                  use_arcface_loss=True,
                  arcface_align_loss_weight=4e-3,
+                 use_ldm_unet=False,
+                 diffuser_unet_path='models/ensemble/sd15-unet',
                  ):
         
         super().__init__()
@@ -151,7 +154,11 @@ class DDPM(pl.LightningModule):
 
         self.init_iteration_flags()
 
-        self.model = DiffusionWrapper(unet_config)
+        self.use_ldm_unet = use_ldm_unet
+        if self.use_ldm_unet:
+            self.model = DiffusionWrapper(unet_config)
+        else:
+            self.model = DiffusersUNetWrapper(unet_dirpath=diffuser_unet_path, torch_dtype=torch.float16)
 
         count_params(self.model, verbose=True)
 
@@ -386,10 +393,15 @@ class LatentDiffusion(DDPM):
         # {'target': 'ldm.modules.encoders.modules.FrozenCLIPEmbedder'}
         # Not sure why it's compared with a string
 
-        # base_model_path and ignore_keys are popped from kwargs, so that they won't be passed to the base class DDPM.
+        # use_ldm_unet is gotten from kwargs, so it will still be passed to the base class DDPM.
+        use_ldm_unet    = kwargs.get("use_ldm_unet", False)
+
+        # base_model_path and ignore_keys are popped from kwargs, so they won't be passed to the base class DDPM.
         base_model_path = kwargs.pop("base_model_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
+
         super().__init__(*args, **kwargs)
+
         self.concat_mode = concat_mode
         self.cond_stage_key = cond_stage_key
         self.embedding_manager_trainable = embedding_manager_trainable
@@ -412,7 +424,7 @@ class LatentDiffusion(DDPM):
         self.restarted_from_ckpt = (base_model_path is not None)
         # base_model_path is popped from kwargs, so that it won't be passed to the base class DDPM.
         # As a result, the model weight is only loaded here, not in DDPM.
-        if base_model_path is not None:
+        if use_ldm_unet and (base_model_path is not None):
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
@@ -2739,7 +2751,7 @@ class LatentDiffusion(DDPM):
                 safetensors_save_file(state_dict2, unet_save_path)
                 print(f"Saved {unet_save_path}")
 
-# The old LDM diffusion wrapper.
+# The old LDM UNet wrapper.
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config):
         super().__init__()
@@ -2753,9 +2765,29 @@ class DiffusionWrapper(pl.LightningModule):
 
         return out
 
-# The new diffusers diffusion wrapper.
-class DiffusersDiffusionWrapper(pl.LightningModule):
-    def __init__(self, diffusers_model_config):
+# The diffusers UNet wrapper.
+class DiffusersUNetWrapper(pl.LightningModule):
+    def __init__(self, unet_dirpath, torch_dtype=torch.float16):
         super().__init__()
-        self.diffusers_model = instantiate_from_config(diffusers_model_config)
+        # diffusion_model is actually a UNet. Use this variable name to be 
+        # consistent with DiffusionWrapper.
+        self.diffusion_model = UNet2DConditionModel.from_pretrained(
+                        unet_dirpath, torch_dtype=torch_dtype
+                    )
+        self.diffusion_model.set_attn_processor(AttnProcessor_Capture())
+        self.diffusion_model.debug_attn = False
+        self.to(torch_dtype)
+
+    def forward(self, x, t, cond_context):
+        c_prompt_emb, c_in, extra_info = cond_context
+        x            = x.to(self.dtype)
+        c_prompt_emb = c_prompt_emb.to(self.dtype)
+
+        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
+
+        for key, value in self.diffusion_model.attn_processors.items():
+            breakpoint()
+            print(key, value)
+
+        return out
         

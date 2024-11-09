@@ -164,7 +164,6 @@ class CrossAttention(nn.Module):
         )
         self.save_attn_vars     = False
         self.cached_activations = None
-        self.infeat_size            = None
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -179,26 +178,26 @@ class CrossAttention(nn.Module):
         v = self.to_v(context)
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> (b h) n d', h=h).contiguous(), (q, k, v))
-        sim = einsum('b i d, b j d -> b i j', q, k) * self.scale
+        attn_score = einsum('b i d, b j d -> b i j', q, k) * self.scale
 
-        # Otherwise, the whole column of 77 sim values will all be max_neg_value, 
+        # Otherwise, the whole column of 77 attn_score values will all be max_neg_value, 
         # which lead to nan after softmax.
         if exists(mask):
             # mask: [2, 1, 64, 64] -> [2, 4096]
             mask = rearrange(mask, 'b ... -> b (...)').contiguous()
-            max_neg_value = -torch.finfo(sim.dtype).max
+            max_neg_value = -torch.finfo(attn_score.dtype).max
             # mask: [2, 4096] -> [16, 1, 4096]
             mask = repeat(mask.bool(), 'b j -> (b h) () j', h=h)
-            # sim: [16, 4096, 4096]. mask will be broadcasted to [16, 4096, 4096].
-            # So some rows in dim 1 (e.g. [0, :, 4095]) of sim will be masked out (all elements in [0, :, 4095] is -inf).
+            # attn_score: [16, 4096, 4096]. mask will be broadcasted to [16, 4096, 4096].
+            # So some rows in dim 1 (e.g. [0, :, 4095]) of attn_score will be masked out (all elements in [0, :, 4095] is -inf).
             # But not all elements in [0, 4095, :] is -inf. Since the softmax is done along dim 2, this is fine.
-            sim.masked_fill_(~mask, max_neg_value)
+            attn_score.masked_fill_(~mask, max_neg_value)
 
-        # sim: [64, 4096, 77]. 64: bs * h.
+        # attn_score: [64, 4096, 77]. 64: bs * h.
         # attention, what we cannot get enough of
         # NOTE: the normalization is done across prompt tokens, not across pixels.
         # So for each pixel, the sum of attention scores across prompt tokens is 1.
-        attn = sim.softmax(dim=-1)
+        attn = attn_score.softmax(dim=-1)
         # v: [64, 77, 40]. 40: dim of each head. out: [64, 4096, 40].
         out = einsum('b i j, b j d -> b i d', attn, v)
         # [64, 4096, 40] -> [8, 4096, 320].
@@ -215,8 +214,8 @@ class CrossAttention(nn.Module):
             # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
             #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
             #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
-            self.cached_activations['attn']      = rearrange(attn, '(b h) i j -> b h i j', h=h).contiguous()
-            self.cached_activations['attnscore'] = rearrange(sim,  '(b h) i j -> b h i j', h=h).contiguous()
+            self.cached_activations['attn']      = rearrange(attn,        '(b h) i j -> b h i j', h=h).contiguous()
+            self.cached_activations['attnscore'] = rearrange(attn_score,  '(b h) i j -> b h i j', h=h).contiguous()
             # attn_out: [b, n, h * d] -> [b, h * d, n]
             self.cached_activations['attn_out']  = out.permute(0, 2, 1).contiguous()
 
