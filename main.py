@@ -224,8 +224,10 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--gen_ss_from_frozen_subj_basis_generator", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to generate the subject-single ada embeddings from the frozen subject basis generator")
+    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to use the LDM UNet implementation as the base UNet")
+    parser.add_argument("--diffusers_unet_path", type=str, default='models/ensemble/sd15-unet',
+                        help="Path to the Diffusers UNet model")
     
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -246,6 +248,9 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--use_face_flow_for_sc_matching_loss", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use face flow for the single-composition matching loss")
+    parser.add_argument("--gen_ss_from_frozen_subj_basis_generator", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to generate the subject-single ada embeddings from the frozen subject basis generator")
+            
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
                              "(The last element is the weight of the last layer, ...)")
@@ -710,6 +715,8 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.use_fp_trick = opt.use_fp_trick
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
+        config.model.params.use_ldm_unet = opt.use_ldm_unet
+        config.model.params.diffusers_unet_path = opt.diffusers_unet_path
         
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):

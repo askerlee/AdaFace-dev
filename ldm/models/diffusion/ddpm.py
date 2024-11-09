@@ -83,7 +83,6 @@ class DDPM(pl.LightningModule):
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  max_num_comp_distill_init_prep_denoising_steps=6,
                  p_unet_distill_uses_comp_prompt=0.1,
-                 id2img_prompt_encoder_lr_ratio=0.001,
                  extra_unet_dirpaths=None,
                  unet_weights=None,
                  p_gen_rand_id_for_id2img=0.4,
@@ -93,8 +92,8 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=False,
                  use_arcface_loss=True,
                  arcface_align_loss_weight=4e-3,
-                 use_ldm_unet=False,
-                 diffuser_unet_path='models/ensemble/sd15-unet',
+                 use_ldm_unet=True,
+                 diffusers_unet_path='models/ensemble/sd15-unet',
                  ):
         
         super().__init__()
@@ -136,7 +135,7 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = p_unet_distill_uses_comp_prompt
         else:
             self.p_unet_distill_uses_comp_prompt = 0
-        self.id2img_prompt_encoder_lr_ratio         = id2img_prompt_encoder_lr_ratio
+            
         self.extra_unet_dirpaths                    = extra_unet_dirpaths
         self.unet_weights                           = unet_weights
         
@@ -158,7 +157,7 @@ class DDPM(pl.LightningModule):
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
         else:
-            self.model = DiffusersUNetWrapper(unet_dirpath=diffuser_unet_path, torch_dtype=torch.float16)
+            self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, torch_dtype=torch.float16)
 
         count_params(self.model, verbose=True)
 
@@ -394,7 +393,7 @@ class LatentDiffusion(DDPM):
         # Not sure why it's compared with a string
 
         # use_ldm_unet is gotten from kwargs, so it will still be passed to the base class DDPM.
-        use_ldm_unet    = kwargs.get("use_ldm_unet", False)
+        use_ldm_unet    = kwargs.get("use_ldm_unet", True)
 
         # base_model_path and ignore_keys are popped from kwargs, so they won't be passed to the base class DDPM.
         base_model_path = kwargs.pop("base_model_path", None)
@@ -687,7 +686,7 @@ class LatentDiffusion(DDPM):
                         'placeholder2indices':           copy.copy(self.embedding_manager.placeholder2indices),
                         'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
-                        'capture_ca_layers_activations':  False,
+                        'capture_ca_activations':  False,
                      }
 
         c = (prompt_embeddings, cond_in, extra_info)
@@ -1308,7 +1307,7 @@ class LatentDiffusion(DDPM):
                 model_output_2 = self.apply_model(x_noisy_2, t_2, (c_prompt_emb_2, c_in_2, extra_info_2))
 
             model_output = torch.cat([model_output_1, model_output_2], dim=0)
-            if extra_info['capture_ca_layers_activations']:
+            if extra_info['capture_ca_activations']:
                 # Concatenate the two attention weights.
                 for layer_idx in extra_info_1['ca_layers_activations'].keys():
                     for k in extra_info_1['ca_layers_activations'][layer_idx].keys():
@@ -1324,7 +1323,7 @@ class LatentDiffusion(DDPM):
             if uncond_emb is None:
                 # Use self.uncond_context as the unconditional context.
                 # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-                # By default, 'capture_ca_layers_activations' = False in a generated text context, 
+                # By default, 'capture_ca_activations' = False in a generated text context, 
                 # including uncond_context. So we don't need to set it in self.uncond_context explicitly.                
                 uncond_emb  = self.uncond_context[0].repeat(x_noisy.shape[0], 1, 1)
 
@@ -1487,7 +1486,7 @@ class LatentDiffusion(DDPM):
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
             extra_info['img_mask']  = img_mask
-            extra_info['capture_ca_layers_activations'] = True
+            extra_info['capture_ca_activations'] = True
 
             # DON'T apply neg_id_emb for recon iterations. 
             # Don't do CFG either. So uncond_emb is None.
@@ -1504,7 +1503,7 @@ class LatentDiffusion(DDPM):
                                     # using the positive prompt.
                                     cfg_scale=-1)
 
-            extra_info['capture_ca_layers_activations'] = False
+            extra_info['capture_ca_activations'] = False
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -1985,7 +1984,7 @@ class LatentDiffusion(DDPM):
         # Ensure the two types of instances (single, comp) use different noise.
         # But subj and cls instances use the same noise.
         noise       = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
-        extra_info['capture_ca_layers_activations'] = True
+        extra_info['capture_ca_activations'] = True
 
         # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
         t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
@@ -2003,7 +2002,7 @@ class LatentDiffusion(DDPM):
                                 # the output images more clear, but the clearer images are not used in the loss computation.
                                 do_pixel_recon=True, cfg_scale=5)
 
-        extra_info['capture_ca_layers_activations'] = False
+        extra_info['capture_ca_activations'] = False
         x_start_final = x_start
         # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
@@ -2772,22 +2771,40 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
         self.diffusion_model = UNet2DConditionModel.from_pretrained(
-                        unet_dirpath, torch_dtype=torch_dtype
-                    )
-        self.diffusion_model.set_attn_processor(AttnProcessor_Capture())
+                                unet_dirpath, torch_dtype=torch_dtype
+                               )
+        self.attnprocessor_capture = AttnProcessor_Capture()
+        self.diffusion_model.set_attn_processor(self.attnprocessor_capture)
+        # Conform with main.py() of setting debug_attn.
         self.diffusion_model.debug_attn = False
         self.to(torch_dtype)
 
+        self.all_ca_layer_indices = [1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+        # l2ca: short for layer_idx2ca_layer_idx.
+        self.l2ca = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
+                      17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+        
     def forward(self, x, t, cond_context):
         c_prompt_emb, c_in, extra_info = cond_context
         x            = x.to(self.dtype)
         c_prompt_emb = c_prompt_emb.to(self.dtype)
 
-        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
+        self.attnprocessor_capture.capture_ca_activations = extra_info['capture_ca_activations']
 
-        for key, value in self.diffusion_model.attn_processors.items():
-            breakpoint()
-            print(key, value)
+        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
+        cached_activations = self.attnprocessor_capture.cached_activations
+        self.attnprocessor_capture.clear_attn_cache()
+
+        # Only capture the activations of the last 3 CA layers.
+        captured_layer_indices = [22, 23, 24] # => 13, 14, 15
+        captured_activations = {}
+        for k in cached_activations:
+            captured_activations[k] = {}
+            for layer_idx in captured_layer_indices:
+                ca_layer_idx = self.l2ca[layer_idx]
+                captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx]
+
+        extra_info['ca_layers_activations'] = captured_activations
 
         return out
         

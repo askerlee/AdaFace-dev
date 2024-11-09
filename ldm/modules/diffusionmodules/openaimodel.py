@@ -506,7 +506,7 @@ class UNetModel(nn.Module):
         self.debug_attn = False
 
         self.backup_vars = { 
-                            'save_attn_vars': False,
+                            'save_cross_attn_vars': False,
                            }
 
         time_embed_dim = model_channels * 4
@@ -841,7 +841,7 @@ class UNetModel(nn.Module):
         t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
         emb = self.time_embed(t_emb)
 
-        capture_ca_layers_activations   = extra_info.get('capture_ca_layers_activations', False)  if extra_info is not None else False
+        capture_ca_activations   = extra_info.get('capture_ca_activations', False)  if extra_info is not None else False
         img_mask                        = extra_info.get('img_mask', None)               if extra_info is not None else None
         debug_attn                      = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
 
@@ -849,10 +849,10 @@ class UNetModel(nn.Module):
         # None here means ca_flags have been applied to all layers.
         ca_flags_stack = []
         
-        if capture_ca_layers_activations or debug_attn:
+        if capture_ca_activations or debug_attn:
             # Save attention matrices and output features for distillation.
             captured_layer_indices = [22, 23, 24]
-            capture_ca_old_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_attn_vars': True}, 
+            capture_ca_old_flags, _ = self.set_cross_attn_flags(ca_flag_dict = {'save_cross_attn_vars': True}, 
                                                                 ca_layer_indices = captured_layer_indices)
             ca_flags_stack.append([ capture_ca_old_flags, captured_layer_indices, None, None ])
         else:

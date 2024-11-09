@@ -34,8 +34,6 @@ model:
     # at the other 50%, we use the original image as the target (do_normal_recon).
     unet_distill_iter_gap:            2
     unet_distill_weight:              4
-    # The ratio of the id2img_prompt_encoder's lr to the main model's lr. Only effective when trainable.
-    id2img_prompt_encoder_lr_ratio:   0.001
     # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
     # of the IDs (belonging to two face detectors) are not consistent. However, a small proportion
     # of random face IDs may help force the arc2face Ada focuses on reconstructing the arc2face random ID,

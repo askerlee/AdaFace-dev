@@ -26,14 +26,20 @@ def sdp_slow(q, k, v, attn_mask=None, dropout_p=0.0):
     output = torch.bmm(attn, v)
     return output, attn_score, attn
 
+# All layers share the same attention processor instance.
 class AttnProcessor_Capture:
     r"""
-    Processor for implementing scaled dot-product attention (enabled by default if you're using PyTorch 2.0).
+    Revised from AttnProcessor2_0
     """
 
-    def __init__(self):
-        self.save_attn_vars     = False
-        self.cached_activations = None
+    def __init__(self, capture_ca_activations: bool = False):
+        self.capture_ca_activations = capture_ca_activations
+        self.clear_attn_cache()
+
+    def clear_attn_cache(self):
+        self.cached_activations = {}
+        for k in ['q', 'attn', 'attnscore', 'attn_out']:
+            self.cached_activations[k] = []
 
     def __call__(
         self,
@@ -73,7 +79,10 @@ class AttnProcessor_Capture:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
         query = attn.to_q(hidden_states)
+        scale = 1 / math.sqrt(query.size(-1))
 
+        is_cross_attn = (encoder_hidden_states is not None)
+        
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:
@@ -122,20 +131,19 @@ class AttnProcessor_Capture:
 
         hidden_states = hidden_states / attn.rescale_output_factor
 
-        if self.save_attn_vars:
-            self.cached_activations = {}
+        if is_cross_attn and self.capture_ca_activations:
             # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
-            # So sqrt(self.scale) will scale the product of two qs by self.scale.
+            # So sqrt(scale) will scale the product of two qs by scale.
             # ANCHOR[id=attention_caching]
-            self.cached_activations['q']         = rearrange(query,   '(b h) n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(self.scale)
-            # cached k, v will be used in ddpm.py:calc_subj_comp_ortho_loss(), in which two ks will multiply each other.
-            # So sqrt(self.scale) will scale the product of two ks/vs by self.scale.
-            #self.cached_activations['k'] = rearrange(k,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
-            #self.cached_activations['v'] = rearrange(v,    '(b h) n d -> b h n d', h=h).contiguous() * math.sqrt(self.scale)
-            self.cached_activations['attn']      = rearrange(attn_prob, '(b h) i j -> b h i j', h=attn.heads).contiguous()
-            self.cached_activations['attnscore'] = rearrange(attn_score,  '(b h) i j -> b h i j', h=attn.heads).contiguous()
+            self.cached_activations['q'].append(
+                rearrange(query,   '(b h) n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale) )
+            self.cached_activations['attn'].append(
+                rearrange(attn_prob, '(b h) i j -> b h i j', h=attn.heads).contiguous() )
+            self.cached_activations['attnscore'].append(
+                rearrange(attn_score, '(b h) i j -> b h i j', h=attn.heads).contiguous() )
             # attn_out: [b, n, h * d] -> [b, h * d, n]
-            self.cached_activations['attn_out']  = hidden_states.permute(0, 2, 1).contiguous()
+            self.cached_activations['attn_out'].append(
+                hidden_states.permute(0, 2, 1).contiguous() )
 
         return hidden_states
 

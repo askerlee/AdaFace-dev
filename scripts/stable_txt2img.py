@@ -352,7 +352,7 @@ def main(opt):
 
         # subj_id_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
         face_image_count, faceid_embeds, subj_id_prompt_embs, neg_id_prompt_embs \
-            = model.embedding_manager.id2img_prompt_encoder.get_img_prompt_embs( \
+            = model.embedding_manager.id2ada_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=None,
                 pre_clip_features=None,
                 image_paths=ref_image_paths,

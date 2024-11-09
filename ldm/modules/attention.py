@@ -162,7 +162,7 @@ class CrossAttention(nn.Module):
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
-        self.save_attn_vars     = False
+        self.save_cross_attn_vars     = False
         self.cached_activations = None
         
     def forward(self, x, context=None, mask=None):
@@ -204,7 +204,7 @@ class CrossAttention(nn.Module):
         out = rearrange(out, '(b h) n d -> b n (h d)', h=h).contiguous()
         out = self.to_out(out)
 
-        if self.save_attn_vars:
+        if self.save_cross_attn_vars:
             self.cached_activations = {}
             # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
             # So sqrt(self.scale) will scale the product of two qs by self.scale.
