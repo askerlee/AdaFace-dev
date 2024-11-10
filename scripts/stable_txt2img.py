@@ -576,6 +576,8 @@ def main(opt):
                             prompt2 = prompt2 + " " + placeholder_tokens_str
                             prompts2.append(prompt2)
                         prompts = prompts2
+                        print("Prompt:", prompts[0])
+
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
