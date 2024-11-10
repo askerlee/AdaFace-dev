@@ -139,7 +139,7 @@ class DDPM(pl.LightningModule):
         self.extra_unet_dirpaths                    = extra_unet_dirpaths
         self.unet_weights                           = unet_weights
         
-        self.p_gen_rand_id_for_id2img                   = p_gen_rand_id_for_id2img
+        self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
 
@@ -441,8 +441,9 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
-            # Use RealisticVision unet to prepare x_start for compositional distillation, since it's more compositional.
-            unet = UNet2DConditionModel.from_pretrained('models/ensemble/rv4-unet', torch_dtype=torch.float16)
+            # Use SAR UNet to prepare x_start for compositional distillation, since 
+            # it's more compositional than SD15 UNet and closer to SD15 UNet than RealisticVision4 UNet.
+            unet = UNet2DConditionModel.from_pretrained('models/ensemble/sar-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
