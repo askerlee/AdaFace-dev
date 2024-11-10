@@ -351,7 +351,7 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
 
         loss, loss_dict = self.shared_step(batch)
-        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=False)
+        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
 
         self.log("global_step", self.global_step, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
