@@ -21,8 +21,8 @@ from collections import OrderedDict
 import copy
 
 # When debugging, make the printed tensors less messy.
-torch.set_printoptions(precision=3, sci_mode=False)
-np.set_printoptions(precision=3, suppress=True)
+torch.set_printoptions(precision=4, sci_mode=False)
+np.set_printoptions(precision=4, suppress=True)
 
 def reg_loss(x, loss_type='l2', selector=None):
     if selector is not None:
@@ -43,10 +43,6 @@ class EmbeddingManager(nn.Module):
             text_embedder,   
             subject_strings,
             subj_name_to_cls_delta_string=None,
-            # token2num_vectors: how many vectors in each layer are allocated to model 
-            # the subject (represented as the subject token). token2num_vectors is a dict.
-            token2num_vectors={},
-            loading_token2num_vectors_from_ckpt=False,
             out_emb_dim=768,
             num_unet_ca_layers=16,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
@@ -68,6 +64,7 @@ class EmbeddingManager(nn.Module):
             num_static_img_suffix_embs=0,
             p_encoder_dropout=0,
             gen_ss_from_frozen_subj_basis_generator=False,
+            multi_token_filler=','
     ):
         super().__init__()
 
@@ -81,6 +78,7 @@ class EmbeddingManager(nn.Module):
 
         self.subject_strings = subject_strings
 
+        # subject_string_dict is used in ddpm.py.
         self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.placeholder_strings    = list(subject_strings)
 
@@ -105,8 +103,7 @@ class EmbeddingManager(nn.Module):
         # the concept through multiple learned pseudo-words. 
         # This setting was proposed in the TI paper,
         # and AdaFace also supports it for more expressive modeling.
-        self.loading_token2num_vectors_from_ckpt = loading_token2num_vectors_from_ckpt
-        self.set_num_vectors_per_subj_token(token2num_vectors)
+        self.token2num_vectors = {}
         self.out_emb_dim = out_emb_dim
         self.p_encoder_dropout = p_encoder_dropout
 
@@ -118,8 +115,6 @@ class EmbeddingManager(nn.Module):
         self.subj_idx_to_cls_delta_tokens   = {}
         self.subj_idx_to_cls_delta_token_weights  = {}
         self.placeholder_token_to_idx       = {}
-
-        self.number_vectors_each_subj = self.token2num_vectors.get(self.subject_strings[0])
 
         self.cls_delta_string  = cls_delta_string
         self.prompt2token_proj_ext_attention_perturb_ratio = prompt2token_proj_ext_attention_perturb_ratio
@@ -175,6 +170,16 @@ class EmbeddingManager(nn.Module):
 
             self.string_to_subj_basis_generator_dict[placeholder_string] = subj_basis_generator
 
+            self.token2num_vectors[placeholder_string] = self.id2ada_prompt_encoder.num_id_vecs 
+            if num_static_img_suffix_embs > 0:
+                # num_static_img_suffix_embs is the total number of multiple static_img_suffix_embs for multiple encoders.
+                self.token2num_vectors[placeholder_string] += self.id2ada_prompt_encoder.num_static_img_suffix_embs
+
+        # ',' is used as filler tokens.
+        self.multi_token_filler = multi_token_filler
+        self.string_to_token_dict[self.multi_token_filler] = \
+            self.get_tokens_for_string(self.multi_token_filler, force_single_token=True)[0].item()
+
         # self.load() loads subj SubjBasisGenerators.
         # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
@@ -183,8 +188,7 @@ class EmbeddingManager(nn.Module):
             self.load(adaface_ckpt_paths)
 
         # Initialize self.subj_name_to_cls_delta_tokens.
-        self.init_cls_delta_tokens(self.get_tokens_for_string, self.get_embeddings_for_tokens, 
-                                   subj_name_to_cls_delta_string, cls_delta_string)
+        self.init_cls_delta_tokens(self.get_tokens_for_string, subj_name_to_cls_delta_string, cls_delta_string)
         self.init_subj_name_to_being_faces(subj_name_to_being_faces)
 
         self.layer_idx = -1
@@ -210,8 +214,7 @@ class EmbeddingManager(nn.Module):
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
         
-    def init_cls_delta_tokens(self, get_tokens_for_string, get_embeddings_for_tokens, 
-                              subj_name_to_cls_delta_string, 
+    def init_cls_delta_tokens(self, get_tokens_for_string, subj_name_to_cls_delta_string, 
                               cls_delta_string=None):
         if subj_name_to_cls_delta_string is None:
             subj_name_to_cls_delta_string = {}
@@ -274,6 +277,7 @@ class EmbeddingManager(nn.Module):
     
     def update_text_embeddings(self, tokenized_text, embedded_text):
         BS = tokenized_text.shape[0]
+        N  = tokenized_text.shape[1]
 
         # Put dist.get_rank() here. We couldn't get the rank in __init__(), as the default process group has not been initialized 
         # at that time.
@@ -288,6 +292,9 @@ class EmbeddingManager(nn.Module):
         self.cls_delta_string_indices = []
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
+            if placeholder_string == self.multi_token_filler:
+                continue
+
             # If there's only one vector per token, we can do a simple replacement
             placeholder_indices = torch.where(tokenized_text == placeholder_token)
             # No placeholder token is found in the current batch.
@@ -412,6 +419,7 @@ class EmbeddingManager(nn.Module):
             # adaface_subj_embs could be shorter than self.token2num_vectors[placeholder_string],
             # due to random dropout of some adaface encoders.
             # So we always replace the first adaface_subj_embs.shape[1] embeddings.
+            k2 = 0
             for k in range(adaface_subj_embs.shape[1]):
                 adaface_subj_emb_k = adaface_subj_embs[:, k]
                 
@@ -431,10 +439,21 @@ class EmbeddingManager(nn.Module):
                 if adaface_subj_emb_k.shape[0] != REAL_OCCURS_IN_BATCH:
                     breakpoint()
 
-                # Assign the k-th token embedding (along the text dim).
-                placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k)
-                embedded_text[placeholder_indices_k] = adaface_subj_emb_k
+                placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k2)
+                while k2 < N and \
+                  ((tokenized_text[placeholder_indices_k] != placeholder_token) & \
+                   (tokenized_text[placeholder_indices_k] != self.string_to_token_dict[self.multi_token_filler])).any():
+                    k2 += 1
+                    # Check the k2-th token.
+                    placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k2)
 
+                if k2 >= N:
+                    breakpoint()
+
+                # Assign the k-th token embedding (along the text dim).
+                embedded_text[placeholder_indices_k] = adaface_subj_emb_k
+                k2 += 1
+                
             # Cache the placeholder indices for mix prompt distillation.
             # Note placeholder_indices are recomputed in update_placeholder_indices(), 
             # But we need them without repetitions for mix prompt distillation.
@@ -546,15 +565,10 @@ class EmbeddingManager(nn.Module):
         # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
         if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
             self.cls_delta_strings = self.cls_delta_strings[:1]
-        
-    def set_num_vectors_per_subj_token(self, token2num_vectors):
-        self.token2num_vectors = token2num_vectors
-        print(f"Set token2num_vectors: {self.token2num_vectors}")
 
     # save custom tokens and their learned embeddings to "embeddings_gs-4200.pt".
     def save(self, adaface_ckpt_path):
         saved_dict = {  "string_to_subj_basis_generator_dict":  self.string_to_subj_basis_generator_dict,
-                        "token2num_vectors":                    self.token2num_vectors,
                         "placeholder_strings":                  self.placeholder_strings,
                         "subject_strings":                      self.subject_strings,
                      }
@@ -565,10 +579,8 @@ class EmbeddingManager(nn.Module):
     def load(self, adaface_ckpt_paths):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
-        token2num_vectors                   = {}
-        self.string_to_token_dict           = {}
-
-        self.subject_strings                = []
+        self.string_to_token_dict   = {}
+        self.subject_strings        = []
 
         # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
         self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
@@ -628,19 +640,14 @@ class EmbeddingManager(nn.Module):
                     # The mapping in string_to_token_dict is determined by the tokenizer. 
                     # Shouldn't do the km->km2 mapping on string_to_token_dict.
                     self.string_to_token_dict[km2] = k2_token
-
-                    if km in ckpt["token2num_vectors"]:
-                        token2num_vectors[km2] = ckpt["token2num_vectors"][km]
-
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
-            if "token2num_vectors" in ckpt and self.loading_token2num_vectors_from_ckpt:
-                self.set_num_vectors_per_subj_token(token2num_vectors)
-
+        # ',' is used as filler tokens.
+        self.string_to_token_dict[self.multi_token_filler] = \
+            self.get_tokens_for_string(self.multi_token_filler, force_single_token=True)[0].item()
         self.placeholder_strings = self.subject_strings
-
-        # Regenerate subject_string_dict 
-        # in case subject_strings have been changed.
+        # Regenerate subject_string_dict, in case subject_strings have been changed.
+        # subject_string_dict is used in ddpm.py.
         self.subject_string_dict = { s: True for s in self.subject_strings }
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.

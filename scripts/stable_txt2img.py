@@ -196,12 +196,6 @@ def parse_args():
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
 
-    parser.add_argument("--num_vectors_per_subj_token",
-                        type=int, default=20,
-                        help="Number of vectors per token. If > 1, use multiple embeddings to represent a subject.")
-    parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
-                        help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
-              
     parser.add_argument("--return_prompt_embs_type", type=str, choices=["text", "id", "text_id"],
                         default="text", help="The type of the returned prompt embeddings from get_text_conditioning()")     
     parser.add_argument("--ref_images", type=str, nargs='+', default=None,
@@ -328,13 +322,8 @@ def main(opt):
 
     if not opt.eval_blip and not opt.diffusers:
         config = OmegaConf.load(f"{opt.config}")
-        config.model.params.personalization_config.params.cls_delta_string   = 'person'
-        config.model.params.personalization_config.params.subject_strings    = [opt.subject_string]
-        config.model.params.personalization_config.params.token2num_vectors  = {} 
-
-        # Command line --num_vectors_per_subj_token overrides the checkpoint setting.
-        config.model.params.personalization_config.params.token2num_vectors[opt.subject_string] = opt.num_vectors_per_subj_token
-        config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = False
+        config.model.params.personalization_config.params.cls_delta_string      = 'person'
+        config.model.params.personalization_config.params.subject_strings       = [opt.subject_string]
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
 
@@ -350,21 +339,46 @@ def main(opt):
         model  = model.to(device)
         model.cond_stage_model.device = device
 
-        # subj_id_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
-        face_image_count, faceid_embeds, subj_id_prompt_embs, neg_id_prompt_embs \
+        # subj_id2img_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
+        face_image_count, faceid_embeds, subj_id2img_prompt_embs, neg_id_prompt_embs \
             = model.embedding_manager.id2ada_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=None,
                 pre_clip_features=None,
                 image_paths=ref_image_paths,
                 image_objs=ref_images,
                 id_batch_size=1,
-                perturb_at_stage='img_prompt_emb',
+                perturb_at_stage=None,
                 perturb_std=0,
                 avg_at_stage='id_emb',
                 verbose=True)
 
         sampler = DDIMSampler(model)
 
+        if len(opt.adaface_encoder_types) == 1:
+            num_vectors_per_subj_token = model.embedding_manager.token2num_vectors[opt.subject_string]
+            placeholder_tokens_strs = [ opt.subject_string + "".join([", "] * (num_vectors_per_subj_token - 1)) ]
+        else:
+            # Joint_FaceID2AdaPrompt
+            placeholder_tokens_strs = []
+            for i in range(len(opt.adaface_encoder_types)):
+                num_vectors_per_subj_token = model.embedding_manager.id2ada_prompt_encoder.encoders_num_id_vecs[i]
+                if i == 0:
+                    placeholder_tokens_str = opt.subject_string + "".join([", "] * (num_vectors_per_subj_token - 1))
+                else:
+                    placeholder_tokens_str = "".join([", "] * num_vectors_per_subj_token)
+                placeholder_tokens_strs.append(placeholder_tokens_str)
+
+        if opt.scale != 1.0:
+            try:
+                uc = model.get_text_conditioning([opt.neg_prompt], 
+                                                 subj_id2img_prompt_embs = None,
+                                                 clip_bg_features=None,
+                                                 return_prompt_embs_type = 'text',
+                                                 text_conditioning_iter_type = 'plain_text_iter')
+            except:
+                breakpoint()
+
+    # opt.eval_blip or opt.diffusers
     else:        
         if opt.diffusers:
             if opt.method == "adaface":
@@ -426,6 +440,9 @@ def main(opt):
             tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
             negative_prompt = predefined_negative_prompt
             first_subj_model_path = ""
+
+        # pulid requires full precision.
+        opt.precision = "full"
 
     os.makedirs(opt.outdir, exist_ok=True)
 
@@ -531,24 +548,6 @@ def main(opt):
     else:
         start_code = None
 
-    if not opt.eval_blip and not opt.diffusers:
-        placeholder_tokens_str = opt.subject_string + "".join([", "] * (opt.num_vectors_per_subj_token - 1))
-        if opt.scale != 1.0:
-            try:
-                uc = model.get_text_conditioning(batch_size * [opt.neg_prompt], 
-                                                 subj_id2img_prompt_embs = None,
-                                                 clip_bg_features=None,
-                                                 return_prompt_embs_type = 'text')
-            except:
-                breakpoint()
-        else:
-            uc = None
-    else:
-        # eval_blip or diffusers
-        uc = None
-        # pulid requires full precision.
-        opt.precision = "full"
-
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
     with torch.no_grad():
         with precision_scope("cuda"):
@@ -573,18 +572,27 @@ def main(opt):
                             # If there is a word 'a' before the subject string or ',' after, then remove 'a z,'.
                             prompt2 = re.sub(r'\b(a|an|the)\s+' + opt.subject_string + r'\b,?', "", prompt)
                             prompt2 = re.sub(r'\b' + opt.subject_string + r'\b,?', "", prompt2)
-                            prompt2 = prompt2 + " " + placeholder_tokens_str
+                            prompt_segs = []
+                            for placeholder_tokens_str in placeholder_tokens_strs:
+                                prompt_segs.append(prompt2 + " " + placeholder_tokens_str)
+
+                            prompt2 = "".join(prompt_segs)
                             prompts2.append(prompt2)
+
                         prompts = prompts2
                         print("Prompt:", prompts[0])
 
                         # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
-                        c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
+                        c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id2img_prompt_embs,
                                                         clip_bg_features = None,
-                                                        return_prompt_embs_type = opt.return_prompt_embs_type)
+                                                        return_prompt_embs_type = opt.return_prompt_embs_type,
+                                                        text_conditioning_iter_type = 'plain_text_iter')
                         if opt.debug:
                             c[2]['debug_attn'] = True
+
+                        uc2_emb = uc[0].repeat(batch_size, 1, 1)
+                        uc2 = (uc2_emb, uc[1], uc[2])
 
                         shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
                         # During inference, the batch size is *doubled*. 
@@ -596,7 +604,7 @@ def main(opt):
                                                          shape=shape,
                                                          verbose=False,
                                                          guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc,
+                                                         unconditional_conditioning=uc2,
                                                          eta=opt.ddim_eta,
                                                          x0=None,
                                                          mask=None,
@@ -689,6 +697,8 @@ def main(opt):
                         if opt.eval_blip or opt.diffusers:
                             # x_samples_ddim: [batch_size, C, H, W]
                             x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
+                        else:
+                            x_samples_ddim = (x_samples_ddim * 255).to(torch.uint8)
 
                         if opt.compare_with:
                             # There's an extra "None" after the last indiv_subdir in batched_subdirs 
@@ -721,6 +731,7 @@ def main(opt):
                         all_samples.append(x_samples_ddim)
                 
                     sample_count += batch_size
+
             # End of the loop over prompts.
 
             # After opt.n_repeat passes of batched_prompts, save all sample images as an image grid

@@ -189,12 +189,6 @@ def get_parser(**parser_kwargs):
         type=str, default='person',
         help="One or more word tso be used in class-level prompts for delta loss")
     
-    parser.add_argument("--num_vectors_per_subj_token",
-        type=int, default=argparse.SUPPRESS,
-        help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
-    parser.add_argument("--loading_token2num_vectors_from_ckpt", type=str2bool, const=True, nargs="?", default=False,
-                        help="Loading token2num_vectors from the checkpoint, overwriting the manually specified configs.")
-
     parser.add_argument("--prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_rand_id_for_id2img", type=float, default=argparse.SUPPRESS,
@@ -278,11 +272,6 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
     # Only keep the first subject placeholder.
     personalization_config_params.subject_strings               = dataset.subject_strings[:1]
     personalization_config_params.subj_name_to_cls_delta_string = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-    personalization_config_params.token2num_vectors             = dict()
-    for subject_string in dataset.subject_strings[:1]:
-        personalization_config_params.token2num_vectors[subject_string] = \
-            opt.num_vectors_per_subj_token + opt.num_static_img_suffix_embs * opt.num_adaface_encoder_types
-
     # subjects_are_faces are always available in dataset.
     personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
     

@@ -161,16 +161,18 @@ class DDIMSampler(object):
         time_range = reversed(range(0,timesteps)) if ddim_use_original_steps else np.flip(timesteps)
         # total_steps: 50, provided in the command line.
         total_steps = timesteps if ddim_use_original_steps else timesteps.shape[0]
-        print(f"Running DDIM Sampling with {total_steps} timesteps")
         # breakpoint()
-        iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
         # Guidance annealing. First proposed in CLIP-Sculptor, CVPR 2023. Independently discovered here.
         if isinstance(guidance_scale, (list, tuple)):        
             max_guide_scale, min_guide_scale = guidance_scale
+            print(f"Running DDIM Sampling with {total_steps} timesteps, scale {min_guide_scale}-{max_guide_scale}")
         else:
             # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
-            min_guide_scale = max_guide_scale = min(2.0, guidance_scale)
+            min_guide_scale = max_guide_scale = max(2.0, guidance_scale)
+            print(f"Running DDIM Sampling with {total_steps} timesteps, scale {max_guide_scale}")
+
+        iterator = tqdm(time_range, desc='DDIM Sampler', total=total_steps)
 
         # At least one guidance annealing step (i.e., two uncond guidance steps)
         max_guide_anneal_steps = total_steps - 1
