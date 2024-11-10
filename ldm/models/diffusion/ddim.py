@@ -170,7 +170,7 @@ class DDIMSampler(object):
             max_guide_scale, min_guide_scale = guidance_scale
         else:
             # If max_guide_scale < 2, then guide_scale_step_delta = 0 and no annealing.
-            min_guide_scale = min(2.0, max_guide_scale)
+            min_guide_scale = max_guide_scale = min(2.0, guidance_scale)
 
         # At least one guidance annealing step (i.e., two uncond guidance steps)
         max_guide_anneal_steps = total_steps - 1

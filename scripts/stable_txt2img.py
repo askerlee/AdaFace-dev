@@ -538,9 +538,7 @@ def main(opt):
                 uc = model.get_text_conditioning(batch_size * [opt.neg_prompt], 
                                                  subj_id2img_prompt_embs = None,
                                                  clip_bg_features=None,
-                                                 return_prompt_embs_type = 'text',
-                                                 num_id_vecs = opt.num_vectors_per_subj_token,
-                                                 text_conditioning_iter_type = 'plain_text_iter')
+                                                 return_prompt_embs_type = 'text')
             except:
                 breakpoint()
         else:
@@ -582,8 +580,7 @@ def main(opt):
                         # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
                         c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id_prompt_embs,
                                                         clip_bg_features = None,
-                                                        return_prompt_embs_type = opt.return_prompt_embs_type,
-                                                        num_id_vecs = opt.num_vectors_per_subj_token)
+                                                        return_prompt_embs_type = opt.return_prompt_embs_type)
                         if opt.debug:
                             c[2]['debug_attn'] = True
 
