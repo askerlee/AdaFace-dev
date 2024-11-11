@@ -9,7 +9,7 @@ from diffusers import (
     #FluxPipeline,
     DDIMScheduler,
     PNDMScheduler,
-    DPMSolverMultistepScheduler,
+    DPMSolverSinglestepScheduler,
     AutoencoderKL,
     LCMScheduler,
 )
@@ -202,6 +202,7 @@ class AdaFaceWrapper(nn.Module):
                     set_alpha_to_one=False,
                     steps_offset=1,
                     timestep_spacing="leading",
+                    rescale_betas_zero_snr=False,
                 )
             elif self.default_scheduler_name == 'pndm':
                 noise_scheduler = PNDMScheduler(
@@ -215,7 +216,7 @@ class AdaFaceWrapper(nn.Module):
                     skip_prk_steps=True,
                 )
             elif self.default_scheduler_name == 'dpm++':
-                noise_scheduler = DPMSolverMultistepScheduler(
+                noise_scheduler = DPMSolverSinglestepScheduler(
                     beta_start=0.00085,
                     beta_end=0.012,
                     beta_schedule="scaled_linear",
