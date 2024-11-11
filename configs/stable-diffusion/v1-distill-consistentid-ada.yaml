@@ -42,9 +42,11 @@ model:
     # should match the mixture of the two teachers' outputs.)
     p_gen_rand_id_for_id2img:             0.1
     p_perturb_face_id_embs:           0.6
+    # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
+    # ** but to find neighbors of the subject image embeddings for UNet distillation.
     # ConsistentID image embeddings are quite robust to random perturbations, so we set
-    # a large std range of [0.5, 1].
-    perturb_face_id_embs_std_range:   [0.5, 1]
+    # a large std range of [0.3, 0.6].
+    perturb_face_id_embs_std_range:   [0.3, 0.6]
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
