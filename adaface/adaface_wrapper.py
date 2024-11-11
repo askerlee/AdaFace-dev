@@ -196,8 +196,8 @@ class AdaFaceWrapper(nn.Module):
                 beta_schedule="scaled_linear",
                 clip_sample=False,
                 set_alpha_to_one=False,
-                steps_offset=0,
-                timestep_spacing="trailing",
+                steps_offset=1,
+                timestep_spacing="leading",
             )
             pipeline.scheduler = noise_scheduler
         # Otherwise, if not use_lcm, pipeline.scheduler == FlowMatchEulerDiscreteScheduler

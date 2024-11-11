@@ -1,6 +1,7 @@
 """SAMPLING ONLY."""
 
 import torch
+import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
 
@@ -17,6 +18,12 @@ class DDIMSampler:
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
 
+    def register_buffer(self, name, attr):
+        if type(attr) == torch.Tensor:
+            if attr.device != torch.device("cuda"):
+                attr = attr.to(torch.device("cuda"))
+        setattr(self, name, attr)
+
     def make_schedule(self, ddim_num_steps, ddim_discretize="uniform", ddim_eta=0., verbose=True):
         '''
         If ddim_num_steps = 50,
@@ -30,7 +37,7 @@ class DDIMSampler:
         self.ddim_timesteps = make_ddim_timesteps(ddim_discr_method=ddim_discretize, num_ddim_timesteps=ddim_num_steps,
                                                   num_ddpm_timesteps=self.ddpm_num_timesteps, verbose=verbose)
         alphas_cumprod = self.model.alphas_cumprod
-        assert alphas_cumprod.shape[0] == self.ddpm_num_timesteps, 'alphas have to be defined for each timestep'
+        assert alphas_cumprod.shape[0] == self.ddpm_num_timesteps, 'alphas_cumprod have to be defined for each timestep'
         to_torch = lambda x: x.clone().detach().to(torch.float32).to(self.model.device)
 
         self.register_buffer('betas', to_torch(self.model.betas))                               # useless
@@ -176,7 +183,7 @@ class DDIMSampler:
         for i, step in enumerate(iterator):
             # step: 981, ..., 1.
             # index: 49, ..., 0.
-            # index points to the correct elements in alphas, sigmas, sqrt_one_minus_alphas, etc.
+            # index points to the correct elements in alphas_cumprod, sigmas, sqrt_one_minus_alphas, etc.
             index = total_steps - i - 1
             ts = torch.full((b,), step, device=device, dtype=torch.long)
             # print(step)
@@ -252,9 +259,9 @@ class DDIMSampler:
             assert self.model.parameterization == "eps"
             e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
 
-        # use_original_steps=False, so alphas = self.ddim_alphas.
+        # use_original_steps=False, so alphas_cumprod = self.ddim_alphas.
         '''        
-        (Pdb) alphas
+        (Pdb) alphas_cumprod
         tensor([0.9985, 0.9805, 0.9609, 0.9399, 0.9170, 0.8931, 0.8672, 0.8403, 0.8120,
                 0.7827, 0.7520, 0.7207, 0.6885, 0.6558, 0.6226, 0.5889, 0.5552, 0.5215,
                 0.4883, 0.4553, 0.4229, 0.3914, 0.3606, 0.3308, 0.3022, 0.2749, 0.2490,
@@ -262,15 +269,15 @@ class DDIMSampler:
                 0.0705, 0.0604, 0.0514, 0.0435, 0.0366, 0.0305, 0.0254, 0.0210, 0.0172,
                 0.0140, 0.0113, 0.0091, 0.0073, 0.0058], device='cuda:0')
         '''
-        alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
-        # alphas_prev: [0.999] + alphas[:-1]
-        alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
+        alphas_cumprod = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
+        # alphas_cumprod_prev: [0.999] + alphas_cumprod[:-1]
+        alphas_cumprod_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
         sqrt_one_minus_alphas = self.model.sqrt_one_minus_alphas_cumprod if use_original_steps else self.ddim_sqrt_one_minus_alphas
         # sigmas = self.ddim_sigmas are all 0s.
         sigmas = self.model.ddim_sigmas_for_original_num_steps if use_original_steps else self.ddim_sigmas
         # select parameters corresponding to the currently considered timestep
-        a_t = torch.full((b, 1, 1, 1), alphas[index], device=device)
-        a_prev = torch.full((b, 1, 1, 1), alphas_prev[index], device=device)
+        a_t = torch.full((b, 1, 1, 1), alphas_cumprod[index], device=device)
+        a_prev = torch.full((b, 1, 1, 1), alphas_cumprod_prev[index], device=device)
         sigma_t = torch.full((b, 1, 1, 1), sigmas[index], device=device)
         sqrt_one_minus_at = torch.full((b, 1, 1, 1), sqrt_one_minus_alphas[index],device=device)
 
@@ -297,7 +304,7 @@ class DDIMSampler:
     @torch.no_grad()
     def stochastic_encode(self, x0, t, use_original_steps=False, noise=None):
         # fast, but does not allow for exact reconstruction
-        # t serves as an index to gather the correct alphas
+        # t serves as an index to gather the correct alphas_cumprod
         if use_original_steps:
             sqrt_alphas_cumprod = self.sqrt_alphas_cumprod
             sqrt_one_minus_alphas_cumprod = self.sqrt_one_minus_alphas_cumprod
