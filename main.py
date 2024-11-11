@@ -188,6 +188,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--default_cls_delta_string",
         type=str, default='person',
         help="One or more word tso be used in class-level prompts for delta loss")
+    parser.add_argument("--num_vectors_per_subj_token",
+        type=int, default=20,
+        help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
     
     parser.add_argument("--prompt2token_proj_ext_attention_perturb_ratio", type=float, default=0.1,
                         help="Perturb ratio of the prompt2token projection extended attention")
@@ -730,9 +733,7 @@ if __name__ == "__main__":
             config.model.base_lr = opt.lr
 
         # Personalization config
-        config.model.params.personalization_config.params.adaface_ckpt_paths    = opt.adaface_ckpt_paths
-        config.model.params.personalization_config.params.loading_token2num_vectors_from_ckpt = opt.loading_token2num_vectors_from_ckpt
-    
+        config.model.params.personalization_config.params.adaface_ckpt_paths    = opt.adaface_ckpt_paths    
         set_placeholders_info(config.model.params.personalization_config.params, opt, data.datasets['train'])
 
         if opt.base_model_path:

@@ -1,10 +1,17 @@
 import torch
 import torch.nn.functional as F
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union, Dict, Any
+from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel, UNet2DConditionOutput
 from diffusers.models.attention_processor import Attention
-from diffusers.utils import deprecate
+from diffusers.utils import logging, is_torch_version, deprecate
+from diffusers.utils.torch_utils import apply_freeu
+from diffusers.models.transformers.transformer_2d import Transformer2DModelOutput
+from diffusers.models.unets.unet_2d_blocks import CrossAttnUpBlock2D
+
 from einops import rearrange
 import math
+
+logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 # Revised from pytorch/tests/test_transformers.py: sdp_ref().
 # This may be slower than F.scaled_dot_product_attention, 
@@ -146,4 +153,100 @@ class AttnProcessor_Capture:
                 hidden_states.permute(0, 2, 1).contiguous() )
 
         return hidden_states
+
+def CrossAttnUpBlock2D_capture_forward(
+    self,
+    hidden_states: torch.Tensor,
+    res_hidden_states_tuple: Tuple[torch.Tensor, ...],
+    temb: Optional[torch.Tensor] = None,
+    encoder_hidden_states: Optional[torch.Tensor] = None,
+    cross_attention_kwargs: Optional[Dict[str, Any]] = None,
+    upsample_size: Optional[int] = None,
+    attention_mask: Optional[torch.Tensor] = None,
+    encoder_attention_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if cross_attention_kwargs is not None:
+        if cross_attention_kwargs.get("scale", None) is not None:
+            logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
+
+    is_freeu_enabled = (
+        getattr(self, "s1", None)
+        and getattr(self, "s2", None)
+        and getattr(self, "b1", None)
+        and getattr(self, "b2", None)
+    )
+
+    self.cached_outfeats = {}
+    if hasattr(self, "capture_outfeats"):
+        capture_outfeats = self.capture_outfeats
+    else:
+        capture_outfeats = False
+
+    layer_idx = 0
+
+    for resnet, attn in zip(self.resnets, self.attentions):
+        # pop res hidden states
+        res_hidden_states = res_hidden_states_tuple[-1]
+        res_hidden_states_tuple = res_hidden_states_tuple[:-1]
+
+        # FreeU: Only operate on the first two stages
+        if is_freeu_enabled:
+            hidden_states, res_hidden_states = apply_freeu(
+                self.resolution_idx,
+                hidden_states,
+                res_hidden_states,
+                s1=self.s1,
+                s2=self.s2,
+                b1=self.b1,
+                b2=self.b2,
+            )
+
+        hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+
+        if self.training and self.gradient_checkpointing:
+
+            def create_custom_forward(module, return_dict=None):
+                def custom_forward(*inputs):
+                    if return_dict is not None:
+                        return module(*inputs, return_dict=return_dict)
+                    else:
+                        return module(*inputs)
+
+                return custom_forward
+
+            ckpt_kwargs: Dict[str, Any] = {"use_reentrant": False} if is_torch_version(">=", "1.11.0") else {}
+            hidden_states = torch.utils.checkpoint.checkpoint(
+                create_custom_forward(resnet),
+                hidden_states,
+                temb,
+                **ckpt_kwargs,
+            )
+            hidden_states = attn(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                cross_attention_kwargs=cross_attention_kwargs,
+                attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
+                return_dict=False,
+            )[0]
+        else:
+            hidden_states = resnet(hidden_states, temb)
+            hidden_states = attn(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                cross_attention_kwargs=cross_attention_kwargs,
+                attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
+                return_dict=False,
+            )[0]
+
+        if capture_outfeats:
+            self.cached_outfeats[layer_idx] = hidden_states
+            layer_idx += 1
+
+    if self.upsamplers is not None:
+        for upsampler in self.upsamplers:
+            hidden_states = upsampler(hidden_states, upsample_size)
+
+    return hidden_states
 

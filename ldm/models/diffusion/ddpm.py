@@ -23,7 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from ldm.modules.diffusers_attention import AttnProcessor_Capture
+from ldm.modules.diffusers_capture import AttnProcessor_Capture, CrossAttnUpBlock2D_capture_forward
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -1487,7 +1487,7 @@ class LatentDiffusion(DDPM):
 
             # Increase t slightly by (1.3, 1.6) to increase noise amount and make the denoising more challenging,
             # with smaller prob to keep the original t.
-            t = probably_anneal_int_tensor(t, self.training_percent, self.num_timesteps, ratio_range=(1.3, 1.6),
+            t = probably_anneal_int_tensor(t, self.training_percent, self.num_timesteps - 20, ratio_range=(1.3, 1.6),
                                            keep_prob_range=(0.2, 0.1))
             if self.iter_flags['num_denoising_steps'] > 1:
                 # Take a weighted average of t and 1000, to shift t to larger values, 
@@ -2796,29 +2796,40 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.l2ca = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                       17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
         
-    def forward(self, x, t, cond_context):
+    def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
-        x            = x.to(self.dtype)
-        c_prompt_emb = c_prompt_emb.to(self.dtype)
 
         self.attnprocessor_capture.capture_ca_activations = extra_info['capture_ca_activations']
+        if extra_info['capture_ca_activations']:
+            # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
+            self.diffusion_model.up_blocks[3].capture_outfeats = extra_info['capture_ca_activations']
+            self.diffusion_model.up_blocks[3].forward = \
+                CrossAttnUpBlock2D_capture_forward.__get__(self.diffusion_model.up_blocks[3])
 
-        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
-        cached_activations = self.attnprocessor_capture.cached_activations
-        self.attnprocessor_capture.clear_attn_cache()
+        with torch.autocast(device_type='cuda', dtype=self.dtype):
+            out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
 
         # Only capture the activations of the last 3 CA layers.
         captured_layer_indices = [22, 23, 24] # => 13, 14, 15
         captured_activations = {}
 
         if extra_info['capture_ca_activations']:
+            cached_activations = self.attnprocessor_capture.cached_activations
+            cached_outfeats    = self.diffusion_model.up_blocks[3].cached_outfeats
+            self.attnprocessor_capture.clear_attn_cache()
+            self.diffusion_model.up_blocks[3].cached_outfeats = {}
+
             for k in cached_activations:
                 captured_activations[k] = {}
+                captured_activations['outfeat'] = {}
+
                 for layer_idx in captured_layer_indices:
                     ca_layer_idx = self.l2ca[layer_idx]
-                    captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx]
+                    captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx].to(out_dtype)
+                    # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
+                    captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx - 22].to(out_dtype)
 
         extra_info['ca_layers_activations'] = captured_activations
+        out = out.to(out_dtype)
 
         return out
-        
