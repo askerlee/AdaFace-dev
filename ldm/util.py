@@ -150,9 +150,6 @@ def load_model_from_config(config, ckpt, verbose=False):
         print(u)
 
     model.eval()
-    # Release some RAM. Not sure if it really works.
-    del sd, pl_sd
-
     return model
 
 def get_obj_from_str(string, reload=False):

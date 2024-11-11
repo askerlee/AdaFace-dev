@@ -741,25 +741,13 @@ class LatentDiffusion(DDPM):
 
     # output: -1 ~ 1.
     @torch.no_grad()
-    def decode_first_stage(self, z, predict_cids=False):
-        if predict_cids:
-            if z.dim() == 4:
-                z = torch.argmax(z.exp(), dim=1).long()
-            z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
-            z = rearrange(z, 'b h w c -> b c h w').contiguous()
-
+    def decode_first_stage(self, z):
         z = 1. / self.scale_factor * z
         return self.first_stage_model.decode(z)
 
     # same as decode_first_stage() but without torch.no_grad() decorator
     # output: -1 ~ 1.
-    def decode_first_stage_with_grad(self, z, predict_cids=False):
-        if predict_cids:
-            if z.dim() == 4:
-                z = torch.argmax(z.exp(), dim=1).long()
-            z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
-            z = rearrange(z, 'b h w c -> b c h w').contiguous()
-
+    def decode_first_stage_with_grad(self, z):
         z = 1. / self.scale_factor * z
         return self.first_stage_model.decode(z)
 
