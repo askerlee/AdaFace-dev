@@ -421,9 +421,11 @@ class LatentDiffusion(DDPM):
         self.bbox_tokenizer = None  
 
         self.restarted_from_ckpt = (base_model_path is not None)
-        # base_model_path is popped from kwargs, so that it won't be passed to the base class DDPM.
-        # As a result, the model weight is only loaded here, not in DDPM.
-        if use_ldm_unet and (base_model_path is not None):
+        if base_model_path is not None:
+            # Ignore all keys of the UNet model, since we are using a diffusers UNet model.
+            # We still need to load the VAE and CLIP weights.
+            if not use_ldm_unet:
+                ignore_keys.append('model')
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
@@ -2067,7 +2069,7 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
             loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
             loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
-                = [ comp_subj_bg_preserve_loss_dict.get(loss_name) for loss_name in loss_names ] 
+                = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
 
             for loss_name in loss_names:
                 if loss_name in comp_subj_bg_preserve_loss_dict and comp_subj_bg_preserve_loss_dict[loss_name] > 0:
