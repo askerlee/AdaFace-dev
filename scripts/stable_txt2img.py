@@ -251,7 +251,10 @@ def parse_args():
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--use_ldm_pipeline", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM pipeline to do the inference")
-        
+    parser.add_argument("--diffusers_scheduler_name", type=str, default="ddim",
+                        choices=["ddim", "pndm", "dpm++"], 
+                        help="The scheduler name for the diffusers pipeline")
+    
     args = parser.parse_args()
     return args
 
@@ -392,13 +395,16 @@ def main(opt):
             from adaface.adaface_wrapper import AdaFaceWrapper
 
             pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
-                                        opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
-                                        opt.enabled_encoders, opt.use_lcm,
-                                        opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
-                                        unet_types=None,
-                                        main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
-                                        unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
-                                        device=device)
+                                      opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
+                                      opt.enabled_encoders, opt.use_lcm,
+                                      default_scheduler_name=opt.diffusers_scheduler_name, 
+                                      subject_string=opt.subject_string, 
+                                      num_inference_steps=opt.ddim_steps, 
+                                      negative_prompt=opt.neg_prompt,
+                                      unet_types=None,
+                                      main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
+                                      unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
+                                      device=device)
             # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
             adaface_subj_embs = \
                 pipeline.prepare_adaface_embeddings(ref_image_paths, None, 

@@ -8,6 +8,8 @@ from diffusers import (
     StableDiffusion3Pipeline,
     #FluxPipeline,
     DDIMScheduler,
+    PNDMScheduler,
+    DPMSolverMultistepScheduler,
     AutoencoderKL,
     LCMScheduler,
 )
@@ -21,8 +23,8 @@ import numpy as np
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
                  adaface_ckpt_paths, adaface_encoder_cfg_scales=None, 
-                 enabled_encoders=None, use_lcm=False,
-                 subject_string='z', num_inference_steps=50, negative_prompt=None,
+                 enabled_encoders=None, use_lcm=False, default_scheduler_name='ddim',
+                 num_inference_steps=50, subject_string='z', negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
                  enable_static_img_suffix_embs=None,
@@ -44,6 +46,7 @@ class AdaFaceWrapper(nn.Module):
         self.use_lcm = use_lcm
         self.subject_string = subject_string
 
+        self.default_scheduler_name = default_scheduler_name
         self.num_inference_steps = num_inference_steps if not use_lcm else 4
         self.use_840k_vae = use_840k_vae
         self.use_ds_text_encoder = use_ds_text_encoder
@@ -189,16 +192,45 @@ class AdaFaceWrapper(nn.Module):
             print("Removed UNet and VAE from the pipeline.")
 
         if self.pipeline_name not in ["text2imgxl", "text2img3", "flux"] and not self.use_lcm:
-            noise_scheduler = DDIMScheduler(
-                num_train_timesteps=1000,
-                beta_start=0.00085,
-                beta_end=0.012,
-                beta_schedule="scaled_linear",
-                clip_sample=False,
-                set_alpha_to_one=False,
-                steps_offset=1,
-                timestep_spacing="leading",
-            )
+            if self.default_scheduler_name == 'ddim':
+                noise_scheduler = DDIMScheduler(
+                    num_train_timesteps=1000,
+                    beta_start=0.00085,
+                    beta_end=0.012,
+                    beta_schedule="scaled_linear",
+                    clip_sample=False,
+                    set_alpha_to_one=False,
+                    steps_offset=1,
+                    timestep_spacing="leading",
+                )
+            elif self.default_scheduler_name == 'pndm':
+                noise_scheduler = PNDMScheduler(
+                    num_train_timesteps=1000,
+                    beta_start=0.00085,
+                    beta_end=0.012,
+                    beta_schedule="scaled_linear",
+                    set_alpha_to_one=False,
+                    steps_offset=1,
+                    timestep_spacing="leading",
+                    skip_prk_steps=True,
+                )
+            elif self.default_scheduler_name == 'dpm++':
+                noise_scheduler = DPMSolverMultistepScheduler(
+                    beta_start=0.00085,
+                    beta_end=0.012,
+                    beta_schedule="scaled_linear",
+                    prediction_type="epsilon",
+                    num_train_timesteps=1000,
+                    trained_betas=None,
+                    thresholding=False,
+                    algorithm_type="dpmsolver++",
+                    solver_type="midpoint",
+                    lower_order_final=True,
+                    use_karras_sigmas=True,
+                )                
+            else:
+                breakpoint()                
+
             pipeline.scheduler = noise_scheduler
         # Otherwise, if not use_lcm, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
         #            if     use_lcm, pipeline.scheduler == LCMScheduler

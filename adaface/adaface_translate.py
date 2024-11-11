@@ -95,9 +95,11 @@ if __name__ == "__main__":
     adaface = AdaFaceWrapper("img2img", args.base_model_path, 
                              args.adaface_encoder_types, args.adaface_ckpt_paths,
                              args.adaface_encoder_cfg_scales, args.enabled_encoders,
-                             args.subject_string, args.num_inference_steps,
+                             num_inference_steps=args.num_inference_steps, 
+                             subject_string=args.subject_string, 
                              unet_types=None,
-                             extra_unet_dirpaths=args.extra_unet_dirpaths, unet_weights=args.unet_weights, 
+                             extra_unet_dirpaths=args.extra_unet_dirpaths, 
+                             unet_weights=args.unet_weights, 
                              device=args.device)
 
     in_folder = args.in_folder
