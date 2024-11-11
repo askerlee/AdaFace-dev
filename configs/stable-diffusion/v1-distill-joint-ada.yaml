@@ -43,7 +43,9 @@ model:
     # should match the mixture of the two teachers' outputs.)
     p_gen_rand_id_for_id2img:             0.1
     p_perturb_face_id_embs:           0.6
-    # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
+    # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
+    # ** but to find neighbors of the subject image embeddings for UNet distillation.
+    # After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent.
     # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6]. 
     # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
     perturb_face_id_embs_std_range:   [0.3, 0.6]

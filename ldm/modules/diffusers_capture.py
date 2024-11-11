@@ -1,37 +1,45 @@
 import torch
 import torch.nn.functional as F
 from typing import Callable, List, Optional, Tuple, Union, Dict, Any
-from diffusers.models.unets.unet_2d_condition import UNet2DConditionModel, UNet2DConditionOutput
-from diffusers.models.attention_processor import Attention
+from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
-from diffusers.models.transformers.transformer_2d import Transformer2DModelOutput
-from diffusers.models.unets.unet_2d_blocks import CrossAttnUpBlock2D
 
 from einops import rearrange
 import math
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-# Revised from pytorch/tests/test_transformers.py: sdp_ref().
-# This may be slower than F.scaled_dot_product_attention, 
-# but we need attn_score and attn.
-def sdp_slow(q, k, v, attn_mask=None, dropout_p=0.0):
-    E = q.size(-1)
-    q = q / math.sqrt(E)
-    # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)
-    if attn_mask is not None:
-        attn = torch.baddbmm(attn_mask, q, k.transpose(-2, -1))
-    else:
-        attn = torch.bmm(q, k.transpose(-2, -1))
+# Slow implementation equivalent to F.scaled_dot_product_attention.
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+        is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(L, S, device=query.device, dtype=query.dtype)
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, device=query.device, dtype=torch.bool).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+        attn_bias.to(query.dtype)
 
-    attn_score = attn
-    attn = torch.nn.functional.softmax(attn, dim=-1)
-    if dropout_p > 0.0:
-        attn = torch.nn.functional.dropout(attn, p=dropout_p)
-    # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
-    output = torch.bmm(attn, v)
-    return output, attn_score, attn
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias += attn_mask
+
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_weight += attn_bias
+    attn_score = attn_weight
+    attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+    output = attn_weight @ value
+    return output, attn_score, attn_weight
+
 
 # All layers share the same attention processor instance.
 class AttnProcessor_Capture:
@@ -106,21 +114,9 @@ class AttnProcessor_Capture:
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
-        if attn.norm_q is not None:
-            query = attn.norm_q(query)
-        if attn.norm_k is not None:
-            key = attn.norm_k(key)
-
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
         # TODO: add support for attn.scale when we move to Torch 2.1
-        '''
-        hidden_states = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
-        )
-        '''
-
-        query, key, value = map(lambda t: rearrange(t, 'b h n d -> (b h) n d').contiguous(), (query, key, value))
-        hidden_states, attn_score, attn_prob  = sdp_slow(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
+        hidden_states, attn_score, attn_prob = scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
@@ -143,11 +139,9 @@ class AttnProcessor_Capture:
             # So sqrt(scale) will scale the product of two qs by scale.
             # ANCHOR[id=attention_caching]
             self.cached_activations['q'].append(
-                rearrange(query,   '(b h) n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale) )
-            self.cached_activations['attn'].append(
-                rearrange(attn_prob, '(b h) i j -> b h i j', h=attn.heads).contiguous() )
-            self.cached_activations['attnscore'].append(
-                rearrange(attn_score, '(b h) i j -> b h i j', h=attn.heads).contiguous() )
+                rearrange(query,   'b h n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale) )
+            self.cached_activations['attn'].append(attn_prob)
+            self.cached_activations['attnscore'].append(attn_score)
             # attn_out: [b, n, h * d] -> [b, h * d, n]
             self.cached_activations['attn_out'].append(
                 hidden_states.permute(0, 2, 1).contiguous() )

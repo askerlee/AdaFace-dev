@@ -87,7 +87,7 @@ class DDPM(pl.LightningModule):
                  unet_weights=None,
                  p_gen_rand_id_for_id2img=0.4,
                  p_perturb_face_id_embs=0.6,
-                 perturb_face_id_embs_std_range=[0.5, 1.5],
+                 perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
                  use_arcface_loss=True,
@@ -249,12 +249,18 @@ class DDPM(pl.LightningModule):
             print(f"Unknown checkpoint format: {path}")
             sys.exit(1)
 
+        num_del_keys = 0
+        deleted_keys = []
         keys = list(sd.keys())
         for k in keys:
             for ik in ignore_keys:
                 if k.startswith(ik):
-                    print("Deleting key {} from state_dict.".format(k))
                     del sd[k]
+                    deleted_keys.append(k)
+                    num_del_keys += 1
+
+        print(f"Deleting {num_del_keys} keys {deleted_keys} from state_dict.")
+        num_remaining_keys = len(list(sd.keys()))
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
@@ -262,6 +268,8 @@ class DDPM(pl.LightningModule):
             print(f"Missing Keys: {missing}")
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
+
+        print(f"Successfully loaded {num_remaining_keys - len(unexpected)} keys")
 
     def predict_start_from_noise(self, x_t, t, noise):
         return (
@@ -1004,6 +1012,8 @@ class LatentDiffusion(DDPM):
                                                 id2img_prompt_embs, zs_clip_fgbg_features)
                 
             # ** Perturb the zero-shot ID image prompt embeddings with probability 0.6. **
+            # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
+            # ** but to find neighbors of the subject image embeddings for UNet distillation.
             # The noise is added to the image prompt embeddings instead of the initial face ID embeddings.
             # Because for ConsistentID, both the ID embeddings and the CLIP features are used to generate the image prompt embeddings.
             # Each embedding has different roles in depicting the facial features.
@@ -2768,6 +2778,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
+        # By default, .eval() is called in the constructor to deactivate DropOut modules.
         self.diffusion_model = UNet2DConditionModel.from_pretrained(
                                 unet_dirpath, torch_dtype=torch_dtype
                                )
@@ -2784,8 +2795,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
         
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
-        extra_info['capture_ca_activations'] = False
-
         self.attnprocessor_capture.capture_ca_activations = extra_info['capture_ca_activations']
         if extra_info['capture_ca_activations']:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
