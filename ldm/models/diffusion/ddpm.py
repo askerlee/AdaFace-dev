@@ -1270,15 +1270,11 @@ class LatentDiffusion(DDPM):
         return self.p_losses(x_start, t, c_prompt_emb, c_in, extra_info)
 
     # apply_model() is called both during training and inference.
-    def apply_model(self, x_noisy, t, cond_context, return_ids=False):
+    def apply_model(self, x_noisy, t, cond_context):
         # self.model: DiffusionWrapper -> 
         # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
         x_recon = self.model(x_noisy, t, cond_context)
-
-        if isinstance(x_recon, tuple) and not return_ids:
-            return x_recon[0]
-        else:
-            return x_recon
+        return x_recon
 
     # text_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
     # Sometimes the prompts changed after generating the prompt embeddings, 
@@ -2798,6 +2794,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
+        extra_info['capture_ca_activations'] = False
 
         self.attnprocessor_capture.capture_ca_activations = extra_info['capture_ca_activations']
         if extra_info['capture_ca_activations']:
@@ -2811,7 +2808,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # Only capture the activations of the last 3 CA layers.
         captured_layer_indices = [22, 23, 24] # => 13, 14, 15
-        captured_activations = {}
+        captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
 
         if extra_info['capture_ca_activations']:
             cached_activations = self.attnprocessor_capture.cached_activations
@@ -2820,9 +2817,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.diffusion_model.up_blocks[3].cached_outfeats = {}
 
             for k in cached_activations:
-                captured_activations[k] = {}
-                captured_activations['outfeat'] = {}
-
                 for layer_idx in captured_layer_indices:
                     ca_layer_idx = self.l2ca[layer_idx]
                     captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx].to(out_dtype)
