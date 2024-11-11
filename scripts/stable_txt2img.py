@@ -251,7 +251,11 @@ def parse_args():
                         help="Repeat the prompt for each encoder during inference (default behavior)")
     parser.add_argument("--use_lcm", type=str2bool, const=True, nargs="?", default=False,
                         help="Use LCM to do quick inference")
-    
+    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to use the LDM UNet implementation as the base UNet")
+    parser.add_argument("--use_ldm_pipeline", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use the LDM pipeline to do the inference")
+        
     args = parser.parse_args()
     return args
 
@@ -320,28 +324,30 @@ def main(opt):
     else:
         first_subj_model_path = "uninitialized"
 
-    if not opt.eval_blip and not opt.diffusers:
+    if opt.use_ldm_pipeline:
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.personalization_config.params.cls_delta_string      = 'person'
         config.model.params.personalization_config.params.subject_strings       = [opt.subject_string]
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
+        config.model.use_ldm_unet = opt.use_ldm_unet
+        config.model.diffusers_unet_path = opt.main_unet_filepath
 
-        model = load_model_from_config(config, f"{opt.ckpt}")
+        ldm_model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
-            model.embedding_manager.load(opt.adaface_ckpt_paths)
-            model.embedding_manager.eval()
+            ldm_model.embedding_manager.load(opt.adaface_ckpt_paths)
+            ldm_model.embedding_manager.eval()
 
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
-        model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
-        model.embedding_manager.curr_subj_is_face = opt.calc_face_sim
+        ldm_model.cond_stage_model.set_last_layers_skip_weights(opt.clip_last_layers_skip_weights)
+        ldm_model.embedding_manager.curr_subj_is_face = opt.calc_face_sim
         
-        model  = model.to(device)
-        model.cond_stage_model.device = device
+        ldm_model  = ldm_model.to(device)
+        ldm_model.cond_stage_model.device = device
 
         # subj_id2img_prompt_embs: [1, 4, 768] or [1, 16, 768] is in the image prompt space.
         face_image_count, faceid_embeds, subj_id2img_prompt_embs, neg_id_prompt_embs \
-            = model.embedding_manager.id2ada_prompt_encoder.get_img_prompt_embs( \
+            = ldm_model.embedding_manager.id2ada_prompt_encoder.get_img_prompt_embs( \
                 init_id_embs=None,
                 pre_clip_features=None,
                 image_paths=ref_image_paths,
@@ -352,16 +358,16 @@ def main(opt):
                 avg_at_stage='id_emb',
                 verbose=True)
 
-        sampler = DDIMSampler(model)
+        sampler = DDIMSampler(ldm_model)
 
         if len(opt.adaface_encoder_types) == 1:
-            num_vectors_per_subj_token = model.embedding_manager.token2num_vectors[opt.subject_string]
+            num_vectors_per_subj_token = ldm_model.embedding_manager.token2num_vectors[opt.subject_string]
             placeholder_tokens_strs = [ opt.subject_string + "".join([", "] * (num_vectors_per_subj_token - 1)) ]
         else:
             # Joint_FaceID2AdaPrompt
             placeholder_tokens_strs = []
             for i in range(len(opt.adaface_encoder_types)):
-                num_vectors_per_subj_token = model.embedding_manager.id2ada_prompt_encoder.encoders_num_id_vecs[i]
+                num_vectors_per_subj_token = ldm_model.embedding_manager.id2ada_prompt_encoder.encoders_num_id_vecs[i]
                 if i == 0:
                     placeholder_tokens_str = opt.subject_string + "".join([", "] * (num_vectors_per_subj_token - 1))
                 else:
@@ -370,7 +376,7 @@ def main(opt):
 
         if opt.scale != 1.0:
             try:
-                uc = model.get_text_conditioning([opt.neg_prompt], 
+                uc = ldm_model.get_text_conditioning([opt.neg_prompt], 
                                                  subj_id2img_prompt_embs = None,
                                                  clip_bg_features=None,
                                                  return_prompt_embs_type = 'text',
@@ -378,8 +384,10 @@ def main(opt):
             except:
                 breakpoint()
 
-    # opt.eval_blip or opt.diffusers
-    else:        
+    # Usually we don't use_ldm_pipeline and diffusers at the same time.
+    # But if both are enabled, the LDM pipeline will be used to get the prompt embeddings,
+    # and the diffusers pipeline will generate the images.
+    if opt.eval_blip or opt.diffusers:
         if opt.diffusers:
             if opt.method == "adaface":
                 from adaface.adaface_wrapper import AdaFaceWrapper
@@ -549,6 +557,7 @@ def main(opt):
         start_code = None
 
     precision_scope = autocast if opt.precision=="autocast" else nullcontext
+
     with torch.no_grad():
         with precision_scope("cuda"):
             tic = time.time()
@@ -565,7 +574,7 @@ def main(opt):
                     if isinstance(prompts, tuple):
                         prompts = list(prompts)
 
-                    if not opt.eval_blip and not opt.diffusers:
+                    if opt.use_ldm_pipeline:
                         prompts2 = []
                         for prompt in prompts:
                             # Remove the subject string 'z', then append the placeholder tokens to the prompt.
@@ -582,48 +591,57 @@ def main(opt):
                         prompts = prompts2
                         print("Prompt:", prompts[0])
 
-                        # NOTE: model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
-                        # We've assigned model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
-                        c = model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id2img_prompt_embs,
-                                                        clip_bg_features = None,
-                                                        return_prompt_embs_type = opt.return_prompt_embs_type,
-                                                        text_conditioning_iter_type = 'plain_text_iter')
+                        # NOTE: ldm_model.embedding_manager.curr_subj_is_face is queried when generating zero-shot id embeddings. 
+                        # We've assigned ldm_model.embedding_manager.curr_subj_is_face = opt.calc_face_sim above.
+                        c = ldm_model.get_text_conditioning(prompts, subj_id2img_prompt_embs = subj_id2img_prompt_embs,
+                                                            clip_bg_features = None,
+                                                            return_prompt_embs_type = opt.return_prompt_embs_type,
+                                                            text_conditioning_iter_type = 'plain_text_iter')
+                        
                         if opt.debug:
                             c[2]['debug_attn'] = True
 
                         uc2_emb = uc[0].repeat(batch_size, 1, 1)
                         uc2 = (uc2_emb, uc[1], uc[2])
 
-                        shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
-                        # During inference, the batch size is *doubled*. 
-                        # The first half contains negative samples, and the second half positive.
-                        # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
-                        samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
-                                                         conditioning=c,
-                                                         batch_size=batch_size,
-                                                         shape=shape,
-                                                         verbose=False,
-                                                         guidance_scale=opt.scale,
-                                                         unconditional_conditioning=uc2,
-                                                         eta=opt.ddim_eta,
-                                                         x0=None,
-                                                         mask=None,
-                                                         x_T=start_code)
+                        if not opt.diffusers:
+                            shape = [opt.C, opt.H // opt.f, opt.W // opt.f]
+                            # During inference, the batch size is *doubled*. 
+                            # The first half contains negative samples, and the second half positive.
+                            # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
+                            samples_ddim, _ = sampler.sample(S=opt.ddim_steps,
+                                                            conditioning=c,
+                                                            batch_size=batch_size,
+                                                            shape=shape,
+                                                            verbose=False,
+                                                            guidance_scale=opt.scale,
+                                                            unconditional_conditioning=uc2,
+                                                            eta=opt.ddim_eta,
+                                                            x0=None,
+                                                            mask=None,
+                                                            x_T=start_code)
 
-                        x_samples_ddim = model.decode_first_stage(samples_ddim)
-                        # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
-                        x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
+                            x_samples_ddim = ldm_model.decode_first_stage(samples_ddim)
+                            # x_samples_ddim: -1 ~ +1 -> 0 ~ 1.
+                            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
-                    elif opt.diffusers:
+                    if opt.diffusers:
                         noise = torch.randn([batch_size, opt.C, opt.H // opt.f, opt.W // opt.f], device=device)
-                        if opt.method == "adaface":                      
-                            x_samples_ddim = pipeline(noise, prompts[0], None, 
+                        if opt.method == "adaface":
+                            if opt.use_ldm_pipeline:
+                                # The prompt embeddings have been generated above. So use them here.
+                                prompt_embeds = (c[0][:1], uc[0][:1])
+                            else:
+                                prompt_embeds = None
+
+                            x_samples_ddim = pipeline(noise, prompts[0], prompt_embeds, None, 
                                                       placeholder_tokens_pos=opt.placeholder_tokens_pos,
                                                       guidance_scale=opt.scale, out_image_count=batch_size, 
                                                       ablate_prompt_only_placeholders=opt.ablate_prompt_only_placeholders,
                                                       ablate_prompt_no_placeholders=opt.ablate_prompt_no_placeholders,
                                                       repeat_prompt_for_each_encoder=opt.repeat_prompt_for_each_encoder,
                                                       verbose=True)
+                            
                         elif opt.method == "pulid":
                             x_samples_ddim = []
                             # Remove the subject string 'z' from the prompt.
@@ -635,7 +653,7 @@ def main(opt):
                                 sample = sample.resize((512, 512))
                                 x_samples_ddim.append(sample)
 
-                    else:
+                    elif opt.eval_blip:
                         x_samples_ddim = []
                         blip_seed = 8888
                         for i_sample, prompt in enumerate(prompts):
@@ -667,6 +685,8 @@ def main(opt):
                                 width=512,
                             )
                             x_samples_ddim.append(samples[0])
+                    # Otherwise, it's use_ldm_pipeline and not diffusers. Do nothing here, 
+                    # since the images have been generated using LDM pipeline above.
 
                     if not opt.skip_save:
                         # "{subj_name}" is a placeholder in indiv_subdir for the subject name. 

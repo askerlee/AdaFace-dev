@@ -842,8 +842,8 @@ class UNetModel(nn.Module):
         emb = self.time_embed(t_emb)
 
         capture_ca_activations   = extra_info.get('capture_ca_activations', False)  if extra_info is not None else False
-        img_mask                        = extra_info.get('img_mask', None)               if extra_info is not None else None
-        debug_attn                      = extra_info.get('debug_attn', self.debug_attn)  if extra_info is not None else self.debug_attn
+        img_mask                 = extra_info.get('img_mask', None)                 if extra_info is not None else None
+        debug_attn               = extra_info.get('debug_attn', self.debug_attn)    if extra_info is not None else self.debug_attn
 
         # ca_flags_stack: each is (old_ca_flags, ca_layer_indices, old_trans_flags, trans_layer_indices).
         # None here means ca_flags have been applied to all layers.

@@ -162,8 +162,8 @@ class CrossAttention(nn.Module):
             nn.Linear(inner_dim, query_dim),
             nn.Dropout(dropout)
         )
-        self.save_cross_attn_vars     = False
-        self.cached_activations = None
+        self.save_cross_attn_vars   = False
+        self.cached_activations     = None
         
     def forward(self, x, context=None, mask=None):
         h = self.heads
@@ -281,7 +281,6 @@ class SpatialTransformer(nn.Module):
                                               stride=1,
                                               padding=0))
 
-        self.save_feat = False
 
     def forward(self, x, context=None, mask=None):
         # note: if no context is given, cross-attention defaults to self-attention
@@ -299,8 +298,5 @@ class SpatialTransformer(nn.Module):
 
         x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w).contiguous()
         
-        if self.save_feat:
-            self.feat = x
-
         x = self.proj_out(x)
         return x + x_in

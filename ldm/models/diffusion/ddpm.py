@@ -2810,11 +2810,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Only capture the activations of the last 3 CA layers.
         captured_layer_indices = [22, 23, 24] # => 13, 14, 15
         captured_activations = {}
-        for k in cached_activations:
-            captured_activations[k] = {}
-            for layer_idx in captured_layer_indices:
-                ca_layer_idx = self.l2ca[layer_idx]
-                captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx]
+
+        if extra_info['capture_ca_activations']:
+            for k in cached_activations:
+                captured_activations[k] = {}
+                for layer_idx in captured_layer_indices:
+                    ca_layer_idx = self.l2ca[layer_idx]
+                    captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx]
 
         extra_info['ca_layers_activations'] = captured_activations
 

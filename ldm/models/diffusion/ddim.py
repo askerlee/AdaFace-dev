@@ -12,7 +12,7 @@ from ldm.util import ortho_subtract
 class DDIMSampler(object):
     def __init__(self, model, schedule="linear", **kwargs):
         super().__init__()
-        # model: LatentDiffusion (inherits DDPM)
+        # model: LatentDiffusion (inherits from DDPM)
         # model is used by calling model.apply_model() -> 
         # DiffusionWrapper.forward() -> UNetModel.forward().
         self.model = model
@@ -36,7 +36,7 @@ class DDIMSampler(object):
         '''
        
         self.ddim_timesteps = make_ddim_timesteps(ddim_discr_method=ddim_discretize, num_ddim_timesteps=ddim_num_steps,
-                                                  num_ddpm_timesteps=self.ddpm_num_timesteps,verbose=verbose)
+                                                  num_ddpm_timesteps=self.ddpm_num_timesteps, verbose=verbose)
         alphas_cumprod = self.model.alphas_cumprod
         assert alphas_cumprod.shape[0] == self.ddpm_num_timesteps, 'alphas have to be defined for each timestep'
         to_torch = lambda x: x.clone().detach().to(torch.float32).to(self.model.device)
@@ -253,20 +253,25 @@ class DDIMSampler(object):
             # model.apply_model() -> DiffusionWrapper.forward() -> UNetModel.forward().
             e_t, e_t_uncond = self.model.apply_model(x_in, t_in, c2).chunk(2)
             # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
-            # cfg_use_ortho_subtract is disabled, as it doesn't bring consistent improvement.
-            cfg_use_ortho_subtract = False
-            if cfg_use_ortho_subtract:
-                # e_t, e_t_uncond: [4, 4, 64, 64]
-                e_t = e_t_uncond + guidance_scale * ortho_subtract(e_t, e_t_uncond, on_last_n_dims=2)
-            else:
-                e_t = e_t_uncond + guidance_scale * (e_t - e_t_uncond)
+            e_t = e_t_uncond + guidance_scale * (e_t - e_t_uncond)
 
         # score_corrector is None.
         if score_corrector is not None:
             assert self.model.parameterization == "eps"
             e_t = score_corrector.modify_score(self.model, e_t, x, t, c, **corrector_kwargs)
 
+        # use_original_steps=False, so alphas = self.ddim_alphas.
+        '''        
+        (Pdb) alphas
+        tensor([0.9985, 0.9805, 0.9609, 0.9399, 0.9170, 0.8931, 0.8672, 0.8403, 0.8120,
+                0.7827, 0.7520, 0.7207, 0.6885, 0.6558, 0.6226, 0.5889, 0.5552, 0.5215,
+                0.4883, 0.4553, 0.4229, 0.3914, 0.3606, 0.3308, 0.3022, 0.2749, 0.2490,
+                0.2245, 0.2014, 0.1798, 0.1598, 0.1412, 0.1243, 0.1088, 0.0947, 0.0819,
+                0.0705, 0.0604, 0.0514, 0.0435, 0.0366, 0.0305, 0.0254, 0.0210, 0.0172,
+                0.0140, 0.0113, 0.0091, 0.0073, 0.0058], device='cuda:0')
+        '''
         alphas = self.model.alphas_cumprod if use_original_steps else self.ddim_alphas
+        # alphas_prev: [0.999] + alphas[:-1]
         alphas_prev = self.model.alphas_cumprod_prev if use_original_steps else self.ddim_alphas_prev
         sqrt_one_minus_alphas = self.model.sqrt_one_minus_alphas_cumprod if use_original_steps else self.ddim_sqrt_one_minus_alphas
         # sigmas = self.ddim_sigmas are all 0s.

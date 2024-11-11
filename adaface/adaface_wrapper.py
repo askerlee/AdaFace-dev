@@ -196,6 +196,7 @@ class AdaFaceWrapper(nn.Module):
                 beta_schedule="scaled_linear",
                 clip_sample=False,
                 set_alpha_to_one=False,
+                steps_offset=1,
             )
             pipeline.scheduler = noise_scheduler
         # Otherwise, if not use_lcm, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
@@ -371,10 +372,10 @@ class AdaFaceWrapper(nn.Module):
             return None
         
         if all_adaface_subj_embs.ndim == 4:
-            # [1, 1, 16, 768] -> [16, 768]
+            # [1, 1, 20, 768] -> [20, 768]
             all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0).squeeze(0)
         elif all_adaface_subj_embs.ndim == 3:
-            # [1, 16, 768] -> [16, 768]
+            # [1, 20, 768] -> [20, 768]
             all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0)
 
         if update_text_encoder:
@@ -471,7 +472,7 @@ class AdaFaceWrapper(nn.Module):
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
-    def forward(self, noise, prompt, negative_prompt=None, 
+    def forward(self, noise, prompt, prompt_embeds=None, negative_prompt=None, 
                 placeholder_tokens_pos='append',
                 guidance_scale=6.0, out_image_count=4, 
                 ref_img_strength=0.8, generator=None, 
@@ -486,17 +487,29 @@ class AdaFaceWrapper(nn.Module):
         if negative_prompt is None:
             negative_prompt = self.negative_prompt
         # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
-        prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, \
-            negative_pooled_prompt_embeds_ = \
-                self.encode_prompt(prompt, negative_prompt, 
-                                   placeholder_tokens_pos=placeholder_tokens_pos,
-                                   ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
-                                   ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
-                                   repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
-                                   device=self.device, 
-                                   verbose=verbose)
+        if prompt_embeds is None:
+            prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, \
+                negative_pooled_prompt_embeds_ = \
+                    self.encode_prompt(prompt, negative_prompt, 
+                                    placeholder_tokens_pos=placeholder_tokens_pos,
+                                    ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
+                                    ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
+                                    repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
+                                    device=self.device, 
+                                    verbose=verbose)
+        else:   
+            if len(prompt_embeds) == 2:
+                prompt_embeds_, negative_prompt_embeds_ = prompt_embeds
+                pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = None, None
+            elif len(prompt_embeds) == 4:
+                prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, \
+                    negative_pooled_prompt_embeds_ = prompt_embeds
+            else:
+                breakpoint()
+                
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
+
         if negative_prompt_embeds_ is not None:
             negative_prompt_embeds_ = negative_prompt_embeds_.repeat(out_image_count, 1, 1)
 
