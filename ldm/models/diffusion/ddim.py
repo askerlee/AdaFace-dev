@@ -3,14 +3,12 @@
 import torch
 import numpy as np
 from tqdm import tqdm
-from functools import partial
 
-from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, noise_like, \
-    extract_into_tensor
-from ldm.util import ortho_subtract
+from ldm.modules.diffusionmodules.util import make_ddim_sampling_parameters, make_ddim_timesteps, \
+                                              noise_like, extract_into_tensor
 
-class DDIMSampler(object):
-    def __init__(self, model, schedule="linear", **kwargs):
+class DDIMSampler:
+    def __init__(self, model, schedule="linear"):
         super().__init__()
         # model: LatentDiffusion (inherits from DDPM)
         # model is used by calling model.apply_model() -> 
@@ -18,12 +16,6 @@ class DDIMSampler(object):
         self.model = model
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
-
-    def register_buffer(self, name, attr):
-        if type(attr) == torch.Tensor:
-            if attr.device != torch.device("cuda"):
-                attr = attr.to(torch.device("cuda"))
-        setattr(self, name, attr)
 
     def make_schedule(self, ddim_num_steps, ddim_discretize="uniform", ddim_eta=0., verbose=True):
         '''

@@ -208,10 +208,6 @@ def parse_args():
                         help="CSV file to save the evaluation scores")
     parser.add_argument("--debug", action="store_true",
                         help="debug mode")
-    parser.add_argument("--eval_blip", action="store_true",
-                        help="Evaluate BLIP-diffusion models")
-    parser.add_argument("--cls_string", type=str, default=None,
-                        help="Subject class name. Only requires for --eval_blip")
     parser.add_argument("--diffusers", type=str2bool, const=True, nargs="?", default=True,
                         help="Use the diffusers implementation which is faster than the original LDM")
     parser.add_argument("--method", type=str, default="adaface",
@@ -324,6 +320,10 @@ def main(opt):
     else:
         first_subj_model_path = "uninitialized"
 
+    # If not using the diffusers pipeline, then always use the LDM pipeline.
+    if not opt.diffusers:
+        opt.use_ldm_pipeline = True
+
     if opt.use_ldm_pipeline:
         config = OmegaConf.load(f"{opt.config}")
         config.model.params.personalization_config.params.cls_delta_string      = 'person'
@@ -387,67 +387,54 @@ def main(opt):
     # Usually we don't use_ldm_pipeline and diffusers at the same time.
     # But if both are enabled, the LDM pipeline will be used to get the prompt embeddings,
     # and the diffusers pipeline will generate the images.
-    if opt.eval_blip or opt.diffusers:
-        if opt.diffusers:
-            if opt.method == "adaface":
-                from adaface.adaface_wrapper import AdaFaceWrapper
+    if opt.diffusers:
+        if opt.method == "adaface":
+            from adaface.adaface_wrapper import AdaFaceWrapper
 
-                pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
-                                          opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
-                                          opt.enabled_encoders, opt.use_lcm,
-                                          opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
-                                          unet_types=None,
-                                          main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
-                                          unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
-                                          device=device)
-                # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
-                adaface_subj_embs = \
-                    pipeline.prepare_adaface_embeddings(ref_image_paths, None, 
-                                                        perturb_at_stage='img_prompt_emb',
-                                                        perturb_std=0, 
-                                                        update_text_encoder=True)
-                
-            elif opt.method == "pulid":
-                sys.path.append("pulid")
-                from pulid.pipeline import PuLIDPipeline
-                from pulid.utils import resize_numpy_image_long
-                from pulid import attention_processor as attention
+            pipeline = AdaFaceWrapper("text2img", opt.ckpt, opt.adaface_encoder_types, 
+                                        opt.adaface_ckpt_paths, opt.adaface_encoder_cfg_scales,
+                                        opt.enabled_encoders, opt.use_lcm,
+                                        opt.subject_string, opt.ddim_steps, negative_prompt=opt.neg_prompt,
+                                        unet_types=None,
+                                        main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
+                                        unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
+                                        device=device)
+            # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
+            adaface_subj_embs = \
+                pipeline.prepare_adaface_embeddings(ref_image_paths, None, 
+                                                    perturb_at_stage='img_prompt_emb',
+                                                    perturb_std=0, 
+                                                    update_text_encoder=True)
+            
+        elif opt.method == "pulid":
+            sys.path.append("pulid")
+            from pulid.pipeline import PuLIDPipeline
+            from pulid.utils import resize_numpy_image_long
+            from pulid import attention_processor as attention
 
-                first_subj_model_path = ""
-                pipeline = PuLIDPipeline(device=device)
-                
-                attention.NUM_ZERO = 8
-                attention.ORTHO = False
-                attention.ORTHO_v2 = True
-
-                id_embeddings = None
-                for id_image_path in ref_image_paths:
-                    id_image = np.array(Image.open(id_image_path))
-                    id_image = resize_numpy_image_long(id_image, 1024)
-                    id_embedding = pipeline.get_id_embedding(id_image)
-                    # No face detected.
-                    if id_embedding is None:
-                        continue
-                    if id_embeddings is None:
-                        id_embeddings = id_embedding
-                    else:
-                        id_embeddings = torch.cat(
-                            (id_embeddings, id_embedding[:, :5]), dim=1
-                        )
-
-                print("id_embeddings:", id_embeddings.shape)
-
-        # eval_blip
-        else:
-            from lavis.models import load_model_and_preprocess
-            blip_model, vis_preprocess, txt_preprocess = load_model_and_preprocess("blip_diffusion", "base", device=f"cuda:{opt.gpu}", is_eval=True)
-            blip_model.load_checkpoint(opt.ckpt)
-            cond_subject = opt.cls_string
-            tgt_subject  = opt.cls_string
-            cond_subjects = [txt_preprocess["eval"](cond_subject)]
-            tgt_subjects  = [txt_preprocess["eval"](tgt_subject)]
-            negative_prompt = predefined_negative_prompt
             first_subj_model_path = ""
+            pipeline = PuLIDPipeline(device=device)
+            
+            attention.NUM_ZERO = 8
+            attention.ORTHO = False
+            attention.ORTHO_v2 = True
+
+            id_embeddings = None
+            for id_image_path in ref_image_paths:
+                id_image = np.array(Image.open(id_image_path))
+                id_image = resize_numpy_image_long(id_image, 1024)
+                id_embedding = pipeline.get_id_embedding(id_image)
+                # No face detected.
+                if id_embedding is None:
+                    continue
+                if id_embeddings is None:
+                    id_embeddings = id_embedding
+                else:
+                    id_embeddings = torch.cat(
+                        (id_embeddings, id_embedding[:, :5]), dim=1
+                    )
+
+            print("id_embeddings:", id_embeddings.shape)
 
         # pulid requires full precision.
         opt.precision = "full"
@@ -653,38 +640,6 @@ def main(opt):
                                 sample = sample.resize((512, 512))
                                 x_samples_ddim.append(sample)
 
-                    elif opt.eval_blip:
-                        x_samples_ddim = []
-                        blip_seed = 8888
-                        for i_sample, prompt in enumerate(prompts):
-                            stripped_prompt_parts = re.split(" z[, ]+", prompt)
-                            if stripped_prompt_parts[1] == "":
-                                stripped_prompt = re.sub("^a ", "", stripped_prompt_parts[0])
-                                stripped_prompt = stripped_prompt.strip()
-                            else:
-                                stripped_prompt = stripped_prompt_parts[1].strip()
-
-                            if i_sample == 0:
-                                print("blip:", stripped_prompt)
-
-                            stripped_prompts = [txt_preprocess["eval"](stripped_prompt)]
-                            samples_info = {
-                                "cond_images":  None,
-                                "cond_subject": cond_subjects,
-                                "tgt_subject":  tgt_subjects,
-                                "prompt":       stripped_prompts,
-                            }
-
-                            samples = blip_model.generate(
-                                samples_info,
-                                seed=blip_seed + i_sample,
-                                guidance_scale=7.5,
-                                num_inference_steps=50,
-                                neg_prompt=negative_prompt,
-                                height=512,
-                                width=512,
-                            )
-                            x_samples_ddim.append(samples[0])
                     # Otherwise, it's use_ldm_pipeline and not diffusers. Do nothing here, 
                     # since the images have been generated using LDM pipeline above.
 
@@ -704,17 +659,17 @@ def main(opt):
                                 base_count += 1
                                 sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
-                            if not opt.eval_blip and not opt.diffusers:
+                            if not opt.diffusers:
                                 x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
                                 Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
                             else:
-                                # eval_blip. x_sample is already a PIL image.
+                                # diffusers. x_sample is already a PIL image.
                                 x_sample.save(sample_file_path)
                                 # Convert x_sample to a torch tensor with a compatible shape.
                                 # H, W, C => C, H, W
                                 x_samples_ddim[i] = torch.from_numpy(np.array(x_sample)).permute(2, 0, 1)
 
-                        if opt.eval_blip or opt.diffusers:
+                        if opt.diffusers:
                             # x_samples_ddim: [batch_size, C, H, W]
                             x_samples_ddim = torch.stack(x_samples_ddim, dim=0)
                         else:

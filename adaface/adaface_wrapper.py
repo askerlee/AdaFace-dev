@@ -196,7 +196,8 @@ class AdaFaceWrapper(nn.Module):
                 beta_schedule="scaled_linear",
                 clip_sample=False,
                 set_alpha_to_one=False,
-                steps_offset=1,
+                steps_offset=0,
+                timestep_spacing="trailing",
             )
             pipeline.scheduler = noise_scheduler
         # Otherwise, if not use_lcm, pipeline.scheduler == FlowMatchEulerDiscreteScheduler
@@ -506,7 +507,7 @@ class AdaFaceWrapper(nn.Module):
                     negative_pooled_prompt_embeds_ = prompt_embeds
             else:
                 breakpoint()
-                
+
         # Repeat the prompt embeddings for all images in the batch.
         prompt_embeds_ = prompt_embeds_.repeat(out_image_count, 1, 1)
 
