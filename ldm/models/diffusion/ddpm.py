@@ -27,8 +27,7 @@ from ldm.modules.diffusers_capture import AttnProcessor_Capture, CrossAttnUpBloc
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
-from ldm.ademamix_shampoo import AdEMAMixDistributedShampoo
-
+from ldm.adopt_optimizer import ADOPT
 from adaface.unet_teachers import create_unet_teacher
 from gma.network import GMA
 from gma.utils.utils import load_checkpoint as gma_load_checkpoint
@@ -2584,8 +2583,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = AdEMAMix
         elif self.optimizer_type == 'AdEMAMix8bit':
             OptimizerClass = bnb.optim.AdEMAMix8bit
-        elif self.optimizer_type == 'AdEMAMixDistributedShampoo':
-            OptimizerClass = AdEMAMixDistributedShampoo
+        elif self.optimizer_type == 'adopt':
+            OptimizerClass = ADOPT
         else:
             raise NotImplementedError()
             
@@ -2612,7 +2611,8 @@ class LatentDiffusion(DDPM):
 
         # Adam series, AdEMAMix series, or OrthogonalNesterov.
         if 'Prodigy' not in self.optimizer_type:
-            if 'adam' in self.optimizer_type.lower():
+            # ADOPT is an improved version of Adam.
+            if 'adam' in self.optimizer_type.lower() or 'adopt' in self.optimizer_type.lower():
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                     betas=self.adam_config.betas)
             # AdEMAMix, AdEMAMix8bit, AdEMAMixDistributedShampoo.
@@ -2795,10 +2795,14 @@ class DiffusersUNetWrapper(pl.LightningModule):
         
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
-        self.attnprocessor_capture.capture_ca_activations = extra_info['capture_ca_activations']
+        # capture_ca_activations is set to extra_info['capture_ca_activations'] in clear_attn_cache().
+        self.attnprocessor_capture.clear_attn_cache(extra_info['capture_ca_activations'])
         if extra_info['capture_ca_activations']:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
             self.diffusion_model.up_blocks[3].capture_outfeats = extra_info['capture_ca_activations']
+            # Back up the forward() method of the last up block.
+            up_blocks3_forward = self.diffusion_model.up_blocks[3].forward
+            # Replace the forward() method of the last up block with a capturing method.
             self.diffusion_model.up_blocks[3].forward = \
                 CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
 
@@ -2813,9 +2817,15 @@ class DiffusersUNetWrapper(pl.LightningModule):
             cached_activations = self.attnprocessor_capture.cached_activations
             # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
             # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
-            #LINK #unet_layers
+            #LINK ldm/modules/diffusionmodules/openaimodel.py#unet_layers
             cached_outfeats = self.diffusion_model.up_blocks[3].cached_outfeats
-            self.attnprocessor_capture.clear_attn_cache()
+
+            # Restore everything.
+            # capture_ca_activations is set to False in clear_attn_cache().
+            self.attnprocessor_capture.clear_attn_cache(False)
+            self.diffusion_model.up_blocks[3].capture_outfeats = False
+            self.diffusion_model.up_blocks[3].forward = up_blocks3_forward
+            # Release one of the references to the cached outfeats.
             self.diffusion_model.up_blocks[3].cached_outfeats = {}
 
             for k in cached_activations:

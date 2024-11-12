@@ -48,10 +48,10 @@ class AttnProcessor_Capture:
     """
 
     def __init__(self, capture_ca_activations: bool = False):
-        self.capture_ca_activations = capture_ca_activations
-        self.clear_attn_cache()
+        self.clear_attn_cache(capture_ca_activations)
 
-    def clear_attn_cache(self):
+    def clear_attn_cache(self, capture_ca_activations):
+        self.capture_ca_activations = capture_ca_activations
         self.cached_activations = {}
         for k in ['q', 'attn', 'attnscore', 'attn_out']:
             self.cached_activations[k] = []
