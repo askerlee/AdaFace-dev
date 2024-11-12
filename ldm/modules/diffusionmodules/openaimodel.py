@@ -918,7 +918,8 @@ class UNetModel(nn.Module):
         for module in self.output_blocks:
             skip_h = hs.pop()
             h = torch.cat([h, skip_h], dim=1)
-
+            # ANCHOR[id=unet_layers]
+            # module: TimestepEmbedSequential: [ResBlock, SpatialTransformer].
             # emb: [2, 1280].
             h = module(h, emb, context, mask=img_mask)
             if layer_idx in captured_layer_indices:

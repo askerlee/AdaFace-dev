@@ -23,7 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from ldm.modules.diffusers_capture import AttnProcessor_Capture, CrossAttnUpBlock2D_capture_forward
+from ldm.modules.diffusers_capture import AttnProcessor_Capture, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -2774,7 +2774,7 @@ class DiffusionWrapper(pl.LightningModule):
 
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
-    def __init__(self, unet_dirpath, torch_dtype=torch.float16):
+    def __init__(self, unet_dirpath, torch_dtype=torch.bfloat16):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -2800,7 +2800,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
             self.diffusion_model.up_blocks[3].capture_outfeats = extra_info['capture_ca_activations']
             self.diffusion_model.up_blocks[3].forward = \
-                CrossAttnUpBlock2D_capture_forward.__get__(self.diffusion_model.up_blocks[3])
+                CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
 
         with torch.autocast(device_type='cuda', dtype=self.dtype):
             out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
@@ -2811,7 +2811,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         if extra_info['capture_ca_activations']:
             cached_activations = self.attnprocessor_capture.cached_activations
-            cached_outfeats    = self.diffusion_model.up_blocks[3].cached_outfeats
+            # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
+            # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
+            #LINK #unet_layers
+            cached_outfeats = self.diffusion_model.up_blocks[3].cached_outfeats
             self.attnprocessor_capture.clear_attn_cache()
             self.diffusion_model.up_blocks[3].cached_outfeats = {}
 
@@ -2820,6 +2823,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                     ca_layer_idx = self.l2ca[layer_idx]
                     captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx].to(out_dtype)
                     # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
+                    # 22, 23, 24 -> 0, 1, 2.
                     captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx - 22].to(out_dtype)
 
         extra_info['ca_layers_activations'] = captured_activations

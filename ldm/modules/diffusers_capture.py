@@ -106,6 +106,11 @@ class AttnProcessor_Capture:
         key = attn.to_k(encoder_hidden_states)
         value = attn.to_v(encoder_hidden_states)
 
+        if attn.norm_q is not None:
+            query = attn.norm_q(query)
+        if attn.norm_k is not None:
+            key = attn.norm_k(key)
+        
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
 
@@ -138,17 +143,19 @@ class AttnProcessor_Capture:
             # cached q will be used in ddpm.py:calc_comp_fg_bg_preserve_loss(), in which two qs will multiply each other.
             # So sqrt(scale) will scale the product of two qs by scale.
             # ANCHOR[id=attention_caching]
+            # query: [2, 8, 4096, 40] -> [2, 320, 4096]
             self.cached_activations['q'].append(
                 rearrange(query,   'b h n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale) )
+            # attn_prob, attn_score: [2, 8, 4096, 77]
             self.cached_activations['attn'].append(attn_prob)
             self.cached_activations['attnscore'].append(attn_score)
             # attn_out: [b, n, h * d] -> [b, h * d, n]
+            # [2, 4096, 320] -> [2, 320, 4096].
             self.cached_activations['attn_out'].append(
                 hidden_states.permute(0, 2, 1).contiguous() )
-
         return hidden_states
 
-def CrossAttnUpBlock2D_capture_forward(
+def CrossAttnUpBlock2D_forward_capture(
     self,
     hidden_states: torch.Tensor,
     res_hidden_states_tuple: Tuple[torch.Tensor, ...],

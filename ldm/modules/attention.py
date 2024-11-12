@@ -237,6 +237,7 @@ class BasicTransformerBlock(nn.Module):
     def forward(self, x, context=None, mask=None):
         return checkpoint(self._forward, (x, context, mask), self.parameters(), self.checkpoint)
 
+    # (attn1, attn2, ff). attn1: self-attention. attn2: cross-attention.
     def _forward(self, x, context=None, mask=None):
         # x1 dim  ==  x dim  ==  attn1 dim  ==  attn2 query_dim.
         x1 = self.attn1(self.norm1(x), mask=mask) + x
