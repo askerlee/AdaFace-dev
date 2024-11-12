@@ -111,7 +111,7 @@ class DDPM(pl.LightningModule):
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
-        self.recon_subj_bg_suppress_loss_weight        = recon_subj_bg_suppress_loss_weight
+        self.recon_subj_bg_suppress_loss_weight     = recon_subj_bg_suppress_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -311,7 +311,7 @@ class DDPM(pl.LightningModule):
 
     def init_iteration_flags(self):
         self.iter_flags = { 'calc_clip_loss':                   False,
-                            'do_normal_recon':                  True,
+                            'do_normal_recon':                  False,
                             'do_unet_distill':                  False,
                             'gen_rand_id_for_id2img':           False,
                             'id2img_prompt_embs':               None,
