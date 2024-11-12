@@ -111,7 +111,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
             prompt = "face portrait, " + prompt
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
-    samples = adaface(noise, prompt, negative_prompt, 
+    samples = adaface(noise, prompt, negative_prompt=negative_prompt, 
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, 
                       repeat_prompt_for_each_encoder=True,
