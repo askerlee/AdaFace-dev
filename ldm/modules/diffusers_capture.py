@@ -13,12 +13,13 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
-    L, S = query.size(-2), key.size(-2)
+    B, L, S = query.size(0), query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
-    attn_bias = torch.zeros(L, S, device=query.device, dtype=query.dtype)
+    # 1: head (to be broadcasted). L: query length. S: key length.
+    attn_bias = torch.zeros(B, 1, L, S, device=query.device, dtype=query.dtype)
     if is_causal:
         assert attn_mask is None
-        temp_mask = torch.ones(L, S, device=query.device, dtype=torch.bool).tril(diagonal=0)
+        temp_mask = torch.ones(B, 1, L, S, device=query.device, dtype=torch.bool).tril(diagonal=0)
         attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
         attn_bias.to(query.dtype)
 
@@ -63,6 +64,7 @@ class AttnProcessor_Capture:
         encoder_hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
+        img_mask: Optional[torch.Tensor] = None,
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -97,7 +99,25 @@ class AttnProcessor_Capture:
         scale = 1 / math.sqrt(query.size(-1))
 
         is_cross_attn = (encoder_hidden_states is not None)
-        
+        if (not is_cross_attn) and (img_mask is not None):
+            # hidden_states: [BS, 4096, 320]. img_mask: [BS, 1, 64, 64]
+            # Scale the mask to the same size as hidden_states.
+            mask_size = int(math.sqrt(hidden_states.shape[-2]))
+            img_mask = F.interpolate(img_mask, size=(mask_size, mask_size), mode='nearest')
+            if (img_mask.sum(dim=(2, 3)) == 0).any():
+                img_mask = None
+            else:
+                # img_mask: [2, 1, 64, 64] -> [2, 4096]
+                img_mask = rearrange(img_mask, 'b ... -> b (...)').contiguous()
+                # max_neg_value = -torch.finfo(hidden_states.dtype).max
+                # img_mask: [2, 4096] -> [2, 1, 1, 4096]
+                img_mask = rearrange(img_mask.bool(), 'b j -> b () () j')
+                # attn_score: [16, 4096, 4096]. img_mask will be broadcasted to [16, 4096, 4096].
+                # So some rows in dim 1 (e.g. [0, :, 4095]) of attn_score will be masked out (all elements in [0, :, 4095] is -inf).
+                # But not all elements in [0, 4095, :] is -inf. Since the softmax is done along dim 2, this is fine.
+                # attn_score.masked_fill_(~img_mask, max_neg_value)
+                attention_mask = img_mask
+
         if encoder_hidden_states is None:
             encoder_hidden_states = hidden_states
         elif attn.norm_cross:

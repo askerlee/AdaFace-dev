@@ -485,7 +485,7 @@ class ImgPrompt2TextPrompt(nn.Module):
         face_prompt_embs_orig_dtype = face_prompt_embs.dtype
         face_prompt_embs            = face_prompt_embs.to(self.dtype)
 
-        ID_END      = 4 + self.N_ID
+        ID_END      = 4      + self.N_ID
         PAD_BEGIN   = ID_END + self.N_SFX + 2
 
         # token_embs: [1, 77, 768]. This call is only to get the template token embeddings (the shallowest mapping).

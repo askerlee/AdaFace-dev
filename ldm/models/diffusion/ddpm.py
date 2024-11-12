@@ -2797,11 +2797,14 @@ class DiffusersUNetWrapper(pl.LightningModule):
         
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
-        # capture_ca_activations is set to extra_info['capture_ca_activations'] in clear_attn_cache().
-        self.attnprocessor_capture.clear_attn_cache(extra_info['capture_ca_activations'])
-        if extra_info['capture_ca_activations']:
+        img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
+        capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
+
+        # capture_ca_activations is set to capture_ca_activations in clear_attn_cache().
+        self.attnprocessor_capture.clear_attn_cache(capture_ca_activations)
+        if capture_ca_activations:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
-            self.diffusion_model.up_blocks[3].capture_outfeats = extra_info['capture_ca_activations']
+            self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
             # Back up the forward() method of the last up block.
             up_blocks3_forward = self.diffusion_model.up_blocks[3].forward
             # Replace the forward() method of the last up block with a capturing method.
@@ -2809,13 +2812,15 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
 
         with torch.autocast(device_type='cuda', dtype=self.dtype):
-            out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, return_dict=False)[0]
+            out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
+                                       cross_attention_kwargs={'img_mask': img_mask},
+                                       return_dict=False)[0]
 
         # Only capture the activations of the last 3 CA layers.
         captured_layer_indices = [22, 23, 24] # => 13, 14, 15
         captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
 
-        if extra_info['capture_ca_activations']:
+        if capture_ca_activations:
             cached_activations = self.attnprocessor_capture.cached_activations
             # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
             # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.

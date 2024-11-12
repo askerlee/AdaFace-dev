@@ -351,17 +351,17 @@ class EmbeddingManager(nn.Module):
             # arc2face     disables static_img_suffix_embs.
             adaface_subj_embs, lens_subj_emb_segments = \
                 self.id2ada_prompt_encoder.generate_adaface_embeddings(
-                                        image_paths=None, face_id_embs=None,
-                                        img_prompt_embs=id2img_prompt_embs,
-                                        p_dropout=self.p_encoder_dropout if self.training else 0,
-                                        # If an encoder is dropped out, then the corresponding adaface_subj_embs
-                                        # will not be included in the returned adaface_subj_embs. 
-                                        # So the returned adaface_subj_embs only contain valid embeddings and 
-                                        # could be shorter than self.token2num_vectors[placeholder_string].
-                                        return_zero_embs_for_dropped_encoders=False,
-                                        avg_at_stage=None,
-                                        enable_static_img_suffix_embs=enable_static_img_suffix_embs,
-                                    )
+                        image_paths=None, face_id_embs=None,
+                        img_prompt_embs=id2img_prompt_embs,
+                        p_dropout=self.p_encoder_dropout if self.training else 0,
+                        # If an encoder is dropped out, then the corresponding adaface_subj_embs
+                        # will not be included in the returned adaface_subj_embs. 
+                        # So the returned adaface_subj_embs only contain valid embeddings and 
+                        # could be shorter than self.token2num_vectors[placeholder_string].
+                        return_zero_embs_for_dropped_encoders=False,
+                        avg_at_stage=None,
+                        enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                    )
             # adaface_subj_embs should never be None, since we have made sure that not all encoders are dropped out,
             # and the passed in id2img_prompt_embs are always valid (even if no faces are detected in the input image,
             # we fill in random values). The following is just in case.
@@ -391,17 +391,17 @@ class EmbeddingManager(nn.Module):
                 with torch.no_grad():
                     adaface_subj_embs0, lens_subj_emb_segments = \
                         self.id2ada_prompt_encoder.generate_adaface_embeddings(
-                                            image_paths=None, face_id_embs=None,
-                                            img_prompt_embs=id2img_prompt_embs,
-                                            p_dropout=self.p_encoder_dropout if self.training else 0,
-                                            # If an encoder is dropped out, then the corresponding adaface_subj_embs
-                                            # will not be included in the returned adaface_subj_embs. 
-                                            # So the returned adaface_subj_embs only contain valid embeddings and 
-                                            # could be shorter than self.token2num_vectors[placeholder_string].
-                                            return_zero_embs_for_dropped_encoders=False,
-                                            avg_at_stage=None,
-                                            enable_static_img_suffix_embs=False,
-                                            )
+                            image_paths=None, face_id_embs=None,
+                            img_prompt_embs=id2img_prompt_embs,
+                            p_dropout=self.p_encoder_dropout if self.training else 0,
+                            # If an encoder is dropped out, then the corresponding adaface_subj_embs
+                            # will not be included in the returned adaface_subj_embs. 
+                            # So the returned adaface_subj_embs only contain valid embeddings and 
+                            # could be shorter than self.token2num_vectors[placeholder_string].
+                            return_zero_embs_for_dropped_encoders=False,
+                            avg_at_stage=None,
+                            enable_static_img_suffix_embs=enable_static_img_suffix_embs,
+                        )
                 self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
 
                 # Replace the first adaface_subj_embs with adaface_subj_embs0.
@@ -440,6 +440,9 @@ class EmbeddingManager(nn.Module):
                     breakpoint()
 
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k2)
+                # There could be a gap between "z , , , ..." and ", , , ...". For example, during inference,
+                # the original prompt is repeated twice for the two encoders. The first segment contains 3 ", ",
+                # and the second segment contains 15 ", ". The second copy of the prompt is between the two segments.
                 while k2 < N and \
                   ((tokenized_text[placeholder_indices_k] != placeholder_token) & \
                    (tokenized_text[placeholder_indices_k] != self.string_to_token_dict[self.multi_token_filler])).any():
