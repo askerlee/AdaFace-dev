@@ -75,7 +75,7 @@ class DDPM(pl.LightningModule):
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
                  unet_distill_iter_gap=2,
-                 unet_distill_weight=4,
+                 unet_distill_weight=8,
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=5,
                  p_unet_teacher_uses_cfg=0.6,
@@ -991,13 +991,13 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['perturb_face_id_embs']:
             if not self.iter_flags['same_subject_in_batch']:
                 self.iter_flags['same_subject_in_batch'] = True
-                # Change the ID features of multiple subjects in the batch to the ID features of 
+                # Replace the ID features of multiple subjects in the batch to multiple copies of 
                 # the first subject, before adding noise to the ID features.
                 # Doing so is similar to contrastive learning: the embeddings in a batch are similar
                 # (the first subject embedding + randn noise), but the generated images are quite different.
                 # Therefore, the model may learn to distinguish the tiny differences in the embeddings.
                 # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
-                # the first subject's as well.
+                # those of the first subject as well.
                 # Change the batch to have the (1 subject image) * BS strcture.
                 # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
                 # clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
@@ -1535,6 +1535,8 @@ class LatentDiffusion(DDPM):
 
             v_loss_unet_distill = loss_unet_distill.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
+            # loss_unet_distill: ~0.01, so we use a very large unet_distill_weight==8 to
+            # make it comparable to the recon loss.
             loss += loss_unet_distill * self.unet_distill_weight
 
         if self.iter_flags['do_prompt_emb_delta_reg']:

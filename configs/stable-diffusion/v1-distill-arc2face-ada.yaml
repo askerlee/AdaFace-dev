@@ -33,14 +33,14 @@ model:
     # we use the unet teacher's output as the target (do_unet_distill).
     # at the other 50%, we use the original image as the target (do_normal_recon).
     unet_distill_iter_gap:            2
-    unet_distill_weight:              4
+    unet_distill_weight:              8
     # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
     # of the IDs (belonging to two face detectors) are not consistent. However, a small proportion
     # of random face IDs may help force the arc2face Ada focuses on reconstructing the arc2face random ID,
     # and the consistentID Ada focuses on reconstructing the consistentID random ID. Therefore, it may still
     # be helpful to set a small p_gen_rand_id_for_id2img. (If both parts are reconstructed well, then their summation
     # should match the mixture of the two teachers' outputs.)
-    p_gen_rand_id_for_id2img:             0.1
+    p_gen_rand_id_for_id2img:         0.1
     # the delta recon loss is only computed when perturb_face_id_embs.
     p_perturb_face_id_embs:           0.6
     # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
