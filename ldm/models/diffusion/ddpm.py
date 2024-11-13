@@ -23,7 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from ldm.modules.diffusers_capture import AttnProcessor_LoRA_Capture, AttnProcessor_Bypass, CrossAttnUpBlock2D_forward_capture
+from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture, AttnProcessor_Bypass, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -2804,11 +2804,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
         self.enable_lora = enable_lora
         self.lora_rank = lora_rank
-        hooked_attn_procs = self.set_attn_processor()
+        hooked_attn_procs = self.set_attn_processors()
         self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs.values())
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def set_attn_processor(self):
+    def set_attn_processors(self):
         unet = self.diffusion_model
         attn_procs = {}
         hooked_attn_procs = {}

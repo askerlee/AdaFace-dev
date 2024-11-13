@@ -16,6 +16,7 @@ from diffusers import (
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.util import UNetEnsemble
 from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
+from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import numpy as np
@@ -177,7 +178,9 @@ class AdaFaceWrapper(nn.Module):
             pipeline.unet = unet_ensemble
 
         print(f"Loaded pipeline from {self.base_model_path}.")
-        
+        if not remove_unet and self.diffusers_unet_uses_lora:
+            self.load_unet_lora_weights(pipeline.unet)
+                    
         if self.use_840k_vae:
             pipeline.vae = vae
             print("Replaced the VAE with the 840k-step VAE.")
@@ -266,7 +269,62 @@ class AdaFaceWrapper(nn.Module):
         else:
             raise ValueError(f"UNet path {unet_path} is not a file.")
         return unet_state_dict
+
+    # Adapted from ConsistentIDPipeline:set_ip_adapter().
+    def load_unet_attn_processors(self, unet, crossattn_loras_weight):
+        attn_procs = {}
+        hooked_attn_procs = {}
+
+        for name, attn_proc in unet.attn_processors.items():
+            # Only capture the activations of the last 3 CA layers.
+            if not name.startswith("up_blocks.3"):
+                attn_procs[name] = attn_proc
+                continue
+            # cross_attention_dim: 768.
+            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+            if cross_attention_dim is None:
+                # Self attention. Skip.
+                attn_procs[name] = attn_proc
+                continue
+
+            block_id = 3
+            # hidden_size: 320
+            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+            hooked_attn_proc = AttnProcessor_LoRA_Capture(
+                capture_ca_activations=False, enable_lora=self.diffusers_unet_uses_lora,
+                hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
+                lora_scale=1.0
+            )
+            attn_procs[name]        = hooked_attn_proc
+            hooked_attn_procs[name] = hooked_attn_proc
         
+        unet.set_attn_processor(attn_procs)
+        print(f"Set {len(hooked_attn_procs)} CrossAttn LoRA processors on {hooked_attn_procs.keys()}.")
+        self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs.values())
+        self.hooked_attn_procs.load_state_dict(crossattn_loras_weight)
+
+    def load_unet_lora_weights(self, unet):
+        unet_lora_weight_found = False
+        for adaface_ckp_path in self.adaface_ckpt_paths:
+            ckpt_dict = torch.load(adaface_ckp_path, map_location='cpu')
+            if 'unet_crossattn_loras' in ckpt_dict:
+                crossattn_loras_weight = ckpt_dict['unet_crossattn_loras']                
+                print(f"Found {len(crossattn_loras_weight)} CrossAttn LoRA weights in {adaface_ckp_path}.")
+                unet_lora_weight_found = True
+                break
+
+        if not unet_lora_weight_found:
+            print(f"CrossAttn LoRA weights not found in {self.adaface_ckpt_paths}.")
+            return
+        
+        if isinstance(unet, UNetEnsemble):
+            for unet_ in unet.unets:
+                self.load_unet_attn_processors(unet_, crossattn_loras_weight)
+            print(f"Loaded CrossAttn LoRA processors on {len(unet.unets)} UNets.")
+        else:
+            self.load_unet_attn_processors(unet, crossattn_loras_weight)
+            print(f"Loaded CrossAttn LoRA processors on the UNet.")
+
     def extend_tokenizer_and_text_encoder(self):
         if np.sum(self.encoders_num_id_vecs) < 1:
             raise ValueError(f"encoders_num_id_vecs has to be larger or equal to 1, but is {self.encoders_num_id_vecs}")
