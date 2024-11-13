@@ -225,7 +225,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--diffusers_unet_path", type=str, default='models/ensemble/sd15-unet',
                         help="Path to the Diffusers UNet model")
-    parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the Diffusers UNet model")
 
     parser.add_argument("--prompt_emb_delta_reg_weight",
