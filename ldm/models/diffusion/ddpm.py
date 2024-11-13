@@ -2848,9 +2848,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         enable_lora = extra_info.get('enable_lora', self.enable_lora) \
                         if extra_info is not None else self.enable_lora
 
-        # capture_ca_activations is set to capture_ca_activations in clear_attn_cache().
+        # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
         for hooked_attn_proc in self.hooked_attn_procs:
-            hooked_attn_proc.clear_attn_cache(capture_ca_activations, enable_lora)
+            hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
 
         if capture_ca_activations:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
@@ -2876,7 +2876,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             cached_outfeats = self.diffusion_model.up_blocks[3].cached_outfeats
 
             # Restore everything.
-            # capture_ca_activations is set to False in clear_attn_cache().
+            # capture_ca_activations is set to False in reset_attn_cache_and_flags().
             self.diffusion_model.up_blocks[3].capture_outfeats = False
             self.diffusion_model.up_blocks[3].forward = up_blocks3_forward
             # Release one of the references to the cached outfeats.
@@ -2894,7 +2894,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
                 # Restore enable_lora to the global flag.
-                self.hooked_attn_procs[layer_idx2].clear_attn_cache(False, self.enable_lora)
+                self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, self.enable_lora)
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)

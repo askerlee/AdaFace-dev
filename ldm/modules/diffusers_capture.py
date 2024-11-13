@@ -70,14 +70,15 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     Revised from AttnProcessor2_0
     """
 
-    def __init__(self, capture_ca_activations: bool = False, 
+    def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_scale: float = 1.0):
         super().__init__()
-        self.clear_attn_cache(capture_ca_activations)
-        self.enable_lora = False
+        # self.enable_lora is set in reset_attn_cache_and_flags().
+        self.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
         self.lora_rank = lora_rank
         self.lora_scale = lora_scale
+
         '''
         network_alpha (`float`, `optional`, defaults to `None`):
             The value of the network alpha used for stable learning and preventing underflow. This value has the same
@@ -90,7 +91,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
 
     # LoRA layers can be enabled/disabled dynamically.
-    def clear_attn_cache(self, capture_ca_activations, enable_lora):
+    def reset_attn_cache_and_flags(self, capture_ca_activations, enable_lora):
         self.capture_ca_activations = capture_ca_activations
         self.cached_activations = {}
         self.enable_lora = enable_lora
