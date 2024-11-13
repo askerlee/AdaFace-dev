@@ -64,7 +64,8 @@ class EmbeddingManager(nn.Module):
             num_static_img_suffix_embs=0,
             p_encoder_dropout=0,
             gen_ss_from_frozen_subj_basis_generator=False,
-            multi_token_filler=','
+            multi_token_filler=',',
+            unet_hooked_attn_procs=None,
     ):
         super().__init__()
 
@@ -180,6 +181,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict[self.multi_token_filler] = \
             self.get_tokens_for_string(self.multi_token_filler, force_single_token=True)[0].item()
 
+        self.unet_hooked_attn_procs = unet_hooked_attn_procs
         # self.load() loads subj SubjBasisGenerators.
         # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
@@ -574,8 +576,8 @@ class EmbeddingManager(nn.Module):
         saved_dict = {  "string_to_subj_basis_generator_dict":  self.string_to_subj_basis_generator_dict,
                         "placeholder_strings":                  self.placeholder_strings,
                         "subject_strings":                      self.subject_strings,
+                        "unet_crossattn_loras":                 self.unet_hooked_attn_procs.state_dict(),
                      }
-        
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
@@ -645,6 +647,13 @@ class EmbeddingManager(nn.Module):
                     self.string_to_token_dict[km2] = k2_token
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
+            if 'unet_crossattn_loras' in ckpt:
+                crossattn_loras_weight = ckpt['unet_crossattn_loras']
+                self.unet_hooked_attn_procs.load_state_dict(crossattn_loras_weight, strict=True)
+                print(f"Loaded {len(crossattn_loras_weight)} layers of CrossAttn LoRA weights")
+            else:
+                print(f"'unet_crossattn_loras' not found in {adaface_ckpt_path}")
+
         # ',' is used as filler tokens.
         self.string_to_token_dict[self.multi_token_filler] = \
             self.get_tokens_for_string(self.multi_token_filler, force_single_token=True)[0].item()
@@ -662,4 +671,9 @@ class EmbeddingManager(nn.Module):
         num_total_params    = len(subj_basis_generator_param_list0)
         print(f"Filtered out {num_no_grad_params} no-grad / {num_total_params} total parameters in subj_basis_generator_param_list0.")
 
-        return subj_basis_generator_param_list
+        if self.unet_hooked_attn_procs is not None:
+            unet_crossattn_loras_param_list = list(self.unet_hooked_attn_procs.parameters())
+        else:
+            unet_crossattn_loras_param_list = []
+
+        return subj_basis_generator_param_list + unet_crossattn_loras_param_list

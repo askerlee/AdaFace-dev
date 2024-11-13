@@ -23,7 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from ldm.modules.diffusers_capture import AttnProcessor_LoRA_Capture, CrossAttnUpBlock2D_forward_capture
+from ldm.modules.diffusers_capture import AttnProcessor_LoRA_Capture, AttnProcessor_Bypass, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -62,7 +62,7 @@ class DDPM(pl.LightningModule):
                  unfreeze_unet=False,
                  unet_lr=0.,
                  parameterization="eps",  # all assuming fixed variance schedules
-                 optimizer_type='Prodigy',
+                 optimizer_type='AdamW',
                  grad_clip=0.5,
                  adam_config=None,
                  prodigy_config=None,
@@ -93,6 +93,7 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=4e-3,
                  use_ldm_unet=True,
                  diffusers_unet_path='models/ensemble/sd15-unet',
+                 diffusers_unet_uses_lora=False,
                  ):
         
         super().__init__()
@@ -153,10 +154,13 @@ class DDPM(pl.LightningModule):
         self.init_iteration_flags()
 
         self.use_ldm_unet = use_ldm_unet
+        self.diffusers_unet_uses_lora = diffusers_unet_uses_lora
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
         else:
-            self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, torch_dtype=torch.float16)
+            self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, 
+                                              torch_dtype=torch.float16,
+                                              enable_lora=self.diffusers_unet_uses_lora)
 
         count_params(self.model, verbose=True)
 
@@ -587,7 +591,12 @@ class LatentDiffusion(DDPM):
         self.cond_stage_model = instantiate_from_config(config)
         
     def instantiate_embedding_manager(self, config, text_embedder):
-        model = instantiate_from_config(config, text_embedder=text_embedder)
+        if self.use_ldm_unet and self.diffusers_unet_uses_lora:
+            unet_hooked_attn_procs = self.model.hooked_attn_procs
+        else:
+            unet_hooked_attn_procs = None
+        model = instantiate_from_config(config, text_embedder=text_embedder,
+                                        unet_hooked_attn_procs=unet_hooked_attn_procs)
         return model
 
     def get_first_stage_encoding(self, encoder_posterior):
@@ -2776,7 +2785,8 @@ class DiffusionWrapper(pl.LightningModule):
 
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
-    def __init__(self, unet_dirpath, torch_dtype=torch.bfloat16):
+    def __init__(self, unet_dirpath, torch_dtype=torch.bfloat16,
+                 enable_lora=False, lora_rank=128):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -2788,47 +2798,55 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.diffusion_model.debug_attn = False
         self.to(torch_dtype)
 
-        self.all_ca_layer_indices = [1, 2, 4, 5, 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24]
-        # l2ca: short for layer_idx2ca_layer_idx.
-        self.l2ca = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
-                      17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
         # Only capture the activations of the last 3 CA layers.
         self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
-        self.set_attn_processor()
+        self.enable_lora = enable_lora
+        self.lora_rank = lora_rank
+        hooked_attn_procs = self.set_attn_processor()
+        self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs.values())
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def set_attn_processor(self):
         unet = self.diffusion_model
         attn_procs = {}
-        for name in unet.attn_processors.keys():
-            breakpoint()
+        hooked_attn_procs = {}
+
+        for name, attn_proc in unet.attn_processors.items():
+            # Only capture the activations of the last 3 CA layers.
+            if not name.startswith("up_blocks.3"):
+                attn_procs[name] = AttnProcessor_Bypass(attn_proc)
+                continue
+            # cross_attention_dim: 768.
             cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if name.startswith("mid_block"):
-                hidden_size = unet.config.block_out_channels[-1]
-            elif name.startswith("up_blocks"):
-                block_id = int(name[len("up_blocks.")])
-                hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            elif name.startswith("down_blocks"):
-                block_id = int(name[len("down_blocks.")])
-                hidden_size = unet.config.block_out_channels[block_id]
             if cross_attention_dim is None:
-                attn_procs[name] = AttnProcessor_LoRA_Capture(
-                    hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, rank=self.lora_rank,
-                )
-            else:
-                attn_procs[name] = AttnProcessor_LoRA_Capture(
-                    hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, scale=1.0, rank=self.lora_rank, num_tokens=self.num_tokens,
-                )
+                # Self attention. Skip.
+                attn_procs[name] = AttnProcessor_Bypass(attn_proc)
+                continue
+
+            block_id = 3
+            # hidden_size: 320
+            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+            hooked_attn_proc = AttnProcessor_LoRA_Capture(
+                capture_ca_activations=True, enable_lora=self.enable_lora,
+                hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
+                lora_rank=self.lora_rank, lora_scale=1.0
+            )
+            attn_procs[name]        = hooked_attn_proc
+            hooked_attn_procs[name] = hooked_attn_proc
         
         unet.set_attn_processor(attn_procs)
-
+        print(f"Set {len(hooked_attn_procs)} CrossAttn LoRA processors on {hooked_attn_procs.keys()}.")
+        return hooked_attn_procs
+    
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
 
         # capture_ca_activations is set to capture_ca_activations in clear_attn_cache().
-        self.attnprocessor_capture.clear_attn_cache(capture_ca_activations)
+        for hooked_attn_proc in self.hooked_attn_procs:
+            hooked_attn_proc.clear_attn_cache(capture_ca_activations)
+
         if capture_ca_activations:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
             self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
@@ -2847,7 +2865,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
         captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
 
         if capture_ca_activations:
-            cached_activations = self.attnprocessor_capture.cached_activations
             # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
             # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
             #LINK ldm/modules/diffusionmodules/openaimodel.py#unet_layers
@@ -2855,19 +2872,23 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
             # Restore everything.
             # capture_ca_activations is set to False in clear_attn_cache().
-            self.attnprocessor_capture.clear_attn_cache(False)
             self.diffusion_model.up_blocks[3].capture_outfeats = False
             self.diffusion_model.up_blocks[3].forward = up_blocks3_forward
             # Release one of the references to the cached outfeats.
             self.diffusion_model.up_blocks[3].cached_outfeats = {}
 
-            for k in cached_activations:
-                for layer_idx in self.captured_layer_indices:
-                    ca_layer_idx = self.l2ca[layer_idx]
-                    captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx].to(out_dtype)
-                    # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
-                    # 22, 23, 24 -> 0, 1, 2.
-                    captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx - 22].to(out_dtype)
+            for layer_idx in self.captured_layer_indices:
+                # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
+                # 22, 23, 24 -> 0, 1, 2.
+                layer_idx2 = layer_idx - 22
+                for k in captured_activations.keys():
+                    if k == 'outfeat':
+                        captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx2].to(out_dtype)
+                    else:
+                        cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
+                        captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
+
+                self.hooked_attn_procs[layer_idx2].clear_attn_cache(False)
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)

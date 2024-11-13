@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from typing import Callable, List, Optional, Tuple, Union, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
@@ -42,16 +43,37 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     output = attn_weight @ value
     return output, attn_score, attn_weight
 
+class AttnProcessor_Bypass:
+    def __init__(self, real_attn_proc):
+        self.real_attn_proc = real_attn_proc
+    
+    def __call__(
+        self,
+        attn: Attention,
+        hidden_states: torch.Tensor,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        temb: Optional[torch.Tensor] = None,
+        # To avoid warning like:
+        # `cross_attention_kwargs ['img_mask'] are not expected by AttnProcessor2_0 and will be ignored.`
+        img_mask: Optional[torch.Tensor] = None,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:    
+        return self.real_attn_proc(
+            attn, hidden_states, encoder_hidden_states, attention_mask, temb, *args, **kwargs
+        )
 
 # All layers share the same attention processor instance.
-class AttnProcessor_LoRA_Capture:
+class AttnProcessor_LoRA_Capture(nn.Module):
     r"""
     Revised from AttnProcessor2_0
     """
 
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
-                 hidden_size: int = -1, cross_attention_dim: int = -1, 
+                 hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_scale: float = 1.0):
+        super().__init__()
         self.clear_attn_cache(capture_ca_activations)
         self.enable_lora = enable_lora
         self.lora_rank = lora_rank
@@ -73,8 +95,6 @@ class AttnProcessor_LoRA_Capture:
     def clear_attn_cache(self, capture_ca_activations):
         self.capture_ca_activations = capture_ca_activations
         self.cached_activations = {}
-        for k in ['q', 'attn', 'attnscore', 'attn_out']:
-            self.cached_activations[k] = []
 
     def __call__(
         self,
