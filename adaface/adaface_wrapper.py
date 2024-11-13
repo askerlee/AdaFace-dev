@@ -27,7 +27,7 @@ class AdaFaceWrapper(nn.Module):
                  num_inference_steps=50, subject_string='z', negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
-                 enable_static_img_suffix_embs=None,
+                 enable_static_img_suffix_embs=None, diffusers_unet_uses_lora=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -43,6 +43,7 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.enabled_encoders = enabled_encoders
         self.enable_static_img_suffix_embs = enable_static_img_suffix_embs
+        self.diffusers_unet_uses_lora = diffusers_unet_uses_lora
         self.use_lcm = use_lcm
         self.subject_string = subject_string
 

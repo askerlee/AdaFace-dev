@@ -591,7 +591,7 @@ class LatentDiffusion(DDPM):
         self.cond_stage_model = instantiate_from_config(config)
         
     def instantiate_embedding_manager(self, config, text_embedder):
-        if self.use_ldm_unet and self.diffusers_unet_uses_lora:
+        if (not self.use_ldm_unet) and self.diffusers_unet_uses_lora:
             unet_hooked_attn_procs = self.model.hooked_attn_procs
         else:
             unet_hooked_attn_procs = None
@@ -2844,7 +2844,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         c_prompt_emb, c_in, extra_info = cond_context
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
-        # self.enable_lora is the global flag. But we can override it in extra_info.
+        # self.enable_lora is the global flag. But we can override it by setting extra_info['enable_lora'].
         enable_lora = extra_info.get('enable_lora', self.enable_lora) \
                         if extra_info is not None else self.enable_lora
 

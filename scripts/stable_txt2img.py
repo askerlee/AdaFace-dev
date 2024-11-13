@@ -248,12 +248,14 @@ def parse_args():
     parser.add_argument("--use_lcm", type=str2bool, const=True, nargs="?", default=False,
                         help="Use LCM to do quick inference")
     parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use the LDM UNet implementation as the base UNet")
+                        help="Whether to use the LDM UNet implementation as the base UNet (only effective when --use_ldm_pipeline is enabled)")
     parser.add_argument("--use_ldm_pipeline", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM pipeline to do the inference")
     parser.add_argument("--diffusers_scheduler_name", type=str, default="ddim",
                         choices=["ddim", "pndm", "dpm++"], 
                         help="The scheduler name for the diffusers pipeline")
+    parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use LoRA in the Diffusers UNet model")
     
     args = parser.parse_args()
     return args
@@ -335,6 +337,7 @@ def main(opt):
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
         config.model.use_ldm_unet = opt.use_ldm_unet
         config.model.diffusers_unet_path = opt.main_unet_filepath
+        config.model.diffusers_unet_uses_lora = opt.diffusers_unet_uses_lora
 
         ldm_model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
@@ -404,6 +407,7 @@ def main(opt):
                                       unet_types=None,
                                       main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
                                       unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
+                                      diffusers_unet_uses_lora=opt.diffusers_unet_uses_lora,
                                       device=device)
             # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
             adaface_subj_embs = \
