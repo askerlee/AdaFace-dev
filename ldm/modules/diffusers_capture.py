@@ -70,31 +70,30 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     Revised from AttnProcessor2_0
     """
 
-    def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
+    def __init__(self, capture_ca_activations: bool = False, 
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_scale: float = 1.0):
         super().__init__()
         self.clear_attn_cache(capture_ca_activations)
-        self.enable_lora = enable_lora
+        self.enable_lora = False
         self.lora_rank = lora_rank
         self.lora_scale = lora_scale
-        if self.enable_lora:
-            '''
-            network_alpha (`float`, `optional`, defaults to `None`):
-                The value of the network alpha used for stable learning and preventing underflow. This value has the same
-                meaning as the `--network_alpha` option in the kohya-ss trainer script. See
-                https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
-            '''
-            self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
-            self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
-            self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
-            self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
-        else:
-            self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = (lambda x: 0)
+        '''
+        network_alpha (`float`, `optional`, defaults to `None`):
+            The value of the network alpha used for stable learning and preventing underflow. This value has the same
+            meaning as the `--network_alpha` option in the kohya-ss trainer script. See
+            https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
+        '''
+        self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+        self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+        self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+        self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
 
-    def clear_attn_cache(self, capture_ca_activations):
+    # LoRA layers can be enabled/disabled dynamically.
+    def clear_attn_cache(self, capture_ca_activations, enable_lora):
         self.capture_ca_activations = capture_ca_activations
         self.cached_activations = {}
+        self.enable_lora = enable_lora
 
     def __call__(
         self,
@@ -134,7 +133,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        query = attn.to_q(hidden_states) + self.lora_scale * self.to_q_lora(hidden_states)
+        query = attn.to_q(hidden_states) + self.enable_lora * self.lora_scale * self.to_q_lora(hidden_states)
         scale = 1 / math.sqrt(query.size(-1))
 
         is_cross_attn = (encoder_hidden_states is not None)
@@ -162,8 +161,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         elif attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
-        key = attn.to_k(encoder_hidden_states)   + self.lora_scale * self.to_k_lora(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states) + self.lora_scale * self.to_v_lora(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states)   + self.enable_lora * self.lora_scale * self.to_k_lora(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states) + self.enable_lora * self.lora_scale * self.to_v_lora(encoder_hidden_states)
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
@@ -186,7 +185,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         hidden_states = hidden_states.to(query.dtype)
 
         # linear proj
-        hidden_states = attn.to_out[0](hidden_states) + self.lora_scale * self.to_out_lora(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states) + self.enable_lora * self.lora_scale * self.to_out_lora(hidden_states)
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
 

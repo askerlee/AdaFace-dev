@@ -1318,6 +1318,8 @@ class LatentDiffusion(DDPM):
             c_prompt_emb_1, c_prompt_emb_2 = c_prompt_emb.chunk(2)
             c_in_1, c_in_2 = c_in[:len(x_noisy_1)], c_in[len(x_noisy_1):]
             extra_info_1, extra_info_2 = extra_info, copy.copy(extra_info)
+            # Always diable LoRA layers when generating the class half of the batch.
+            extra_info_2['enable_lora'] = False
             model_output_1 = self.apply_model(x_noisy_1, t_1, (c_prompt_emb_1, c_in_1, extra_info_1))
             with torch.no_grad():
                 model_output_2 = self.apply_model(x_noisy_2, t_2, (c_prompt_emb_2, c_in_2, extra_info_2))
@@ -2842,10 +2844,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
         c_prompt_emb, c_in, extra_info = cond_context
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
+        # self.enable_lora is the global flag. But we can override it in extra_info.
+        enable_lora = extra_info.get('enable_lora', self.enable_lora) \
+                        if extra_info is not None else self.enable_lora
 
         # capture_ca_activations is set to capture_ca_activations in clear_attn_cache().
         for hooked_attn_proc in self.hooked_attn_procs:
-            hooked_attn_proc.clear_attn_cache(capture_ca_activations)
+            hooked_attn_proc.clear_attn_cache(capture_ca_activations, enable_lora)
 
         if capture_ca_activations:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
@@ -2888,7 +2893,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
-                self.hooked_attn_procs[layer_idx2].clear_attn_cache(False)
+                # Restore enable_lora to the global flag.
+                self.hooked_attn_procs[layer_idx2].clear_attn_cache(False, self.enable_lora)
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)
