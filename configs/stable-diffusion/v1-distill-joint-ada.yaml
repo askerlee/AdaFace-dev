@@ -61,7 +61,7 @@ model:
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, adopt,
     # AdEMAMix, AdEMAMix8bit, OrthogonalNesterov
-    optimizer_type:           adopt #AdEMAMix
+    optimizer_type:           AdamW #AdEMAMix
     # This grad_clip is used when manual optimization is enabled.
     grad_clip:                0.5
     adam_config:

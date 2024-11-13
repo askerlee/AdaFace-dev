@@ -59,7 +59,7 @@ model:
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
     # AdEMAMix, AdEMAMixDistributedShampoo, OrthogonalNesterov
-    optimizer_type:           AdEMAMix
+    optimizer_type:           AdamW8bit
     grad_clip:                0.5
     adam_config:
       # Half life:
