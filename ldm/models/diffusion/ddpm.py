@@ -23,7 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from ldm.modules.diffusers_capture import AttnProcessor_Capture, CrossAttnUpBlock2D_forward_capture
+from ldm.modules.diffusers_capture import AttnProcessor_LoRA_Capture, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -2784,8 +2784,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.diffusion_model = UNet2DConditionModel.from_pretrained(
                                 unet_dirpath, torch_dtype=torch_dtype
                                )
-        self.attnprocessor_capture = AttnProcessor_Capture()
-        self.diffusion_model.set_attn_processor(self.attnprocessor_capture)
         # Conform with main.py() of setting debug_attn.
         self.diffusion_model.debug_attn = False
         self.to(torch_dtype)
@@ -2794,7 +2792,36 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # l2ca: short for layer_idx2ca_layer_idx.
         self.l2ca = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                       17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 }
+        # Only capture the activations of the last 3 CA layers.
+        self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
+        self.set_attn_processor()
+
+    # Adapted from ConsistentIDPipeline:set_ip_adapter().
+    def set_attn_processor(self):
+        unet = self.diffusion_model
+        attn_procs = {}
+        for name in unet.attn_processors.keys():
+            breakpoint()
+            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+            if name.startswith("mid_block"):
+                hidden_size = unet.config.block_out_channels[-1]
+            elif name.startswith("up_blocks"):
+                block_id = int(name[len("up_blocks.")])
+                hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+            elif name.startswith("down_blocks"):
+                block_id = int(name[len("down_blocks.")])
+                hidden_size = unet.config.block_out_channels[block_id]
+            if cross_attention_dim is None:
+                attn_procs[name] = AttnProcessor_LoRA_Capture(
+                    hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, rank=self.lora_rank,
+                )
+            else:
+                attn_procs[name] = AttnProcessor_LoRA_Capture(
+                    hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, scale=1.0, rank=self.lora_rank, num_tokens=self.num_tokens,
+                )
         
+        unet.set_attn_processor(attn_procs)
+
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
@@ -2811,13 +2838,12 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.diffusion_model.up_blocks[3].forward = \
                 CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
 
+
         with torch.autocast(device_type='cuda', dtype=self.dtype):
             out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
                                        cross_attention_kwargs={'img_mask': img_mask},
                                        return_dict=False)[0]
 
-        # Only capture the activations of the last 3 CA layers.
-        captured_layer_indices = [22, 23, 24] # => 13, 14, 15
         captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
 
         if capture_ca_activations:
@@ -2836,7 +2862,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.diffusion_model.up_blocks[3].cached_outfeats = {}
 
             for k in cached_activations:
-                for layer_idx in captured_layer_indices:
+                for layer_idx in self.captured_layer_indices:
                     ca_layer_idx = self.l2ca[layer_idx]
                     captured_activations[k][layer_idx] = cached_activations[k][ca_layer_idx].to(out_dtype)
                     # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].

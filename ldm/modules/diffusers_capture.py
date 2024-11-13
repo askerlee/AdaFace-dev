@@ -4,6 +4,7 @@ from typing import Callable, List, Optional, Tuple, Union, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
+from diffusers.models.lora import LoRALinearLayer
 
 from einops import rearrange
 import math
@@ -43,13 +44,31 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
 
 
 # All layers share the same attention processor instance.
-class AttnProcessor_Capture:
+class AttnProcessor_LoRA_Capture:
     r"""
     Revised from AttnProcessor2_0
     """
 
-    def __init__(self, capture_ca_activations: bool = False):
+    def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
+                 hidden_size: int = -1, cross_attention_dim: int = -1, 
+                 lora_rank: int = 128, lora_scale: float = 1.0):
         self.clear_attn_cache(capture_ca_activations)
+        self.enable_lora = enable_lora
+        self.lora_rank = lora_rank
+        self.lora_scale = lora_scale
+        if self.enable_lora:
+            '''
+            network_alpha (`float`, `optional`, defaults to `None`):
+                The value of the network alpha used for stable learning and preventing underflow. This value has the same
+                meaning as the `--network_alpha` option in the kohya-ss trainer script. See
+                https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
+            '''
+            self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+            self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+            self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+            self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+        else:
+            self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = (lambda x: 0)
 
     def clear_attn_cache(self, capture_ca_activations):
         self.capture_ca_activations = capture_ca_activations
@@ -95,7 +114,7 @@ class AttnProcessor_Capture:
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        query = attn.to_q(hidden_states)
+        query = attn.to_q(hidden_states) + self.lora_scale * self.to_q_lora(hidden_states)
         scale = 1 / math.sqrt(query.size(-1))
 
         is_cross_attn = (encoder_hidden_states is not None)
@@ -123,8 +142,8 @@ class AttnProcessor_Capture:
         elif attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
-        key = attn.to_k(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states)   + self.lora_scale * self.to_k_lora(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states) + self.lora_scale * self.to_v_lora(encoder_hidden_states)
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
@@ -147,7 +166,7 @@ class AttnProcessor_Capture:
         hidden_states = hidden_states.to(query.dtype)
 
         # linear proj
-        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[0](hidden_states) + self.lora_scale * self.to_out_lora(hidden_states)
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
@@ -164,15 +183,15 @@ class AttnProcessor_Capture:
             # So sqrt(scale) will scale the product of two qs by scale.
             # ANCHOR[id=attention_caching]
             # query: [2, 8, 4096, 40] -> [2, 320, 4096]
-            self.cached_activations['q'].append(
-                rearrange(query,   'b h n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale) )
+            self.cached_activations['q'] = \
+                rearrange(query, 'b h n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale)
             # attn_prob, attn_score: [2, 8, 4096, 77]
-            self.cached_activations['attn'].append(attn_prob)
-            self.cached_activations['attnscore'].append(attn_score)
+            self.cached_activations['attn'] = attn_prob
+            self.cached_activations['attnscore'] = attn_score
             # attn_out: [b, n, h * d] -> [b, h * d, n]
             # [2, 4096, 320] -> [2, 320, 4096].
-            self.cached_activations['attn_out'].append(
-                hidden_states.permute(0, 2, 1).contiguous() )
+            self.cached_activations['attn_out'] = hidden_states.permute(0, 2, 1).contiguous()
+
         return hidden_states
 
 def CrossAttnUpBlock2D_forward_capture(
