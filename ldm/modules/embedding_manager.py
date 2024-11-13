@@ -576,8 +576,11 @@ class EmbeddingManager(nn.Module):
         saved_dict = {  "string_to_subj_basis_generator_dict":  self.string_to_subj_basis_generator_dict,
                         "placeholder_strings":                  self.placeholder_strings,
                         "subject_strings":                      self.subject_strings,
-                        "unet_crossattn_loras":                 self.unet_hooked_attn_procs.state_dict(),
                      }
+        
+        if self.unet_hooked_attn_procs is not None:
+            saved_dict["unet_crossattn_loras"] = self.unet_hooked_attn_procs.state_dict()
+
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
@@ -647,10 +650,15 @@ class EmbeddingManager(nn.Module):
                     self.string_to_token_dict[km2] = k2_token
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
-            if 'unet_crossattn_loras' in ckpt:
+            if 'unet_crossattn_loras' in ckpt and self.unet_hooked_attn_procs is not None:
                 crossattn_loras_weight = ckpt['unet_crossattn_loras']
                 self.unet_hooked_attn_procs.load_state_dict(crossattn_loras_weight, strict=True)
-                print(f"Loaded {len(crossattn_loras_weight)} layers of CrossAttn LoRA weights")
+                # Each cross-attn layer has 4 lora layers, and each lora layer has 2 weights (weight and bias).
+                # So the total number of weights is 4 * 2 * 3 = 24.
+                print(f"Loaded {len(crossattn_loras_weight)} CrossAttn LoRA weights")
+            elif self.unet_hooked_attn_procs is None:
+                # unet_hooked_attn_procs is not properly initialized.
+                breakpoint()
             else:
                 print(f"'unet_crossattn_loras' not found in {adaface_ckpt_path}")
 
