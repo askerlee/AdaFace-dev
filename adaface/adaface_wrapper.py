@@ -180,7 +180,7 @@ class AdaFaceWrapper(nn.Module):
         print(f"Loaded pipeline from {self.base_model_path}.")
         if not remove_unet and self.diffusers_unet_uses_lora:
             self.load_unet_lora_weights(pipeline.unet)
-                    
+
         if self.use_840k_vae:
             pipeline.vae = vae
             print("Replaced the VAE with the 840k-step VAE.")
@@ -305,14 +305,20 @@ class AdaFaceWrapper(nn.Module):
 
     def load_unet_lora_weights(self, unet):
         unet_lora_weight_found = False
-        for adaface_ckp_path in self.adaface_ckpt_paths:
-            ckpt_dict = torch.load(adaface_ckp_path, map_location='cpu')
+        if isinstance(self.adaface_ckpt_paths, str):
+            adaface_ckpt_paths = [self.adaface_ckpt_paths]
+        else:
+            adaface_ckpt_paths = self.adaface_ckpt_paths
+
+        for adaface_ckpt_path in adaface_ckpt_paths:
+            ckpt_dict = torch.load(adaface_ckpt_path, map_location='cpu')
             if 'unet_crossattn_loras' in ckpt_dict:
                 crossattn_loras_weight = ckpt_dict['unet_crossattn_loras']                
-                print(f"Found {len(crossattn_loras_weight)} CrossAttn LoRA weights in {adaface_ckp_path}.")
+                print(f"{len(crossattn_loras_weight)} CrossAttn LoRA weights found in {adaface_ckpt_path}.")
                 unet_lora_weight_found = True
                 break
 
+        # Since unet lora weights are not found in the adaface ckpt, we give up on loading unet attn processors.
         if not unet_lora_weight_found:
             print(f"CrossAttn LoRA weights not found in {self.adaface_ckpt_paths}.")
             return

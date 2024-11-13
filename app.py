@@ -8,6 +8,17 @@ import random
 
 import gradio as gr
 import spaces
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "y", "1"):
+        return True
+    elif v.lower() in ("no", "false", "f", "n", "0"):
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
+
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
@@ -28,6 +39,8 @@ parser.add_argument('--unet_weights', type=float, nargs="+", default=[1],
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
+parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=True,
+                    help="Whether to use LoRA in the Diffusers UNet model")
 
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
@@ -52,7 +65,9 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
                          enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
-                         unet_weights=args.unet_weights, device='cpu')
+                         unet_weights=args.unet_weights, 
+                         diffusers_unet_uses_lora=args.diffusers_unet_uses_lora,
+                         device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
