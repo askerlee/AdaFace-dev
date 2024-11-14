@@ -2194,8 +2194,9 @@ class LatentDiffusion(DDPM):
                 # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
                 # Note cls_*subj_attn use *_gs versions.
-                loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn**2).mean(dim=-1)   - (cls_comp_subj_attn_gs**2).mean(dim=-1)).abs().mean()
-                loss_layer_subj_single_attn_norm = (subj_single_subj_attn**2).mean(dim=-1) - (cls_single_subj_attn_gs**2).mean(dim=-1)).abs().mean()
+                # The L1 loss of the average attention values of the subject tokens, at each head and each instance.
+                loss_layer_subj_comp_attn_norm   = torch.nn.functional.l1_loss((subj_comp_subj_attn**2).mean(dim=-1), (cls_comp_subj_attn_gs**2).mean(dim=-1))
+                loss_layer_subj_single_attn_norm = torch.nn.functional.l1_loss((subj_single_subj_attn**2).mean(dim=-1), (cls_single_subj_attn_gs**2).mean(dim=-1))
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
                 loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
