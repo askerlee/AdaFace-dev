@@ -23,7 +23,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture, AttnProcessor_Bypass, CrossAttnUpBlock2D_forward_capture
+from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
 from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
 from ldm.ademamix import AdEMAMix
@@ -1495,10 +1495,6 @@ class LatentDiffusion(DDPM):
             # with smaller prob to keep the original t.
             t = probably_anneal_int_tensor(t, self.training_percent, self.num_timesteps - 20, ratio_range=(1.3, 1.6),
                                            keep_prob_range=(0.2, 0.1))
-            if self.iter_flags['num_denoising_steps'] > 1:
-                # Take a weighted average of t and 1000, to shift t to larger values, 
-                # so that the 2nd-6th denoising steps fall in more reasonable ranges.
-                t = (4 * t + (self.iter_flags['num_denoising_steps'] - 1) * self.num_timesteps) // (3 + self.iter_flags['num_denoising_steps'])
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
