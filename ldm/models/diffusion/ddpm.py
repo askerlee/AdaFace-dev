@@ -2816,13 +2816,18 @@ class DiffusersUNetWrapper(pl.LightningModule):
         for name, attn_proc in unet.attn_processors.items():
             # Only capture the activations of the last 3 CA layers.
             if not name.startswith("up_blocks.3"):
-                attn_procs[name] = AttnProcessor_Bypass(attn_proc)
+                # Not the last 3 CA layers. Don't enable LoRA or capture activations.
+                # The difference with the default attn_proc is that AttnProcessor_LoRA_Capture handles img_mask.
+                attn_procs[name] = AttnProcessor_LoRA_Capture(
+                    capture_ca_activations=False, enable_lora=False)
                 continue
             # cross_attention_dim: 768.
             cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
             if cross_attention_dim is None:
-                # Self attention. Skip.
-                attn_procs[name] = AttnProcessor_Bypass(attn_proc)
+                # Self attention. Don't enable LoRA or capture activations.
+                # The difference with the default attn_proc is that AttnProcessor_LoRA_Capture handles img_mask.
+                attn_procs[name] = AttnProcessor_LoRA_Capture(
+                    capture_ca_activations=False, enable_lora=False)
                 continue
 
             block_id = 3
@@ -2831,7 +2836,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
                 capture_ca_activations=True, enable_lora=self.enable_lora,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
-                lora_rank=self.lora_rank, lora_scale=1.0
+                lora_rank=self.lora_rank, lora_scale=0.3
             )
             attn_procs[name]        = hooked_attn_proc
             hooked_attn_procs[name] = hooked_attn_proc

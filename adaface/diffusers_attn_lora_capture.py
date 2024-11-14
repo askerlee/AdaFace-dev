@@ -43,27 +43,6 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     output = attn_weight @ value
     return output, attn_score, attn_weight
 
-class AttnProcessor_Bypass:
-    def __init__(self, real_attn_proc):
-        self.real_attn_proc = real_attn_proc
-    
-    def __call__(
-        self,
-        attn: Attention,
-        hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        temb: Optional[torch.Tensor] = None,
-        # To avoid warning like:
-        # `cross_attention_kwargs ['img_mask'] are not expected by AttnProcessor2_0 and will be ignored.`
-        img_mask: Optional[torch.Tensor] = None,
-        *args,
-        **kwargs,
-    ) -> torch.Tensor:    
-        return self.real_attn_proc(
-            attn, hidden_states, encoder_hidden_states, attention_mask, temb, *args, **kwargs
-        )
-
 # All layers share the same attention processor instance.
 class AttnProcessor_LoRA_Capture(nn.Module):
     r"""
@@ -74,7 +53,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_scale: float = 1.0):
         super().__init__()
-        # self.enable_lora is set in reset_attn_cache_and_flags().
+        self.global_enable_lora = enable_lora
+        # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
         self.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
         self.lora_rank = lora_rank
         self.lora_scale = lora_scale
@@ -85,16 +65,20 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             meaning as the `--network_alpha` option in the kohya-ss trainer script. See
             https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
         '''
-        self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
-        self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
-        self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
-        self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+        if self.global_enable_lora:
+            self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+            self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+            self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+            self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+        else:
+            self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = (lambda x: 0)
 
     # LoRA layers can be enabled/disabled dynamically.
     def reset_attn_cache_and_flags(self, capture_ca_activations, enable_lora):
         self.capture_ca_activations = capture_ca_activations
         self.cached_activations = {}
-        self.enable_lora = enable_lora
+        # Only enable LoRA for the next call(s) if global_enable_lora is set to True.
+        self.enable_lora = enable_lora and self.global_enable_lora
 
     def __call__(
         self,
@@ -155,6 +139,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                 # So some rows in dim 1 (e.g. [0, :, 4095]) of attn_score will be masked out (all elements in [0, :, 4095] is -inf).
                 # But not all elements in [0, 4095, :] is -inf. Since the softmax is done along dim 2, this is fine.
                 # attn_score.masked_fill_(~img_mask, max_neg_value)
+                # NOTE: If there's an attention mask, it will be replaced by img_mask.
                 attention_mask = img_mask
 
         if encoder_hidden_states is None:
@@ -179,8 +164,14 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        # TODO: add support for attn.scale when we move to Torch 2.1
-        hidden_states, attn_score, attn_prob = scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
+        if is_cross_attn and self.capture_ca_activations:
+            hidden_states, attn_score, attn_prob = \
+                scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0)
+        else:
+            # Use the faster implementation of scaled_dot_product_attention when not capturing the activations.
+            hidden_states = \
+                F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False)
+            attn_prob = attn_score = None
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
