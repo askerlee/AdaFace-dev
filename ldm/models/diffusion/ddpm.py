@@ -90,7 +90,7 @@ class DDPM(pl.LightningModule):
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
                  use_arcface_loss=True,
-                 arcface_align_loss_weight=4e-3,
+                 arcface_align_loss_weight=4e-2,
                  use_ldm_unet=True,
                  diffusers_unet_path='models/ensemble/sd15-unet',
                  diffusers_unet_uses_lora=False,
@@ -1531,8 +1531,8 @@ class LatentDiffusion(DDPM):
                 loss_arcface_align = self.calc_arcface_align_loss(x_start[:2], x_recon[:2])
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
-                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
-                    # This loss is around 1/150 of recon/distill losses (0.1).
+                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
+                    # This loss is around 1/5 of recon/distill losses (0.1).
                     loss += loss_arcface_align * self.arcface_align_loss_weight
 
             recon_images = self.decode_first_stage(x_recon)
