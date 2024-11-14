@@ -72,7 +72,7 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_bg_suppress_loss_weight=0.,
                  pred_l2_loss_weight=1e-4,
-                 subj_attn_norm_distill_loss_weight=4e-4,
+                 subj_attn_norm_distill_loss_weight=1e-2,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -2114,7 +2114,7 @@ class LatentDiffusion(DDPM):
         # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
         loss_feat_delta_align, loss_subj_attn_norm_distill \
             = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_layers_activations['attn'], 
-                                                    all_subj_indices_2b, BLOCK_SIZE)
+                                                      all_subj_indices_2b, BLOCK_SIZE)
 
         # loss_feat_delta_align: 0.02~0.03. 
         if loss_feat_delta_align > 0:
@@ -2188,16 +2188,14 @@ class LatentDiffusion(DDPM):
             if unet_layer_idx in attn_norm_distill_layer_weights:
                 attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
 
-                # mix_attn_grad_scale = 0.05, almost zero, effectively no grad to cls_comp_subj_attn/cls_single_subj_attn. 
-                # Use this scaler to release the graph and avoid OOM.
                 cls_comp_subj_attn_gs       = cls_comp_subj_attn.detach()
                 cls_single_subj_attn_gs     = cls_single_subj_attn.detach()
 
                 # mean(dim=-1): average over the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
                 # Note cls_*subj_attn use *_gs versions.
-                loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn.mean(dim=-1)   - cls_comp_subj_attn_gs.mean(dim=-1)).abs().mean()
-                loss_layer_subj_single_attn_norm = (subj_single_subj_attn.mean(dim=-1) - cls_single_subj_attn_gs.mean(dim=-1)).abs().mean()
+                loss_layer_subj_comp_attn_norm   = (subj_comp_subj_attn**2).mean(dim=-1)   - (cls_comp_subj_attn_gs**2).mean(dim=-1)).abs().mean()
+                loss_layer_subj_single_attn_norm = (subj_single_subj_attn**2).mean(dim=-1) - (cls_single_subj_attn_gs**2).mean(dim=-1)).abs().mean()
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
                 loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \

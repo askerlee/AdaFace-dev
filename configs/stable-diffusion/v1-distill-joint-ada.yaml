@@ -58,9 +58,9 @@ model:
     # DISABLED: subj_bg_suppress loss used in recon iters.
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 7.5e-4
     recon_subj_bg_suppress_loss_weight:  0
-    subj_attn_norm_distill_loss_weight: 4e-4
+    subj_attn_norm_distill_loss_weight: 1e-2
     pred_l2_loss_weight:                1e-4
-    
+
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, adopt,
     # AdEMAMix, AdEMAMix8bit, OrthogonalNesterov
     optimizer_type:           AdamW8bit #AdEMAMix
