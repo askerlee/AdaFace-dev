@@ -1260,7 +1260,8 @@ class LatentDiffusion(DDPM):
         # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
         extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                             cls_single_prompts,  cls_comp_prompts)
-
+        extra_info['enable_lora']        = self.diffusers_unet_uses_lora
+        
         # c_prompt_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts. 
         # c_prompt_emb: [64, 77, 768]                    
