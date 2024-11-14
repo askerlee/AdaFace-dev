@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, select_and_repeat_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        count_optimized_params, count_params, add_dict_to_dict
+                        count_optimized_params, count_params, add_dict_to_dict, calc_dyn_loss_scale
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -1592,7 +1592,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
             
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
-            # loss_subj_attn_norm_distill: 0.02~0.03. subj_attn_norm_distill_loss_weight: 1 => 0.02~0.03.
+            # loss_subj_attn_norm_distill: 0.02~0.03. subj_attn_norm_distill_loss_weight: 0.1 => 0.002~0.003.
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     + loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
 
@@ -2088,7 +2088,7 @@ class LatentDiffusion(DDPM):
             # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
             # which are very small. So we scale them up by 50x.
             # loss_sc_mc_bg_match: 0.004~0.006 -> 0.2~0.3.
-            sc_mc_bg_match_loss_scale     = 50
+            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.002, 50), (0.01, 250))
             sc_recon_ss_fg_min_loss_scale = 10
 
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
