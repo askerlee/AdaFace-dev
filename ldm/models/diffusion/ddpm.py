@@ -1261,7 +1261,7 @@ class LatentDiffusion(DDPM):
         extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                             cls_single_prompts,  cls_comp_prompts)
         extra_info['enable_lora']        = self.diffusers_unet_uses_lora
-        
+
         # c_prompt_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts. 
         # c_prompt_emb: [64, 77, 768]                    
@@ -2836,7 +2836,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # We can override this call by setting extra_info['enable_lora'].
         enable_lora = extra_info.get('enable_lora', self.global_enable_lora) \
                         if extra_info is not None else self.global_enable_lora
-
+        
         # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
         for hooked_attn_proc in self.hooked_attn_procs:
             hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
