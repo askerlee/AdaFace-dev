@@ -72,7 +72,7 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_bg_suppress_loss_weight=0.,
                  pred_l2_loss_weight=1e-4,
-                 subj_attn_norm_distill_loss_weight=1e-2,
+                 subj_attn_norm_distill_loss_weight=1,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -295,9 +295,9 @@ class DDPM(pl.LightningModule):
             loss_type = self.loss_type
 
         if loss_type == 'l1':
-            loss_func = torch.nn.functional.l1_loss
+            loss_func = F.l1_loss
         elif loss_type == 'l2':
-            loss_func = torch.nn.functional.mse_loss
+            loss_func = F.mse_loss
         else:
             raise NotImplementedError("Unknown loss type '{loss_type}'")
 
@@ -1592,6 +1592,7 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
             
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
+            # loss_subj_attn_norm_distill: 0.02~0.03. subj_attn_norm_distill_loss_weight: 1 => 0.02~0.03.
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
                     + loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
 
@@ -2195,8 +2196,8 @@ class LatentDiffusion(DDPM):
                 # Align the attention corresponding to each embedding individually.
                 # Note cls_*subj_attn use *_gs versions.
                 # The L1 loss of the average attention values of the subject tokens, at each head and each instance.
-                loss_layer_subj_comp_attn_norm   = torch.nn.functional.l1_loss((subj_comp_subj_attn**2).mean(dim=-1), (cls_comp_subj_attn_gs**2).mean(dim=-1))
-                loss_layer_subj_single_attn_norm = torch.nn.functional.l1_loss((subj_single_subj_attn**2).mean(dim=-1), (cls_single_subj_attn_gs**2).mean(dim=-1))
+                loss_layer_subj_comp_attn_norm   = F.l1_loss((subj_comp_subj_attn**2).mean(dim=-1), (cls_comp_subj_attn_gs**2).mean(dim=-1))
+                loss_layer_subj_single_attn_norm = F.l1_loss((subj_single_subj_attn**2).mean(dim=-1), (cls_single_subj_attn_gs**2).mean(dim=-1))
                 # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
                 # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
                 loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
