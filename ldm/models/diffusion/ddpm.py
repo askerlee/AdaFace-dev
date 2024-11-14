@@ -71,6 +71,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_bg_suppress_loss_weight=0.,
+                 pred_l2_loss_weight=1e-4,
                  subj_attn_norm_distill_loss_weight=4e-4,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -114,6 +115,7 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.recon_subj_bg_suppress_loss_weight     = recon_subj_bg_suppress_loss_weight
+        self.pred_l2_loss_weight                    = pred_l2_loss_weight
         self.subj_attn_norm_distill_loss_weight     = subj_attn_norm_distill_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
@@ -1517,16 +1519,18 @@ class LatentDiffusion(DDPM):
             # bg loss is completely ignored. 
             bg_pixel_weight = 0 
 
-            loss_recon_subj_bg_suppress, loss_recon = \
+            loss_recon_subj_bg_suppress, loss_recon, loss_pred_l2 = \
                 self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
                                                    all_subj_indices,
                                                    img_mask, fg_mask, instances_have_fg_mask,
                                                    bg_pixel_weight,
                                                    x_start.shape[0], loss_dict, session_prefix)
-            loss += loss_recon + loss_recon_subj_bg_suppress * self.recon_subj_bg_suppress_loss_weight
             v_loss_recon = loss_recon.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+            loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
+            loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
+                    + loss_recon_subj_bg_suppress * self.recon_subj_bg_suppress_loss_weight
 
             if self.use_arcface_loss and (self.arcface is not None):
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
@@ -1648,7 +1652,9 @@ class LatentDiffusion(DDPM):
         loss_recon, _ = calc_recon_loss(self.get_loss_func(), model_output, target, img_mask, fg_mask, 
                                         fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
 
-        return loss_recon_subj_bg_suppress, loss_recon
+        # Calc the L2 norm of model_output.
+        loss_pred_l2 = (model_output ** 2).mean()
+        return loss_recon_subj_bg_suppress, loss_recon, loss_pred_l2
 
 
     def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, 
