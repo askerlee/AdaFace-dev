@@ -1525,6 +1525,22 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
 
+            # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
+            # to compute arcface_align_loss.
+            if self.use_arcface_loss and (self.arcface is not None):
+                # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
+                # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
+                x_start_recon  = self.decode_first_stage(x_start)
+                # subj-comp instance. 
+                # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
+                subj_recon = self.decode_first_stage_with_grad(x_recon)
+                loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_recon, subj_recon)
+                if loss_arcface_align > 0:
+                    loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
+                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                    # This loss is around 1/150 of recon/distill losses (0.1).
+                    loss += loss_arcface_align * self.arcface_align_loss_weight
+
             recon_images = self.decode_first_stage(x_recon)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # all of them are 2, indicating red.
