@@ -681,6 +681,7 @@ class EmbeddingManager(nn.Module):
 
         if self.unet_hooked_attn_procs is not None:
             unet_crossattn_loras_param_list = list(self.unet_hooked_attn_procs.parameters())
+            print(f"Total parameters in unet_hooked_attn_procs: {len(unet_crossattn_loras_param_list)}")
         else:
             unet_crossattn_loras_param_list = []
 

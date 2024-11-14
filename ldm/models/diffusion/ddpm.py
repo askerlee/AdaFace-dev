@@ -1526,7 +1526,8 @@ class LatentDiffusion(DDPM):
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
 
             if self.use_arcface_loss and (self.arcface is not None):
-                loss_arcface_align = self.calc_arcface_align_loss(x_start[:1], x_recon[:1])
+                # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
+                loss_arcface_align = self.calc_arcface_align_loss(x_start[:2], x_recon[:2])
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
                     # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
@@ -1588,9 +1589,9 @@ class LatentDiffusion(DDPM):
             if self.use_arcface_loss and (self.arcface is not None) and (num_init_prep_denoising_steps > 1):
                 # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
                 # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
-                x_start0_recon = x_start.chunk(4)[0]
-                subj_recon     = x_recon.chunk(2)[0]
-                loss_arcface_align = self.calc_arcface_align_loss(x_start0_recon, subj_recon)
+                x_start0    = x_start.chunk(4)[0]
+                subj_recon  = x_recon.chunk(2)[0]
+                loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
                     # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
@@ -2816,7 +2817,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
                 capture_ca_activations=True, enable_lora=self.global_enable_lora,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
-                lora_rank=self.lora_rank, lora_scale=0.3
+                # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
+                lora_rank=self.lora_rank, lora_scale=1
             )
             attn_procs[name]        = hooked_attn_proc
             hooked_attn_procs[name] = hooked_attn_proc
