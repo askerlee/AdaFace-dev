@@ -71,6 +71,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_bg_suppress_loss_weight=0.,
+                 subj_attn_norm_distill_loss_weight=1e-4,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -113,6 +114,7 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.recon_subj_bg_suppress_loss_weight     = recon_subj_bg_suppress_loss_weight
+        self.subj_attn_norm_distill_loss_weight     = subj_attn_norm_distill_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -1568,7 +1570,7 @@ class LatentDiffusion(DDPM):
 
         ###### begin of do_feat_distill_on_comp_prompt ######
         if self.iter_flags['do_feat_distill_on_comp_prompt']:
-            loss_comp_fg_bg_preserve = \
+            loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill = \
                 self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, 
                                                    instances_have_fg_mask, 
                                                    all_subj_indices_1b, all_subj_indices_2b, 
@@ -1581,9 +1583,13 @@ class LatentDiffusion(DDPM):
                 self.comp_init_fg_from_training_image_count += 1
                 comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.global_step + 1)
                 loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
-
+            # loss_subj_attn_norm_distill: 0.08~0.12.
+            if loss_subj_attn_norm_distill > 0:
+                loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
+            
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
-            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
+            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
+                    + loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
 
             # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
             # to compute arcface_align_loss.
@@ -2074,6 +2080,7 @@ class LatentDiffusion(DDPM):
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
             # which are very small. So we scale them up by 50x.
+            # loss_sc_mc_bg_match: 0.004~0.006 -> 0.2~0.3.
             sc_mc_bg_match_loss_scale     = 50
             sc_recon_ss_fg_min_loss_scale = 10
 
@@ -2099,19 +2106,15 @@ class LatentDiffusion(DDPM):
         # to index subj single and subj comp embeddings.
         # The indices will be shifted along the batch dimension (size doubled) 
         # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
-        with torch.no_grad():
-            loss_feat_delta_align, loss_subj_attn_norm_distill \
-                = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_layers_activations['attn'], 
-                                                        all_subj_indices_2b, BLOCK_SIZE)
+        loss_feat_delta_align, loss_subj_attn_norm_distill \
+            = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_layers_activations['attn'], 
+                                                    all_subj_indices_2b, BLOCK_SIZE)
 
         # loss_feat_delta_align: 0.02~0.03. 
         if loss_feat_delta_align > 0:
             loss_dict.update({f'{session_prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
-        # loss_subj_attn_norm_distill: 0.3~0.5.
-        if loss_subj_attn_norm_distill > 0:
-            loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
-        
-        return loss_comp_fg_bg_preserve
+
+        return loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
     def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
