@@ -13,13 +13,13 @@ from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         ortho_subtract, gen_gradient_scaler, calc_ref_cosine_loss, \
-                        calc_prompt_emb_delta_loss, calc_elastic_matching_loss, \
+                        calc_prompt_emb_delta_loss, calc_elastic_matching_loss, calc_recon_loss, \
                         save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
                         join_dict_of_indices_with_key_filter, select_and_repeat_instances, halve_token_indices, \
                         double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        probably_anneal_int_tensor, count_optimized_params, count_params, add_dict_to_dict
+                        count_optimized_params, count_params, add_dict_to_dict
 
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -286,23 +286,18 @@ class DDPM(pl.LightningModule):
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
     # self.loss_type: default 'l2'.
-    def get_loss(self, pred, target, mean=True, loss_type=None):
+    def get_loss_func(self, loss_type=None):
         if loss_type is None:
             loss_type = self.loss_type
 
         if loss_type == 'l1':
-            loss = (target - pred).abs()
-            if mean:
-                loss = loss.mean()
+            loss_func = torch.nn.functional.l1_loss
         elif loss_type == 'l2':
-            if mean:
-                loss = torch.nn.functional.mse_loss(target, pred)
-            else:
-                loss = torch.nn.functional.mse_loss(target, pred, reduction='none')
+            loss_func = torch.nn.functional.mse_loss
         else:
-            raise NotImplementedError("unknown loss type '{loss_type}'")
+            raise NotImplementedError("Unknown loss type '{loss_type}'")
 
-        return loss
+        return loss_func
 
     def get_input(self, batch, k):
         x = batch[k]
@@ -1128,7 +1123,6 @@ class LatentDiffusion(DDPM):
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
     def forward(self, x_start, captions):
-        t = torch.randint(0, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
         ORIG_BS  = len(x_start)
 
         # Use >=, i.e., assign decay in all iterations after the first 100.
@@ -1275,7 +1269,7 @@ class LatentDiffusion(DDPM):
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
         c_prompt_emb, c_in, extra_info = cond_context
-        return self.p_losses(x_start, t, c_prompt_emb, c_in, extra_info)
+        return self.p_losses(x_start, c_prompt_emb, c_in, extra_info)
 
     # apply_model() is called both during training and inference.
     def apply_model(self, x_noisy, t, cond_context):
@@ -1385,7 +1379,7 @@ class LatentDiffusion(DDPM):
     # c_in is the textual prompts. 
     # extra_info: a dict that contains various fields. 
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, t, c_prompt_emb, c_in, extra_info):
+    def p_losses(self, x_start, c_prompt_emb, c_in, extra_info):
         #print(c_in)
         cond_context = (c_prompt_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
@@ -1490,11 +1484,7 @@ class LatentDiffusion(DDPM):
                                 
         if self.iter_flags['do_normal_recon']:          
             BLOCK_SIZE = x_start.shape[0]
-
-            # Increase t slightly by (1.3, 1.6) to increase noise amount and make the denoising more challenging,
-            # with smaller prob to keep the original t.
-            t = probably_anneal_int_tensor(t, self.training_percent, self.num_timesteps - 20, ratio_range=(1.3, 1.6),
-                                           keep_prob_range=(0.2, 0.1))
+            t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1512,7 +1502,7 @@ class LatentDiffusion(DDPM):
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     # do_pixel_recon is enabled only when do_feat_distill_on_comp_prompt.
                                     # This is to cache the denoised images as future initialization.
-                                    do_pixel_recon=self.iter_flags['do_feat_distill_on_comp_prompt'],
+                                    do_pixel_recon=True,
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
                                     cfg_scale=-1)
@@ -1535,7 +1525,15 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
 
+            recon_images = self.decode_first_stage(x_recon)
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # all of them are 2, indicating red.
+            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
+            self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+
         elif self.iter_flags['do_unet_distill']:
+            t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
+
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, 
                                             text_prompt_adhoc_info, img_mask, fg_mask)
@@ -1623,42 +1621,12 @@ class LatentDiffusion(DDPM):
         loss_recon_subj_bg_suppress = loss_subj_mb_suppress
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-        loss_recon, _ = self.calc_recon_loss(model_output, target, img_mask, fg_mask, 
-                                             fg_pixel_weight=1,
-                                             bg_pixel_weight=bg_pixel_weight)
+        loss_recon, _ = calc_recon_loss(self.get_loss_func(), model_output, target, img_mask, fg_mask, 
+                                        fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
 
         return loss_recon_subj_bg_suppress, loss_recon
 
-    # pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
-    # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
-    # img_mask, fg_mask:    [BS, 1, 64, 64] or None.
-    # model_output, target: [BS, 4, 64, 64].
-    def calc_recon_loss(self, model_output, target, img_mask, fg_mask, 
-                        fg_pixel_weight=1, bg_pixel_weight=1):
 
-        if img_mask is None:
-            img_mask = torch.ones_like(model_output)
-        if fg_mask is None:
-            fg_mask = torch.ones_like(model_output)
-        
-        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-        model_output = model_output * img_mask
-        target       = target       * img_mask
-        loss_recon_pixels = self.get_loss(model_output, target, mean=False)
-
-        # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
-        # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
-        weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
-        weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
-        weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
-        weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
-
-        loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
-                      + (loss_recon_pixels * weighted_bg_mask).sum() )   \
-                     / (weighted_fg_mask.sum() + weighted_bg_mask.sum() + 1e-6)
-
-        return loss_recon, loss_recon_pixels
-    
     def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, 
                                text_prompt_adhoc_info, img_mask, fg_mask):
         c_prompt_emb, c_in, extra_info = cond_context
@@ -1820,9 +1788,9 @@ class LatentDiffusion(DDPM):
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
-                self.calc_recon_loss(model_output, target.to(model_output.dtype), 
-                                     img_mask, fg_mask, fg_pixel_weight=1,
-                                     bg_pixel_weight=bg_pixel_weight)
+                calc_recon_loss(self.get_loss_func(), model_output, target.to(model_output.dtype), 
+                                img_mask, fg_mask, fg_pixel_weight=1,
+                                bg_pixel_weight=bg_pixel_weight)
 
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
             
@@ -2798,7 +2766,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # Only capture the activations of the last 3 CA layers.
         self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
-        self.enable_lora = enable_lora
+        self.global_enable_lora = enable_lora
         self.lora_rank = lora_rank
         hooked_attn_procs = self.set_attn_processors()
         self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs.values())
@@ -2830,7 +2798,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # hidden_size: 320
             hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=True, enable_lora=self.enable_lora,
+                capture_ca_activations=True, enable_lora=self.global_enable_lora,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
                 lora_rank=self.lora_rank, lora_scale=0.3
             )
@@ -2845,9 +2813,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
         c_prompt_emb, c_in, extra_info = cond_context
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
-        # self.enable_lora is the global flag. But we can override it by setting extra_info['enable_lora'].
-        enable_lora = extra_info.get('enable_lora', self.enable_lora) \
-                        if extra_info is not None else self.enable_lora
+        # self.global_enable_lora is the global flag. 
+        # We can override this call by setting extra_info['enable_lora'].
+        enable_lora = extra_info.get('enable_lora', self.global_enable_lora) \
+                        if extra_info is not None else self.global_enable_lora
 
         # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
         for hooked_attn_proc in self.hooked_attn_procs:
@@ -2861,7 +2830,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # Replace the forward() method of the last up block with a capturing method.
             self.diffusion_model.up_blocks[3].forward = \
                 CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
-
 
         with torch.autocast(device_type='cuda', dtype=self.dtype):
             out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
@@ -2895,7 +2863,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
                 # Restore enable_lora to the global flag.
-                self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, self.enable_lora)
+                self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, self.global_enable_lora)
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)

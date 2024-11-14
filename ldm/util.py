@@ -1654,6 +1654,36 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
     return x_start, fg_mask, filtered_fg_mask
 
+# pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
+# fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
+# img_mask, fg_mask:    [BS, 1, 64, 64] or None.
+# model_output, target: [BS, 4, 64, 64].
+def calc_recon_loss(loss_func, model_output, target, img_mask, fg_mask, 
+                    fg_pixel_weight=1, bg_pixel_weight=1):
+
+    if img_mask is None:
+        img_mask = torch.ones_like(model_output)
+    if fg_mask is None:
+        fg_mask = torch.ones_like(model_output)
+    
+    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+    model_output = model_output * img_mask
+    target       = target       * img_mask
+    loss_recon_pixels = loss_func(model_output, target, reduction='none')
+
+    # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
+    # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
+    weighted_fg_mask = fg_mask       * img_mask * fg_pixel_weight
+    weighted_bg_mask = (1 - fg_mask) * img_mask * bg_pixel_weight
+    weighted_fg_mask = weighted_fg_mask.expand_as(loss_recon_pixels)
+    weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
+
+    loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
+                    + (loss_recon_pixels * weighted_bg_mask).sum() )   \
+                    / (weighted_fg_mask.sum() + weighted_bg_mask.sum() + 1e-6)
+
+    return loss_recon, loss_recon_pixels
+
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
 # according to the feature map size.
