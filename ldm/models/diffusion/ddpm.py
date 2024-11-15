@@ -1376,8 +1376,8 @@ class LatentDiffusion(DDPM):
         return noise_pred, x_recon, ca_layers_activations
 
     def multistep_denoise(self, x_start, noise, t, cond_context, 
-                          uncond_emb=None, img_mask=None, unet_has_grad='all', 
-                          do_pixel_recon=False, cfg_scale=-1, capture_ca_activations=False,
+                          uncond_emb=None, img_mask=None, unet_has_grad='subject-compos', 
+                          do_pixel_recon=True, cfg_scale=-1, capture_ca_activations=False,
                           num_denoising_steps=1, same_t_noise_across_instances=False):
         assert num_denoising_steps <= 10
 
@@ -1396,7 +1396,7 @@ class LatentDiffusion(DDPM):
             # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
             x_noisy = self.q_sample(x_start, t, noise)
             
-            # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
+            # unet_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_noisy, noise, t, cond_context,
                                     uncond_emb, img_mask, unet_has_grad, 
@@ -1494,7 +1494,8 @@ class LatentDiffusion(DDPM):
             # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
             t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
                                   (BLOCK_SIZE,), device=x_start.device)
-            t_mid = t_mid.repeat(4)
+            # Same t_mid for all instances.
+            t_mid = t_mid.repeat(BLOCK_SIZE * 4)
 
             # max_num_comp_distill_denoising_steps: 3.
             # Iterate among 1 ~ 3. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
@@ -1516,7 +1517,7 @@ class LatentDiffusion(DDPM):
                 self.multistep_denoise(x_start_primed, noise, t_mid, cond_context,
                                        uncond_emb=uncond_emb, img_mask=None, 
                                        unet_has_grad='subject-compos', 
-                                       do_pixel_recon=True, cfg_scale=-1, capture_ca_activations=True,
+                                       do_pixel_recon=True, cfg_scale=5, capture_ca_activations=True,
                                        num_denoising_steps=num_denoising_steps,
                                        same_t_noise_across_instances=True)
 
@@ -1550,7 +1551,7 @@ class LatentDiffusion(DDPM):
                 # If there are multiple denoising steps, the output images are assigned different colors.
                 log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * (i % 4)
 
-            self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+                self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
         ###### Begin of loss computation. ######
         loss_dict = {}
