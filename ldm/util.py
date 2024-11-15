@@ -2144,6 +2144,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         elif bg_align_loss_scheme == 'L2':
             # sc_feat, mc_feat: [1, 961, 1280]. sc_to_ss_bg_prob: [1, 961, 1].
             loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob)
+        elif bg_align_loss_scheme == 'L1':
+            loss_sc_mc_bg_match_obj = masked_mean((sc_feat - mc_feat).abs(), sc_to_ss_bg_prob)
         else:
             breakpoint()
 
