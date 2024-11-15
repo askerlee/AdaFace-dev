@@ -139,7 +139,7 @@ class UNetTeacher(nn.Module):
                     t2       = t.repeat(2)
                 else:
                     x_noisy2 = x_noisy
-                    t2 = t
+                    t2       = t
 
                 # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
                 noise_pred = self.unet(sample=x_noisy2, timestep=t2, encoder_hidden_states=teacher_context,
@@ -148,10 +148,9 @@ class UNetTeacher(nn.Module):
                     pos_noise_pred, neg_noise_pred = torch.chunk(noise_pred, 2, dim=0)
                     noise_pred = pos_noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
 
-                # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
-                pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)
                 noise_preds.append(noise_pred)
-                
+                # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
+                pred_x0 = ddpm_model.predict_start_from_noise(x_noisy, t, noise_pred)                
                 # The predicted x0 is used as the x_start for the next denoising step.
                 x_starts.append(pred_x0)
 

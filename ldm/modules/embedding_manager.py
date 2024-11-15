@@ -490,12 +490,6 @@ class EmbeddingManager(nn.Module):
         self.placeholder2indices    = {}
         self.prompt_emb_mask        = None
 
-    # Set ad-hoc data structures for computing placeholder embeddings and various losses.
-    # set_prompt_adhoc_info() is called in ddpm.py:guided_denoise() when switching prompts.
-    def set_prompt_adhoc_info(self, prompt_adhoc_info):
-        self.placeholder2indices    = prompt_adhoc_info['placeholder2indices']
-        self.prompt_emb_mask        = prompt_adhoc_info['prompt_emb_mask']
-    
     # During training,  set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.
     def set_curr_batch_subject_names(self, subj_names):
@@ -657,8 +651,8 @@ class EmbeddingManager(nn.Module):
                 # So the total number of weights is 4 * 2 * 3 = 24.
                 print(f"Loaded {len(crossattn_loras_weight)} CrossAttn LoRA weights")
             elif self.unet_hooked_attn_procs is None:
-                # unet_hooked_attn_procs is not properly initialized.
-                breakpoint()
+                # unet loras are not enabled.
+                continue
             else:
                 print(f"'unet_crossattn_loras' not found in {adaface_ckpt_path}")
 

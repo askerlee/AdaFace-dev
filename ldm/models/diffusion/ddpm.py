@@ -17,17 +17,14 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         save_grid, normalize_dict_values, masked_mean, pool_feat_or_attn_mat, \
                         init_x_with_fg_from_training_image, resize_mask_to_target_size, \
                         sel_emb_attns_by_indices, distribute_embedding_to_M_tokens_by_dict, \
-                        join_dict_of_indices_with_key_filter, select_and_repeat_instances, halve_token_indices, \
-                        double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
+                        join_dict_of_indices_with_key_filter, collate_dicts, select_and_repeat_instances, \
+                        halve_token_indices, double_token_indices, merge_cls_token_embeddings, anneal_perturb_embedding, \
                         count_optimized_params, count_params, add_dict_to_dict, calc_dyn_loss_scale
-
+                        
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
 from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
-from ldm.ortho_nesterov import CombinedOptimizer, OrthogonalNesterov
-from ldm.ademamix import AdEMAMix
-from ldm.adopt_optimizer import ADOPT
 from adaface.unet_teachers import create_unet_teacher
 from gma.network import GMA
 from gma.utils.utils import load_checkpoint as gma_load_checkpoint
@@ -132,10 +129,10 @@ class DDPM(pl.LightningModule):
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
-        # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
-        # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
+        # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.
+        # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.1.
         # NOTE: If compositional iterations are enabled, then we don't do unet distillation on the compositional prompts.
-        if self.unet_teacher_types != ['arc2face'] and self.comp_distill_iter_gap <= 0:
+        if self.unet_teacher_types == ['consistentID'] and self.comp_distill_iter_gap <= 0:
             self.p_unet_distill_uses_comp_prompt = p_unet_distill_uses_comp_prompt
         else:
             self.p_unet_distill_uses_comp_prompt = 0
@@ -1283,22 +1280,32 @@ class LatentDiffusion(DDPM):
         x_recon = self.model(x_noisy, t, cond_context)
         return x_recon
 
-    # text_prompt_adhoc_info: volatile data structures changing along with the prompts or the input images.
-    # Sometimes the prompts changed after generating the prompt embeddings, 
-    # so in such cases we need to manually specify these data structures. 
-    # If they are not provided (None),
-    # then the data structures stored in embedding_manager are not updated.
+    def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, enable_grad, enable_lora):
+        x_noisy_ = x_noisy[slice_inst]
+        t_ = t[slice_inst]
+        c_prompt_emb, c_in, extra_info = cond_context
+        c_prompt_emb_ = c_prompt_emb[slice_inst]
+        c_in_ = c_in[slice_inst]
+        extra_info_ = copy.copy(extra_info)
+        extra_info_['enable_lora'] = enable_lora
+        with torch.set_grad_enabled(enable_grad):
+            model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info_))
+        return model_output, extra_info_
+
     # do_pixel_recon: return denoised images for CLIP evaluation. 
     # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
     # This is not used for the iter_type 'do_normal_recon'.
-    # unet_has_grad: 'all', 'none', 'subject-half'.
-    def guided_denoise(self, x_start, noise, t, cond_context, text_prompt_adhoc_info, 
-                       uncond_emb=None, unet_has_grad='all', 
-                       do_pixel_recon=False, cfg_scale=-1):
+    # unet_has_grad: 'all', 'none', 'subject-compos'.
+    def guided_denoise(self, x_start, noise, t, cond_context,
+                       uncond_emb=None, img_mask=None, unet_has_grad='all', 
+                       do_pixel_recon=False, cfg_scale=-1, capture_ca_activations=False):
         
-        self.embedding_manager.set_prompt_adhoc_info(text_prompt_adhoc_info)
-
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        ca_layers_activations = None
+        
+        extra_info = cond_context[2]
+        extra_info['capture_ca_activations'] = capture_ca_activations
+        extra_info['img_mask'] = img_mask
 
         # model_output is the predicted noise.
         # if not unet_has_grad, we save RAM by not storing the computation graph.
@@ -1307,30 +1314,31 @@ class LatentDiffusion(DDPM):
         if unet_has_grad == 'none':
             with torch.no_grad():
                 model_output = self.apply_model(x_noisy, t, cond_context)
+
+            if capture_ca_activations:
+                ca_layers_activations = extra_info['ca_layers_activations']
+
         elif unet_has_grad == 'all':
             model_output = self.apply_model(x_noisy, t, cond_context)
-        elif unet_has_grad == 'subject-half':
-            # Split x_noisy, t, cond_context into two halves.
-            x_noisy_1, x_noisy_2 = x_noisy.chunk(2)
-            t_1, t_2 = t.chunk(2)
-            c_prompt_emb, c_in, extra_info = cond_context
-            c_prompt_emb_1, c_prompt_emb_2 = c_prompt_emb.chunk(2)
-            c_in_1, c_in_2 = c_in[:len(x_noisy_1)], c_in[len(x_noisy_1):]
-            extra_info_1, extra_info_2 = extra_info, copy.copy(extra_info)
-            # Always diable LoRA layers when generating the class half of the batch.
-            extra_info_2['enable_lora'] = False
-            model_output_1 = self.apply_model(x_noisy_1, t_1, (c_prompt_emb_1, c_in_1, extra_info_1))
-            with torch.no_grad():
-                model_output_2 = self.apply_model(x_noisy_2, t_2, (c_prompt_emb_2, c_in_2, extra_info_2))
 
-            model_output = torch.cat([model_output_1, model_output_2], dim=0)
-            if extra_info['capture_ca_activations']:
-                # Concatenate the two attention weights.
-                for layer_idx in extra_info_1['ca_layers_activations'].keys():
-                    for k in extra_info_1['ca_layers_activations'][layer_idx].keys():
-                        extra_info_1['ca_layers_activations'][layer_idx][k] = \
-                            torch.cat([extra_info_1['ca_layers_activations'][layer_idx][k], 
-                                       extra_info_2['ca_layers_activations'][layer_idx][k]], dim=0)
+            if capture_ca_activations:
+                ca_layers_activations = extra_info['ca_layers_activations']
+
+        elif unet_has_grad == 'subject-compos':
+            model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
+                                                                     enable_grad=False, enable_lora=True)
+            model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
+                                                                     enable_grad=True,  enable_lora=True)
+            model_output_c2, extra_info_c2 = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(2, 4),
+                                                                     enable_grad=False, enable_lora=False)
+            
+            model_output = torch.cat([model_output_ss, model_output_sc, model_output_c2], dim=0)
+            extra_info = cond_context[2]
+            if capture_ca_activations:
+                # Collate three captured activation dicts into extra_info.
+                ca_layers_activations = collate_dicts([extra_info_ss['ca_layers_activations'],
+                                                       extra_info_sc['ca_layers_activations'],
+                                                       extra_info_c2['ca_layers_activations']])
         else:
             breakpoint()
 
@@ -1350,10 +1358,6 @@ class LatentDiffusion(DDPM):
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
                 x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
-                # Clear the cached placeholder indices, as they are for conditional embeddings.
-                # Now we generate model_output_uncond under unconditional (negative) prompts,
-                # which don't contain placeholder tokens.
-                self.embedding_manager.clear_prompt_adhoc_info()
                 # model_output_uncond: [BS, 4, 64, 64]
                 model_output_uncond = self.apply_model(x_noisy, t, uncond_context)
             # If do clip filtering, CFG makes the contents in the 
@@ -1367,19 +1371,69 @@ class LatentDiffusion(DDPM):
         else:
             x_recon = None
         
-        return noise_pred, x_recon
+        return noise_pred, x_recon, ca_layers_activations
 
-    # Release part of the computation graph on unused instances to save RAM.
-    def release_plosses_intermediates(self, local_vars):
-        for k in ('model_output', 'x_recon', 'clip_images_code'):
-            if k in local_vars:
-                del local_vars[k]
+    def multistep_denoise(self, x_start, noise, t, cond_context, 
+                          uncond_emb=None, img_mask=None, unet_has_grad='all', 
+                          do_pixel_recon=False, cfg_scale=-1, capture_ca_activations=False,
+                          num_denoising_steps=1, same_t_noise_across_instances=False):
+        assert num_denoising_steps <= 10
 
-        extra_info = local_vars['extra_info']
-        for k in ('ca_layers_activations'):
-            if k in extra_info:
-                del extra_info[k]
+        # Initially, x_starts only contains the original x_start.
+        x_starts    = [ x_start ]
+        noises      = [ noise ]
+        ts          = [ t ]
+        noise_preds = []
+        x_recons    = []
+        ca_layers_activations_list = []
 
+        for i in range(num_denoising_steps):
+            x_start = x_starts[i]
+            t       = ts[i]
+            noise   = noises[i]
+            # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
+            x_noisy = self.q_sample(x_start, t, noise)
+            
+            # If do_arc2face_distill, then pos_context is [BS=6, 21, 768].
+            noise_pred, x_recon, ca_layers_activations = \
+                self.guided_denoise(x_noisy, noise, t, cond_context,
+                                    uncond_emb, img_mask, unet_has_grad, 
+                                    do_pixel_recon, cfg_scale, capture_ca_activations)
+            
+            noise_preds.append(noise_pred)
+            # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
+            pred_x0 = self.predict_start_from_noise(x_noisy, t, noise_pred)                
+            # The predicted x0 is used as the x_start for the next denoising step.
+            x_starts.append(pred_x0)
+            x_recons.append(x_recon)
+            ca_layers_activations_list.append(ca_layers_activations)
+
+            # Sample an earlier timestep for the next denoising step.
+            if i < num_denoising_steps - 1:
+                # NOTE: rand_like() samples from U(0, 1), not like randn_like().
+                relative_ts = torch.rand_like(t.float())
+                # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
+                # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
+                # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
+                # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
+                # of the current timestep.
+                t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
+                t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
+                earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
+                earlier_timesteps = earlier_timesteps.long()
+                noise = torch.randn_like(pred_x0)
+
+                if same_t_noise_across_instances:
+                    # If same_t_noise_across_instances, we use the same earlier_timesteps and noise for all instances.
+                    earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
+                    noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
+
+                # earlier_timesteps = ts[i+1] < ts[i].
+                ts.append(earlier_timesteps)
+                noises.append(noise)
+
+        return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list
+            
     # t: timesteps.
     # c_in is the textual prompts. 
     # extra_info: a dict that contains various fields. 
@@ -1391,9 +1445,7 @@ class LatentDiffusion(DDPM):
         fg_mask             = self.iter_flags['fg_mask']
         instances_have_fg_mask  = self.iter_flags['instances_have_fg_mask']
         filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
-        placeholder2indices = extra_info['placeholder2indices']
-        prompt_emb_mask     = extra_info['prompt_emb_mask']
-        
+
         # all_subj_indices are used to extract the attention weights
         # of the subject tokens for the attention loss computation.
         # Then combine all subject indices into all_subj_indices.
@@ -1409,10 +1461,6 @@ class LatentDiffusion(DDPM):
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
                                                      self.embedding_manager.subject_string_dict)
 
-        # prompt_emb_mask is used by calc_prompt_emb_delta_loss() to highlight the subject tokens.
-        text_prompt_adhoc_info = { 'placeholder2indices':   placeholder2indices,
-                                   'prompt_emb_mask':       prompt_emb_mask }
-
         noise = torch.randn_like(x_start) 
 
         # If do_feat_distill_on_comp_prompt, we prepare the attention activations 
@@ -1422,22 +1470,55 @@ class LatentDiffusion(DDPM):
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
             masks = (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask)
-            # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
+            # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
+            # and the bg mask area filled with noise. Returned only for logging.
+            # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
+            # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
             # We return noise to make the gt_target up-to-date, which is the recon objective.
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_recon, x_start_maskfilled, x_start_final, noise, masks, \
-            init_prep_context_type, num_init_prep_denoising_steps = \
-                self.do_comp_prompt_denoising(cond_context, x_start, noise, text_prompt_adhoc_info,
-                                              masks, fg_noise_amount=0.2,
-                                              BLOCK_SIZE=BLOCK_SIZE)
+            x_start_maskfilled, x_start_primed, noise, masks, \
+            num_init_prep_denoising_steps = \
+                self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
+                                                    masks, fg_noise_amount=0.2,
+                                                    BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask = masks
             self.iter_flags['fg_mask_avail_ratio'] = instances_have_fg_mask.float().mean()
 
+            uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
+
+            # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
+            t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
+                                  (BLOCK_SIZE,), device=x_start.device)
+            t_mid = t_mid.repeat(4)
+
+            # Iterate among 1 ~ 3. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
+            # which would be faster for synchronization.
+            num_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % 3 + 1
+
+            # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+            # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+            # (img_mask is not used in the prompt-guided cross-attention layers).
+            # But we don't use img_mask in compositional iterations. Because in compositional iterations,
+            # the original images don't play a role (even if comp_init_fg_from_training_image,
+            # the unet doesn't consider the actual pixels outside of the subject areas, so img_mask is
+            # set to None).
+
+            # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
+            # noise_preds is not used for loss computation.
+            # x_recons[-1] will be used for arcface align loss computation.
+            noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
+                self.multistep_denoise(x_start_primed, noise, t_mid, cond_context,
+                                       uncond_emb=uncond_emb, img_mask=None, 
+                                       unet_has_grad='subject-compos', 
+                                       do_pixel_recon=True, cfg_scale=-1, capture_ca_activations=True,
+                                       num_denoising_steps=num_denoising_steps,
+                                       same_t_noise_across_instances=True)
+
             # Log x_start_maskfilled (noisy and scaled version of the first image in the batch),
-            # x_start_final (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
+            # x_start_primed (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
             # The four instances in iter_flags['image_unnorm'] are different,
             # but only the first one is actually used. 
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
@@ -1455,21 +1536,16 @@ class LatentDiffusion(DDPM):
             x_start_maskfilled_decoded = self.decode_first_stage(x_start_maskfilled)
             self.cache_and_log_generations(x_start_maskfilled_decoded, log_image_colors, do_normalize=True)
 
-            x_start_final = x_start_final.chunk(2)[0]
-            log_image_colors = torch.ones(x_start_final.shape[0], dtype=int, device=x_start.device)
-            x_start_final_decoded = self.decode_first_stage(x_start_final)
-            self.cache_and_log_generations(x_start_final_decoded, log_image_colors, do_normalize=True)
+            x_start_primed = x_start_primed.chunk(2)[0]
+            log_image_colors = torch.ones(x_start_primed.shape[0], dtype=int, device=x_start.device)
+            x_start_primed_decoded = self.decode_first_stage(x_start_primed)
+            self.cache_and_log_generations(x_start_primed_decoded, log_image_colors, do_normalize=True)
             
-            recon_images = self.decode_first_stage(x_recon)
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # If using subj context to do init prep, then the color is green.
-            # If using comp context to do init prep, then the color is purple.
-            if init_prep_context_type == 'subj':
-                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device)
-            elif init_prep_context_type == 'cls':
-                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
-            elif init_prep_context_type == 'ensemble':
-                log_image_colors = torch.zeros(recon_images.shape[0], dtype=int, device=x_start.device)
+            for i, x_recon in enumerate(x_recons):
+                recon_images = self.decode_first_stage(x_recon)
+                # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+                # If there are multiple denoising steps, the output images are assigned different colors.
+                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * (i % 4)
 
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
@@ -1486,7 +1562,21 @@ class LatentDiffusion(DDPM):
             raise NotImplementedError()
 
         loss = 0
-                                
+
+        # do_prompt_emb_delta_reg is always done, regardless of the iter_type.
+        if self.iter_flags['do_prompt_emb_delta_reg']:
+            loss_prompt_emb_delta = calc_prompt_emb_delta_loss( 
+                        extra_info['c_prompt_emb_4b'], extra_info['prompt_emb_mask'])
+
+            loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
+
+            # The Prodigy optimizer seems to suppress the embeddings too much, 
+            # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
+            prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
+            # prompt_emb_delta_reg_weight: 1e-5.
+            loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
+
+        ##### begin of do_normal_recon #####
         if self.iter_flags['do_normal_recon']:          
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
@@ -1494,43 +1584,37 @@ class LatentDiffusion(DDPM):
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
-            extra_info['img_mask']  = img_mask
-            extra_info['capture_ca_activations'] = True
-
-            # DON'T apply neg_id_emb for recon iterations. 
-            # Don't do CFG either. So uncond_emb is None.
-            model_output, x_recon = \
+            # Don't do CFG. So uncond_emb is None.
+            model_output, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context, 
-                                    text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    uncond_emb=None,
+                                    uncond_emb=None, img_mask=img_mask,
                                     unet_has_grad='all', 
                                     # Reconstruct the images at the pixel level for CLIP loss.
-                                    # do_pixel_recon is enabled only when do_feat_distill_on_comp_prompt.
-                                    # This is to cache the denoised images as future initialization.
                                     do_pixel_recon=True,
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
-                                    cfg_scale=-1)
-
-            extra_info['capture_ca_activations'] = False
+                                    cfg_scale=-1, capture_ca_activations=True)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
             # bg loss is completely ignored. 
             bg_pixel_weight = 0 
 
-            loss_recon_subj_bg_suppress, loss_recon, loss_pred_l2 = \
-                self.calc_recon_and_complem_losses(model_output, gt_target, extra_info,
-                                                   all_subj_indices,
-                                                   img_mask, fg_mask, instances_have_fg_mask,
-                                                   bg_pixel_weight,
-                                                   x_start.shape[0], loss_dict, session_prefix)
+            loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
+                self.calc_recon_and_complem_losses(model_output, gt_target, ca_layers_activations,
+                                                   all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
+                                                   bg_pixel_weight, x_start.shape[0])
             v_loss_recon = loss_recon.mean().detach().item()
+        
+            # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
+            if loss_subj_mb_suppress > 0:
+                loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
+
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
             loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
-                    + loss_recon_subj_bg_suppress * self.recon_subj_bg_suppress_loss_weight
+                    + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
 
             if self.use_arcface_loss and (self.arcface is not None):
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
@@ -1547,12 +1631,13 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
+        ##### begin of do_unet_distill #####
         elif self.iter_flags['do_unet_distill']:
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, 
-                                            text_prompt_adhoc_info, img_mask, fg_mask)
+                                            img_mask, fg_mask)
 
             v_loss_unet_distill = loss_unet_distill.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
@@ -1560,26 +1645,22 @@ class LatentDiffusion(DDPM):
             # make it comparable to the recon loss.
             loss += loss_unet_distill * self.unet_distill_weight
 
-        if self.iter_flags['do_prompt_emb_delta_reg']:
-            loss_prompt_emb_delta = calc_prompt_emb_delta_loss( 
-                        extra_info['c_prompt_emb_4b'], extra_info['prompt_emb_mask'])
-
-            loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
-
-            # The Prodigy optimizer seems to suppress the embeddings too much, 
-            # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
-            prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
-            # prompt_emb_delta_reg_weight: 1e-5.
-            loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
-
         ###### begin of do_feat_distill_on_comp_prompt ######
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:
-            loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill = \
-                self.calc_comp_prompt_distill_loss(extra_info['ca_layers_activations'], filtered_fg_mask, 
-                                                   instances_have_fg_mask, 
-                                                   all_subj_indices_1b, all_subj_indices_2b, 
-                                                   BLOCK_SIZE, loss_dict, session_prefix)
+        elif self.iter_flags['do_feat_distill_on_comp_prompt']:
+            losses_comp_fg_bg_preserve = []
+            losses_subj_attn_norm_distill = []
+            for ca_layers_activations in ca_layers_activations_list:
+                loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill = \
+                    self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
+                                                       instances_have_fg_mask, 
+                                                       all_subj_indices_1b, all_subj_indices_2b, 
+                                                       BLOCK_SIZE, loss_dict, session_prefix)
+                losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
+                losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
             
+            loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
+            loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
+
             # loss_comp_fg_bg_preserve = 0 if comp_init_fg_from_training_image and there's a valid fg_mask.
             if loss_comp_fg_bg_preserve > 0:
                 loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
@@ -1592,13 +1673,13 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
             
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
-            # loss_subj_attn_norm_distill: 0.08~0.12. subj_attn_norm_distill_loss_weight: 0, DISABLED.
-            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight \
-                    + loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
+            # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED.
+            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
 
             # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
             # to compute arcface_align_loss.
             if self.use_arcface_loss and (self.arcface is not None) and (num_init_prep_denoising_steps > 1):
+                x_recon     = x_recons[-1]
                 # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
                 # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
                 x_start0    = x_start.chunk(4)[0]
@@ -1609,12 +1690,13 @@ class LatentDiffusion(DDPM):
                     # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
                     # This loss is around 1/150 of recon/distill losses (0.1).
                     loss += loss_arcface_align * self.arcface_align_loss_weight
+        else:
+            breakpoint()
 
         if torch.isnan(loss) and self.trainer.global_rank == 0:
             print('NaN loss detected.')
             breakpoint()
 
-        self.release_plosses_intermediates(locals())
         loss_dict.update({f'{session_prefix}/loss': loss.mean().detach().item() })
 
         return loss, loss_dict
@@ -1629,25 +1711,18 @@ class LatentDiffusion(DDPM):
         loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels)
         return loss_arcface_align
     
-    # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_bg_suppress, etc.).
+    # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
     # (But there are still other losses used after calling this function.)
-    def calc_recon_and_complem_losses(self, model_output, target, extra_info,
+    def calc_recon_and_complem_losses(self, model_output, target, ca_layers_activations,
                                       all_subj_indices,
                                       img_mask, fg_mask, instances_have_fg_mask, 
-                                      bg_pixel_weight, BLOCK_SIZE, loss_dict, session_prefix):
+                                      bg_pixel_weight, BLOCK_SIZE):
 
         loss_subj_mb_suppress = \
             self.calc_subj_masked_bg_suppress_loss(
-                extra_info['ca_layers_activations']['attnscore'],
+                ca_layers_activations['attnscore'],
                 all_subj_indices,
                 BLOCK_SIZE, fg_mask, instances_have_fg_mask)
-        
-        # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
-        if loss_subj_mb_suppress > 0:
-            loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
-
-        # loss_recon_subj_bg_suppress will be weighted by recon_subj_bg_suppress_loss_weight = 2e-4.
-        loss_recon_subj_bg_suppress = loss_subj_mb_suppress
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = calc_recon_loss(self.get_loss_func(), model_output, target, img_mask, fg_mask, 
@@ -1655,11 +1730,11 @@ class LatentDiffusion(DDPM):
 
         # Calc the L2 norm of model_output.
         loss_pred_l2 = (model_output ** 2).mean()
-        return loss_recon_subj_bg_suppress, loss_recon, loss_pred_l2
+        return loss_subj_mb_suppress, loss_recon, loss_pred_l2
 
 
     def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, 
-                               text_prompt_adhoc_info, img_mask, fg_mask):
+                               img_mask, fg_mask):
         c_prompt_emb, c_in, extra_info = cond_context
         BLOCK_SIZE = x_start.shape[0]
 
@@ -1780,10 +1855,10 @@ class LatentDiffusion(DDPM):
             # We need to make the student's CFG scale consistent with the teacher UNet's.
             # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
             # and the cfg_scale is not used in guided_denoise().
-            model_output_s, x_recon_s = \
+            # ca_layers_activations is not used in unet distillation.
+            model_output_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
-                                    text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                    uncond_emb=uncond_emb,
+                                    uncond_emb=uncond_emb, img_mask=img_mask,
                                     unet_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale)
             model_outputs.append(model_output_s)
@@ -1808,6 +1883,7 @@ class LatentDiffusion(DDPM):
             # Therefore, bg_pixel_weight = 0.1.
             if not self.iter_flags['do_unet_distill']:
                 bg_pixel_weight = 0.1
+            # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
             # we want to do recon on the whole image. But considering background is not perfect, 
             # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
@@ -1843,8 +1919,8 @@ class LatentDiffusion(DDPM):
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
-    def do_comp_prompt_denoising(self, cond_context, x_start, noise, text_prompt_adhoc_info,
-                                 masks, fg_noise_amount=0.2, BLOCK_SIZE=1):
+    def prime_x_start_for_comp_prompts(self, cond_context, x_start, noise,
+                                       masks, fg_noise_amount=0.2, BLOCK_SIZE=1):
         c_prompt_emb, c_in, extra_info = cond_context
 
         # Although img_mask is not explicitly referred to in the following code,
@@ -1882,27 +1958,17 @@ class LatentDiffusion(DDPM):
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
 
-        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
-        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
-        # (img_mask is not used in the prompt-guided cross-attention layers).
-        # But we don't use img_mask in compositional iterations. Because in compositional iterations,
-        # the original images don't play a role (even if comp_init_fg_from_training_image,
-        # the unet doesn't consider the actual pixels outside of the subject areas, so img_mask is
-        # set to None in extra_info).
-        extra_info['img_mask']  = None
-
         # num_init_prep_denoising_steps iterates from 2 to 5.
         # NOTE: self.global_step // self.comp_distill_iter_gap gets the actual number of 
         # comp distillation iterations. So we don't need to consider whether 
         # the divisor 3 is co-prime with comp_distill_iter_gap or not.
         # 3 is co-prime with comp_distill_iter_gap == 2.
         # Consequently, num_init_prep_denoising_steps will always follow 
-        # a uniform distribution of [2, 3, 4, 5].
-        num_init_prep_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % 4 + 2
+        # a uniform distribution of [1, 2, 3, 4].
+        num_init_prep_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % 5
 
-        # Always True
+        # 1 out of 5 times, num_init_prep_denoising_steps == 0. 
         if num_init_prep_denoising_steps > 0:
-            init_prep_context_type = 'ensemble'
             MAX_N_SEP = 3
             # If num_init_prep_denoising_steps > MAX_N_SEP, then we split the denoising steps into
             # shared denoising steps and separate denoising steps.
@@ -1917,7 +1983,7 @@ class LatentDiffusion(DDPM):
                                    (BLOCK_SIZE,), device=x_start.device)
             t      = t_rear.repeat(4)
 
-            # First, do num_shared_denoising_steps of shared denoising steps with the subj-mix-cls comp prompts.
+            # ** Do num_shared_denoising_steps of shared denoising steps with the subj-mix-cls comp prompts.
             if num_shared_denoising_steps > 0:
                 # Class prep denoising: Denoise x_start_1 with the comp prompts 
                 # for num_shared_denoising_steps times, using self.comp_distill_init_prep_unet.
@@ -1963,14 +2029,15 @@ class LatentDiffusion(DDPM):
             noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
             subj_prompt_emb, cls_prompt_emb = c_prompt_emb.chunk(2)
             uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
-            # *_double_context contains both the positive and negative prompt embeddings.
+            # x_double_context contains both the positive and negative prompt embeddings.
             subj_double_context = torch.cat([subj_prompt_emb, uncond_emb], dim=0)
             cls_double_context  = torch.cat([cls_prompt_emb,  uncond_emb], dim=0)
 
-            # Now do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
-            # Since we always use CFG for class prep denoising,
-            # we need to pass the negative prompt as well.
-            # cfg_scale_range=[2, 4].
+            # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
+            #     x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
+            # and x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
+            # Since we always use CFG for class prep denoising, we need to pass the negative prompt as well.
+            # default cfg_scale_range=[2, 4].
             with torch.no_grad():
                 init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
                     self.comp_distill_init_prep_unet(self, x_start_2, noise_2, t_2, 
@@ -1994,38 +2061,17 @@ class LatentDiffusion(DDPM):
             x_start = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
             del init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t
 
-        uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
         # Regenerate the noise, since the noise has been used above.
         # Ensure the two types of instances (single, comp) use different noise.
         # But subj and cls instances use the same noise.
-        noise       = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
-        extra_info['capture_ca_activations'] = True
-
-        # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
-        t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
-                                 (BLOCK_SIZE,), device=x_start.device)
-        t_mid = t_mid.repeat(4)
-
-        # model_output is not used by the caller.
-        # x_start will be added with noise to get x_noisy, on which the denoising is done to get model_output.
-        model_output, x_recon = \
-            self.guided_denoise(x_start, noise, t_mid, cond_context, 
-                                text_prompt_adhoc_info=text_prompt_adhoc_info,
-                                uncond_emb=uncond_emb,
-                                unet_has_grad='subject-half', 
-                                # Reconstruct the images at the pixel level. cfg_scale does CFG to make 
-                                # the output images more clear, but the clearer images are not used in the loss computation.
-                                do_pixel_recon=True, cfg_scale=5)
-
-        extra_info['capture_ca_activations'] = False
-        x_start_final = x_start
-        # noise and masks are updated to be a 1-repeat-4 structure in do_comp_prompt_denoising().
+        noise           = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
+        x_start_primed   = x_start
+        # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_recon, x_start_maskfilled, x_start_final, noise, masks, \
-                init_prep_context_type, num_init_prep_denoising_steps
+        return x_start_maskfilled, x_start_primed, noise, masks, num_init_prep_denoising_steps
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, instances_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
@@ -2081,19 +2127,19 @@ class LatentDiffusion(DDPM):
                     loss_name2 = loss_name.replace('loss_', '')
                     loss_dict.update({f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
-            # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so its magnitude is small.
-            # But this loss is very small from the beginning, so no need to scale it up to further penalize it.
+            # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
-            # which are very small. So we scale them up by 50x.
-            # loss_sc_mc_bg_match: 0.004~0.006 -> 0.2~0.3.
+            # which are very small. So we scale them up by 50x to 250x.
+            # loss_sc_mc_bg_match: 0.004~0.008, sc_mc_bg_match_loss_scale: 100~200 => 0.4~1.6.
             sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.002, 50), (0.01, 250))
             sc_recon_ss_fg_min_loss_scale = 10
 
+            # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
-            # loss_sc_mc_bg_match: 0.005~0.008 -> 0.25~0.4.
-            # loss_comp_subj_bg_attn_suppress: 0.1~0.2 -> 0.002~0.004.
+            # loss_sc_mc_bg_match:             0.005~0.008 -> 0.25~0.4.
+            # loss_comp_subj_bg_attn_suppress: 0.1~0.2     -> 0.002~0.004.
             # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.
             # Therefore, we use a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
             loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
@@ -2579,16 +2625,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = bnb.optim.Adam8bit
         elif self.optimizer_type == 'AdamW8bit':
             OptimizerClass = bnb.optim.AdamW8bit
-        elif self.optimizer_type == 'OrthogonalNesterov':
-            OptimizerClass = CombinedOptimizer
         elif self.optimizer_type == 'Prodigy':
             OptimizerClass = Prodigy
-        elif self.optimizer_type == 'AdEMAMix':
-            OptimizerClass = AdEMAMix
-        elif self.optimizer_type == 'AdEMAMix8bit':
-            OptimizerClass = bnb.optim.AdEMAMix8bit
-        elif self.optimizer_type == 'adopt':
-            OptimizerClass = ADOPT
         else:
             raise NotImplementedError()
             
@@ -2613,26 +2651,12 @@ class LatentDiffusion(DDPM):
 
         count_optimized_params(opt_params_with_lrs)
 
-        # Adam series, AdEMAMix series, or OrthogonalNesterov.
+        # Adam series, AdEMAMix series.
         if 'Prodigy' not in self.optimizer_type:
-            # ADOPT is an improved version of Adam.
-            if 'adam' in self.optimizer_type.lower() or 'adopt' in self.optimizer_type.lower():
+            if 'adam' in self.optimizer_type.lower():
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                     betas=self.adam_config.betas)
-            # AdEMAMix, AdEMAMix8bit, AdEMAMixDistributedShampoo.
-            if 'AdEMAMix' in self.optimizer_type:
-                # AdEMAMix uses three betas. We use the default 0.9999 for the third beta.
-                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                     betas=(0.9, 0.999, 0.9999))
-                
-            elif self.optimizer_type == 'OrthogonalNesterov':
-                adam_config = {'betas': self.adam_config.betas, 'weight_decay': self.weight_decay}
-                # ortho_nevstrov uses a much smaller LR. Theses settings are copied from
-                # https://github.com/KellerJordan/modded-nanogpt/blob/master/train_gpt2.py
-                ortho_nesterov_config = {'lr': 0.1 * lr, 'momentum': 0.95}
-                opt = OptimizerClass(opt_params_with_lrs, optimizer_types=(OrthogonalNesterov, torch.optim.AdamW),
-                                     configs=(ortho_nesterov_config, adam_config))
-                
+
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)

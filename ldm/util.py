@@ -1077,6 +1077,24 @@ def filter_dict_by_key(d, key_container):
     d2 = { k: v for k, v in d.items() if k in key_container }
     return d2
 
+# each dict in dicts has the same keys.
+# The values are either lists or tensors, or dicts of either lists or tensors.
+def collate_dicts(dicts):
+    d = {}
+
+    for k, v in dicts[0].items():
+        collection = [ d[k] for d in dicts ]
+        if isinstance(v, list):
+            d[k] = sum(collection, [])
+        elif isinstance(v, torch.Tensor):
+            d[k] = torch.cat(collection, dim=0)
+        elif isinstance(v, dict):
+            d[k] = collate_dicts(collection)
+        else:
+            breakpoint()
+
+    return d
+
 def extract_layerwise_value(v, layer_idx, v_is_layerwise_array, v_is_layerwise_dict):
     if v_is_layerwise_array:
         # Extract the layer-specific value from the layerwise array.

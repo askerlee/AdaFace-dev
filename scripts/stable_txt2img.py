@@ -254,7 +254,7 @@ def parse_args():
     parser.add_argument("--diffusers_scheduler_name", type=str, default="ddim",
                         choices=["ddim", "pndm", "dpm++"], 
                         help="The scheduler name for the diffusers pipeline")
-    parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use LoRA in the Diffusers UNet model")
     
     args = parser.parse_args()
