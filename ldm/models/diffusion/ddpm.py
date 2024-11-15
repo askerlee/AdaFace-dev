@@ -76,7 +76,8 @@ class DDPM(pl.LightningModule):
                  unet_distill_iter_gap=2,
                  unet_distill_weight=8,
                  unet_teacher_types=None,
-                 max_num_unet_distill_denoising_steps=5,
+                 max_num_unet_distill_denoising_steps=3,
+                 max_num_comp_distill_denoising_steps=3, 
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  max_num_comp_distill_init_prep_denoising_steps=6,
@@ -126,6 +127,7 @@ class DDPM(pl.LightningModule):
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
+        self.max_num_comp_distill_denoising_steps    = max_num_comp_distill_denoising_steps
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
@@ -1302,7 +1304,7 @@ class LatentDiffusion(DDPM):
         
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         ca_layers_activations = None
-        
+
         extra_info = cond_context[2]
         extra_info['capture_ca_activations'] = capture_ca_activations
         extra_info['img_mask'] = img_mask
@@ -1494,9 +1496,10 @@ class LatentDiffusion(DDPM):
                                   (BLOCK_SIZE,), device=x_start.device)
             t_mid = t_mid.repeat(4)
 
+            # max_num_comp_distill_denoising_steps: 3.
             # Iterate among 1 ~ 3. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
-            # which would be faster for synchronization.
-            num_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % 3 + 1
+            # which might be faster for synchronization.
+            num_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_distill_denoising_steps + 1
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
