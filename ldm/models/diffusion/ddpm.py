@@ -1852,18 +1852,21 @@ class LatentDiffusion(DDPM):
             noise_t   = unet_teacher_noises[s].to(x_start.dtype)
             t_s       = all_t[s]
 
-            # Here x_start_s is used as x_start.
-            # ** unet_teacher.cfg_scale is randomly sampled from unet_teacher_cfg_scale_range in unet_teacher(). **
-            # ** DO make sure unet_teacher() was called before guided_denoise() below. **
+            # x_start_s, noise_t, t_s, unet_teacher.cfg_scale
+            # are all randomly sampled from unet_teacher_cfg_scale_range in unet_teacher().
+            # So, make sure unet_teacher() was called before guided_denoise() below.
             # We need to make the student's CFG scale consistent with the teacher UNet's.
             # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
             # and the cfg_scale is not used in guided_denoise().
             # ca_layers_activations is not used in unet distillation.
+            # ** Intentionally do not use img_mask in unet distillation. 
+            # Otherwise the task will be too easy for the student.
             model_output_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
-                                    uncond_emb=uncond_emb, img_mask=img_mask,
+                                    uncond_emb=uncond_emb, img_mask=None,
                                     unet_has_grad='all', do_pixel_recon=True, 
-                                    cfg_scale=self.unet_teacher.cfg_scale)
+                                    cfg_scale=self.unet_teacher.cfg_scale,
+                                    capture_ca_activations=False)
             model_outputs.append(model_output_s)
 
             recon_images_s = self.decode_first_stage(x_recon_s)
