@@ -1652,6 +1652,15 @@ class LatentDiffusion(DDPM):
         elif self.iter_flags['do_feat_distill_on_comp_prompt']:
             losses_comp_fg_bg_preserve = []
             losses_subj_attn_norm_distill = []
+
+            loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
+                           'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+                           'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
+            
+            for loss_name in loss_names:
+                loss_name2 = loss_name.replace('loss_', '')
+                loss_dict[loss_name2] = 0
+
             for ca_layers_activations in ca_layers_activations_list:
                 loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill = \
                     self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
@@ -1661,6 +1670,11 @@ class LatentDiffusion(DDPM):
                 losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
                 losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
             
+            for loss_name in loss_names:
+                loss_name2 = loss_name.replace('loss_', '')
+                if loss_name2 in loss_dict:
+                    loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
+
             loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
             loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
 
@@ -2131,7 +2145,8 @@ class LatentDiffusion(DDPM):
             for loss_name in loss_names:
                 if loss_name in comp_subj_bg_preserve_loss_dict and comp_subj_bg_preserve_loss_dict[loss_name] > 0:
                     loss_name2 = loss_name.replace('loss_', '')
-                    loss_dict.update({f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
+                    # Accumulate the loss values to loss_dict when there are multiple denoising steps.
+                    add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
             # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
             subj_comp_map_single_align_with_cls_loss_scale = 1
