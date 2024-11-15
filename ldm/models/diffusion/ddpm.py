@@ -1302,7 +1302,7 @@ class LatentDiffusion(DDPM):
                        uncond_emb=None, img_mask=None, unet_has_grad='all', 
                        do_pixel_recon=False, cfg_scale=-1, capture_ca_activations=False):
         
-        x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        x_noisy = self.q_sample(x_start, t, noise)
         ca_layers_activations = None
 
         extra_info = cond_context[2]
@@ -1327,6 +1327,8 @@ class LatentDiffusion(DDPM):
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif unet_has_grad == 'subject-compos':
+            # Although enable_lora is set to True, if self.diffusers_unet_uses_lora is False, it will be overridden
+            # in the unet.
             model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
                                                                      enable_grad=False, enable_lora=True)
             model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
@@ -1359,7 +1361,7 @@ class LatentDiffusion(DDPM):
 
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
-                x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+                x_noisy = self.q_sample(x_start, t, noise)
                 # model_output_uncond: [BS, 4, 64, 64]
                 model_output_uncond = self.apply_model(x_noisy, t, uncond_context)
             # If do clip filtering, CFG makes the contents in the 
@@ -1377,7 +1379,7 @@ class LatentDiffusion(DDPM):
 
     def multistep_denoise(self, x_start, noise, t, cond_context, 
                           uncond_emb=None, img_mask=None, unet_has_grad='subject-compos', 
-                          do_pixel_recon=True, cfg_scale=-1, capture_ca_activations=False,
+                          cfg_scale=-1, capture_ca_activations=False,
                           num_denoising_steps=1, same_t_noise_across_instances=False):
         assert num_denoising_steps <= 10
 
@@ -1400,11 +1402,11 @@ class LatentDiffusion(DDPM):
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_noisy, noise, t, cond_context,
                                     uncond_emb, img_mask, unet_has_grad, 
-                                    do_pixel_recon, cfg_scale, capture_ca_activations)
+                                    do_pixel_recon=True, cfg_scale=cfg_scale, 
+                                    capture_ca_activations=capture_ca_activations)
             
             noise_preds.append(noise_pred)
-            # sqrt_recip_alphas_cumprod[t] * x_t - sqrt_recipm1_alphas_cumprod[t] * noise
-            pred_x0 = self.predict_start_from_noise(x_noisy, t, noise_pred)                
+            pred_x0 = x_recon
             # The predicted x0 is used as the x_start for the next denoising step.
             x_starts.append(pred_x0)
             x_recons.append(x_recon)
@@ -1413,7 +1415,7 @@ class LatentDiffusion(DDPM):
             # Sample an earlier timestep for the next denoising step.
             if i < num_denoising_steps - 1:
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                relative_ts = torch.rand_like(t.float())
+                unscaled_ts = torch.rand_like(t.float())
                 # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
                 # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
                 # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
@@ -1421,7 +1423,7 @@ class LatentDiffusion(DDPM):
                 # of the current timestep.
                 t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
                 t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
-                earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
+                earlier_timesteps = (t_ub - t_lb) * unscaled_ts + t_lb
                 earlier_timesteps = earlier_timesteps.long()
                 noise = torch.randn_like(pred_x0)
 
@@ -1517,7 +1519,7 @@ class LatentDiffusion(DDPM):
                 self.multistep_denoise(x_start_primed, noise, t_mid, cond_context,
                                        uncond_emb=uncond_emb, img_mask=None, 
                                        unet_has_grad='subject-compos', 
-                                       do_pixel_recon=True, cfg_scale=5, capture_ca_activations=True,
+                                       cfg_scale=5, capture_ca_activations=True,
                                        num_denoising_steps=num_denoising_steps,
                                        same_t_noise_across_instances=True)
 
@@ -2889,8 +2891,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
         # self.global_enable_lora is the global flag. 
         # We can override this call by setting extra_info['enable_lora'].
-        enable_lora = extra_info.get('enable_lora', self.global_enable_lora) \
-                        if extra_info is not None else self.global_enable_lora
+        enable_lora = extra_info.get('enable_lora', True) if extra_info is not None else True
+        # If enable_lora is set to False globally, then disable it in this call.
+        enable_lora = enable_lora and self.global_enable_lora
         
         # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
         for hooked_attn_proc in self.hooked_attn_procs:
