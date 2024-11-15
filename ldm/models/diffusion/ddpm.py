@@ -1395,12 +1395,10 @@ class LatentDiffusion(DDPM):
             x_start = x_starts[i]
             t       = ts[i]
             noise   = noises[i]
-            # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
-            x_noisy = self.q_sample(x_start, t, noise)
-            
+
             # unet_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
             noise_pred, x_recon, ca_layers_activations = \
-                self.guided_denoise(x_noisy, noise, t, cond_context,
+                self.guided_denoise(x_start, noise, t, cond_context,
                                     uncond_emb, img_mask, unet_has_grad, 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations)
@@ -1482,8 +1480,7 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_start_maskfilled, x_start_primed, noise, masks, \
-            num_init_prep_denoising_steps = \
+            x_start_maskfilled, x_start_primed, noise, masks, num_init_prep_denoising_steps = \
                 self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
                                                     masks, fg_noise_amount=0.2,
                                                     BLOCK_SIZE=BLOCK_SIZE)
@@ -1523,19 +1520,19 @@ class LatentDiffusion(DDPM):
                                        num_denoising_steps=num_denoising_steps,
                                        same_t_noise_across_instances=True)
 
-            # Log x_start_maskfilled (noisy and scaled version of the first image in the batch),
+            ts_1st = [ t[0].item() for t in ts ]
+            print(f"num_denoising_steps: {num_denoising_steps}, ts: {ts_1st}")
+
+            # Log x_start, x_start_maskfilled (noisy and scaled version of the first image in the batch),
             # x_start_primed (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
-            # The four instances in iter_flags['image_unnorm'] are different,
-            # but only the first one is actually used. 
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # All of them are 1, indicating green.
-            # input_image: torch.uint8, 0~255, [1, 512, 512, 3] -> [1, 3, 512, 512].
-            input_image = self.iter_flags['image_unnorm'][[0]]
-            input_image = input_image.permute(0, 3, 1, 2)
+            x_start0 = x_start[:1]
+            input_image = self.decode_first_stage(x_start0)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # All of them are 1, indicating green.
             log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
-            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=False)
+            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=True)
 
             x_start_maskfilled = x_start_maskfilled[[0]]
             log_image_colors = torch.ones(x_start_maskfilled.shape[0], dtype=int, device=x_start.device)
@@ -1698,7 +1695,7 @@ class LatentDiffusion(DDPM):
 
             # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
             # to compute arcface_align_loss.
-            if self.use_arcface_loss and (self.arcface is not None) and (num_init_prep_denoising_steps > 1):
+            if self.use_arcface_loss and (self.arcface is not None):
                 x_recon     = x_recons[-1]
                 # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
                 # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
@@ -2086,9 +2083,9 @@ class LatentDiffusion(DDPM):
 
         # Regenerate the noise, since the noise has been used above.
         # Ensure the two types of instances (single, comp) use different noise.
-        # But subj and cls instances use the same noise.
+        # ** But subj and cls instances use the same noise.
         noise           = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
-        x_start_primed   = x_start
+        x_start_primed  = x_start
         # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
         # But gt_target is probably not referred to in the following loss computations,
@@ -2894,7 +2891,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         enable_lora = extra_info.get('enable_lora', True) if extra_info is not None else True
         # If enable_lora is set to False globally, then disable it in this call.
         enable_lora = enable_lora and self.global_enable_lora
-        
+
         # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
         for hooked_attn_proc in self.hooked_attn_procs:
             hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
