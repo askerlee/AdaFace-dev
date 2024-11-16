@@ -78,7 +78,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
-                 max_num_comp_distill_denoising_steps=3, 
+                 range_comp_distill_denoising_steps=[2, 3],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0.1,
@@ -128,7 +128,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
-        self.max_num_comp_distill_denoising_steps   = max_num_comp_distill_denoising_steps
+        self.range_comp_distill_denoising_steps     = range_comp_distill_denoising_steps
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
@@ -319,7 +319,6 @@ class DDPM(pl.LightningModule):
                             'id2img_neg_prompt_embs':           None,
                             'perturb_face_id_embs':             False,
                             'faceless_img_count':               0,
-                            'num_denoising_steps':              1,
                             'do_feat_distill_on_comp_prompt':   False,
                             'do_prompt_emb_delta_reg':          False,
                             'unet_distill_uses_comp_prompt':    False,
@@ -1036,12 +1035,12 @@ class LatentDiffusion(DDPM):
                                          keep_norm=True, verbose=True)
 
         if self.iter_flags['do_unet_distill']:
-            # Iterate among 1 ~ 5. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
+            # Iterate among 3 ~ 5. We don't draw random numbers, so that different ranks have the same num_unet_denoising_steps,
             # which would be faster for synchronization.
             # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
             # Otherwise, some values, e.g., 0 and 3, will never be chosen.
-            num_denoising_steps = self.global_step % 3 + 3
-            self.iter_flags['num_denoising_steps'] = num_denoising_steps
+            num_unet_denoising_steps = self.global_step % 3 + 3
+            self.iter_flags['num_unet_denoising_steps'] = num_unet_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
             # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
@@ -1052,16 +1051,16 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
                 captions = batch[SUBJ_COMP_PROMPT]
 
-            if num_denoising_steps > 1:
-                # Only use the first 1/num_denoising_steps of the batch to avoid OOM.
-                # If num_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
-                # If num_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
-                # If num_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
-                HALF_BS = torch.arange(BS).chunk(num_denoising_steps)[0].shape[0]
-                # Setting the minimal batch size to be 2 requires skipping 3 steps if num_denoising_steps == 6.
+            if num_unet_denoising_steps > 1:
+                # Only use the first 1/num_unet_denoising_steps of the batch to avoid OOM.
+                # If num_unet_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
+                # If num_unet_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
+                # If num_unet_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
+                HALF_BS = torch.arange(BS).chunk(num_unet_denoising_steps)[0].shape[0]
+                # Setting the minimal batch size to be 2 requires skipping 3 steps if num_unet_denoising_steps == 6.
                 # Seems doing so will introduce too much artifact. Therefore it's DISABLED.
                 ## The batch size when doing multi-step denoising is at least 2. 
-                ## But naively doing so when num_denoising_steps >= 3 may cause OOM.
+                ## But naively doing so when num_unet_denoising_steps >= 3 may cause OOM.
                 ## In that case, we need to discard the first few steps from loss computation.
                 ## HALF_BS = max(2, HALF_BS)
 
@@ -1496,10 +1495,12 @@ class LatentDiffusion(DDPM):
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
 
-            # max_num_comp_distill_denoising_steps: 3.
-            # Iterate among 1 ~ 3. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
+            # range_comp_distill_denoising_steps: 3.
+            # num_denoising_steps iterates among 2 ~ 3. We don't draw random numbers, 
+            # so that different ranks have the same num_denoising_steps,
             # which might be faster for synchronization.
-            num_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_distill_denoising_steps + 1
+            W = self.range_comp_distill_denoising_steps[1] - self.range_comp_distill_denoising_steps[0] + 1
+            num_comp_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % W + self.range_comp_distill_denoising_steps[0]
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1517,11 +1518,11 @@ class LatentDiffusion(DDPM):
                                        uncond_emb=uncond_emb, img_mask=None, 
                                        unet_has_grad='subject-compos', 
                                        cfg_scale=5, capture_ca_activations=True,
-                                       num_denoising_steps=num_denoising_steps,
+                                       num_denoising_steps=num_comp_denoising_steps,
                                        same_t_noise_across_instances=True)
 
             ts_1st = [ t[0].item() for t in ts ]
-            print(f"comp distill denoising steps: {num_denoising_steps}, ts: {ts_1st}")
+            print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
 
             # Log x_start, x_start_maskfilled (noisy and scaled version of the first image in the batch),
             # x_start_primed (x_start_maskfilled denoised for a few steps), and the denoised images for diagnosis.
@@ -1698,7 +1699,8 @@ class LatentDiffusion(DDPM):
             if self.use_arcface_loss and (self.arcface is not None):
                 # Trying to calc arcface_align_loss from difficult to easy steps.
                 # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
-                calc_loss_count = 0
+                loss_calc_count = 0
+                max_loss_calc_count = 1
                 for sel_step in range(len(x_recons)):
                     x_recon  = x_recons[sel_step]
                     # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
@@ -1713,8 +1715,8 @@ class LatentDiffusion(DDPM):
                         # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
                         # This loss is around 1/150 of recon/distill losses (0.1).
                         loss += loss_arcface_align * self.arcface_align_loss_weight
-                        calc_loss_count += 1
-                        if calc_loss_count >= 2:
+                        loss_calc_count += 1
+                        if loss_calc_count >= max_loss_calc_count:
                             break
         else:
             breakpoint()
@@ -1765,8 +1767,8 @@ class LatentDiffusion(DDPM):
         c_prompt_emb, c_in, extra_info = cond_context
         BLOCK_SIZE = x_start.shape[0]
 
-        # num_denoising_steps > 1 implies do_unet_distill, but not vice versa.
-        num_denoising_steps = self.iter_flags['num_denoising_steps']
+        # num_unet_denoising_steps > 1 implies do_unet_distill, but not vice versa.
+        num_unet_denoising_steps = self.iter_flags['num_unet_denoising_steps']
         # student_prompt_embs is the prompt embedding of the student model.
         student_prompt_embs = cond_context[0]
         # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
@@ -1850,13 +1852,13 @@ class LatentDiffusion(DDPM):
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
                 self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
-                                  num_denoising_steps=num_denoising_steps)
+                                  num_denoising_steps=num_unet_denoising_steps)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
         # targets: replaced as the reconstructed x0 by the teacher UNet.
-        # If ND = num_denoising_steps > 1, then unet_teacher_noise_preds contain ND 
+        # If ND = num_unet_denoising_steps > 1, then unet_teacher_noise_preds contain ND 
         # unet_teacher predicted noises (of different ts).
-        # targets: [HALF_BS, 4, 64, 64] * num_denoising_steps.
+        # targets: [HALF_BS, 4, 64, 64] * num_unet_denoising_steps.
         targets = unet_teacher_noise_preds
 
         # The outputs of the remaining denoising steps will be appended to model_outputs.
@@ -1867,7 +1869,7 @@ class LatentDiffusion(DDPM):
         # But still apply CFG to match the teacher. So uncond_emb is the real uncond_emb.
         uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
 
-        for s in range(num_denoising_steps):
+        for s in range(num_unet_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
             # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
             # used to seed the second denoising step. 
@@ -1937,10 +1939,10 @@ class LatentDiffusion(DDPM):
             # doing so may not have any effect :(
             model_outputs[s], targets[s] = None, None
 
-        # If num_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
-        # In order not to dilute the large loss_unet_distill, we don't divide by num_denoising_steps.
+        # If num_unet_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
+        # In order not to dilute the large loss_unet_distill, we don't divide by num_unet_denoising_steps.
         # Instead, only increase the normalizer sub-linearly.
-        loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_denoising_steps)
+        loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_unet_denoising_steps)
 
         return loss_unet_distill
 
@@ -2093,7 +2095,7 @@ class LatentDiffusion(DDPM):
         # Regenerate the noise, since the noise has been used above.
         # Ensure the two types of instances (single, comp) use different noise.
         # ** But subj and cls instances use the same noise.
-        noise           = torch.randn_like(x_start[:2*BLOCK_SIZE]).repeat(2, 1, 1, 1)
+        noise           = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
         x_start_primed  = x_start
         # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
@@ -2132,9 +2134,7 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, instances_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives={'attn_out': ['orig'], 
-                                                                            'outfeat':  ['orig']},
-                                                     fg_align_loss_scheme='L2',
+                                                     recon_feat_objectives={'attn_out': 'cosine', 'outfeat': 'cosine'},
                                                      bg_align_loss_scheme='L2',
                                                      do_feat_attn_pooling=True)
             
@@ -2147,8 +2147,8 @@ class LatentDiffusion(DDPM):
             # Only their counterparts -- loss_sc_recon_ss_fg_min, loss_comp_subj_bg_attn_suppress 
             # are optimized.
             loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
-            loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, \
-            loss_sc_mc_bg_match, loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
+            loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, loss_sc_mc_bg_match, \
+            loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
                 = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
 
             for loss_name in loss_names:
@@ -2160,11 +2160,10 @@ class LatentDiffusion(DDPM):
             # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
-            # which are very small. So we scale them up by 50x to 250x.
+            # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
             # loss_sc_mc_bg_match: 0.004~0.02, sc_mc_bg_match_loss_scale: 50~250 => 0.2~5.
-            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.004, 50), (0.02, 250))
-            sc_recon_ss_fg_min_loss_scale = 10
+            sc_mc_bg_match_loss_scale     = 100 #calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.004, 50), (0.02, 250))
+            sc_recon_ss_fg_min_loss_scale = 1 #10
 
             # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
@@ -2437,9 +2436,7 @@ class LatentDiffusion(DDPM):
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
-                                        recon_feat_objectives={'attn_out': ['orig'], 
-                                                               'outfeat':  ['orig']},
-                                        fg_align_loss_scheme='L2',
+                                        recon_feat_objectives={'attn_out': 'cosine', 'outfeat': 'cosine'},
                                         bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or instances_have_fg_mask.sum() == 0:
@@ -2525,7 +2522,6 @@ class LatentDiffusion(DDPM):
                                              ss_fg_mask, ca_feat_h, ca_feat_w, 
                                              recon_feat_objectives=recon_feat_objectives,
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
-                                             fg_align_loss_scheme=fg_align_loss_scheme,
                                              bg_align_loss_scheme=bg_align_loss_scheme,
                                              do_feat_attn_pooling=do_feat_attn_pooling)
 

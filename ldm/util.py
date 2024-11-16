@@ -1875,7 +1875,7 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
 @torch.compile
 def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_map_ss_prob, 
                                ss_fg_mask, ss_q, sc_q, H, W, num_flow_est_iters, objective_name, 
-                               fg_align_loss_scheme='L2'):
+                               loss_scheme='L2'):
 
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
 
@@ -1884,7 +1884,8 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
         reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask)
     if flow_model is not None or s2c_flow is not None:
         # If s2c_flow is not provided, estimate it using the flow model.
-        # Otherwise use the provided flow, and return the estimated s2c_flow.     
+        # Otherwise s2c_flow is passed to reconstruct_feat_with_matching_flow() to be used,
+        # and return the same s2c_flow.     
         sc_recon_ss_fg_feat_flow, s2c_flow = \
             reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_feat, 
                                                 ss_fg_mask, H, W, num_flow_est_iters=num_flow_est_iters)
@@ -1900,7 +1901,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
     ss_fg_feat =  ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
     # ms_fg_feat, mc_recon_ms_fg_feat = ... ms_feat, mc_recon_ms_feat
 
-    loss_type_names = ['attn', 'flow']
+    matching_type_names = ['attn', 'flow']
 
     print(f"Layer {layer_idx}: {objective_name} sc->ss-fg:", end=' ')
 
@@ -1920,7 +1921,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
                                      ref_grad_scale=0, aim_to_align=True,
                                      reduction='none')
 
-            if fg_align_loss_scheme == 'cosine':
+            if loss_scheme == 'cosine':
                 # ref_grad_scale=0: doesn't update through mc_feat (but since mc_feat is generated without
                 # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
                 # will be backpropagated to subj embeddings).
@@ -1930,7 +1931,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
                                          first_n_dims_into_instances=2, 
                                          ref_grad_scale=0, aim_to_align=True,
                                          reduction='none')
-            elif fg_align_loss_scheme == 'L2':
+            elif loss_scheme == 'L2':
                 # ss_feat has been detached. So no need to cut off the gradients of ss_feat.
                 token_losses_sc_recon_ss_fg = F.mse_loss(sc_recon_ss_fg_feat, ss_fg_feat, reduction='none')
             else:
@@ -1944,7 +1945,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
             all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
-        print(f"{loss_type_names[i]}: {loss_sc_recon_ss_fg}", end=' ')
+        print(f"{matching_type_names[i]}: {loss_sc_recon_ss_fg}", end=' ')
 
     # We have both attn and flow token losses.
     if len(all_token_losses_sc_recon_ss_fg) > 1:
@@ -1961,20 +1962,17 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 
     return losses_sc_recon_ss_fg, s2c_flow
 
-# recon_feat_objectives: a dict mapping feature map types to a list of objectives.
-# feature map type candidates: 'attn_out', 'outfeat'.
-# Objective candidates:        'orig'    'delta'. 
-# Default reconstruct both attn_out and outfeat, but only do delta for attn_out, not for outfeat.
-# Because there may be spatial shifting between attention and the CA output features, and
-# the delta of outfeat may be too noisy (manifested by the observation that it's 0.8~0.9).
+# recon_feat_objectives: {'attn_out': 'L2', 'outfeat': 'cosine'}, a dict of feature names to be reconstructed,
+# and the loss schemes for them.
+# NOTE: in theory outfeat could precede attn_out when iterating recon_feat_objectives.keys(), but in the
+# current implementation, attn_out is always iterated first. So we don't need to worry about the flow computation,
+# which is based on attn_out, and reused for outfeat.
 # bg_align_loss_scheme: 'cosine' or 'L2'.
 @torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
-                               recon_feat_objectives={'attn_out': ['orig'], 
-                                                      'outfeat':  ['orig']}, 
+                               recon_feat_objectives={'attn_out': 'cosine', 'outfeat': 'cosine'}, 
                                recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
-                               num_flow_est_iters=12, fg_align_loss_scheme='L2', 
-                               bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
+                               num_flow_est_iters=12, bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
@@ -2069,73 +2067,48 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     loss_sc_mc_bg_match     = 0
     num_bg_matching_losses  = 0
 
-    for feat_type in recon_feat_objectives.keys():
+    for feat_type in recon_feat_objectives:
         if feat_type == 'attn_out':
             # ca_attn_out: output of the CA layer, i.e., attention-aggregated v.
             feat_obj = ca_attn_out
-            delta_discount = 0.9
         elif feat_type == 'outfeat':
             # outfeat: output of the transformer layer, i.e., attn_out transformed by a FFN.
             feat_obj = ca_outfeat
-            delta_discount = 0.8
         else:
             breakpoint()
 
+        loss_scheme = recon_feat_objectives[feat_type]
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
         # Cut off the gradients into the subj single instance.
         # We don't need to cut off ms_feat, mc_feat, because they were generated with no_grad().
         ss_feat = ss_feat.detach()
 
-        use_ortho_subtract = True
         num_kept_objectives = 0
         #### Compute fg reconstruction losses. ####
-        for recon_feat_objective in recon_feat_objectives[feat_type]:
-            if recon_feat_objective == 'orig':
-                ss_feat_obj = ss_feat
-                sc_feat_obj = sc_feat
-            elif recon_feat_objective == 'delta':
-                # ss_feat, sc_feat: [1, 1280, 961] => [1, 961, 1280].
-                # Do the subtraction in the last dim, i.e., the feature dim. 
-                # So we need to permute the features to the last dim.
-                ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
-                if use_ortho_subtract:
-                    # Ideally, ss_feat should be aligned with ms_feat, and sc_feat should be aligned with mc_feat.
-                    # We couldn't subtract sc_feat from ss_feat, as they are not spatially aligned.
-                    # But considering that there may be spatial misalignment between two outfeats,
-                    # hence if feat_type == 'outfeat', discount the contribution of the class features by 0.8.
-                    # We couldn't ortho_subtract(ss_feat, ms_feat * 0.8), as ortho_subtract() is invarant
-                    # to the scale of the second argument.
-                    ss_feat_obj = ortho_subtract(ss_feat, ms_feat, b_discount=delta_discount)
-                    sc_feat_obj = ortho_subtract(sc_feat, mc_feat, b_discount=delta_discount)
-                else:
-                    ss_feat_obj = ss_feat - ms_feat * delta_discount
-                    sc_feat_obj = sc_feat - mc_feat * delta_discount
 
-                ss_feat, sc_feat, ms_feat, mc_feat = [ feat.permute(0, 2, 1) for feat in [ss_feat, sc_feat, ms_feat, mc_feat] ]
-                ss_feat_obj, sc_feat_obj = [ feat.permute(0, 2, 1) for feat in [ss_feat_obj, sc_feat_obj] ]
-            else:
-                breakpoint()
-            
-            objective_name = f"{feat_type}-{recon_feat_objective}"
-            # Make the objective name have a fixed length by padding spaces.
-            if len(objective_name) < 14:
-                objective_name += ' ' * (14 - len(objective_name))
+        objective_name = feat_type
+        # Make the objective name have a fixed length by padding spaces.
+        if len(objective_name) < 8:
+            objective_name += ' ' * (8 - len(objective_name))
 
-            losses_sc_recon_ss_fg_obj, s2c_flow = \
-                calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat_obj, sc_feat_obj, 
-                                           sc_map_ss_prob, ss_fg_mask_2d, 
-                                           ss_q, sc_q, H2, W2, num_flow_est_iters, 
-                                           objective_name=objective_name,
-                                           fg_align_loss_scheme=fg_align_loss_scheme)
-            
-            # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
-            # Optimizing w.r.t. this loss may lead to degenerate results.
-            to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
-            if to_discard:
-                print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1]}")
-            else:
-                losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
-                num_kept_objectives += 1
+        # feat_type iterates ['attn_out', 'outfeat']. On attn_out, the input s2c_flow is None.
+        # The estimated s2c_flow is returned and used in the next iteration.
+        # On outfeat, the input s2c_flow is the s2c_flow estimated on attn_out.
+        losses_sc_recon_ss_fg_obj, s2c_flow = \
+            calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, 
+                                       sc_map_ss_prob, ss_fg_mask_2d, 
+                                       ss_q, sc_q, H2, W2, num_flow_est_iters, 
+                                       objective_name=objective_name,
+                                       loss_scheme=loss_scheme)
+        
+        # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
+        # Optimizing w.r.t. this loss may lead to degenerate results.
+        to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
+        if to_discard:
+            print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1]}")
+        else:
+            losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
+            num_kept_objectives += 1
 
         # Skip bg matching loss if all fg recon objectives for this feature type are discarded.
         if num_kept_objectives == 0:
