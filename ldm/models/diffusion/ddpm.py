@@ -81,7 +81,6 @@ class DDPM(pl.LightningModule):
                  max_num_comp_distill_denoising_steps=3, 
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
-                 max_num_comp_distill_init_prep_denoising_steps=6,
                  p_unet_distill_uses_comp_prompt=0.1,
                  extra_unet_dirpaths=None,
                  unet_weights=None,
@@ -147,8 +146,6 @@ class DDPM(pl.LightningModule):
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
-
-        self.max_num_comp_distill_init_prep_denoising_steps = max_num_comp_distill_init_prep_denoising_steps
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_init_fg_from_training_image_count  = 0
@@ -454,13 +451,13 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
-            # Use SAR UNet to prepare x_start for compositional distillation, since 
+            # Use SAR UNet to prime x_start for compositional distillation, since 
             # it's more compositional than SD15 UNet and closer to SD15 UNet than RealisticVision4 UNet.
             unet = UNet2DConditionModel.from_pretrained('models/ensemble/sar-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
-            self.comp_distill_init_prep_unet = \
+            self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
                                     # A trick to avoid creating multiple UNet instances.
                                     unets = [unet, unet],
@@ -471,10 +468,10 @@ class LatentDiffusion(DDPM):
                                     # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
                                     unet_weights = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
-                                    p_uses_cfg=1, # Always uses CFG for init prep denoising.
+                                    p_uses_cfg=1, # Always uses CFG for priming denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)
-            self.comp_distill_init_prep_unet.train = disabled_train
+            self.comp_distill_priming_unet.train = disabled_train
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
         # We never train the CLIP text encoder. So disable the training of the CLIP text encoder.
@@ -1382,7 +1379,8 @@ class LatentDiffusion(DDPM):
     def multistep_denoise(self, x_start, noise, t, cond_context, 
                           uncond_emb=None, img_mask=None, unet_has_grad='subject-compos', 
                           cfg_scale=-1, capture_ca_activations=False,
-                          num_denoising_steps=1, same_t_noise_across_instances=False):
+                          num_denoising_steps=1, half_noise_at_first_step=True,
+                          same_t_noise_across_instances=False):
         assert num_denoising_steps <= 10
 
         # Initially, x_starts only contains the original x_start.
@@ -1398,6 +1396,9 @@ class LatentDiffusion(DDPM):
             t       = ts[i]
             noise   = noises[i]
 
+            if i == 0 and half_noise_at_first_step:
+                noise = noise * 0.5
+                
             # unet_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
@@ -1482,7 +1483,7 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
-            x_start_maskfilled, x_start_primed, noise, masks, num_init_prep_denoising_steps = \
+            x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
                 self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
                                                     masks, fg_noise_amount=0.2,
                                                     BLOCK_SIZE=BLOCK_SIZE)
@@ -1520,13 +1521,14 @@ class LatentDiffusion(DDPM):
                                        unet_has_grad='subject-compos', 
                                        cfg_scale=5, capture_ca_activations=True,
                                        num_denoising_steps=num_denoising_steps,
+                                       half_noise_at_first_step=True,
                                        same_t_noise_across_instances=True)
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_denoising_steps}, ts: {ts_1st}")
 
             # Log x_start, x_start_maskfilled (noisy and scaled version of the first image in the batch),
-            # x_start_primed (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
+            # x_start_primed (x_start_maskfilled denoised for a few steps), and the denoised images for diagnosis.
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # All of them are 1, indicating green.
             x_start0 = x_start[:1]
@@ -1984,25 +1986,25 @@ class LatentDiffusion(DDPM):
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
 
-        # num_init_prep_denoising_steps iterates from 2 to 5.
+        # num_primed_denoising_steps iterates from 2 to 5.
         # NOTE: self.global_step // self.comp_distill_iter_gap gets the actual number of 
         # comp distillation iterations. So we don't need to consider whether 
         # the divisor 4 is co-prime with comp_distill_iter_gap or not.
-        # Consequently, num_init_prep_denoising_steps will always follow 
+        # Consequently, num_primed_denoising_steps will always follow 
         # a uniform distribution of [0, 1, 2, 3].
-        num_init_prep_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps
+        num_primed_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps
 
-        # 1 out of 5 times, num_init_prep_denoising_steps == 0. 
-        if num_init_prep_denoising_steps > 0:
+        # 1 out of 5 times, num_primed_denoising_steps == 0. 
+        if num_primed_denoising_steps > 0:
             MAX_N_SEP = 3
-            # If num_init_prep_denoising_steps > MAX_N_SEP, then we split the denoising steps into
+            # If num_primed_denoising_steps > MAX_N_SEP, then we split the denoising steps into
             # shared denoising steps and separate denoising steps.
             # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
-            num_shared_denoising_steps = max(num_init_prep_denoising_steps - MAX_N_SEP, 0)
-            num_sep_denoising_steps    = min(num_init_prep_denoising_steps, MAX_N_SEP)
+            num_shared_denoising_steps = max(num_primed_denoising_steps - MAX_N_SEP, 0)
+            num_sep_denoising_steps    = min(num_primed_denoising_steps, MAX_N_SEP)
             all_t_list = []
 
-            # In preparatory denoising steps, we don't use the t passed into p_losses().
+            # In priming denoising steps, we don't use the t passed into p_losses().
             # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (a bit more noisy).
             t_rear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
                                    (BLOCK_SIZE,), device=x_start.device)
@@ -2010,8 +2012,8 @@ class LatentDiffusion(DDPM):
 
             # ** Do num_shared_denoising_steps of shared denoising steps with the subj-mix-cls comp prompts.
             if num_shared_denoising_steps > 0:
-                # Class prep denoising: Denoise x_start_1 with the comp prompts 
-                # for num_shared_denoising_steps times, using self.comp_distill_init_prep_unet.
+                # Class priming denoising: Denoise x_start_1 with the comp prompts 
+                # for num_shared_denoising_steps times, using self.comp_distill_priming_unet.
                 x_start_1                      = x_start.chunk(4)[0]
                 noise_1                        = noise.chunk(4)[0]
                 t_1                            = t.chunk(4)[0]
@@ -2022,29 +2024,29 @@ class LatentDiffusion(DDPM):
                 subj_double_context = torch.cat([subj_comp_prompt_emb, uncond_emb], dim=0)
                 cls_double_context  = torch.cat([cls_comp_prompt_emb,  uncond_emb], dim=0)
 
-                # Since we always use CFG for class prep denoising,
+                # Since we always use CFG for class priming denoising,
                 # we need to pass the negative prompt as well.
-                # cfg_scale_range of comp_distill_init_prep_unet is [2, 4].
-                # init_prep_noises: the noises that have been used in the denoising.
+                # cfg_scale_range of comp_distill_priming_unet is [2, 4].
+                # primed_noises: the noises that have been used in the denoising.
                 with torch.no_grad():
-                    init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
-                        self.comp_distill_init_prep_unet(self, x_start_1, noise_1, t_1, 
-                                                         # In each timestep, the unet ensemble will do denoising on the same x_start_1 
-                                                         # with both subj_double_context and cls_double_context, then average the results.
-                                                         # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                         # From the outside, the unet ensemble is transparent, like a single unet.
-                                                         teacher_context=[subj_double_context, cls_double_context], 
-                                                         num_denoising_steps=num_shared_denoising_steps,
-                                                         # Same t and noise across instances.
-                                                         same_t_noise_across_instances=True)
+                    primed_noise_preds, primed_x_starts, primed_noises, all_t = \
+                        self.comp_distill_priming_unet(self, x_start_1, noise_1, t_1, 
+                                                     # In each timestep, the unet ensemble will do denoising on the same x_start_1 
+                                                     # with both subj_double_context and cls_double_context, then average the results.
+                                                     # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                     # From the outside, the unet ensemble is transparent, like a single unet.
+                                                     teacher_context=[subj_double_context, cls_double_context], 
+                                                     num_denoising_steps=num_shared_denoising_steps,
+                                                     # Same t and noise across instances.
+                                                     same_t_noise_across_instances=True)
                 # Repeat the 1-instance denoised x_start_1 to 2-instance x_start_2, i.e., one single, one comp instances.
-                x_start_2   = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+                x_start_2   = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
                 t_2         = all_t[-1].repeat(2)
                 all_t_list  += [ ti[0].item() for ti in all_t ]
             else:
-                # Class prep denoising: Denoise x_start_2 with the class single/comp prompts 
-                # for num_sep_denoising_steps times, using self.comp_distill_init_prep_unet.
-                # We only use the second half-batch (class instances) for class prep denoising.
+                # Class priming denoising: Denoise x_start_2 with the class single/comp prompts 
+                # for num_sep_denoising_steps times, using self.comp_distill_priming_unet.
+                # We only use the second half-batch (class instances) for class priming denoising.
                 # x_start and t are initialized as 1-repeat-4 at above, so the second half is 1-repeat-2.
                 # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
                 x_start_2   = x_start.chunk(2)[1]
@@ -2061,30 +2063,30 @@ class LatentDiffusion(DDPM):
             # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
             #     x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
             # and x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
-            # Since we always use CFG for class prep denoising, we need to pass the negative prompt as well.
+            # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
             # default cfg_scale_range=[2, 4].
             with torch.no_grad():
-                init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t = \
-                    self.comp_distill_init_prep_unet(self, x_start_2, noise_2, t_2, 
-                                                    # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                                    # with both subj_double_context and cls_double_context, then average the results.
-                                                    # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                    # From the outside, the unet ensemble is transparent, like a single unet.
-                                                    teacher_context=[subj_double_context, cls_double_context], 
-                                                    num_denoising_steps=num_sep_denoising_steps,
-                                                    # Same t and noise across instances.
-                                                    same_t_noise_across_instances=True)
+                primed_noise_preds, primed_x_starts, primed_noises, all_t = \
+                    self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
+                                                   # In each timestep, the unet ensemble will do denoising on the same x_start_2 
+                                                   # with both subj_double_context and cls_double_context, then average the results.
+                                                   # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                   # From the outside, the unet ensemble is transparent, like a single unet.
+                                                   teacher_context=[subj_double_context, cls_double_context], 
+                                                   num_denoising_steps=num_sep_denoising_steps,
+                                                   # Same t and noise across instances.
+                                                   same_t_noise_across_instances=True)
             
             all_t_list += [ ti[0].item() for ti in all_t ]
             print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                  f"subj-cls ensemble prep denoising {num_init_prep_denoising_steps} steps {all_t_list}")
+                  f"subj-cls ensemble prime denoising {num_primed_denoising_steps} steps {all_t_list}")
             
-            # The last init_prep_x_start is the final denoised image (with the smallest t).
+            # The last primed_x_start is the final denoised image (with the smallest t).
             # So we use it as the x_start to be denoised by the 4-type prompt set.
             # We need to let the subject and class instances use the same x_start. 
-            # Therefore, we repeat init_prep_x_starts[-1] twice.
-            x_start = init_prep_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-            del init_prep_noise_preds, init_prep_x_starts, init_prep_noises, all_t
+            # Therefore, we repeat primed_x_starts[-1] twice.
+            x_start = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+            del primed_noise_preds, primed_x_starts, primed_noises, all_t
 
         # Regenerate the noise, since the noise has been used above.
         # Ensure the two types of instances (single, comp) use different noise.
@@ -2096,7 +2098,7 @@ class LatentDiffusion(DDPM):
         # But gt_target is probably not referred to in the following loss computations,
         # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_start_maskfilled, x_start_primed, noise, masks, num_init_prep_denoising_steps
+        return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, instances_have_fg_mask,
                                       all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
