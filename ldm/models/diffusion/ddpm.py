@@ -1659,6 +1659,7 @@ class LatentDiffusion(DDPM):
             
             for loss_name in loss_names:
                 loss_name2 = loss_name.replace('loss_', '')
+                loss_name2 = '{session_prefix}/{loss_name2}'
                 loss_dict[loss_name2] = 0
 
             for ca_layers_activations in ca_layers_activations_list:
@@ -1672,6 +1673,7 @@ class LatentDiffusion(DDPM):
             
             for loss_name in loss_names:
                 loss_name2 = loss_name.replace('loss_', '')
+                loss_name2 = '{session_prefix}/{loss_name2}'
                 if loss_name2 in loss_dict:
                     loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
 
@@ -1696,6 +1698,7 @@ class LatentDiffusion(DDPM):
             if self.use_arcface_loss and (self.arcface is not None):
                 # Trying to calc arcface_align_loss from difficult to easy steps.
                 # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
+                calc_loss_count = 0
                 for sel_step in range(len(x_recons)):
                     x_recon  = x_recons[sel_step]
                     # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
@@ -1710,7 +1713,9 @@ class LatentDiffusion(DDPM):
                         # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
                         # This loss is around 1/150 of recon/distill losses (0.1).
                         loss += loss_arcface_align * self.arcface_align_loss_weight
-                        break
+                        calc_loss_count += 1
+                        if calc_loss_count >= 2:
+                            break
         else:
             breakpoint()
 
@@ -1730,6 +1735,7 @@ class LatentDiffusion(DDPM):
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon)
         loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels)
+        loss_arcface_align = loss_arcface_align.to(x_start.dtype)
         return loss_arcface_align
     
     # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
@@ -1990,9 +1996,8 @@ class LatentDiffusion(DDPM):
         # a uniform distribution of [1, 2, 3, 4].
         num_primed_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps + 1
 
-        # 1 out of 5 times, num_primed_denoising_steps == 0. 
         if num_primed_denoising_steps > 0:
-            MAX_N_SEP = 3
+            MAX_N_SEP = 2
             # If num_primed_denoising_steps > MAX_N_SEP, then we split the denoising steps into
             # shared denoising steps and separate denoising steps.
             # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
@@ -2026,14 +2031,16 @@ class LatentDiffusion(DDPM):
                 with torch.no_grad():
                     primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                         self.comp_distill_priming_unet(self, x_start_1, noise_1, t_1, 
-                                                     # In each timestep, the unet ensemble will do denoising on the same x_start_1 
-                                                     # with both subj_double_context and cls_double_context, then average the results.
-                                                     # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                     # From the outside, the unet ensemble is transparent, like a single unet.
-                                                     teacher_context=[subj_double_context, cls_double_context], 
-                                                     num_denoising_steps=num_shared_denoising_steps,
-                                                     # Same t and noise across instances.
-                                                     same_t_noise_across_instances=True)
+                                                       # In each timestep, the unet ensemble will do denoising on the same x_start_1 
+                                                       # with both subj_double_context and cls_double_context, then average the results.
+                                                       # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                       # From the outside, the unet ensemble is transparent, like a single unet.
+                                                       teacher_context=[subj_double_context, cls_double_context], 
+                                                       num_denoising_steps=num_shared_denoising_steps,
+                                                       # Same t and noise across instances.
+                                                       same_t_noise_across_instances=True,
+                                                       global_t_lb=300)
+                    
                 # Repeat the 1-instance denoised x_start_1 to 2-instance x_start_2, i.e., one single, one comp instances.
                 x_start_2   = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
                 t_2         = all_t[-1].repeat(2)
@@ -2155,8 +2162,8 @@ class LatentDiffusion(DDPM):
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             # loss_sc_mc_bg_match and sc_recon_ss_fg_min_loss_scale are L2 loss, 
             # which are very small. So we scale them up by 50x to 250x.
-            # loss_sc_mc_bg_match: 0.004~0.008, sc_mc_bg_match_loss_scale: 100~200 => 0.4~1.6.
-            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.002, 50), (0.01, 250))
+            # loss_sc_mc_bg_match: 0.004~0.02, sc_mc_bg_match_loss_scale: 50~250 => 0.2~5.
+            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.004, 50), (0.02, 250))
             sc_recon_ss_fg_min_loss_scale = 10
 
             # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.

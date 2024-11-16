@@ -62,7 +62,8 @@ class UNetTeacher(nn.Module):
     # t: the initial t. We will sample additional (num_denoising_steps - 1) smaller t.
     # same_t_noise_across_instances: when sampling t and noise, use the same t and noise for all instances.
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, 
-                num_denoising_steps=1, same_t_noise_across_instances=False):
+                num_denoising_steps=1, same_t_noise_across_instances=False,
+                global_t_lb=0, global_t_ub=1000):
         assert num_denoising_steps <= 10
 
         if self.p_uses_cfg > 0:
@@ -165,6 +166,8 @@ class UNetTeacher(nn.Module):
                     # of the current timestep.
                     t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
                     t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
+                    t_lb = torch.clamp(t_lb, max=global_t_lb)
+                    t_ub = torch.clamp(t_ub, min=global_t_ub)
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
                     noise = torch.randn_like(pred_x0)

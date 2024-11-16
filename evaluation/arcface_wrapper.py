@@ -22,7 +22,7 @@ def load_image_for_arcface(img_path, device='cpu'):
     return image_ts
 
 class ArcFaceWrapper(nn.Module):
-    def __init__(self, device='cpu', ckpt_path='models/arcface-resnet18_110.pth'):
+    def __init__(self, device='cpu', dtype=torch.float16, ckpt_path='models/arcface-resnet18_110.pth'):
         super(ArcFaceWrapper, self).__init__()
         self.arcface = resnet_face18(False)
         ckpt_state_dict = torch.load(ckpt_path, map_location='cpu')
@@ -32,18 +32,21 @@ class ArcFaceWrapper(nn.Module):
 
         self.arcface.load_state_dict(ckpt_state_dict)
         self.arcface.eval()
-        self.arcface.to(device)
+        self.dtype = dtype
+        self.arcface.to(device, dtype=self.dtype)
 
         self.retinaface = RetinaFaceClient(device=device)
         for param in self.retinaface.parameters():
             param.requires_grad = False
+        # We keep retinaface at float32, as it doesn't require grad and won't consume much memory.
         self.retinaface.eval()
-        self.retinaface.to(device)
 
     # Suppose images_ts has been normalized to [-1, 1].
-    def embed_image_tensor(self, images_ts, T=20):
+    def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False):
         # retina_crop_face() crops on the input tensor, so that computation graph is preserved.
-        faces, failed_indices = self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T)
+        faces, failed_indices = self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, 
+                                                           use_whole_image_if_no_face=use_whole_image_if_no_face)
+        
         # No face detected in any instances in the batch.
         if faces is None:
             return None, failed_indices
@@ -53,15 +56,16 @@ class ArcFaceWrapper(nn.Module):
         faces_gray = (faces * rgb_to_gray_weights).sum(dim=1, keepdim=True)
         # Resize to (128, 128)
         faces_gray = F.interpolate(faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
-        faces_emb = self.arcface(faces_gray)
+        with torch.autocast(device_type='cuda', dtype=self.dtype):
+            faces_emb = self.arcface(faces_gray)
         return faces_emb, failed_indices
 
     # T: minimal face height/width to be detected.
     # images1: the groundtruth images.
     # images2: the generated   images.
-    def calc_arcface_align_loss(self, images1, images2, T=20):
-        embs1, failed_indices1 = self.embed_image_tensor(images1, T)
-        embs2, failed_indices2 = self.embed_image_tensor(images2, T)
+    def calc_arcface_align_loss(self, images1, images2, T=20, use_whole_image_if_no_face=False):
+        embs1, failed_indices1 = self.embed_image_tensor(images1, T, False)
+        embs2, failed_indices2 = self.embed_image_tensor(images2, T, use_whole_image_if_no_face)
         if len(failed_indices1) > 0:
             print(f"Failed to detect faces in images1-{failed_indices1}")
             return torch.tensor(0.0, device=images1.device)

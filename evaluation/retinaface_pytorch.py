@@ -117,7 +117,7 @@ class RetinaFaceClient(nn.Module):
 
     # Find facial areas of given image tensors and crop them.
     # Output: [BS, 3, 128, 128]
-    def crop_faces(self, images_ts, out_size=(128, 128), T=20):
+    def crop_faces(self, images_ts, out_size=(128, 128), T=20, use_whole_image_if_no_face=False):
         face_crops = []
         failed_indices = []
 
@@ -127,22 +127,31 @@ class RetinaFaceClient(nn.Module):
             # [-1, 1] -> [0, 255]
             image_np = ((image_np + 1) * 127.5).astype(np.uint8)
 
-            # .detect_faces() doesn't require grad.
+            # .detect_faces() doesn't require grad. So we convert the image tensor to numpy.
             facial_areas = self.detect_faces(image_np, T=T)
             if len(facial_areas) == 0:
+                curr_img_found_face = False
+            else:
+                curr_img_found_face = True
+
+            if curr_img_found_face:
+                # Only use the first detected face.
+                facial_area  = facial_areas[0]
+                x = facial_area.x
+                y = facial_area.y
+                w = facial_area.w
+                h = facial_area.h
+
+                # Extract detected face without alignment
+                # Crop on the input tensor, so that computation graph is preserved.
+                face_crop = image_ts[:, int(y) : int(y + h), int(x) : int(x + w)]
+            elif use_whole_image_if_no_face and not curr_img_found_face:
+                face_crop = image_ts
+            else:
                 # No face detected
                 failed_indices.append(i)
                 continue
-            # Only use the first detected face.
-            facial_area  = facial_areas[0]
-            x = facial_area.x
-            y = facial_area.y
-            w = facial_area.w
-            h = facial_area.h
 
-            # Extract detected face without alignment
-            # Crop on the input tensor, so that computation graph is preserved.
-            face_crop = image_ts[:, int(y) : int(y + h), int(x) : int(x + w)]
             # resize to (1, 3, 128, 128)
             face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
             face_crops.append(face_crop)
