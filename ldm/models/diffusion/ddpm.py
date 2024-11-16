@@ -1379,7 +1379,7 @@ class LatentDiffusion(DDPM):
     def multistep_denoise(self, x_start, noise, t, cond_context, 
                           uncond_emb=None, img_mask=None, unet_has_grad='subject-compos', 
                           cfg_scale=-1, capture_ca_activations=False,
-                          num_denoising_steps=1, half_noise_at_first_step=True,
+                          num_denoising_steps=1, 
                           same_t_noise_across_instances=False):
         assert num_denoising_steps <= 10
 
@@ -1396,9 +1396,6 @@ class LatentDiffusion(DDPM):
             t       = ts[i]
             noise   = noises[i]
 
-            if i == 0 and half_noise_at_first_step:
-                noise = noise * 0.5
-                
             # unet_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
@@ -1493,8 +1490,8 @@ class LatentDiffusion(DDPM):
 
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
-            # t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
-            t_midrear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+            # t is randomly drawn from the middle rear segment of the timesteps (noisy but not too noisy).
+            t_midrear = torch.randint(int(self.num_timesteps * 0.45), int(self.num_timesteps * 0.7), 
                                       (BLOCK_SIZE,), device=x_start.device)
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
@@ -1521,7 +1518,6 @@ class LatentDiffusion(DDPM):
                                        unet_has_grad='subject-compos', 
                                        cfg_scale=5, capture_ca_activations=True,
                                        num_denoising_steps=num_denoising_steps,
-                                       half_noise_at_first_step=True,
                                        same_t_noise_across_instances=True)
 
             ts_1st = [ t[0].item() for t in ts ]
@@ -1991,8 +1987,8 @@ class LatentDiffusion(DDPM):
         # comp distillation iterations. So we don't need to consider whether 
         # the divisor 4 is co-prime with comp_distill_iter_gap or not.
         # Consequently, num_primed_denoising_steps will always follow 
-        # a uniform distribution of [0, 1, 2, 3].
-        num_primed_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps
+        # a uniform distribution of [1, 2, 3, 4].
+        num_primed_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps + 1
 
         # 1 out of 5 times, num_primed_denoising_steps == 0. 
         if num_primed_denoising_steps > 0:
@@ -2006,7 +2002,7 @@ class LatentDiffusion(DDPM):
 
             # In priming denoising steps, we don't use the t passed into p_losses().
             # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (a bit more noisy).
-            t_rear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+            t_rear = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 1), 
                                    (BLOCK_SIZE,), device=x_start.device)
             t      = t_rear.repeat(4)
 
