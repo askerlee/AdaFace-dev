@@ -2162,8 +2162,8 @@ class LatentDiffusion(DDPM):
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
-            # loss_sc_mc_bg_match: 0.004~0.02, sc_mc_bg_match_loss_scale: 50~250 => 0.2~5.
-            sc_mc_bg_match_loss_scale     = 100 #calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.004, 50), (0.02, 250))
+            # loss_sc_mc_bg_match: 0.008~0.02, sc_mc_bg_match_loss_scale: 100~250 => 0.8~5.
+            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.008, 100), (0.02, 250))
             sc_recon_ss_fg_min_loss_scale = 10
 
             # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
