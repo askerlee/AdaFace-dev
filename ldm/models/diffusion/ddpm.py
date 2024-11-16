@@ -2134,7 +2134,7 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, instances_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives={'attn_out': 'cosine', 'outfeat': 'cosine'},
+                                                     recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'},
                                                      bg_align_loss_scheme='L2',
                                                      do_feat_attn_pooling=True)
             
@@ -2163,7 +2163,7 @@ class LatentDiffusion(DDPM):
             # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
             # loss_sc_mc_bg_match: 0.004~0.02, sc_mc_bg_match_loss_scale: 50~250 => 0.2~5.
             sc_mc_bg_match_loss_scale     = 100 #calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.004, 50), (0.02, 250))
-            sc_recon_ss_fg_min_loss_scale = 1 #10
+            sc_recon_ss_fg_min_loss_scale = 10
 
             # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
             loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
@@ -2436,7 +2436,7 @@ class LatentDiffusion(DDPM):
     # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
-                                        recon_feat_objectives={'attn_out': 'cosine', 'outfeat': 'cosine'},
+                                        recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'},
                                         bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or instances_have_fg_mask.sum() == 0:

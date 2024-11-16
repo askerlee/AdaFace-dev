@@ -1967,10 +1967,16 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # NOTE: in theory outfeat could precede attn_out when iterating recon_feat_objectives.keys(), but in the
 # current implementation, attn_out is always iterated first. So we don't need to worry about the flow computation,
 # which is based on attn_out, and reused for outfeat.
+# We adopt L2 loss for attn_out and cosine for outfeat. After training, the loss on attn_out is usually much smaller than
+# that on outfeat. Note attn_out is a feature map aggregated from the attention maps,
+# so it's not probs, but similar to outfeat. So the small magnitude of the loss on attn_out indicates good matching,
+# and isn't caused by inherently different scales of attn_out and outfeat.
+# Although in theory L2 and cosine losses may have different scales, for simplicity, 
+# we still average them to get the total loss.
 # bg_align_loss_scheme: 'cosine' or 'L2'.
 @torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
-                               recon_feat_objectives={'attn_out': 'cosine', 'outfeat': 'cosine'}, 
+                               recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'}, 
                                recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
                                num_flow_est_iters=12, bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
