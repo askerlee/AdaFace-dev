@@ -1693,21 +1693,30 @@ class LatentDiffusion(DDPM):
             # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED.
             loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
 
-            # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
-            # to compute arcface_align_loss.
             if self.use_arcface_loss and (self.arcface is not None):
                 # Calc arcface_align_loss on a randommly selected step.
-                x_recon     = x_recons[np.random.randint(len(x_recons))]
-                # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
-                # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
-                x_start0    = x_start.chunk(4)[0]
-                subj_recon  = x_recon.chunk(2)[0]
-                loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
-                if loss_arcface_align > 0:
-                    loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
-                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
-                    # This loss is around 1/150 of recon/distill losses (0.1).
-                    loss += loss_arcface_align * self.arcface_align_loss_weight
+                tried_steps = []
+            
+                while len(tried_steps) < len(x_recons):
+                    # Randomly select a step not tried before.
+                    sel_step = np.random.randint(len(x_recons))
+                    if sel_step in tried_steps:
+                        continue
+                    x_recon  = x_recons[sel_step]
+                    print(f"Rank-{self.trainer.global_rank} arcface_align step: {sel_step+1}/{len(x_recons)}")
+                    # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
+                    # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
+                    x_start0    = x_start.chunk(4)[0]
+                    subj_recon  = x_recon.chunk(2)[0]
+                    loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
+                    if loss_arcface_align > 0:
+                        loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
+                        # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                        # This loss is around 1/150 of recon/distill losses (0.1).
+                        loss += loss_arcface_align * self.arcface_align_loss_weight
+                        break
+                    else:
+                        tried_steps.append(sel_step)
         else:
             breakpoint()
 
