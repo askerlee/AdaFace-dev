@@ -196,10 +196,11 @@ def get_parser(**parser_kwargs):
                         help="Perturb ratio of the prompt2token projection extended attention")
     parser.add_argument("--p_gen_rand_id_for_id2img", type=float, default=argparse.SUPPRESS,
                         help="Probability of generating random faces during arc2face distillation")
-    parser.add_argument("--max_num_unet_distill_denoising_steps", type=int, default=3,
-                        help="Maximum number of denoising steps (default 3)")    
+    parser.add_argument("--max_num_unet_distill_denoising_steps", type=int, default=4,
+                        help="Maximum number of denoising steps (default 4)")    
     parser.add_argument("--max_num_comp_distill_denoising_steps", type=int, default=3,
-                        help="Maximum number of denoising steps for composition distillation")
+                        help="Maximum number of denoising steps for composition distillation (default 3). "
+                             "Avoid setting it the same as --max_num_unet_distill_denoising_steps.")
     parser.add_argument("--p_perturb_face_id_embs", type=float, default=argparse.SUPPRESS,
                         help="Probability of adding noise to real identity embeddings")
     parser.add_argument("--extend_prompt2token_proj_attention_multiplier", type=int, default=1,

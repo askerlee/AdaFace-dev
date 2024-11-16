@@ -76,7 +76,7 @@ class DDPM(pl.LightningModule):
                  unet_distill_iter_gap=2,
                  unet_distill_weight=8,
                  unet_teacher_types=None,
-                 max_num_unet_distill_denoising_steps=3,
+                 max_num_unet_distill_denoising_steps=4,
                  max_num_comp_distill_denoising_steps=3, 
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
@@ -127,7 +127,7 @@ class DDPM(pl.LightningModule):
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
-        self.max_num_comp_distill_denoising_steps    = max_num_comp_distill_denoising_steps
+        self.max_num_comp_distill_denoising_steps   = max_num_comp_distill_denoising_steps
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
@@ -1490,11 +1490,11 @@ class LatentDiffusion(DDPM):
 
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
-            # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
-            t_mid = torch.randint(int(self.num_timesteps * 0.3), int(self.num_timesteps * 0.6), 
-                                  (BLOCK_SIZE,), device=x_start.device)
+            # t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
+            t_midrear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+                                      (BLOCK_SIZE,), device=x_start.device)
             # Same t_mid for all instances.
-            t_mid = t_mid.repeat(BLOCK_SIZE * 4)
+            t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
 
             # max_num_comp_distill_denoising_steps: 3.
             # Iterate among 1 ~ 3. We don't draw random numbers, so that different ranks have the same num_denoising_steps,
@@ -1513,7 +1513,7 @@ class LatentDiffusion(DDPM):
             # noise_preds is not used for loss computation.
             # x_recons[-1] will be used for arcface align loss computation.
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-                self.multistep_denoise(x_start_primed, noise, t_mid, cond_context,
+                self.multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                        uncond_emb=uncond_emb, img_mask=None, 
                                        unet_has_grad='subject-compos', 
                                        cfg_scale=5, capture_ca_activations=True,
@@ -1696,17 +1696,19 @@ class LatentDiffusion(DDPM):
             # If only done 1 step of init prep denoising, then sc_recon is too noisy, and we don't use it
             # to compute arcface_align_loss.
             if self.use_arcface_loss and (self.arcface is not None):
-                x_recon     = x_recons[-1]
-                # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
-                # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
-                x_start0    = x_start.chunk(4)[0]
-                subj_recon  = x_recon.chunk(2)[0]
-                loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
-                if loss_arcface_align > 0:
-                    loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
-                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
-                    # This loss is around 1/150 of recon/distill losses (0.1).
-                    loss += loss_arcface_align * self.arcface_align_loss_weight
+                # Calc arcface_align_loss on the last two denoising steps.
+                for i in range(min(2, len(x_recons))):
+                    x_recon     = x_recons[-i]
+                    # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
+                    # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
+                    x_start0    = x_start.chunk(4)[0]
+                    subj_recon  = x_recon.chunk(2)[0]
+                    loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
+                    if loss_arcface_align > 0:
+                        loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
+                        # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                        # This loss is around 1/150 of recon/distill losses (0.1).
+                        loss += loss_arcface_align * self.arcface_align_loss_weight
         else:
             breakpoint()
 
