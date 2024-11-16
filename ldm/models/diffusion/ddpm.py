@@ -77,6 +77,7 @@ class DDPM(pl.LightningModule):
                  unet_distill_weight=8,
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
+                 max_num_comp_priming_denoising_steps=4,
                  max_num_comp_distill_denoising_steps=3, 
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
@@ -127,6 +128,7 @@ class DDPM(pl.LightningModule):
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
+        self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
         self.max_num_comp_distill_denoising_steps   = max_num_comp_distill_denoising_steps
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
@@ -1521,7 +1523,7 @@ class LatentDiffusion(DDPM):
                                        same_t_noise_across_instances=True)
 
             ts_1st = [ t[0].item() for t in ts ]
-            print(f"num_denoising_steps: {num_denoising_steps}, ts: {ts_1st}")
+            print(f"comp distill denoising steps: {num_denoising_steps}, ts: {ts_1st}")
 
             # Log x_start, x_start_maskfilled (noisy and scaled version of the first image in the batch),
             # x_start_primed (denoising-prepared version of x_start_maskfilled), and the denoised images for diagnosis.
@@ -1985,11 +1987,10 @@ class LatentDiffusion(DDPM):
         # num_init_prep_denoising_steps iterates from 2 to 5.
         # NOTE: self.global_step // self.comp_distill_iter_gap gets the actual number of 
         # comp distillation iterations. So we don't need to consider whether 
-        # the divisor 3 is co-prime with comp_distill_iter_gap or not.
-        # 3 is co-prime with comp_distill_iter_gap == 2.
+        # the divisor 4 is co-prime with comp_distill_iter_gap or not.
         # Consequently, num_init_prep_denoising_steps will always follow 
-        # a uniform distribution of [1, 2, 3, 4].
-        num_init_prep_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % 5
+        # a uniform distribution of [0, 1, 2, 3].
+        num_init_prep_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps
 
         # 1 out of 5 times, num_init_prep_denoising_steps == 0. 
         if num_init_prep_denoising_steps > 0:
