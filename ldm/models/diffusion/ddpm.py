@@ -1490,8 +1490,8 @@ class LatentDiffusion(DDPM):
 
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
-            # t is randomly drawn from the middle rear segment of the timesteps (noisy but not too noisy).
-            t_midrear = torch.randint(int(self.num_timesteps * 0.45), int(self.num_timesteps * 0.7), 
+            # t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
+            t_midrear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
                                       (BLOCK_SIZE,), device=x_start.device)
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
@@ -2000,9 +2000,8 @@ class LatentDiffusion(DDPM):
             num_sep_denoising_steps    = min(num_primed_denoising_steps, MAX_N_SEP)
             all_t_list = []
 
-            # In priming denoising steps, we don't use the t passed into p_losses().
-            # Instead, t is randomly drawn from the middle rear 30% segment of the timesteps (a bit more noisy).
-            t_rear = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 1), 
+            # In priming denoising steps, t is randomly drawn from the terminal 25% segment of the timesteps (very noisy).
+            t_rear = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 1), 
                                    (BLOCK_SIZE,), device=x_start.device)
             t      = t_rear.repeat(4)
 
