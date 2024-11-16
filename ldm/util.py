@@ -1971,6 +1971,9 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # that on outfeat. Note attn_out is a feature map aggregated from the attention maps,
 # so it's not probs, but similar to outfeat. So the small magnitude of the loss on attn_out indicates good matching,
 # and isn't caused by inherently different scales of attn_out and outfeat.
+# Using cosine instead of L2 for outfeat is because outfeat may have drastically different values for different tokens,
+# and the loss may become too large sometimes and then discarded. 
+# Cosine loss can limit the loss to [-1, 1], and is more robust to scale changes.
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
 # bg_align_loss_scheme: 'cosine' or 'L2'.

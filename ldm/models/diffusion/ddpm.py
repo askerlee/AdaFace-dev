@@ -68,7 +68,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_bg_suppress_loss_weight=0.,
-                 pred_l2_loss_weight=1e-4,
+                 pred_l2_loss_weight=0, #1e-4,
                  subj_attn_norm_distill_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -1617,6 +1617,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
+            # DISABLED: loss_pred_l2: 0.97~0.98. Quite stable, no need to penalize it.
             loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
                     + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
 
