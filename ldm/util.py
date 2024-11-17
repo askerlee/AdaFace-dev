@@ -1509,7 +1509,7 @@ def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_gra
 
     return loss_prompt_emb_delta
 
-def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, rel_scale_range=(-0.5, 10)):
+def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, rel_scale_range=(0, 5)):
     """
     Return a loss scale as a function of loss.
 
