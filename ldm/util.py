@@ -2092,7 +2092,6 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # We don't need to cut off ms_feat, mc_feat, because they were generated with no_grad().
         ss_feat = ss_feat.detach()
 
-        num_kept_objectives = 0
         #### Compute fg reconstruction losses. ####
 
         objective_name = feat_type
@@ -2114,15 +2113,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Optimizing w.r.t. this loss may lead to degenerate results.
         to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
         if to_discard:
-            print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1]}")
+            print(f"Discard layer {layer_idx} {objective_name} loss: {losses_sc_recon_ss_fg_obj[-1]}. Skip bg matching loss.")
+            continue
         else:
             losses_sc_recon_ss_fg.append(torch.tensor(losses_sc_recon_ss_fg_obj))
-            num_kept_objectives += 1
-
-        # Skip bg matching loss if all fg recon objectives for this feature type are discarded.
-        if num_kept_objectives == 0:
-            print(f"All objectives for {feat_type} have been discarded. Skip bg matching loss.")
-            continue
 
         #### Compute bg matching losses. #### 
         # We compute cosine loss on the features dim. 

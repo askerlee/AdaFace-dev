@@ -148,7 +148,10 @@ class DDPM(pl.LightningModule):
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
+        self.comp_iters_count                        = 0
+        self.non_comp_iters_count                    = 0
         self.comp_iters_face_detected_count          = 0
+        self.comp_iters_bg_match_loss_count          = 0
         self.comp_init_fg_from_training_image_count  = 0
 
         self.cached_inits = {}
@@ -176,9 +179,6 @@ class DDPM(pl.LightningModule):
 
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
-
-        self.training_percent = 0.
-        self.non_comp_iter_counter = 0
 
         self.unfreeze_unet = unfreeze_unet
         self.unet_lr = unet_lr
@@ -333,7 +333,6 @@ class DDPM(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
-        self.training_percent = self.global_step / self.trainer.max_steps
         
         # NOTE: No need to have standalone ada prompt delta reg, 
         # since each prompt mix reg iter will also do ada prompt delta reg.
@@ -345,10 +344,11 @@ class DDPM(pl.LightningModule):
             self.iter_flags['do_normal_recon']              = False
             self.iter_flags['do_unet_distill']              = False
             self.iter_flags['do_prompt_emb_delta_reg']      = self.do_prompt_emb_delta_reg
+            self.comp_iters_count += 1
         else:
             self.iter_flags['do_feat_distill_on_comp_prompt']  = False
-            self.non_comp_iter_counter += 1
-            if self.unet_distill_iter_gap > 0 and self.non_comp_iter_counter % self.unet_distill_iter_gap == 0:
+            self.non_comp_iters_count += 1
+            if self.unet_distill_iter_gap > 0 and self.non_comp_iters_count % self.unet_distill_iter_gap == 0:
                 self.iter_flags['do_normal_recon']  = False
                 self.iter_flags['do_unet_distill']  = True
                 # Disable do_prompt_emb_delta_reg during unet distillation.
@@ -1038,7 +1038,7 @@ class LatentDiffusion(DDPM):
             # which would be faster for synchronization.
             # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
             # Otherwise, some values, e.g., 0 and 3, will never be chosen.
-            num_unet_denoising_steps = self.global_step % 3 + 3
+            num_unet_denoising_steps = self.non_comp_iters_count % 3 + 2
             self.iter_flags['num_unet_denoising_steps'] = num_unet_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
@@ -1499,7 +1499,7 @@ class LatentDiffusion(DDPM):
             # so that different ranks have the same num_denoising_steps,
             # which might be faster for synchronization.
             W = self.comp_distill_denoising_steps_range[1] - self.comp_distill_denoising_steps_range[0] + 1
-            num_comp_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % W + self.comp_distill_denoising_steps_range[0]
+            num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1616,7 +1616,8 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
-            # DISABLED: loss_pred_l2: 0.97~0.98. Quite stable, no need to penalize it.
+            # loss_recon: 0.02~0.03.
+            # loss_pred_l2: 0.97~0.99. Quite stable. pred_l2_loss_weight: 1e-3 -> 1e-3. 1/20~1/30 of recon loss.
             loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
                     + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
 
@@ -1640,9 +1641,9 @@ class LatentDiffusion(DDPM):
         elif self.iter_flags['do_unet_distill']:
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
+            # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
-                self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, 
-                                            img_mask, fg_mask)
+                self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, img_mask, fg_mask)
 
             v_loss_unet_distill = loss_unet_distill.mean().detach().item()
             loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
@@ -1666,11 +1667,38 @@ class LatentDiffusion(DDPM):
                 loss_dict[loss_name2] = 0
 
             for ca_layers_activations in ca_layers_activations_list:
-                loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill = \
+                loss_comp_fg_bg_preserve = \
                     self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
                                                        instances_have_fg_mask, 
                                                        all_subj_indices_1b, all_subj_indices_2b, 
                                                        BLOCK_SIZE, loss_dict, session_prefix)
+
+
+                # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
+                # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
+                # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
+
+                # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
+                # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
+                # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
+                # NOTE: loss_feat_delta_align is disabled. It doesn't have spatial correspondance when 
+                # doing the feature delta calculation.
+                # These two losses are only used for monitoring the training process.
+
+                # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
+                # to index subj single and subj comp embeddings.
+                # The indices will be shifted along the batch dimension (size doubled) 
+                # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
+                loss_feat_delta_align, loss_subj_attn_norm_distill \
+                    = self.calc_feat_delta_and_attn_norm_loss(ca_layers_activations['outfeat'], 
+                                                              ca_layers_activations['attn'], 
+                                                              all_subj_indices_2b, BLOCK_SIZE)
+
+                # loss_feat_delta_align: 0.02~0.03. 
+                if loss_feat_delta_align > 0:
+                    loss_dict.update({f'{session_prefix}/feat_delta_align': \
+                                      loss_feat_delta_align.mean().detach().item() })
+
                 losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
                 losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
             
@@ -1683,12 +1711,17 @@ class LatentDiffusion(DDPM):
             loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
             loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
 
+            if loss_dict.get(f'{session_prefix}/sc_mc_bg_match', 0) > 0:
+                self.comp_iters_bg_match_loss_count += 1
+                sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
+                loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
+                
             # loss_comp_fg_bg_preserve = 0 if comp_init_fg_from_training_image and there's a valid fg_mask.
             if loss_comp_fg_bg_preserve > 0:
                 loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
                 # Keep track of the number of iterations that use comp_init_fg_from_training_image.
                 self.comp_init_fg_from_training_image_count += 1
-                comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.global_step + 1)
+                comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.comp_iters_count + 1)
                 loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
             # loss_subj_attn_norm_distill: 0.08~0.12.
             if loss_subj_attn_norm_distill > 0:
@@ -1723,10 +1756,10 @@ class LatentDiffusion(DDPM):
 
                 if loss_calc_count > 0:
                     self.comp_iters_face_detected_count += 1
-                    comp_iters_face_detected_frac = self.comp_iters_face_detected_count / (self.global_step + 1)
+                    comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                     loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
         ##### end of do_feat_distill_on_comp_prompt #####
-        
+
         else:
             breakpoint()
 
@@ -1752,15 +1785,13 @@ class LatentDiffusion(DDPM):
     # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
     # (But there are still other losses used after calling this function.)
     def calc_recon_and_complem_losses(self, model_output, target, ca_layers_activations,
-                                      all_subj_indices,
-                                      img_mask, fg_mask, instances_have_fg_mask, 
+                                      all_subj_indices, img_mask, fg_mask, instances_have_fg_mask, 
                                       bg_pixel_weight, BLOCK_SIZE):
 
         loss_subj_mb_suppress = \
             self.calc_subj_masked_bg_suppress_loss(
                 ca_layers_activations['attnscore'],
-                all_subj_indices,
-                BLOCK_SIZE, fg_mask, instances_have_fg_mask)
+                all_subj_indices, BLOCK_SIZE, fg_mask, instances_have_fg_mask)
 
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = calc_recon_loss(self.get_loss_func(), model_output, target, img_mask, fg_mask, 
@@ -1771,8 +1802,7 @@ class LatentDiffusion(DDPM):
         return loss_subj_mb_suppress, loss_recon, loss_pred_l2
 
 
-    def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, 
-                               img_mask, fg_mask):
+    def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, img_mask, fg_mask):
         c_prompt_emb, c_in, extra_info = cond_context
         BLOCK_SIZE = x_start.shape[0]
 
@@ -2000,12 +2030,8 @@ class LatentDiffusion(DDPM):
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
 
         # num_primed_denoising_steps iterates from 2 to 5.
-        # NOTE: self.global_step // self.comp_distill_iter_gap gets the actual number of 
-        # comp distillation iterations. So we don't need to consider whether 
-        # the divisor 4 is co-prime with comp_distill_iter_gap or not.
-        # Consequently, num_primed_denoising_steps will always follow 
-        # a uniform distribution of [1, 2, 3, 4].
-        num_primed_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % self.max_num_comp_priming_denoising_steps + 1
+        # num_primed_denoising_steps will always follow a uniform distribution of [1, 2, 3, 4].
+        num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 1
 
         if num_primed_denoising_steps > 0:
             MAX_N_SEP = 2
@@ -2114,12 +2140,10 @@ class LatentDiffusion(DDPM):
         return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, instances_have_fg_mask,
-                                      all_subj_indices_1b, all_subj_indices_2b, BLOCK_SIZE, loss_dict, session_prefix):
+                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
         # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
-        # It contains the 12 specified cross-attention layers of UNet.
-        # i.e., layers 7, 8, 12, 16, 17, 18, 19, 20, 21, 22, 23, 24.
-        # Similar are ca_attns and ca_attns.
-        # Each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
+        # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
+        # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
         ca_outfeats  = ca_layers_activations['outfeat']
 
         # NOTE: loss_comp_fg_bg_preserve is applied only when this 
@@ -2143,7 +2167,7 @@ class LatentDiffusion(DDPM):
                                                      ca_layers_activations['attn'], 
                                                      filtered_fg_mask, instances_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
-                                                     recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'},
+                                                     recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
                                                      bg_align_loss_scheme='L2',
                                                      do_feat_attn_pooling=True)
             
@@ -2186,26 +2210,7 @@ class LatentDiffusion(DDPM):
         else:
             loss_comp_fg_bg_preserve = 0
 
-        # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
-        # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
-        # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
-        # NOTE: loss_feat_delta_align is disabled. It doesn't have spatial correspondance when 
-        # doing the feature delta calculation.
-        # These two losses are only used for monitoring the training process.
-
-        # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
-        # to index subj single and subj comp embeddings.
-        # The indices will be shifted along the batch dimension (size doubled) 
-        # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
-        loss_feat_delta_align, loss_subj_attn_norm_distill \
-            = self.calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_layers_activations['attn'], 
-                                                      all_subj_indices_2b, BLOCK_SIZE)
-
-        # loss_feat_delta_align: 0.02~0.03. 
-        if loss_feat_delta_align > 0:
-            loss_dict.update({f'{session_prefix}/feat_delta_align':        loss_feat_delta_align.mean().detach().item() })
-
-        return loss_comp_fg_bg_preserve, loss_subj_attn_norm_distill
+        return loss_comp_fg_bg_preserve
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
     def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
