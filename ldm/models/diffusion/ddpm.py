@@ -1663,7 +1663,7 @@ class LatentDiffusion(DDPM):
             
             for loss_name in loss_names:
                 loss_name2 = loss_name.replace('loss_', '')
-                loss_name2 = '{session_prefix}/{loss_name2}'
+                loss_name2 = f'{session_prefix}/{loss_name2}'
                 loss_dict[loss_name2] = 0
 
             for ca_layers_activations in ca_layers_activations_list:
@@ -1702,7 +1702,7 @@ class LatentDiffusion(DDPM):
             
             for loss_name in loss_names:
                 loss_name2 = loss_name.replace('loss_', '')
-                loss_name2 = '{session_prefix}/{loss_name2}'
+                loss_name2 = f'{session_prefix}/{loss_name2}'
                 if loss_name2 in loss_dict:
                     loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
 
@@ -1713,7 +1713,7 @@ class LatentDiffusion(DDPM):
                 self.comp_iters_bg_match_loss_count += 1
                 sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
                 loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
-                
+
             # loss_comp_fg_bg_preserve = 0 if comp_init_fg_from_training_image and there's a valid fg_mask.
             if loss_comp_fg_bg_preserve > 0:
                 loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
