@@ -42,7 +42,7 @@ static_action_regexs = \
   # Split a regex with too many candidate patterns into two lines, 
   # to avoid under-representation of the patterns, as the regexs are unifomly sampled.
   "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train)",
-  "on (a boat|a bike|a roller coaster|a ski lift|a hot air balloon|a scooter)",
+  "on (a boat|a bike|a roller coaster|a scooter)",
   "in (a car|a meeting|a class|a wedding|a dinner|a concert|a gym|a library|a park)",
   "in (a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
