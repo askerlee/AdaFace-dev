@@ -1655,6 +1655,7 @@ class LatentDiffusion(DDPM):
         ###### begin of do_feat_distill_on_comp_prompt ######
         elif self.iter_flags['do_feat_distill_on_comp_prompt']:
             losses_comp_fg_bg_preserve = []
+            losses_sc_mc_bg_match = []
             losses_subj_attn_norm_distill = []
 
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
@@ -1667,7 +1668,7 @@ class LatentDiffusion(DDPM):
                 loss_dict[loss_name2] = 0
 
             for ca_layers_activations in ca_layers_activations_list:
-                loss_comp_fg_bg_preserve = \
+                loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
                     self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
                                                        instances_have_fg_mask, all_subj_indices_1b, 
                                                        BLOCK_SIZE, loss_dict, session_prefix)
@@ -1699,6 +1700,7 @@ class LatentDiffusion(DDPM):
 
                 losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
                 losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
+                losses_sc_mc_bg_match.append(loss_sc_mc_bg_match)
             
             for loss_name in loss_names:
                 loss_name2 = loss_name.replace('loss_', '')
@@ -1708,8 +1710,9 @@ class LatentDiffusion(DDPM):
 
             loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
             loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
+            loss_sc_mc_bg_match         = torch.stack(losses_sc_mc_bg_match).mean()
 
-            if loss_dict.get(f'{session_prefix}/sc_mc_bg_match', 0) > 0:
+            if loss_sc_mc_bg_match > 0:
                 self.comp_iters_bg_match_loss_count += 1
                 sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
                 loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
@@ -1727,8 +1730,14 @@ class LatentDiffusion(DDPM):
             
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
             # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED.
-            loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
-
+            # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
+            # loss_sc_mc_bg_match: 0.01~0.05, sc_mc_bg_match_loss_scale: 50~250 => 0.5~12.5.
+            # rel_scale_range=(0, 1): the absolute range of the scale will be 50~200.
+            sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.001, 5), (0.01, 50), 
+                                                            rel_scale_range=(0, 1))
+            loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
+                    * self.comp_fg_bg_preserve_loss_weight
+            
             if self.use_arcface_loss and (self.arcface is not None):
                 # Trying to calc arcface_align_loss from difficult to easy steps.
                 # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
@@ -2191,11 +2200,6 @@ class LatentDiffusion(DDPM):
             # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
-            # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
-            # loss_sc_mc_bg_match: 0.01~0.05, sc_mc_bg_match_loss_scale: 50~250 => 0.5~12.5.
-            # rel_scale_range=(0, 1): the absolute range of the scale will be 50~200.
-            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.01, 50), (0.04, 200), 
-                                                                rel_scale_range=(0, 1))
             sc_recon_ss_fg_min_loss_scale = 10
 
             # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
@@ -2205,12 +2209,11 @@ class LatentDiffusion(DDPM):
             # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.
             # Therefore, we use a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
             loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
-                                        + loss_sc_ss_fg_recon + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale \
-                                        + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
+                                        + loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
         else:
-            loss_comp_fg_bg_preserve = 0
+            loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = 0
 
-        return loss_comp_fg_bg_preserve
+        return loss_comp_fg_bg_preserve, loss_sc_mc_bg_match
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
     def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
