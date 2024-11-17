@@ -47,8 +47,7 @@ class EmbeddingManager(nn.Module):
             num_unet_ca_layers=16,
             layer_idx2ca_layer_idx = { 1:  0, 2:  1, 4:  2,  5:  3,  7:  4,  8:  5,  12: 6,  16: 7,
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
-            training_begin_perturb_std_range=None,
-            training_end_perturb_std_range=None,
+            training_perturb_std_range=None,
             training_perturb_prob=None,
             subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             cls_delta_string='person',
@@ -83,9 +82,7 @@ class EmbeddingManager(nn.Module):
         self.subject_string_dict    = { s: True for s in self.subject_strings }
         self.placeholder_strings    = list(subject_strings)
 
-        self.set_training_perturb_specs(training_begin_perturb_std_range, 
-                                        training_end_perturb_std_range,
-                                        training_perturb_prob)
+        self.set_training_perturb_specs(training_perturb_std_range, training_perturb_prob)
 
         self.layer_idx2ca_layer_idx = layer_idx2ca_layer_idx
         self.ca_layer_idx2layer_idx = { v: k for k, v in layer_idx2ca_layer_idx.items() }
@@ -201,7 +198,6 @@ class EmbeddingManager(nn.Module):
         self.set_image_prompts_and_iter_type(None, None, 'plain_text_iter')
 
         self.loss_call_count = 0
-        self.training_percent = 0
 
         # image_prompt_dict have two keys: 'subj', 'bg'.
         # image_prompt_dict['subj'] is the image prompt embs for the subject, which is ready to be used.
@@ -425,15 +421,13 @@ class EmbeddingManager(nn.Module):
             for k in range(adaface_subj_embs.shape[1]):
                 adaface_subj_emb_k = adaface_subj_embs[:, k]
                 
-                if self.training and self.training_begin_perturb_std_range is not None:
-                    # The std of adaface_subj_embs is around 0.07, times training_end_perturb_std_range
-                    # (0.02 ~ 0.04) is very small. Therefore, it won't hurt the subject identity encoded
+                if self.training and self.training_perturb_std_range is not None:
+                    # The std of adaface_subj_embs is around 0.07, times training_perturb_std_range
+                    # (0.05 ~ 0.1) is very small. Therefore, it won't hurt the subject identity encoded
                     # in the embeddings.
                     adaface_subj_emb_k = \
-                        anneal_perturb_embedding(adaface_subj_emb_k, 
-                                                 self.training_percent,
-                                                 self.training_begin_perturb_std_range,
-                                                 self.training_end_perturb_std_range,
+                        anneal_perturb_embedding(adaface_subj_emb_k, 0, 
+                                                 self.training_perturb_std_range, None,
                                                  self.training_perturb_prob[self.iter_type],
                                                  perturb_std_is_relative=True, keep_norm=False,
                                                  verbose=False)
@@ -540,17 +534,14 @@ class EmbeddingManager(nn.Module):
         
         self.placeholder2indices[placeholder_string] = placeholder_indices
 
-    def set_training_perturb_specs(self, training_begin_perturb_std_range, 
-                                   training_end_perturb_std_range,
-                                   training_perturb_prob):
-        self.training_begin_perturb_std_range = training_begin_perturb_std_range
-        self.training_end_perturb_std_range   = training_end_perturb_std_range
-        self.training_perturb_prob            = training_perturb_prob
+    def set_training_perturb_specs(self, training_perturb_std_range, training_perturb_prob):
+        self.training_perturb_std_range = training_perturb_std_range
+        self.training_perturb_prob      = training_perturb_prob
 
-        if training_begin_perturb_std_range is None and training_end_perturb_std_range is None:
+        if training_perturb_std_range is None:
             print(f"Disable training perturbance")
         else:
-            print(f"training perturbance std range: {training_begin_perturb_std_range}-{training_end_perturb_std_range}"
+            print(f"training perturbance std range: {training_perturb_std_range}"
                   f", with prob = {training_perturb_prob}")
 
     def set_image_prompts_and_iter_type(self, id2img_prompt_embs, clip_bg_features, iter_type):

@@ -200,7 +200,7 @@ def get_parser(**parser_kwargs):
                         help="Maximum number of denoising steps for UNet distillation (default 4). ")
     parser.add_argument("--max_num_comp_priming_denoising_steps", type=int, default=4,
                         help="Maximum number of denoising steps (default 4)")
-    parser.add_argument("--range_comp_distill_denoising_steps", type=int, default=[2, 3], nargs=2,
+    parser.add_argument("--comp_distill_denoising_steps_range", type=int, default=argparse.SUPPRESS, nargs=2,
                         help="Maximum number of denoising steps for composition distillation (default 3). ")
     parser.add_argument("--p_perturb_face_id_embs", type=float, default=argparse.SUPPRESS,
                         help="Probability of adding noise to real identity embeddings")
@@ -664,7 +664,8 @@ if __name__ == "__main__":
             
         config.model.params.max_num_unet_distill_denoising_steps = opt.max_num_unet_distill_denoising_steps
         config.model.params.max_num_comp_priming_denoising_steps = opt.max_num_comp_priming_denoising_steps
-        config.model.params.range_comp_distill_denoising_steps   = opt.range_comp_distill_denoising_steps
+        if hasattr(opt, 'comp_distill_denoising_steps_range'):
+            config.model.params.comp_distill_denoising_steps_range   = opt.comp_distill_denoising_steps_range
         if hasattr(opt, 'p_perturb_face_id_embs'):
             config.model.params.p_perturb_face_id_embs = opt.p_perturb_face_id_embs
 

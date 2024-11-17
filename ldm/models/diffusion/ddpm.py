@@ -78,7 +78,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
-                 range_comp_distill_denoising_steps=[2, 3],
+                 comp_distill_denoising_steps_range=[2, 3],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0.1,
@@ -128,7 +128,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
-        self.range_comp_distill_denoising_steps     = range_comp_distill_denoising_steps
+        self.comp_distill_denoising_steps_range     = comp_distill_denoising_steps_range
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
@@ -148,6 +148,7 @@ class DDPM(pl.LightningModule):
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
+        self.comp_iters_face_detected_count          = 0
         self.comp_init_fg_from_training_image_count  = 0
 
         self.cached_inits = {}
@@ -786,8 +787,6 @@ class LatentDiffusion(DDPM):
         # Encode noise as 4-channel latent features.
         # first_stage_key="image"
         x_start = self.get_input(batch, self.first_stage_key)
-        # Update the training_percent of embedding_manager.
-        self.embedding_manager.training_percent = self.training_percent
 
         instances_have_fg_mask  = batch['has_fg_mask']
         # Temporarily disable fg_mask for debugging.
@@ -1495,12 +1494,12 @@ class LatentDiffusion(DDPM):
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
 
-            # range_comp_distill_denoising_steps: 3.
+            # comp_distill_denoising_steps_range: [2, 2].
             # num_denoising_steps iterates among 2 ~ 3. We don't draw random numbers, 
             # so that different ranks have the same num_denoising_steps,
             # which might be faster for synchronization.
-            W = self.range_comp_distill_denoising_steps[1] - self.range_comp_distill_denoising_steps[0] + 1
-            num_comp_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % W + self.range_comp_distill_denoising_steps[0]
+            W = self.comp_distill_denoising_steps_range[1] - self.comp_distill_denoising_steps_range[0] + 1
+            num_comp_denoising_steps = (self.global_step // self.comp_distill_iter_gap) % W + self.comp_distill_denoising_steps_range[0]
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1635,6 +1634,7 @@ class LatentDiffusion(DDPM):
             # all of them are 2, indicating red.
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+        ##### end of do_normal_recon #####
 
         ##### begin of do_unet_distill #####
         elif self.iter_flags['do_unet_distill']:
@@ -1649,6 +1649,7 @@ class LatentDiffusion(DDPM):
             # loss_unet_distill: ~0.01, so we use a very large unet_distill_weight==8 to
             # make it comparable to the recon loss.
             loss += loss_unet_distill * self.unet_distill_weight
+        ##### end of do_unet_distill #####
 
         ###### begin of do_feat_distill_on_comp_prompt ######
         elif self.iter_flags['do_feat_distill_on_comp_prompt']:
@@ -1719,6 +1720,13 @@ class LatentDiffusion(DDPM):
                         loss_calc_count += 1
                         if loss_calc_count >= max_loss_calc_count:
                             break
+
+                if loss_calc_count > 0:
+                    self.comp_iters_face_detected_count += 1
+                    comp_iters_face_detected_frac = self.comp_iters_face_detected_count / (self.global_step + 1)
+                    loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+        ##### end of do_feat_distill_on_comp_prompt #####
+        
         else:
             breakpoint()
 
@@ -2162,8 +2170,8 @@ class LatentDiffusion(DDPM):
             subj_comp_map_single_align_with_cls_loss_scale = 1
             comp_subj_bg_attn_suppress_loss_scale = 0.02
             # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
-            # loss_sc_mc_bg_match: 0.008~0.02, sc_mc_bg_match_loss_scale: 100~250 => 0.8~5.
-            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.008, 100), (0.02, 250))
+            # loss_sc_mc_bg_match: 0.01~0.05, sc_mc_bg_match_loss_scale: 50~250 => 0.5~12.5.
+            sc_mc_bg_match_loss_scale     = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.01, 50), (0.04, 200))
             sc_recon_ss_fg_min_loss_scale = 10
 
             # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.

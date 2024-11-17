@@ -22,7 +22,8 @@ model:
     unfreeze_unet:                    False
     unet_lr:                          0.0
     use_fp_trick:                     True
-    comp_distill_iter_gap:            2
+    comp_distill_iter_gap:            3
+    comp_distill_denoising_steps_range: [2, 3]
     unet_teacher_types:               ['consistentID', 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.3, 2.0]
@@ -59,7 +60,7 @@ model:
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 7.5e-4
     recon_subj_bg_suppress_loss_weight:  0
     subj_attn_norm_distill_loss_weight: 0
-    pred_l2_loss_weight:              0 #1e-4
+    pred_l2_loss_weight:              1e-3
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, adopt,
     # AdEMAMix, AdEMAMix8bit, OrthogonalNesterov
@@ -98,8 +99,7 @@ model:
       params:
         subject_strings:                    ['z']
         subj_name_to_cls_delta_string:      { 'z': "person", 'rand_id_to_img_prompt': 'person' }
-        training_begin_perturb_std_range:   [ 0.05, 0.1 ]
-        training_end_perturb_std_range:     [ 0.05, 0.1 ]
+        training_perturb_std_range:         [ 0.05, 0.1 ]
         # probs for recon_iter and compos_distill_iter, respectively
         training_perturb_prob:              { 'recon_iter':            0.6, 
                                               'unet_distill_iter':     0.3,
