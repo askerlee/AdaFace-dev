@@ -1730,9 +1730,9 @@ class LatentDiffusion(DDPM):
             
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
             # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED.
-            # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 50x to 250x.
-            # loss_sc_mc_bg_match: 0.01~0.05, sc_mc_bg_match_loss_scale: 50~250 => 0.5~12.5.
-            # rel_scale_range=(0, 1): the absolute range of the scale will be 50~200.
+            # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 5x to 50x.
+            # loss_sc_mc_bg_match: 0.002~0.01, sc_mc_bg_match_loss_scale: 10~50 => 0.02~5.
+            # rel_scale_range=(0, 1): the absolute range of the scale will be 5~50.
             sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.001, 5), (0.01, 50), 
                                                             rel_scale_range=(0, 1))
             loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
