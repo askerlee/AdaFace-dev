@@ -1669,10 +1669,8 @@ class LatentDiffusion(DDPM):
             for ca_layers_activations in ca_layers_activations_list:
                 loss_comp_fg_bg_preserve = \
                     self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
-                                                       instances_have_fg_mask, 
-                                                       all_subj_indices_1b, all_subj_indices_2b, 
+                                                       instances_have_fg_mask, all_subj_indices_1b, 
                                                        BLOCK_SIZE, loss_dict, session_prefix)
-
 
                 # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
                 # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -2259,10 +2257,6 @@ class LatentDiffusion(DDPM):
             if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
                 continue
 
-            # each is [1, 1280, 16, 16]
-            subj_single_feat, subj_comp_feat, cls_single_feat, cls_comp_feat \
-                = ca_outfeat.chunk(4)
-            
             # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
             # We don't need BP through attention into UNet.
             attn_mat = ca_attns[unet_layer_idx].permute(0, 3, 1, 2)
@@ -2281,7 +2275,7 @@ class LatentDiffusion(DDPM):
                 cls_comp_subj_attn_gs       = cls_comp_subj_attn.detach()
                 cls_single_subj_attn_gs     = cls_single_subj_attn.detach()
 
-                # mean(dim=-1): average over the 64 feature channels.
+                # mean(dim=-1): average across the 64 feature channels.
                 # Align the attention corresponding to each embedding individually.
                 # Note cls_*subj_attn use *_gs versions.
                 # The L1 loss of the average attention values of the subject tokens, at each head and each instance.
