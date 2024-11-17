@@ -1667,11 +1667,15 @@ class LatentDiffusion(DDPM):
                 loss_name2 = f'{session_prefix}/{loss_name2}'
                 loss_dict[loss_name2] = 0
 
-            for ca_layers_activations in ca_layers_activations_list:
+            for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
+                # If we take 3 denoising steps, then recon_loss_discard_thres will be 0.4, 0.5, 0.6, respectively,
+                # i.e., more strict for the first step, and more relaxed for the last step.
+                recon_loss_discard_thres = 0.4 + 0.1 * step_idx
                 loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
                     self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
                                                        instances_have_fg_mask, all_subj_indices_1b, 
-                                                       BLOCK_SIZE, loss_dict, session_prefix)
+                                                       BLOCK_SIZE, loss_dict, session_prefix,
+                                                       recon_loss_discard_thres=recon_loss_discard_thres)
 
                 # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
                 # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -2147,7 +2151,8 @@ class LatentDiffusion(DDPM):
         return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
     
     def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, instances_have_fg_mask,
-                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
+                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
+                                      recon_loss_discard_thres=0.4):
         # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
         # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
         # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -2175,6 +2180,7 @@ class LatentDiffusion(DDPM):
                                                      filtered_fg_mask, instances_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
                                                      recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
+                                                     recon_loss_discard_thres=recon_loss_discard_thres,
                                                      bg_align_loss_scheme='L2',
                                                      do_feat_attn_pooling=True)
             
@@ -2450,6 +2456,7 @@ class LatentDiffusion(DDPM):
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
                                         recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'},
+                                        recon_loss_discard_thres=0.4,
                                         bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or instances_have_fg_mask.sum() == 0:
@@ -2534,6 +2541,7 @@ class LatentDiffusion(DDPM):
                                              ca_layer_q, ca_attn_out, ca_outfeat, 
                                              ss_fg_mask, ca_feat_h, ca_feat_w, 
                                              recon_feat_objectives=recon_feat_objectives,
+                                             recon_loss_discard_thres=recon_loss_discard_thres,
                                              fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
                                              bg_align_loss_scheme=bg_align_loss_scheme,
                                              do_feat_attn_pooling=do_feat_attn_pooling)
