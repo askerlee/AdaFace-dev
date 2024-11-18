@@ -1824,7 +1824,7 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask):
 
     return sc_recon_ss_fg_feat
 
-@torch.compile        
+@torch.compiler.disable
 def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_feat, ss_fg_mask, 
                                         H, W, num_flow_est_iters=12):
     # Remove background features to reduce noisy matching.

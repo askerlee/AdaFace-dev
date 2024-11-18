@@ -61,17 +61,19 @@ class ArcFaceWrapper(nn.Module):
         return faces_emb, failed_indices
 
     # T: minimal face height/width to be detected.
-    # images1: the groundtruth images.
-    # images2: the generated   images.
-    def calc_arcface_align_loss(self, images1, images2, T=20, use_whole_image_if_no_face=False):
-        embs1, failed_indices1 = self.embed_image_tensor(images1, T, False)
-        embs2, failed_indices2 = self.embed_image_tensor(images2, T, use_whole_image_if_no_face)
+    # ref_images: the groundtruth images.
+    # aligned_images: the generated   images.
+    def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, use_whole_image_if_no_face=False):
+        with torch.no_grad():
+            embs1, failed_indices1 = self.embed_image_tensor(ref_images, T, False)
+
+        embs2, failed_indices2 = self.embed_image_tensor(aligned_images, T, use_whole_image_if_no_face)
         if len(failed_indices1) > 0:
-            print(f"Failed to detect faces in images1-{failed_indices1}")
-            return torch.tensor(0.0, device=images1.device)
+            print(f"Failed to detect faces in ref_images-{failed_indices1}")
+            return torch.tensor(0.0, device=ref_images.device)
         if len(failed_indices2) > 0:
-            print(f"Failed to detect faces in images2-{failed_indices2}")
-            return torch.tensor(0.0, device=images1.device)
+            print(f"Failed to detect faces in aligned_images-{failed_indices2}")
+            return torch.tensor(0.0, device=ref_images.device)
 
         # Repeat groundtruth embeddings to match the number of generated embeddings.
         if len(embs1) < len(embs2):
