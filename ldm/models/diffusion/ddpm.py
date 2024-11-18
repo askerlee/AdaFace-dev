@@ -1744,16 +1744,12 @@ class LatentDiffusion(DDPM):
                                                             rel_scale_range=(0, 2))
             loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
                     * self.comp_fg_bg_preserve_loss_weight
-            if loss_sc_mc_bg_match == 0:
-                # loss_feat_delta_align is less accurate, so we only use it when loss_sc_mc_bg_match is 0.
-                # And only use a small weight 1e-4 for it.
-                loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
-            
+
+            arcface_loss_calc_count = 0
             if self.use_arcface_loss and (self.arcface is not None):
                 # Trying to calc arcface_align_loss from difficult to easy steps.
                 # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
-                loss_calc_count = 0
-                max_loss_calc_count = 1
+                max_arcface_loss_calc_count = 1
                 for sel_step in range(len(x_recons)):
                     x_recon  = x_recons[sel_step]
                     # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
@@ -1768,14 +1764,21 @@ class LatentDiffusion(DDPM):
                         # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
                         # This loss is around 1/150 of recon/distill losses (0.1).
                         loss += loss_arcface_align * self.arcface_align_loss_weight
-                        loss_calc_count += 1
-                        if loss_calc_count >= max_loss_calc_count:
+                        arcface_loss_calc_count += 1
+                        if arcface_loss_calc_count >= max_arcface_loss_calc_count:
                             break
 
-                if loss_calc_count > 0:
+                if arcface_loss_calc_count > 0:
                     self.comp_iters_face_detected_count += 1
                     comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                     loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+
+            if loss_sc_mc_bg_match == 0 and arcface_loss_calc_count == 0:
+                # loss_feat_delta_align is less accurate, so we only use it when 
+                # loss_sc_mc_bg_match is 0 (large fg matching errors) and no faces have been detected.
+                # And only use a small weight feat_delta_align_loss_weight = 1e-4.
+                loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
+                                
         ##### end of do_feat_distill_on_comp_prompt #####
 
         else:
