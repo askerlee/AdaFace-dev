@@ -1823,13 +1823,10 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_map_ss_prob, ss_fg_mask):
     # mc_recon_ms_feat = torch.matmul(mc_feat, mc_map_ms_prob)
 
     return sc_recon_ss_fg_feat
-        
-@torch.compiler.disable
+
+@torch.compile        
 def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_feat, ss_fg_mask, 
                                         H, W, num_flow_est_iters=12):
-    if H*W != sc_feat.shape[-1]:
-        breakpoint()
-
     # Remove background features to reduce noisy matching.
     # ss_q: [1, 1280, 961]. ss_fg_mask: [1, 961] -> [1, 1, 961]
     ss_q = ss_q * ss_fg_mask.unsqueeze(1)
@@ -2009,7 +2006,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
     num_heads = 8
     # Similar to the scale of the attention scores.
-    matching_score_scale = (ca_outfeat.shape[1] / num_heads) ** -0.5
+    # Disable matching_score_scale, since when we were caching q, we've scaled it by 1/sqrt(sqrt(dim)).
+    # Two q's multiplied together will be scaled by 1/sqrt(dim). Moreover, currently sc_map_ss_prob is quite uniform,
+    # and disabling matching_score_scale can make sc_map_ss_prob more polarized.
+    matching_score_scale = 1 #(ca_outfeat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 961, 961]. 
     # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single image tokens).
     # We use ca_outfeat instead of ca_q to compute the correlation scores, so we scale it.
@@ -2052,8 +2052,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
     # If sc_map_ss_prob is uniform, then each token in the subj comp instance has a prob of ss_fg_mask_3d.mean().
     # Therefore it's used as a cutoff prob to determine whether a token is fg or bg.
-    # * 0.95 to keep a small margin. The smaller the cutoff prob, the smaller (the stricter on deciding) the bg area. 
-    fg_bg_cutoff_prob = ss_fg_mask_3d.mean() * 0.95
+    # * 0.98 to keep a small margin. The smaller the cutoff prob, the smaller (the stricter on deciding) the bg area. 
+    # It's OK to discard some bg tokens, but we should try to avoid any fg tokens being considered as bg.
+    fg_bg_cutoff_prob = ss_fg_mask_3d.mean() * 0.98
     # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
@@ -2145,8 +2146,6 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         elif bg_align_loss_scheme == 'L2':
             # sc_feat, mc_feat: [1, 961, 1280]. sc_to_ss_bg_prob: [1, 961, 1].
             loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob)
-            if loss_sc_mc_bg_match_obj == 0:
-                breakpoint()
         elif bg_align_loss_scheme == 'L1':
             loss_sc_mc_bg_match_obj = masked_mean((sc_feat - mc_feat).abs(), sc_to_ss_bg_prob)
         else:
