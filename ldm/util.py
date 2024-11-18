@@ -1980,8 +1980,8 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 @torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'}, 
-                               recon_loss_discard_thres=0.4, fg_bg_cutoff_prob=0.25, 
-                               num_flow_est_iters=12, bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
+                               bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4, 
+                               num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64] => [1, 64*64]
     if ss_fg_mask.sum() == 0:
         return 0, 0, 0, None, None
@@ -2047,6 +2047,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     sc_map_ss_fg_prob = torch.matmul(sc_map_ss_prob, ss_fg_mask_3d).permute(0, 2, 1)
     mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, ss_fg_mask_3d).permute(0, 2, 1)
 
+    # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
+    # If sc_map_ss_prob is uniform, then each token in the subj comp instance has a prob of fg_bg_cutoff_prob.
+    # Therefore it's used as a cutoff prob to determine whether a token is fg or bg.
+    fg_bg_cutoff_prob = ss_fg_mask_3d.mean()
     # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
@@ -2057,7 +2061,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # Set large negative values to 0, which correspond to large positive probs in 
     # sc_map_ss_fg_prob/mc_map_ms_fg_prob at fg areas of the corresponding single instances,
     # likely being foreground areas. 
-    # When sc_map_ss_fg_prob/mc_map_ms_fg_prob < fg_bg_cutoff_prob = 0.25, this token is likely to be bg.
+    # When sc_map_ss_fg_prob/mc_map_ms_fg_prob < fg_bg_cutoff_prob (dynamic, around 0.3), this token is likely to be bg.
     # The smaller sc_map_ss_fg_prob/mc_map_ms_fg_prob is, the more likely this token is bg.
     sc_map_ss_fg_prob_below_mean = torch.clamp(sc_map_ss_fg_prob_below_mean, min=0)
     mc_map_ms_fg_prob_below_mean = torch.clamp(mc_map_ms_fg_prob_below_mean, min=0)
@@ -2068,7 +2072,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # Note sc_to_ss_bg_prob is a soft mask, not a hard mask.
     # sc_to_ss_bg_prob: [1, 1, 961]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
-    # sc_to_ss_bg_prob: [1, 1, 961] => [1, 961, 1]. values: 0 ~ fg_bg_cutoff_prob=0.25.
+    # sc_to_ss_bg_prob: [1, 1, 961] => [1, 961, 1]. values: 0 ~ fg_bg_cutoff_prob (dynamic, around 0.3).
     sc_to_ss_bg_prob = sc_map_ss_fg_prob_below_mean.permute(0, 2, 1)
 
     s2c_flow = None
@@ -2138,6 +2142,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         elif bg_align_loss_scheme == 'L2':
             # sc_feat, mc_feat: [1, 961, 1280]. sc_to_ss_bg_prob: [1, 961, 1].
             loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob)
+            if loss_sc_mc_bg_match_obj == 0:
+                breakpoint()
         elif bg_align_loss_scheme == 'L1':
             loss_sc_mc_bg_match_obj = masked_mean((sc_feat - mc_feat).abs(), sc_to_ss_bg_prob)
         else:

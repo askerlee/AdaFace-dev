@@ -2191,8 +2191,8 @@ class LatentDiffusion(DDPM):
                                                      filtered_fg_mask, instances_have_fg_mask,
                                                      all_subj_indices_1b, BLOCK_SIZE,
                                                      recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
-                                                     recon_loss_discard_thres=recon_loss_discard_thres,
                                                      bg_align_loss_scheme='L2',
+                                                     recon_loss_discard_thres=recon_loss_discard_thres,
                                                      do_feat_attn_pooling=True)
             
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
@@ -2467,11 +2467,11 @@ class LatentDiffusion(DDPM):
     def calc_comp_subj_bg_preserve_loss(self, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                         fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
                                         recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'},
-                                        recon_loss_discard_thres=0.4,
-                                        bg_align_loss_scheme='L2', do_feat_attn_pooling=True):
+                                        bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4,
+                                        do_feat_attn_pooling=True):
         # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
         if fg_mask is None or instances_have_fg_mask.sum() == 0:
-            return 0, 0, 0, 0, 0, 0
+            return {}
 
         # Feature map spatial sizes are all 64*64.
         # Remove layer 22, as the losses at this layer are often too large 
@@ -2552,9 +2552,9 @@ class LatentDiffusion(DDPM):
                                              ca_layer_q, ca_attn_out, ca_outfeat, 
                                              ss_fg_mask, ca_feat_h, ca_feat_w, 
                                              recon_feat_objectives=recon_feat_objectives,
-                                             recon_loss_discard_thres=recon_loss_discard_thres,
-                                             fg_bg_cutoff_prob=0.25, num_flow_est_iters=12,
                                              bg_align_loss_scheme=bg_align_loss_scheme,
+                                             recon_loss_discard_thres=recon_loss_discard_thres,
+                                             num_flow_est_iters=12,
                                              do_feat_attn_pooling=do_feat_attn_pooling)
 
             loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
@@ -2615,7 +2615,9 @@ class LatentDiffusion(DDPM):
             add_dict_to_dict(loss_dict,
                              { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * elastic_matching_layer_weight,
                                'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
-            
+        
+        if loss_dict['loss_sc_mc_bg_match'] == 0:
+            breakpoint()
         return loss_dict
     
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
