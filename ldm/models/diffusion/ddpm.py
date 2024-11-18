@@ -2616,8 +2616,6 @@ class LatentDiffusion(DDPM):
                              { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * elastic_matching_layer_weight,
                                'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
         
-        if loss_dict['loss_sc_mc_bg_match'] == 0:
-            breakpoint()
         return loss_dict
     
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
