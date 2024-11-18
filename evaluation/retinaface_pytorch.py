@@ -68,6 +68,7 @@ class RetinaFaceClient(nn.Module):
         """
         resp = []
 
+        # predict_jsons is wrapped with torch.no_grad().
         objs = self.model.predict_jsons(img, confidence_threshold=0.9)
         H, W = img.shape[:2]
 

@@ -42,8 +42,9 @@ class ArcFaceWrapper(nn.Module):
         self.retinaface.eval()
 
     # Suppose images_ts has been normalized to [-1, 1].
-    def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False):
+    def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False, enable_grad=True):
         # retina_crop_face() crops on the input tensor, so that computation graph is preserved.
+        # The cropping param computation is wrapped with torch.no_grad().
         faces, failed_indices = self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, 
                                                            use_whole_image_if_no_face=use_whole_image_if_no_face)
         
@@ -56,18 +57,20 @@ class ArcFaceWrapper(nn.Module):
         faces_gray = (faces * rgb_to_gray_weights).sum(dim=1, keepdim=True)
         # Resize to (128, 128)
         faces_gray = F.interpolate(faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
-        with torch.autocast(device_type='cuda', dtype=self.dtype):
-            faces_emb = self.arcface(faces_gray)
+        with torch.set_grad_enabled(enable_grad):
+            faces_emb = self.arcface(faces_gray.to(self.dtype))
         return faces_emb, failed_indices
 
     # T: minimal face height/width to be detected.
     # ref_images: the groundtruth images.
     # aligned_images: the generated   images.
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, use_whole_image_if_no_face=False):
-        with torch.no_grad():
-            embs1, failed_indices1 = self.embed_image_tensor(ref_images, T, False)
-
-        embs2, failed_indices2 = self.embed_image_tensor(aligned_images, T, use_whole_image_if_no_face)
+        embs1, failed_indices1 = \
+            self.embed_image_tensor(ref_images, T, use_whole_image_if_no_face=False, enable_grad=False)
+        embs2, failed_indices2 = \
+            self.embed_image_tensor(aligned_images, T, use_whole_image_if_no_face=use_whole_image_if_no_face, 
+                                    enable_grad=True)
+        
         if len(failed_indices1) > 0:
             print(f"Failed to detect faces in ref_images-{failed_indices1}")
             return torch.tensor(0.0, device=ref_images.device)
