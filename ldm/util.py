@@ -1838,16 +1838,18 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
     # Otherwise use the provided flow.
     if s2c_flow is None:
         # Latent optical flow from subj single feature maps to subj comp feature maps.
-        # Enabling grad seems to lead to quite bad results. 
-        # Maybe updating q through flow is not a good idea.
+        # Enabling grad seems to lead to quite bad results. Maybe updating q through flow is not a good idea.
         with torch.no_grad():
+            #LINK gma/network.py#est_flow_from_feats
+            # s2c_flow: [1, 2, H, W]
             s2c_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, num_iters=num_flow_est_iters, 
                                                       corr_normalized_by_sqrt_dim=False)
         # s2c_flow = resize_flow(s2c_flow, H, W)
 
+    # Resize sc_feat to [1, *, H, W] and warp it using s2c_flow, 
+    # then collapse the spatial dimensions.
     sc_feat             = sc_feat.reshape(*sc_feat.shape[:2], H, W)
     sc_recon_ss_feat    = backward_warp_by_flow(sc_feat, s2c_flow)
-    # Collapse the spatial dimensions again.
     sc_recon_ss_feat    = sc_recon_ss_feat.reshape(*sc_recon_ss_feat.shape[:2], -1)
 
     # ss_fg_mask's spatial dim is already collapsed. ss_fg_mask: [1, 225]
@@ -1864,9 +1866,9 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
             154, 155, 156, 157, 158, 167, 168, 169, 170, 171, 172, 173, 182, 183,
             184, 185, 186, 187, 188], device='cuda:0')
     '''    
-    ss_fg_mask_B, ss_fg_mask_N    = ss_fg_mask.nonzero(as_tuple=True)    
+    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)    
     # sc_recon_ss_feat: [1, 1280, 961] -> [1, 961, 1280] -> [1, N_fg, 1280]
-    sc_recon_ss_fg_feat     = sc_recon_ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
+    sc_recon_ss_fg_feat = sc_recon_ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
 
     return sc_recon_ss_fg_feat, s2c_flow
 
@@ -2048,9 +2050,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     mc_map_ms_fg_prob = torch.matmul(mc_map_ms_prob, ss_fg_mask_3d).permute(0, 2, 1)
 
     # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
-    # If sc_map_ss_prob is uniform, then each token in the subj comp instance has a prob of fg_bg_cutoff_prob.
+    # If sc_map_ss_prob is uniform, then each token in the subj comp instance has a prob of ss_fg_mask_3d.mean().
     # Therefore it's used as a cutoff prob to determine whether a token is fg or bg.
-    fg_bg_cutoff_prob = ss_fg_mask_3d.mean()
+    # * 0.95 to keep a small margin. The smaller the cutoff prob, the smaller (the stricter on deciding) the bg area. 
+    fg_bg_cutoff_prob = ss_fg_mask_3d.mean() * 0.95
     # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
