@@ -70,6 +70,7 @@ class DDPM(pl.LightningModule):
                  recon_subj_bg_suppress_loss_weight=0.,
                  pred_l2_loss_weight=0, #1e-4,
                  subj_attn_norm_distill_loss_weight=0,
+                 feat_delta_align_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -115,6 +116,7 @@ class DDPM(pl.LightningModule):
         self.recon_subj_bg_suppress_loss_weight     = recon_subj_bg_suppress_loss_weight
         self.pred_l2_loss_weight                    = pred_l2_loss_weight
         self.subj_attn_norm_distill_loss_weight     = subj_attn_norm_distill_loss_weight
+        self.feat_delta_align_loss_weight           = feat_delta_align_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -803,9 +805,7 @@ class LatentDiffusion(DDPM):
 
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
-        # When doing compositional distillation on humans/animals they are a little bit better.
-        # For objects, even if use_fp_trick = True, *_fp prompts are not available in batch, 
-        # so fp_trick won't be used.
+        # Always use the trick on compositional distillation iterations.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_feat_distill_on_comp_prompt']:
                 p_use_fp_trick = 1
@@ -1657,6 +1657,7 @@ class LatentDiffusion(DDPM):
             losses_comp_fg_bg_preserve = []
             losses_sc_mc_bg_match = []
             losses_subj_attn_norm_distill = []
+            losses_feat_delta_align = []
 
             loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
                            'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
@@ -1705,6 +1706,7 @@ class LatentDiffusion(DDPM):
                 losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
                 losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
                 losses_sc_mc_bg_match.append(loss_sc_mc_bg_match)
+                losses_feat_delta_align.append(loss_feat_delta_align)
             
             for loss_name in loss_names:
                 loss_name2 = loss_name.replace('loss_', '')
@@ -1715,6 +1717,7 @@ class LatentDiffusion(DDPM):
             loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
             loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
             loss_sc_mc_bg_match         = torch.stack(losses_sc_mc_bg_match).mean()
+            loss_feat_delta_align       = torch.stack(losses_feat_delta_align).mean()
 
             if loss_sc_mc_bg_match > 0:
                 self.comp_iters_bg_match_loss_count += 1
@@ -1741,6 +1744,10 @@ class LatentDiffusion(DDPM):
                                                             rel_scale_range=(0, 2))
             loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
                     * self.comp_fg_bg_preserve_loss_weight
+            if loss_sc_mc_bg_match == 0:
+                # loss_feat_delta_align is less accurate, so we only use it when loss_sc_mc_bg_match is 0.
+                # And only use a small weight 1e-4 for it.
+                loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
             
             if self.use_arcface_loss and (self.arcface is not None):
                 # Trying to calc arcface_align_loss from difficult to easy steps.
