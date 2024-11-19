@@ -592,11 +592,11 @@ class LatentDiffusion(DDPM):
         
     def instantiate_embedding_manager(self, config, text_embedder):
         if (not self.use_ldm_unet) and self.unet_uses_lora:
-            unet_lora_params = self.model.unet_lora_params
+            unet_lora_modules = self.model.unet_lora_modules
         else:
-            unet_lora_params = None
+            unet_lora_modules = None
         model = instantiate_from_config(config, text_embedder=text_embedder,
-                                        unet_lora_params=unet_lora_params)
+                                        unet_lora_modules=unet_lora_modules)
         return model
 
     def get_first_stage_encoding(self, encoder_posterior):
@@ -2105,11 +2105,23 @@ class LatentDiffusion(DDPM):
                                                     num_denoising_steps=num_shared_denoising_steps,
                                                     # Same t and noise across instances.
                                                     same_t_noise_across_instances=True,
-                                                    global_t_lb=300)
+                                                    global_t_lb=400)
                 
             # Repeat the 1-instance denoised x_start_1 to 2-instance x_start_2, i.e., one single, one comp instances.
-            x_start_2   = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-            t_2         = all_t[-1].repeat(2)
+            x_start_2 = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+            # If num_shared_denoising_steps == 1, then all_t[-1] == t_1. In this case, we need to resample t_2.
+            if num_shared_denoising_steps > 1:
+                t_2 = all_t[-1].repeat(2)
+            else:
+                # If there are more sep denoising steps, then t_lb/t_1 is closer to 1, i.e., 
+                # shrinking with a ~1 ratio. If there are fewer sep denoising steps, 
+                # then t_lb/t_1 is closer to 0.5.
+                t_lb = t_1 * np.power(0.65, np.power(num_sep_denoising_steps + 1, -0.3))
+                t_ub = t_1 * np.power(0.8,  np.power(num_sep_denoising_steps + 1, -0.3))
+                t_lb = torch.clamp(t_lb, min=400)
+                t_2  = (t_ub - t_lb) * torch.rand(1, device=t_1.device) + t_lb
+                t_2  = t_2.long().repeat(2)
+
             all_t_list  += [ ti[0].item() for ti in all_t ]
         else:
             # Class priming denoising: Denoise x_start_2 with the class single/comp prompts 
@@ -2882,10 +2894,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # Only capture the activations of the last 3 CA layers.
         self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
-        self.global_enable_lora = enable_lora
-        self.lora_rank = lora_rank
         # Keep a reference to self.hooked_attn_procs to change their flags later.
-        self.hooked_attn_procs = list(self.set_attn_processors().values())
+        self.hooked_attn_procs = list(self.setup_attn_processors().values())
         # Replace the forward() method of the last up block with a capturing method.
         self.diffusion_model.up_blocks[3].forward = \
             CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
@@ -2893,13 +2903,16 @@ class DiffusersUNetWrapper(pl.LightningModule):
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
 
+        self.global_enable_lora = enable_lora
+        self.lora_rank = lora_rank
+
         if enable_lora:
-            self.set_loras()
+            self.setup_loras(lora_rank=lora_rank, lora_alpha=lora_rank // 4)
         else:
-            self.unet_lora_params = None
+            self.unet_lora_modules = None
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def set_attn_processors(self):
+    def setup_attn_processors(self):
         unet = self.diffusion_model
         attn_procs = {}
         hooked_attn_procs = {}
@@ -2929,7 +2942,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 capture_ca_activations=True, enable_lora=False,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
                 # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
-                lora_rank=self.lora_rank, lora_scale=1
+                lora_rank=0, lora_scale=1
             )
             attn_procs[name]        = hooked_attn_proc
             hooked_attn_procs[name] = hooked_attn_proc
@@ -2938,18 +2951,27 @@ class DiffusersUNetWrapper(pl.LightningModule):
         print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_procs.keys()}.")
         return hooked_attn_procs
     
-    def set_loras(self):
-            # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
-            peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
-                                     target_modules="up_blocks.3.resnets...conv.+")
-            self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
-            lora_params = {}
-            for name, param in self.diffusion_model.named_parameters():
-                if param.requires_grad:
-                    lora_params[name] = param
-            self.unet_lora_params = lora_params
-            print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
-            self.diffusion_model.print_trainable_parameters()
+    def setup_loras(self, lora_rank=128, lora_alpha=32):
+        # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
+        peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
+                                 target_modules="up_blocks.3.resnets...conv.+")
+        self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
+        lora_modules = {}
+        for name, module in self.diffusion_model.named_modules():
+            if hasattr(module, "lora_alpha"):
+                # ModuleDict doesn't allow "." in the key.
+                name = name.replace(".", "_")
+                lora_modules[name] = module
+                # lora_alpha is applied through the scaling dict.
+                # So we back up the original scaling dict as scaling_.
+                module.scaling_      = module.scaling
+                module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
+
+        self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
+        for param in self.unet_lora_modules.parameters():
+            param.requires_grad = True
+        print(f"Set up LoRA with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
+        self.diffusion_model.print_trainable_parameters()
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
@@ -2962,13 +2984,15 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # If enable_lora is set to False globally, then disable it in this call.
         enable_lora = enable_lora and self.global_enable_lora
 
-        # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
-        for hooked_attn_proc in self.hooked_attn_procs:
-            hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=False)
-
         if capture_ca_activations:
+            # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
+            for hooked_attn_proc in self.hooked_attn_procs:
+                hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=False)
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
             self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
+
+        for lora_module in self.unet_lora_modules.values():
+            lora_module.scaling = lora_module.scaling_ if enable_lora else lora_module.zero_scaling_
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3003,8 +3027,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
-                # Restore enable_lora to the global flag.
+                # Restore capture_ca_activations to False.
                 self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
+
+        # Reset the lora_alpha of the LoRA modules to 0.
+        if enable_lora:
+            for lora_module in self.unet_lora_modules.values():
+                lora_module.scaling = lora_module.zero_scaling_
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)

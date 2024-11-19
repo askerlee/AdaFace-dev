@@ -166,8 +166,8 @@ class UNetTeacher(nn.Module):
                     # of the current timestep.
                     t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
                     t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
-                    t_lb = torch.clamp(t_lb, max=global_t_lb)
-                    t_ub = torch.clamp(t_ub, min=global_t_ub)
+                    t_lb = torch.clamp(t_lb, min=global_t_lb)
+                    t_ub = torch.clamp(t_ub, max=global_t_ub)
                     earlier_timesteps = (t_ub - t_lb) * relative_ts + t_lb
                     earlier_timesteps = earlier_timesteps.long()
                     noise = torch.randn_like(pred_x0)

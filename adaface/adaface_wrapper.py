@@ -273,28 +273,21 @@ class AdaFaceWrapper(nn.Module):
         return unet_state_dict
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def load_unet_loras(self, unet, unet_lora_params):
+    def load_unet_loras(self, unet, unet_lora_modules_state_dict):
         # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
         peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
                                  target_modules="up_blocks.3.resnets...conv.+")
         unet = get_peft_model(unet, peft_config)
-        lora_params = {}
-        for name, param in unet.named_parameters():
-            if param.requires_grad:
-                lora_params[name] = param
-        self.unet_lora_params = lora_params
-        print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
+        lora_modules = {}
+        for name, module in self.diffusion_model.named_modules():
+            if hasattr(module, "lora_alpha"):
+                lora_modules[name] = module
+        self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
+        print(f"Set up LoRA with {len(self.unet_lora_modules)} weights: {self.unet_lora_modules.keys()}")
         unet.print_trainable_parameters()
 
-        loaded_lora_names = []
-        for name in unet_lora_params:
-            if name in self.unet_lora_params:
-                self.unet_lora_params[name].data.copy_(unet_lora_params[name])
-                loaded_lora_names.append(name)
-            else:
-                print(f"LoRA weight {name} not found in the UNet.")
-
-        print(f"Loaded {len(loaded_lora_names)} LoRA weights on the UNet:\n{loaded_lora_names}")
+        self.unet_lora_modules.load_state_dict(unet_lora_modules_state_dict)
+        print(f"Loaded {len(unet_lora_modules_state_dict)} LoRA weights on the UNet:\n{lora_modules.keys()}")
         return unet
 
     def load_unet_lora_weights(self, unet):
@@ -306,9 +299,9 @@ class AdaFaceWrapper(nn.Module):
 
         for adaface_ckpt_path in adaface_ckpt_paths:
             ckpt_dict = torch.load(adaface_ckpt_path, map_location='cpu')
-            if 'unet_lora_params' in ckpt_dict:
-                unet_lora_params = ckpt_dict['unet_lora_params']                
-                print(f"{len(unet_lora_params)} LoRA weights found in {adaface_ckpt_path}.")
+            if 'unet_lora_modules' in ckpt_dict:
+                unet_lora_modules_state_dict = ckpt_dict['unet_lora_modules']                
+                print(f"{len(unet_lora_modules_state_dict)} LoRA weights found in {adaface_ckpt_path}.")
                 unet_lora_weight_found = True
                 break
 
@@ -319,11 +312,11 @@ class AdaFaceWrapper(nn.Module):
         
         if isinstance(unet, UNetEnsemble):
             for i, unet_ in enumerate(unet.unets):
-                unet_ = self.load_unet_loras(unet_, unet_lora_params)
+                unet_ = self.load_unet_loras(unet_, unet_lora_modules_state_dict)
                 unet.unets[i] = unet_
             print(f"Loaded LoRA processors on UNetEnsemble of {len(unet.unets)} UNets.")
         else:
-            unet = self.load_unet_loras(unet, unet_lora_params)
+            unet = self.load_unet_loras(unet, unet_lora_modules_state_dict)
 
         return unet
 

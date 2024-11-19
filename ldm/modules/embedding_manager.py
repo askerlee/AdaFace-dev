@@ -64,7 +64,7 @@ class EmbeddingManager(nn.Module):
             p_encoder_dropout=0,
             gen_ss_from_frozen_subj_basis_generator=False,
             multi_token_filler=',',
-            unet_lora_params=None,
+            unet_lora_modules=None,
     ):
         super().__init__()
 
@@ -178,7 +178,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict[self.multi_token_filler] = \
             self.get_tokens_for_string(self.multi_token_filler, force_single_token=True)[0].item()
 
-        self.unet_lora_params = unet_lora_params
+        self.unet_lora_modules = unet_lora_modules
         # self.load() loads subj SubjBasisGenerators.
         # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
@@ -563,8 +563,8 @@ class EmbeddingManager(nn.Module):
                         "subject_strings":                      self.subject_strings,
                      }
         
-        if self.unet_lora_params is not None:
-            saved_dict["unet_lora_params"] = self.unet_lora_params
+        if self.unet_lora_modules is not None:
+            saved_dict["unet_lora_modules"] = self.unet_lora_modules.state_dict()
 
         torch.save(saved_dict, adaface_ckpt_path)
 
@@ -635,19 +635,17 @@ class EmbeddingManager(nn.Module):
                     self.string_to_token_dict[km2] = k2_token
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
-            if 'unet_lora_params' in ckpt and self.unet_lora_params is not None:
-                unet_lora_params = ckpt['unet_lora_params']
-                for name in self.unet_lora_params:
-                    if name in unet_lora_params:
-                        self.unet_lora_params[name].data.copy_(unet_lora_params[name])
+            if 'unet_lora_modules' in ckpt and self.unet_lora_modules is not None:
+                unet_lora_modules = ckpt['unet_lora_modules']
+                self.unet_lora_modules.load_state_dict(unet_lora_modules)
                 # Each cross-attn layer has 4 lora layers, and each lora layer has 2 weights (weight and bias).
                 # So the total number of weights is 4 * 2 * 3 = 24.
-                print(f"Loaded {len(unet_lora_params)} LoRA weights")
-            elif self.unet_lora_params is None:
-                # unet unet_lora_params are not enabled.
+                print(f"Loaded {len(unet_lora_modules)} LoRA weights")
+            elif self.unet_lora_modules is None:
+                # unet unet_lora_modules are not enabled.
                 continue
             else:
-                print(f"'unet_lora_params' not found in {adaface_ckpt_path}")
+                print(f"'unet_lora_modules' not found in {adaface_ckpt_path}")
 
         # ',' is used as filler tokens.
         self.string_to_token_dict[self.multi_token_filler] = \
@@ -666,11 +664,11 @@ class EmbeddingManager(nn.Module):
         num_total_params    = len(subj_basis_generator_param_list0)
         print(f"Filtered out {num_no_grad_params} no-grad / {num_total_params} total parameters in subj_basis_generator_param_list0.")
 
-        if self.unet_lora_params is not None:
-            unet_loras_param_list = list(self.unet_lora_params.values())
+        if self.unet_lora_modules is not None:
+            unet_loras_param_list = list(self.unet_lora_modules.parameters())
             for param in unet_loras_param_list:
                 param.requires_grad = True
-            print(f"Total parameters in unet_lora_params: {len(unet_loras_param_list)}")
+            print(f"Total parameters in unet_lora_modules: {len(unet_loras_param_list)}")
         else:
             unet_loras_param_list = []
 
