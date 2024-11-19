@@ -2894,17 +2894,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             param.requires_grad = False
 
         if enable_lora:
-            # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
-            peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
-                                     target_modules="up_blocks.3.resnets...conv.+")
-            self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
-            lora_params = {}
-            for name, param in self.diffusion_model.named_parameters():
-                if param.requires_grad:
-                    lora_params[name] = param
-            self.unet_lora_params = lora_params
-            print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
-            self.diffusion_model.print_trainable_parameters()
+            self.set_loras()
         else:
             self.unet_lora_params = None
 
@@ -2945,9 +2935,22 @@ class DiffusersUNetWrapper(pl.LightningModule):
             hooked_attn_procs[name] = hooked_attn_proc
         
         unet.set_attn_processor(attn_procs)
-        print(f"Set {len(hooked_attn_procs)} CrossAttn LoRA processors on {hooked_attn_procs.keys()}.")
+        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_procs.keys()}.")
         return hooked_attn_procs
     
+    def set_loras(self):
+            # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
+            peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
+                                     target_modules="up_blocks.3.resnets...conv.+")
+            self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
+            lora_params = {}
+            for name, param in self.diffusion_model.named_parameters():
+                if param.requires_grad:
+                    lora_params[name] = param
+            self.unet_lora_params = lora_params
+            print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
+            self.diffusion_model.print_trainable_parameters()
+
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
         # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.

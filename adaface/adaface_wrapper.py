@@ -20,6 +20,7 @@ from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import numpy as np
+from peft import LoraConfig, get_peft_model
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
@@ -179,7 +180,8 @@ class AdaFaceWrapper(nn.Module):
 
         print(f"Loaded pipeline from {self.base_model_path}.")
         if not remove_unet and self.unet_uses_lora:
-            self.load_unet_lora_weights(pipeline.unet)
+            unet2 = self.load_unet_lora_weights(pipeline.unet)
+            pipeline.unet = unet2
 
         if self.use_840k_vae:
             pipeline.vae = vae
@@ -271,10 +273,10 @@ class AdaFaceWrapper(nn.Module):
         return unet_state_dict
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def load_unet_attn_processors(self, unet, crossattn_loras_weight):
+    def load_unet_loras(self, unet, unet_lora_params):
+        '''
         attn_procs = {}
         hooked_attn_procs = {}
-
         for name, attn_proc in unet.attn_processors.items():
             # Only capture the activations of the last 3 CA layers.
             if not name.startswith("up_blocks.3"):
@@ -291,7 +293,7 @@ class AdaFaceWrapper(nn.Module):
             # hidden_size: 320
             hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=False, enable_lora=self.unet_uses_lora,
+                capture_ca_activations=False, enable_lora=False,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
                 lora_scale=1.0
             )
@@ -299,9 +301,28 @@ class AdaFaceWrapper(nn.Module):
             hooked_attn_procs[name] = hooked_attn_proc
         
         unet.set_attn_processor(attn_procs)
-        print(f"Set {len(hooked_attn_procs)} CrossAttn LoRA processors on {hooked_attn_procs.keys()}.")
-        self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs.values())
-        self.hooked_attn_procs.load_state_dict(crossattn_loras_weight)
+        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_procs.keys()}.")
+        '''
+        # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
+        peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
+                                 target_modules="up_blocks.3.resnets...conv.+")
+        unet = get_peft_model(unet, peft_config)
+        lora_params = {}
+        for name, param in unet.named_parameters():
+            if param.requires_grad:
+                lora_params[name] = param
+        self.unet_lora_params = lora_params
+        print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
+        unet.print_trainable_parameters()
+
+        for name in unet_lora_params:
+            if name in self.unet_lora_params:
+                self.unet_lora_params[name].data.copy_(unet_lora_params[name])
+                print(f"Loaded LoRA weight {name} on the UNet.")
+            else:
+                print(f"LoRA weight {name} not found in the UNet.")
+
+        return unet
 
     def load_unet_lora_weights(self, unet):
         unet_lora_weight_found = False
@@ -312,24 +333,27 @@ class AdaFaceWrapper(nn.Module):
 
         for adaface_ckpt_path in adaface_ckpt_paths:
             ckpt_dict = torch.load(adaface_ckpt_path, map_location='cpu')
-            if 'unet_crossattn_loras' in ckpt_dict:
-                crossattn_loras_weight = ckpt_dict['unet_crossattn_loras']                
-                print(f"{len(crossattn_loras_weight)} CrossAttn LoRA weights found in {adaface_ckpt_path}.")
+            if 'unet_lora_params' in ckpt_dict:
+                unet_lora_params = ckpt_dict['unet_lora_params']                
+                print(f"{len(unet_lora_params)} LoRA weights found in {adaface_ckpt_path}.")
                 unet_lora_weight_found = True
                 break
 
         # Since unet lora weights are not found in the adaface ckpt, we give up on loading unet attn processors.
         if not unet_lora_weight_found:
-            print(f"CrossAttn LoRA weights not found in {self.adaface_ckpt_paths}.")
+            print(f"LoRA weights not found in {self.adaface_ckpt_paths}.")
             return
         
         if isinstance(unet, UNetEnsemble):
-            for unet_ in unet.unets:
-                self.load_unet_attn_processors(unet_, crossattn_loras_weight)
-            print(f"Loaded CrossAttn LoRA processors on {len(unet.unets)} UNets.")
+            for i, unet_ in enumerate(unet.unets):
+                unet_ = self.load_unet_loras(unet_, unet_lora_params)
+                unet.unets[i] = unet_
+            print(f"Loaded LoRA processors on {len(unet.unets)} UNets.")
         else:
-            self.load_unet_attn_processors(unet, crossattn_loras_weight)
-            print(f"Loaded CrossAttn LoRA processors on the UNet.")
+            unet = self.load_unet_loras(unet, unet_lora_params)
+            print(f"Loaded LoRA processors on the UNet.")
+
+        return unet
 
     def extend_tokenizer_and_text_encoder(self):
         if np.sum(self.encoders_num_id_vecs) < 1:
