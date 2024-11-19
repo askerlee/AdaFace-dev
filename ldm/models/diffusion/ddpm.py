@@ -342,14 +342,16 @@ class DDPM(pl.LightningModule):
 
         # If N_CAND_REGS == 0, then no prompt distillation/regularizations, 
         # and the flags below take the default False value.
+        # ** Due to grad accumulation (global_step increases 1 after 2 iterations), 
+        # ** each type of iter is actually executed twice in a row.
         if self.comp_distill_iter_gap > 0 and self.global_step % self.comp_distill_iter_gap == 0:
-            self.iter_flags['do_feat_distill_on_comp_prompt']  = True
-            self.iter_flags['do_normal_recon']              = False
-            self.iter_flags['do_unet_distill']              = False
-            self.iter_flags['do_prompt_emb_delta_reg']      = self.do_prompt_emb_delta_reg
+            self.iter_flags['do_feat_distill_on_comp_prompt']   = True
+            self.iter_flags['do_normal_recon']                  = False
+            self.iter_flags['do_unet_distill']                  = False
+            self.iter_flags['do_prompt_emb_delta_reg']          = self.do_prompt_emb_delta_reg
             self.comp_iters_count += 1
         else:
-            self.iter_flags['do_feat_distill_on_comp_prompt']  = False
+            self.iter_flags['do_feat_distill_on_comp_prompt']   = False
             self.non_comp_iters_count += 1
             if self.unet_distill_iter_gap > 0 and self.non_comp_iters_count % self.unet_distill_iter_gap == 0:
                 self.iter_flags['do_normal_recon']  = False

@@ -279,7 +279,7 @@ class AdaFaceWrapper(nn.Module):
                                  target_modules="up_blocks.3.resnets...conv.+")
         unet = get_peft_model(unet, peft_config)
         lora_modules = {}
-        for name, module in self.diffusion_model.named_modules():
+        for name, module in unet.named_modules():
             if hasattr(module, "lora_alpha"):
                 lora_modules[name] = module
         self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
