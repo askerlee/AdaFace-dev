@@ -281,6 +281,8 @@ def CrossAttnUpBlock2D_forward_capture(
                 return_dict=False,
             )[0]
         else:
+            # resnet: ResnetBlock2D instance.
+            #LINK diffusers.models.resnet.ResnetBlock2D
             hidden_states = resnet(hidden_states, temb)
             hidden_states = attn(
                 hidden_states,

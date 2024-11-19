@@ -34,6 +34,7 @@ from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 from evaluation.arcface_wrapper import ArcFaceWrapper
+from peft import LoraConfig, get_peft_model
 
 import sys
 torch.set_printoptions(precision=4, sci_mode=False)
@@ -94,7 +95,7 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=4e-2,
                  use_ldm_unet=True,
                  diffusers_unet_path='models/ensemble/sd15-unet',
-                 diffusers_unet_uses_lora=False,
+                 unet_uses_lora=False,
                  ):
         
         super().__init__()
@@ -162,13 +163,13 @@ class DDPM(pl.LightningModule):
         self.init_iteration_flags()
 
         self.use_ldm_unet = use_ldm_unet
-        self.diffusers_unet_uses_lora = diffusers_unet_uses_lora
+        self.unet_uses_lora = unet_uses_lora
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
         else:
             self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, 
                                               torch_dtype=torch.float16,
-                                              enable_lora=self.diffusers_unet_uses_lora)
+                                              enable_lora=self.unet_uses_lora)
 
         count_params(self.model, verbose=True)
 
@@ -590,12 +591,12 @@ class LatentDiffusion(DDPM):
         self.cond_stage_model = instantiate_from_config(config)
         
     def instantiate_embedding_manager(self, config, text_embedder):
-        if (not self.use_ldm_unet) and self.diffusers_unet_uses_lora:
-            unet_hooked_attn_procs = self.model.hooked_attn_procs
+        if (not self.use_ldm_unet) and self.unet_uses_lora:
+            unet_lora_params = self.model.unet_lora_params
         else:
-            unet_hooked_attn_procs = None
+            unet_lora_params = None
         model = instantiate_from_config(config, text_embedder=text_embedder,
-                                        unet_hooked_attn_procs=unet_hooked_attn_procs)
+                                        unet_lora_params=unet_lora_params)
         return model
 
     def get_first_stage_encoding(self, encoder_posterior):
@@ -1260,7 +1261,7 @@ class LatentDiffusion(DDPM):
         # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
         extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                             cls_single_prompts,  cls_comp_prompts)
-        extra_info['enable_lora']        = self.diffusers_unet_uses_lora
+        extra_info['enable_lora']        = self.unet_uses_lora
 
         # c_prompt_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts. 
@@ -1324,7 +1325,7 @@ class LatentDiffusion(DDPM):
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'subject-compos':
-            # Although enable_lora is set to True, if self.diffusers_unet_uses_lora is False, it will be overridden
+            # Although enable_lora is set to True, if self.unet_uses_lora is False, it will be overridden
             # in the unet.
             model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
                                                                      enable_grad=False, enable_lora=True)
@@ -1378,8 +1379,13 @@ class LatentDiffusion(DDPM):
                           uncond_emb=None, img_mask=None, batch_part_has_grad='subject-compos', 
                           cfg_scale=-1, capture_ca_activations=False,
                           num_denoising_steps=1, 
-                          same_t_noise_across_instances=False):
+                          same_t_noise_across_instances=True):
         assert num_denoising_steps <= 10
+
+        if same_t_noise_across_instances:
+            # If same_t_noise_across_instances, we use the same t and noise for all instances.
+            t = t[0].repeat(x_start.shape[0])
+            noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -1424,7 +1430,7 @@ class LatentDiffusion(DDPM):
                 noise = torch.randn_like(pred_x0)
 
                 if same_t_noise_across_instances:
-                    # If same_t_noise_across_instances, we use the same earlier_timesteps and noise for all instances.
+                    # If same_t_noise_across_instances, we use the same t and noise for all instances.
                     earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
                     noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
 
@@ -2869,16 +2875,38 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.diffusion_model = UNet2DConditionModel.from_pretrained(
                                 unet_dirpath, torch_dtype=torch_dtype
                                )
-        # Conform with main.py() of setting debug_attn.
+        # Conform with main.py() which sets debug_attn.
         self.diffusion_model.debug_attn = False
+        # _DeviceDtypeModuleMixin class sets self.dtype = torch_dtype.
         self.to(torch_dtype)
 
         # Only capture the activations of the last 3 CA layers.
         self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
         self.global_enable_lora = enable_lora
         self.lora_rank = lora_rank
-        hooked_attn_procs = self.set_attn_processors()
-        self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs.values())
+        # Keep a reference to self.hooked_attn_procs to change their flags later.
+        self.hooked_attn_procs = list(self.set_attn_processors().values())
+        # Replace the forward() method of the last up block with a capturing method.
+        self.diffusion_model.up_blocks[3].forward = \
+            CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
+        
+        for param in self.diffusion_model.parameters():
+            param.requires_grad = False
+
+        if enable_lora:
+            # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
+            peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
+                                     target_modules="up_blocks.3.resnets...conv.+")
+            self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
+            lora_params = {}
+            for name, param in self.diffusion_model.named_parameters():
+                if param.requires_grad:
+                    lora_params[name] = param
+            self.unet_lora_params = lora_params
+            print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
+            self.diffusion_model.print_trainable_parameters()
+        else:
+            self.unet_lora_params = None
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def set_attn_processors(self):
@@ -2906,8 +2934,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
             block_id = 3
             # hidden_size: 320
             hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+            # Never use LoRA in the cross attention layers.
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=True, enable_lora=self.global_enable_lora,
+                capture_ca_activations=True, enable_lora=False,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
                 # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
                 lora_rank=self.lora_rank, lora_scale=1
@@ -2921,6 +2950,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
     
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
+        # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
         # self.global_enable_lora is the global flag. 
@@ -2931,21 +2961,19 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
         for hooked_attn_proc in self.hooked_attn_procs:
-            hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
+            hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=False)
 
         if capture_ca_activations:
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
             self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
-            # Back up the forward() method of the last up block.
-            up_blocks3_forward = self.diffusion_model.up_blocks[3].forward
-            # Replace the forward() method of the last up block with a capturing method.
-            self.diffusion_model.up_blocks[3].forward = \
-                CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
 
-        with torch.autocast(device_type='cuda', dtype=self.dtype):
-            out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
-                                       cross_attention_kwargs={'img_mask': img_mask},
-                                       return_dict=False)[0]
+        # x: x_noisy from LatentDiffusion.apply_model().
+        x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
+                                       for ts in (x, c_prompt_emb, img_mask) ]
+        
+        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
+                                   cross_attention_kwargs={'img_mask': img_mask},
+                                   return_dict=False)[0]
 
         captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
 
@@ -2958,7 +2986,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # Restore everything.
             # capture_ca_activations is set to False in reset_attn_cache_and_flags().
             self.diffusion_model.up_blocks[3].capture_outfeats = False
-            self.diffusion_model.up_blocks[3].forward = up_blocks3_forward
             # Release one of the references to the cached outfeats.
             self.diffusion_model.up_blocks[3].cached_outfeats = {}
 
@@ -2974,7 +3001,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
                 # Restore enable_lora to the global flag.
-                self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, self.global_enable_lora)
+                self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)

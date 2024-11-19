@@ -64,7 +64,7 @@ class EmbeddingManager(nn.Module):
             p_encoder_dropout=0,
             gen_ss_from_frozen_subj_basis_generator=False,
             multi_token_filler=',',
-            unet_hooked_attn_procs=None,
+            unet_lora_params=None,
     ):
         super().__init__()
 
@@ -178,7 +178,7 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict[self.multi_token_filler] = \
             self.get_tokens_for_string(self.multi_token_filler, force_single_token=True)[0].item()
 
-        self.unet_hooked_attn_procs = unet_hooked_attn_procs
+        self.unet_lora_params = unet_lora_params
         # self.load() loads subj SubjBasisGenerators.
         # The FaceID2AdaPrompt.load_adaface_ckpt() only loads fg SubjBasisGenerators.
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
@@ -563,8 +563,8 @@ class EmbeddingManager(nn.Module):
                         "subject_strings":                      self.subject_strings,
                      }
         
-        if self.unet_hooked_attn_procs is not None:
-            saved_dict["unet_crossattn_loras"] = self.unet_hooked_attn_procs.state_dict()
+        if self.unet_lora_params is not None:
+            saved_dict["unet_lora_params"] = self.unet_lora_params
 
         torch.save(saved_dict, adaface_ckpt_path)
 
@@ -635,17 +635,19 @@ class EmbeddingManager(nn.Module):
                     self.string_to_token_dict[km2] = k2_token
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
-            if 'unet_crossattn_loras' in ckpt and self.unet_hooked_attn_procs is not None:
-                crossattn_loras_weight = ckpt['unet_crossattn_loras']
-                self.unet_hooked_attn_procs.load_state_dict(crossattn_loras_weight, strict=True)
+            if 'unet_lora_params' in ckpt and self.unet_lora_params is not None:
+                unet_lora_params = ckpt['unet_lora_params']
+                for name in self.unet_lora_params:
+                    if name in unet_lora_params:
+                        self.unet_lora_params[name].data.copy_(unet_lora_params[name])
                 # Each cross-attn layer has 4 lora layers, and each lora layer has 2 weights (weight and bias).
                 # So the total number of weights is 4 * 2 * 3 = 24.
-                print(f"Loaded {len(crossattn_loras_weight)} CrossAttn LoRA weights")
-            elif self.unet_hooked_attn_procs is None:
-                # unet loras are not enabled.
+                print(f"Loaded {len(unet_lora_params)} LoRA weights")
+            elif self.unet_lora_params is None:
+                # unet unet_lora_params are not enabled.
                 continue
             else:
-                print(f"'unet_crossattn_loras' not found in {adaface_ckpt_path}")
+                print(f"'unet_lora_params' not found in {adaface_ckpt_path}")
 
         # ',' is used as filler tokens.
         self.string_to_token_dict[self.multi_token_filler] = \
@@ -664,12 +666,12 @@ class EmbeddingManager(nn.Module):
         num_total_params    = len(subj_basis_generator_param_list0)
         print(f"Filtered out {num_no_grad_params} no-grad / {num_total_params} total parameters in subj_basis_generator_param_list0.")
 
-        if self.unet_hooked_attn_procs is not None:
-            unet_crossattn_loras_param_list = list(self.unet_hooked_attn_procs.parameters())
-            for param in unet_crossattn_loras_param_list:
+        if self.unet_lora_params is not None:
+            unet_loras_param_list = list(self.unet_lora_params.values())
+            for param in unet_loras_param_list:
                 param.requires_grad = True
-            print(f"Total parameters in unet_hooked_attn_procs: {len(unet_crossattn_loras_param_list)}")
+            print(f"Total parameters in unet_lora_params: {len(unet_loras_param_list)}")
         else:
-            unet_crossattn_loras_param_list = []
+            unet_loras_param_list = []
 
-        return subj_basis_generator_param_list + unet_crossattn_loras_param_list
+        return subj_basis_generator_param_list + unet_loras_param_list

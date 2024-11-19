@@ -254,7 +254,7 @@ def parse_args():
     parser.add_argument("--diffusers_scheduler_name", type=str, default="ddim",
                         choices=["ddim", "pndm", "dpm++"], 
                         help="The scheduler name for the diffusers pipeline")
-    parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use LoRA in the Diffusers UNet model")
     
     args = parser.parse_args()
@@ -337,7 +337,7 @@ def main(opt):
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
         config.model.params.use_ldm_unet = opt.use_ldm_unet
         config.model.params.diffusers_unet_path = opt.main_unet_filepath
-        config.model.params.diffusers_unet_uses_lora = opt.diffusers_unet_uses_lora
+        config.model.params.unet_uses_lora = opt.unet_uses_lora
 
         ldm_model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
@@ -407,7 +407,7 @@ def main(opt):
                                       unet_types=None,
                                       main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
                                       unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
-                                      diffusers_unet_uses_lora=opt.diffusers_unet_uses_lora,
+                                      unet_uses_lora=opt.unet_uses_lora,
                                       device=device)
             # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
             adaface_subj_embs = \

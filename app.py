@@ -39,7 +39,7 @@ parser.add_argument('--unet_weights', type=float, nargs="+", default=[1],
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
-parser.add_argument("--diffusers_unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
+parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
 
 parser.add_argument('--gpu', type=int, default=None)
@@ -66,7 +66,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
                          unet_weights=args.unet_weights, 
-                         diffusers_unet_uses_lora=args.diffusers_unet_uses_lora,
+                         unet_uses_lora=args.unet_uses_lora,
                          device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:

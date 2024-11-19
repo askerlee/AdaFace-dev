@@ -28,7 +28,7 @@ class AdaFaceWrapper(nn.Module):
                  num_inference_steps=50, subject_string='z', negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
-                 enable_static_img_suffix_embs=None, diffusers_unet_uses_lora=False,
+                 enable_static_img_suffix_embs=None, unet_uses_lora=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -44,7 +44,7 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.enabled_encoders = enabled_encoders
         self.enable_static_img_suffix_embs = enable_static_img_suffix_embs
-        self.diffusers_unet_uses_lora = diffusers_unet_uses_lora
+        self.unet_uses_lora = unet_uses_lora
         self.use_lcm = use_lcm
         self.subject_string = subject_string
 
@@ -178,7 +178,7 @@ class AdaFaceWrapper(nn.Module):
             pipeline.unet = unet_ensemble
 
         print(f"Loaded pipeline from {self.base_model_path}.")
-        if not remove_unet and self.diffusers_unet_uses_lora:
+        if not remove_unet and self.unet_uses_lora:
             self.load_unet_lora_weights(pipeline.unet)
 
         if self.use_840k_vae:
@@ -291,7 +291,7 @@ class AdaFaceWrapper(nn.Module):
             # hidden_size: 320
             hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=False, enable_lora=self.diffusers_unet_uses_lora,
+                capture_ca_activations=False, enable_lora=self.unet_uses_lora,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
                 lora_scale=1.0
             )

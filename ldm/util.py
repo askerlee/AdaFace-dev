@@ -2054,7 +2054,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # Therefore it's used as a cutoff prob to determine whether a token is fg or bg.
     # * 0.98 to keep a small margin. The smaller the cutoff prob, the smaller (the stricter on deciding) the bg area. 
     # It's OK to discard some bg tokens, but we should try to avoid any fg tokens being considered as bg.
-    fg_bg_cutoff_prob = ss_fg_mask_3d.mean() * 0.98
+    fg_bg_cutoff_prob = ss_fg_mask_3d.mean() * 0.97
     # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
