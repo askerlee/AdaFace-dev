@@ -281,6 +281,8 @@ class AdaFaceWrapper(nn.Module):
         lora_modules = {}
         for name, module in unet.named_modules():
             if hasattr(module, "lora_alpha"):
+                # ModuleDict doesn't allow "." in the key.
+                name = name.replace(".", "_")                
                 lora_modules[name] = module
         self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
         print(f"Set up LoRA with {len(self.unet_lora_modules)} weights: {self.unet_lora_modules.keys()}")
