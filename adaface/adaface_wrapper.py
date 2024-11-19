@@ -315,7 +315,7 @@ class AdaFaceWrapper(nn.Module):
         # Since unet lora weights are not found in the adaface ckpt, we give up on loading unet attn processors.
         if not unet_lora_weight_found:
             print(f"LoRA weights not found in {self.adaface_ckpt_paths}.")
-            return
+            return unet
         
         if isinstance(unet, UNetEnsemble):
             for i, unet_ in enumerate(unet.unets):

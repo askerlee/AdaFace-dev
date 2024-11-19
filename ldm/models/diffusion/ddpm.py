@@ -95,7 +95,7 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=4e-2,
                  use_ldm_unet=True,
                  diffusers_unet_path='models/ensemble/sd15-unet',
-                 unet_uses_lora=False,
+                 unet_uses_lora=True,
                  ):
         
         super().__init__()
