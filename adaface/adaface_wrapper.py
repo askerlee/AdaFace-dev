@@ -274,35 +274,6 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_params):
-        '''
-        attn_procs = {}
-        hooked_attn_procs = {}
-        for name, attn_proc in unet.attn_processors.items():
-            # Only capture the activations of the last 3 CA layers.
-            if not name.startswith("up_blocks.3"):
-                attn_procs[name] = attn_proc
-                continue
-            # cross_attention_dim: 768.
-            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if cross_attention_dim is None:
-                # Self attention. Skip.
-                attn_procs[name] = attn_proc
-                continue
-
-            block_id = 3
-            # hidden_size: 320
-            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=False, enable_lora=False,
-                hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
-                lora_scale=1.0
-            )
-            attn_procs[name]        = hooked_attn_proc
-            hooked_attn_procs[name] = hooked_attn_proc
-        
-        unet.set_attn_processor(attn_procs)
-        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_procs.keys()}.")
-        '''
         # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
         peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
                                  target_modules="up_blocks.3.resnets...conv.+")
@@ -315,13 +286,15 @@ class AdaFaceWrapper(nn.Module):
         print(f"Set up LoRA with {len(self.unet_lora_params)} weights: {self.unet_lora_params.keys()}")
         unet.print_trainable_parameters()
 
+        loaded_lora_names = []
         for name in unet_lora_params:
             if name in self.unet_lora_params:
                 self.unet_lora_params[name].data.copy_(unet_lora_params[name])
-                print(f"Loaded LoRA weight {name} on the UNet.")
+                loaded_lora_names.append(name)
             else:
                 print(f"LoRA weight {name} not found in the UNet.")
 
+        print(f"Loaded {len(loaded_lora_names)} LoRA weights on the UNet:\n{loaded_lora_names}")
         return unet
 
     def load_unet_lora_weights(self, unet):
@@ -348,10 +321,9 @@ class AdaFaceWrapper(nn.Module):
             for i, unet_ in enumerate(unet.unets):
                 unet_ = self.load_unet_loras(unet_, unet_lora_params)
                 unet.unets[i] = unet_
-            print(f"Loaded LoRA processors on {len(unet.unets)} UNets.")
+            print(f"Loaded LoRA processors on UNetEnsemble of {len(unet.unets)} UNets.")
         else:
             unet = self.load_unet_loras(unet, unet_lora_params)
-            print(f"Loaded LoRA processors on the UNet.")
 
         return unet
 
