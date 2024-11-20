@@ -61,7 +61,7 @@ class UNetTeacher(nn.Module):
     # noise: the initial noise for the first iteration.
     # t: the initial t. We will sample additional (num_denoising_steps - 1) smaller t.
     # same_t_noise_across_instances: when sampling t and noise, use the same t and noise for all instances.
-    def forward(self, ddpm_model, x_start, noise, t, teacher_context, 
+    def forward(self, ddpm_model, x_start, noise, t, teacher_context, negative_context=None,
                 num_denoising_steps=1, same_t_noise_across_instances=False,
                 global_t_lb=0, global_t_ub=1000):
         assert num_denoising_steps <= 10
@@ -76,27 +76,22 @@ class UNetTeacher(nn.Module):
 
             if self.uses_cfg:
                 print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
+                if negative_context is not None:
+                    negative_context = negative_context[:1].repeat(x_start.shape[0], 1, 1)
+
+                # if negative_context is None, then teacher_context is a combination of
+                # (one or multiple if unet_ensemble) pos_context and neg_context.
+                # If negative_context is not None, then teacher_context is only pos_context.
             else:
                 self.cfg_scale = 1
                 print("Teacher does not use CFG.")
 
-                # If p_uses_cfg > 0, we always pass both pos_context and neg_context to the teacher.
-                # But the neg_context is only used when self.uses_cfg is True and cfg_scale > 1.
-                # So we manually split the teacher_context into pos_context and neg_context, and only keep pos_context.
-                if self.name == 'unet_ensemble':
-                    teacher_pos_contexts = []
-                    # teacher_context is a list of teacher contexts.
-                    for teacher_context_i in teacher_context:
-                        pos_context, neg_context = torch.chunk(teacher_context_i, 2, dim=0)
-                        if pos_context.shape[0] != x_start.shape[0]:
-                            breakpoint()             
-                        teacher_pos_contexts.append(pos_context)
-                    teacher_context = teacher_pos_contexts       
-                else:
-                    pos_context, neg_context = torch.chunk(teacher_context, 2, dim=0)
-                    if pos_context.shape[0] != x_start.shape[0]:
-                        breakpoint()
-                    teacher_context = pos_context      
+                # If negative_context is None, then teacher_context is a combination of 
+                # (one or multiple if unet_ensemble) pos_context and neg_context.
+                # Since not uses_cfg, we only need pos_context.
+                # If negative_context is not None, then teacher_context is only pos_context.
+                if negative_context is None:
+                    teacher_context = self.extract_pos_context(teacher_context, x_start.shape[0])
         else:
             # p_uses_cfg = 0. Never use CFG. 
             self.uses_cfg = False
@@ -146,7 +141,18 @@ class UNetTeacher(nn.Module):
                 noise_pred = self.unet(sample=x_noisy2, timestep=t2, encoder_hidden_states=teacher_context,
                                        return_dict=False)[0]
                 if self.uses_cfg and self.cfg_scale > 1:
-                    pos_noise_pred, neg_noise_pred = torch.chunk(noise_pred, 2, dim=0)
+                    if negative_context is None:
+                        pos_noise_pred, neg_noise_pred = torch.chunk(noise_pred, 2, dim=0)
+                    else:
+                        # If negative_context is not None, then teacher_context is only pos_context.
+                        pos_noise_pred = noise_pred
+                        if self.name == 'unet_ensemble':
+                            neg_noise_pred = self.unet.unets[0](sample=x_noisy, timestep=t, 
+                                                                encoder_hidden_states=negative_context, return_dict=False)[0]
+                        else:
+                            neg_noise_pred = self.unet(sample=x_noisy, timestep=t, 
+                                                       encoder_hidden_states=negative_context, return_dict=False)[0]
+                            
                     noise_pred = pos_noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
 
                 noise_preds.append(noise_pred)
@@ -182,6 +188,27 @@ class UNetTeacher(nn.Module):
                     noises.append(noise)
 
         return noise_preds, x_starts, noises, ts
+        
+    def extract_pos_context(self, teacher_context, BS):
+        # If p_uses_cfg > 0, we always pass both pos_context and neg_context to the teacher.
+        # But the neg_context is only used when self.uses_cfg is True and cfg_scale > 1.
+        # So we manually split the teacher_context into pos_context and neg_context, and only keep pos_context.
+        if self.name == 'unet_ensemble':
+            teacher_pos_contexts = []
+            # teacher_context is a list of teacher contexts.
+            for teacher_context_i in teacher_context:
+                pos_context, neg_context = torch.chunk(teacher_context_i, 2, dim=0)
+                if pos_context.shape[0] != BS:
+                    breakpoint()             
+                teacher_pos_contexts.append(pos_context)
+            teacher_context = teacher_pos_contexts       
+        else:
+            pos_context, neg_context = torch.chunk(teacher_context, 2, dim=0)
+            if pos_context.shape[0] != BS:
+                breakpoint()
+            teacher_context = pos_context
+
+        return teacher_context
 
 class Arc2FaceTeacher(UNetTeacher):
     def __init__(self, **kwargs):

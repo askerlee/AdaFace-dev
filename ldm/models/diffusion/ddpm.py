@@ -465,14 +465,15 @@ class LatentDiffusion(DDPM):
             self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
                                     # A trick to avoid creating multiple UNet instances.
-                                    unets = [unet, unet],
+                                    unets = [unet, unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
-                                    # unet_weights: [0.2, 0.8]. The "first unet" uses subject embeddings, 
+                                    # unet_weights: [0.2, 0.24, 0.56]. The "first unet" uses subject embeddings, 
                                     # the second uses class embeddings. This means that,
                                     # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
-                                    unet_weights = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
+                                    unet_weights = [0.2, (1 - self.cls_subj_mix_scale) * 0.8, 
+                                                    self.cls_subj_mix_scale * 0.8],
                                     p_uses_cfg=1, # Always uses CFG for priming denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)
@@ -1846,10 +1847,10 @@ class LatentDiffusion(DDPM):
         if self.unet_teacher_types == ['unet_ensemble']:
             teacher_contexts = [student_prompt_embs]
         else:
-            # Only enable a subset of teachers. The whole set of teachers may have been initialized,
+            # The whole set of teachers have been initialized,
             # if id2ada_prompt_encoder.name == 'jointIDs' by setting 
-            # personalization_config.params.adaface_encoder_types = ['consistentID', 'arc2face'])
-            # but some are disabled by setting
+            # personalization_config.params.adaface_encoder_types = ['consistentID', 'arc2face']).
+            # But some may be disabled by setting
             # personalization_config.params.enabled_encoders = ['consistentID'] or ['arc2face'].
             teacher_contexts = []
             encoders_num_id_vecs = self.iter_flags['encoders_num_id_vecs']
@@ -2077,20 +2078,17 @@ class LatentDiffusion(DDPM):
         t_rear = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 1), 
                                 (BLOCK_SIZE,), device=x_start.device)
         t      = t_rear.repeat(4)
+        uncond_emb = self.uncond_context[0]
 
         # ** Do num_shared_denoising_steps of shared denoising steps with the subj-mix-cls comp prompts.
         if num_shared_denoising_steps > 0:
             # Class priming denoising: Denoise x_start_1 with the comp prompts 
             # for num_shared_denoising_steps times, using self.comp_distill_priming_unet.
-            x_start_1                      = x_start.chunk(4)[0]
-            noise_1                        = noise.chunk(4)[0]
-            t_1                            = t.chunk(4)[0]
+            x_start_1   = x_start.chunk(4)[0]
+            noise_1     = noise.chunk(4)[0]
+            t_1         = t.chunk(4)[0]
             
-            _, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
-            uncond_emb          = self.uncond_context[0].repeat(x_start_1.shape[0], 1, 1)
-            # Both cond and uncond embeddings are provided for CFG denoising.
-            subj_double_context = torch.cat([subj_comp_prompt_emb, uncond_emb], dim=0)
-            cls_double_context  = torch.cat([cls_comp_prompt_emb,  uncond_emb], dim=0)
+            subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
 
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
@@ -2099,15 +2097,17 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                     self.comp_distill_priming_unet(self, x_start_1, noise_1, t_1, 
-                                                    # In each timestep, the unet ensemble will do denoising on the same x_start_1 
-                                                    # with both subj_double_context and cls_double_context, then average the results.
-                                                    # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                    # From the outside, the unet ensemble is transparent, like a single unet.
-                                                    teacher_context=[subj_double_context, cls_double_context], 
-                                                    num_denoising_steps=num_shared_denoising_steps,
-                                                    # Same t and noise across instances.
-                                                    same_t_noise_across_instances=True,
-                                                    global_t_lb=400)
+                                                   # In each timestep, the unet ensemble will do denoising on the same x_start_1 
+                                                   # with subj_single_prompt_emb, subj_comp_prompt_emb and cls_comp_prompt_emb, then average the results.
+                                                   # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                   # From the outside, the unet ensemble is transparent, like a single unet.
+                                                   teacher_context=[subj_single_prompt_emb, 
+                                                        subj_comp_prompt_emb, cls_comp_prompt_emb], 
+                                                   negative_context=uncond_emb,
+                                                   num_denoising_steps=num_shared_denoising_steps,
+                                                   # Same t and noise across instances.
+                                                   same_t_noise_across_instances=True,
+                                                   global_t_lb=400)
                 
             # Repeat the 1-instance denoised x_start_1 to 2-instance x_start_2, i.e., one single, one comp instances.
             x_start_2 = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
@@ -2136,11 +2136,8 @@ class LatentDiffusion(DDPM):
 
         # Ensure the two instances (one single, one comp) use the same t, although on different x_start_2 and noise.
         noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
-        subj_prompt_emb, cls_prompt_emb = c_prompt_emb.chunk(2)
-        uncond_emb          = self.uncond_context[0].repeat(x_start_2.shape[0], 1, 1)
-        # x_double_context contains both the positive and negative prompt embeddings.
-        subj_double_context = torch.cat([subj_prompt_emb, uncond_emb], dim=0)
-        cls_double_context  = torch.cat([cls_prompt_emb,  uncond_emb], dim=0)
+        subj_double_prompt_emb, cls_double_prompt_emb = c_prompt_emb.chunk(2)
+        subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
 
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         #     x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
@@ -2151,10 +2148,12 @@ class LatentDiffusion(DDPM):
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
                                                 # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                                # with both subj_double_context and cls_double_context, then average the results.
+                                                # with subj_single_prompt_emb, subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
                                                 # It's similar to do averaging on the prompt embeddings, but yields sharper results.
                                                 # From the outside, the unet ensemble is transparent, like a single unet.
-                                                teacher_context=[subj_double_context, cls_double_context], 
+                                                teacher_context=[subj_single_prompt_emb, 
+                                                    subj_double_prompt_emb, cls_double_prompt_emb], 
+                                                negative_context=uncond_emb,
                                                 num_denoising_steps=num_sep_denoising_steps,
                                                 # Same t and noise across instances.
                                                 same_t_noise_across_instances=True)

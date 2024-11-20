@@ -40,3 +40,4 @@ logs-backup
 latent_diffusion.egg-info/*
 .gradio/certificate.pem
 gma/examples/xxr*
+*.jpg
