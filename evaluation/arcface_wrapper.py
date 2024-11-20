@@ -36,10 +36,13 @@ class ArcFaceWrapper(nn.Module):
         self.arcface.to(device, dtype=self.dtype)
 
         self.retinaface = RetinaFaceClient(device=device)
-        for param in self.retinaface.parameters():
-            param.requires_grad = False
         # We keep retinaface at float32, as it doesn't require grad and won't consume much memory.
         self.retinaface.eval()
+        
+        for param in self.arcface.parameters():
+            param.requires_grad = False
+        for param in self.retinaface.parameters():
+            param.requires_grad = False
 
     # Suppose images_ts has been normalized to [-1, 1].
     def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False, enable_grad=True):

@@ -39,7 +39,7 @@ parser.add_argument('--unet_weights', type=float, nargs="+", default=[1],
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
-parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=True,
+parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
 
 parser.add_argument('--gpu', type=int, default=None)
