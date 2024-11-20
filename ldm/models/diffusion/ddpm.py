@@ -2959,17 +2959,24 @@ class DiffusersUNetWrapper(pl.LightningModule):
         peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
                                  target_modules="up_blocks.3.resnets...conv.+")
         self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
+        # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
+        # lora_layers are used to set the flag, not used for optimization.
+        # lora_modules contain only the LoRA A and B matrices, so they are used for optimization.
+        lora_layers = {}
         lora_modules = {}
         for name, module in self.diffusion_model.named_modules():
             if hasattr(module, "lora_alpha"):
                 # ModuleDict doesn't allow "." in the key.
                 name = name.replace(".", "_")
-                lora_modules[name] = module
+                lora_layers[name] = module
                 # lora_alpha is applied through the scaling dict.
                 # So we back up the original scaling dict as scaling_.
                 module.scaling_      = module.scaling
                 module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
+                lora_modules[name + "_A"] = module.lora_A
+                lora_modules[name + "_B"] = module.lora_B
 
+        self.unet_lora_layers = lora_layers
         self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
         for param in self.unet_lora_modules.parameters():
             param.requires_grad = True
@@ -2996,8 +3003,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # If not global_enable_lora, unet_lora_modules is an empty ModuleDict.
         # This loop will exit immediately.
-        for lora_module in self.unet_lora_modules.values():
-            lora_module.scaling = lora_module.scaling_ if enable_lora else lora_module.zero_scaling_
+        for lora_layer in self.unet_lora_layers.values():
+            lora_layer.scaling = lora_layer.scaling_ if enable_lora else lora_layer.zero_scaling_
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3039,8 +3046,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # If not global_enable_lora, unet_lora_modules is an empty ModuleDict.
         # This loop will exit immediately.
         if enable_lora:
-            for lora_module in self.unet_lora_modules.values():
-                lora_module.scaling = lora_module.zero_scaling_
+            for lora_layer in self.unet_lora_layers.values():
+                lora_layer.scaling = lora_layer.zero_scaling_
 
         extra_info['ca_layers_activations'] = captured_activations
         out = out.to(out_dtype)
