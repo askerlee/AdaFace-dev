@@ -29,7 +29,7 @@ class AdaFaceWrapper(nn.Module):
                  num_inference_steps=50, subject_string='z', negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
-                 enable_static_img_suffix_embs=None, unet_uses_lora=False,
+                 enable_static_img_suffix_embs=None, unet_uses_lora=True,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 

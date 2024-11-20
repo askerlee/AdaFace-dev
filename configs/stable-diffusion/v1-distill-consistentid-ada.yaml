@@ -40,7 +40,7 @@ model:
     # and the consistentID Ada focuses on reconstructing the consistentID random ID. Therefore, it may still
     # be helpful to set a small p_gen_rand_id_for_id2img. (If both parts are reconstructed well, then their summation
     # should match the mixture of the two teachers' outputs.)
-    p_gen_rand_id_for_id2img:             0.1
+    p_gen_rand_id_for_id2img:         0
     p_perturb_face_id_embs:           0.6
     # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
     # ** but to find neighbors of the subject image embeddings for UNet distillation.

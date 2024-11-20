@@ -86,7 +86,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0.1,
                  extra_unet_dirpaths=None,
                  unet_weights=None,
-                 p_gen_rand_id_for_id2img=0.4,
+                 p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
