@@ -2912,7 +2912,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         if enable_lora:
             self.setup_loras(lora_rank=lora_rank, lora_alpha=lora_rank // 4)
         else:
-            self.unet_lora_modules = torch.nn.ModuleDict()
+            self.unet_lora_layers = torch.nn.ModuleDict()
+            self.unet_lora_modules = None
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def setup_attn_processors(self):
@@ -3001,7 +3002,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
             self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
 
-        # If not global_enable_lora, unet_lora_modules is an empty ModuleDict.
+        # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
         # This loop will exit immediately.
         for lora_layer in self.unet_lora_layers.values():
             lora_layer.scaling = lora_layer.scaling_ if enable_lora else lora_layer.zero_scaling_
@@ -3043,7 +3044,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
 
         # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
-        # If not global_enable_lora, unet_lora_modules is an empty ModuleDict.
+        # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
         # This loop will exit immediately.
         if enable_lora:
             for lora_layer in self.unet_lora_layers.values():
