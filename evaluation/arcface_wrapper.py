@@ -38,13 +38,14 @@ class ArcFaceWrapper(nn.Module):
         self.retinaface = RetinaFaceClient(device=device)
         # We keep retinaface at float32, as it doesn't require grad and won't consume much memory.
         self.retinaface.eval()
-        
+
         for param in self.arcface.parameters():
             param.requires_grad = False
         for param in self.retinaface.parameters():
             param.requires_grad = False
 
     # Suppose images_ts has been normalized to [-1, 1].
+    # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
     def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False, enable_grad=True):
         # retina_crop_face() crops on the input tensor, so that computation graph is preserved.
         # The cropping param computation is wrapped with torch.no_grad().
