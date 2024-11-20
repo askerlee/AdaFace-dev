@@ -102,13 +102,14 @@ class UNetTeacher(nn.Module):
             # in case someday we want to switch from CFG to non-CFG during runtime.
             self.cfg_scale = 1
 
+        is_context_doubled = 2 if (self.uses_cfg and negative_context is None) else 1
         if self.name == 'unet_ensemble':
             # teacher_context is a list of teacher contexts.
             for teacher_context_i in teacher_context:
-                if teacher_context_i.shape[0] != x_start.shape[0] * (1 + self.uses_cfg):
+                if teacher_context_i.shape[0] != x_start.shape[0] * is_context_doubled:
                     breakpoint()
         else:
-            if teacher_context.shape[0] != x_start.shape[0] * (1 + self.uses_cfg):
+            if teacher_context.shape[0] != x_start.shape[0] * is_context_doubled:
                 breakpoint()
         
         if same_t_noise_across_instances:
@@ -130,7 +131,7 @@ class UNetTeacher(nn.Module):
                 # sqrt_alphas_cumprod[t] * x_start + sqrt_one_minus_alphas_cumprod[t] * noise
                 x_noisy = ddpm_model.q_sample(x_start, t, noise)
                 
-                if self.uses_cfg:
+                if self.uses_cfg and self.cfg_scale > 1 and negative_context is None:
                     x_noisy2 = x_noisy.repeat(2, 1, 1, 1)
                     t2       = t.repeat(2)
                 else:

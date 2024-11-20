@@ -2089,6 +2089,8 @@ class LatentDiffusion(DDPM):
             t_1         = t.chunk(4)[0]
             
             subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
+            subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
+                [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
