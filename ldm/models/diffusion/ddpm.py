@@ -3032,7 +3032,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 # Restore capture_ca_activations to False.
                 self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
 
-        # Reset the lora_alpha of the LoRA modules to 0.
+        # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
         if enable_lora:
             for lora_module in self.unet_lora_modules.values():
                 lora_module.scaling = lora_module.zero_scaling_

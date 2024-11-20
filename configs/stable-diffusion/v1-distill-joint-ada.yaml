@@ -26,10 +26,10 @@ model:
     comp_distill_denoising_steps_range: [2, 2]
     unet_teacher_types:               ['consistentID', 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
-    unet_teacher_cfg_scale_range:     [1.3, 2.0]
+    unet_teacher_cfg_scale_range:     [1.5, 2.5]
     # Reduce p_unet_distill_uses_comp_prompt from 0.2 to 0.1, since the joint teachers
     # only have weak compositionality and their outputs are not so informative.
-    p_unet_distill_uses_comp_prompt:  0.1
+    p_unet_distill_uses_comp_prompt:  0
     # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
     # unet_distill_iter_gap = 2 means at 50% of the non-compositional iters, 
     # we use the unet teacher's output as the target (do_unet_distill).
@@ -43,13 +43,13 @@ model:
     # be helpful to set a small p_gen_rand_id_for_id2img. (If both parts are reconstructed well, then their summation
     # should match the mixture of the two teachers' outputs.)
     p_gen_rand_id_for_id2img:         0.1
-    p_perturb_face_id_embs:           0
+    p_perturb_face_id_embs:           0.4
     # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
     # ** but to find neighbors of the subject image embeddings for UNet distillation.
     # After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent.
     # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6]. 
     # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
-    perturb_face_id_embs_std_range:   [0.3, 0.6]
+    perturb_face_id_embs_std_range:   [0.1, 0.2]
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
@@ -62,7 +62,7 @@ model:
     subj_attn_norm_distill_loss_weight: 0
     # Only enabled if loss_sc_mc_bg_match == 0.
     feat_delta_align_loss_weight:      1e-4
-    pred_l2_loss_weight:              1e-4 #1e-3
+    pred_l2_loss_weight:               1e-4
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, adopt,
     # AdEMAMix, AdEMAMix8bit, OrthogonalNesterov
