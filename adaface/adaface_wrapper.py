@@ -285,7 +285,7 @@ class AdaFaceWrapper(nn.Module):
                 continue
             # cross_attention_dim: 768.
             cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if cross_attention_dim is None:
+            if cross_attention_dim is None or (name.startswith("up_blocks.3.attentions.0")):
                 # Self attention. Skip.
                 attn_procs[name] = attn_proc
                 continue
@@ -321,7 +321,7 @@ class AdaFaceWrapper(nn.Module):
         self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
         for i, hooked_attn_proc in enumerate(hooked_attn_procs):
             self.unet_lora_modules[hooked_attn_proc_names[i]] = hooked_attn_proc
-            
+
         print(f"Set up LoRA with {len(self.unet_lora_modules)} weights: {self.unet_lora_modules.keys()}")
         unet.print_trainable_parameters()
 
