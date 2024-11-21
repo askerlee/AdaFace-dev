@@ -268,15 +268,15 @@ class DDPM(pl.LightningModule):
                     deleted_keys.append(k)
                     num_del_keys += 1
 
-        print(f"Deleting {num_del_keys} keys {deleted_keys[0]}...{deleted_keys[-1]} from state_dict.")
+        print(f"Deleting {num_del_keys} keys {deleted_keys[0]} ... {deleted_keys[-1]} from state_dict.")
         num_remaining_keys = len(list(sd.keys()))
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
-            print(f"Missing Keys: {missing[0]}...{missing[-1]}")
+            print(f"Missing Keys: {missing[0]} ... {missing[-1]}")
         if len(unexpected) > 0:
-            print(f"Unexpected Keys: {unexpected[0]}...{unexpected[-1]}")
+            print(f"Unexpected Keys: {unexpected[0]} ... {unexpected[-1]}")
 
         print(f"Successfully loaded {num_remaining_keys - len(unexpected)} keys")
 

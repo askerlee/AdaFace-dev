@@ -288,6 +288,7 @@ class AdaFaceWrapper(nn.Module):
 
         self.unet_lora_modules.load_state_dict(unet_lora_modules_state_dict)
         print(f"Loaded {len(unet_lora_modules_state_dict)} LoRA weights on the UNet:\n{unet_lora_modules.keys()}")
+        self.outfeat_capture_blocks.append(unet.up_blocks[3])
 
         set_lora_and_capture_flags(self, enable_lora=True, capture_ca_activations=False)
 
@@ -313,6 +314,8 @@ class AdaFaceWrapper(nn.Module):
             print(f"LoRA weights not found in {self.adaface_ckpt_paths}.")
             return unet
         
+        self.outfeat_capture_blocks = []
+
         if isinstance(unet, UNetEnsemble):
             for i, unet_ in enumerate(unet.unets):
                 unet_ = self.load_unet_loras(unet_, unet_lora_modules_state_dict)
