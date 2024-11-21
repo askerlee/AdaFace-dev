@@ -2274,12 +2274,7 @@ class LatentDiffusion(DDPM):
                                      }
 
         # attn norm distillation is applied to almost all conditioning layers.
-        attn_norm_distill_layer_weights = { 7: 0.5, 8: 0.5,
-                                            12: 1.,
-                                            16: 1., 17: 1.,
-                                            18: 1.,
-                                            19: 1., 20: 1., 
-                                            21: 1., 22: 1., 
+        attn_norm_distill_layer_weights = { 
                                             23: 1., 24: 1.,                                   
                                            }
 
@@ -2896,9 +2891,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.to(torch_dtype)
 
         # Only capture the activations of the last 3 CA layers.
-        self.captured_layer_indices = [22, 23, 24] # => 13, 14, 15
+        self.captured_layer_indices = [23, 24] # => 13, 14, 15
         # Keep a reference to self.hooked_attn_procs to change their flags later.
-        self.hooked_attn_procs = list(self.setup_attn_processors().values())
+        self.hooked_attn_procs = torch.nn.ModuleDict(self.setup_attn_processors())
         # Replace the forward() method of the last up block with a capturing method.
         self.diffusion_model.up_blocks[3].forward = \
             CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
@@ -2910,10 +2905,17 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.lora_rank = lora_rank
 
         if enable_lora:
-            self.setup_loras(lora_rank=lora_rank, lora_alpha=lora_rank // 4)
+            # LoRA scaling is always 0.125, the same as the LoRAs in AttnProcessor_LoRA_Capture
+            # for cross attention layers.
+            unet_lora_modules = self.setup_loras(lora_rank=lora_rank, lora_alpha=lora_rank // 8)
         else:
             self.unet_lora_layers = torch.nn.ModuleDict()
-            self.unet_lora_modules = None
+            unet_lora_modules = {}
+
+        self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
+        self.unet_lora_modules.update(self.hooked_attn_procs)
+        for param in self.unet_lora_modules.parameters():
+            param.requires_grad = True
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def setup_attn_processors(self):
@@ -2941,12 +2943,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
             block_id = 3
             # hidden_size: 320
             hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            # Never use LoRA in the cross attention layers.
+            # The LoRAs in the cross attention layers are traditional implementations, 
+            # not based on PEFT.
             hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=True, enable_lora=False,
+                capture_ca_activations=True, enable_lora=self.global_enable_lora,
                 hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
                 # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
-                lora_rank=0, lora_scale=1
+                lora_rank=128, lora_scale=0.125
             )
             attn_procs[name]        = hooked_attn_proc
             hooked_attn_procs[name] = hooked_attn_proc
@@ -2955,7 +2958,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_procs.keys()}.")
         return hooked_attn_procs
     
-    def setup_loras(self, lora_rank=128, lora_alpha=32):
+    def setup_loras(self, lora_rank=128, lora_alpha=16):
         # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
         peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
                                  target_modules="up_blocks.3.resnets...conv.+")
@@ -2978,11 +2981,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 lora_modules[name + "_B"] = module.lora_B
 
         self.unet_lora_layers = lora_layers
-        self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
-        for param in self.unet_lora_modules.parameters():
-            param.requires_grad = True
         print(f"Set up LoRA with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
         self.diffusion_model.print_trainable_parameters()
+        return lora_modules
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
@@ -2995,12 +2996,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # If enable_lora is set to False globally, then disable it in this call.
         enable_lora = enable_lora and self.global_enable_lora
 
-        if capture_ca_activations:
-            # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
-            for hooked_attn_proc in self.hooked_attn_procs:
-                hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=False)
-            # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
-            self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
+        # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
+        for hooked_attn_proc in self.hooked_attn_procs:
+            hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=enable_lora)
+        # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
+        self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
 
         # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
         # This loop will exit immediately.
@@ -3040,9 +3040,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
-                # Restore capture_ca_activations to False.
-                self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
-
+        # Restore capture_ca_activations to False.
+        self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
         # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
         # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
         # This loop will exit immediately.
@@ -3051,6 +3050,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 lora_layer.scaling = lora_layer.zero_scaling_
 
         extra_info['ca_layers_activations'] = captured_activations
-        out = out.to(out_dtype)
 
+        out = out.to(out_dtype)
         return out

@@ -195,7 +195,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             # ANCHOR[id=attention_caching]
             # query: [2, 8, 4096, 40] -> [2, 320, 4096]
             self.cached_activations['q'] = \
-                rearrange(query, 'b h n d -> b (h d) n', h=attn.heads).contiguous() * math.sqrt(scale)
+                rearrange(query, 'b h n d -> b (h d) n').contiguous() * math.sqrt(scale)
             # attn_prob, attn_score: [2, 8, 4096, 77]
             self.cached_activations['attn'] = attn_prob
             self.cached_activations['attnscore'] = attn_score
@@ -303,3 +303,23 @@ def CrossAttnUpBlock2D_forward_capture(
 
     return hidden_states
 
+
+def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
+    hidden_states = self.resnets[0](hidden_states, temb)
+
+    attn_i = 0
+    self.hidden_states = []
+    for attn, resnet in zip(self.attentions, self.resnets[1:]):
+        if attn is not None:
+            # self.hidden_states stores the pre-attention hidden states,
+            # which will be used in cross-attentions.
+            self.hidden_states.append(hidden_states)
+            # encoder_hidden_states = all_encoder_hidden_states[attn_i]
+            #cross_hidden_states = attn(hidden_states, encoder_hidden_states=encoder_hidden_states, 
+            #                           temb=temb)
+            hidden_states = attn(hidden_states, encoder_hidden_states=None, temb=temb)
+
+        hidden_states = resnet(hidden_states, temb)
+        attn_i += 1
+
+    return hidden_states
