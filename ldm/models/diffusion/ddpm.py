@@ -465,6 +465,7 @@ class LatentDiffusion(DDPM):
             self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
                                     # A trick to avoid creating multiple UNet instances.
+                                    # Same underlying unet, applied with different prompts, then mixed.
                                     unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
@@ -2935,9 +2936,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 continue
             # cross_attention_dim: 768.
             cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            if cross_attention_dim is None:
-                # Self attention. Don't enable LoRA or capture activations.
-                # The difference with the default attn_proc is that AttnProcessor_LoRA_Capture handles img_mask.
+            # Self attention. Don't enable LoRA or capture activations.
+            if cross_attention_dim is None or (name.startswith("up_blocks.3.attentions.0")):
+                # We replace the default attn_proc with AttnProcessor_LoRA_Capture, 
+                # as it can handle img_mask.
                 attn_procs[name] = AttnProcessor_LoRA_Capture(
                     capture_ca_activations=False, enable_lora=False)
                 continue
@@ -3036,13 +3038,15 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
             for layer_idx in self.captured_layer_indices:
                 # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
-                # 22, 23, 24 -> 0, 1, 2.
-                layer_idx2 = layer_idx - 22
+                # 23, 24 -> 0, 1.
+                attn_layer_idx2 = layer_idx - 23
+                # 23, 24 -> 1, 2.
+                ffn_layer_idx2  = layer_idx - 22
                 for k in captured_activations.keys():
                     if k == 'outfeat':
-                        captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx2].to(out_dtype)
+                        captured_activations['outfeat'][layer_idx] = cached_outfeats[ffn_layer_idx2].to(out_dtype)
                     else:
-                        cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
+                        cached_activations = self.hooked_attn_procs[attn_layer_idx2].cached_activations
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
         # Restore capture_ca_activations to False.
