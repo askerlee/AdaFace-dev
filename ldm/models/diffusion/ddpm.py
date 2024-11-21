@@ -2890,19 +2890,20 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # _DeviceDtypeModuleMixin class sets self.dtype = torch_dtype.
         self.to(torch_dtype)
 
+        self.global_enable_lora = enable_lora
+        self.lora_rank = lora_rank
+
         # Only capture the activations of the last 3 CA layers.
         self.captured_layer_indices = [23, 24] # => 13, 14, 15
         # Keep a reference to self.hooked_attn_procs to change their flags later.
-        self.hooked_attn_procs = torch.nn.ModuleDict(self.setup_attn_processors())
+        hooked_attn_procs, hooked_attn_proc_names = self.setup_attn_processors()
+        self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs)
         # Replace the forward() method of the last up block with a capturing method.
         self.diffusion_model.up_blocks[3].forward = \
             CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
         
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
-
-        self.global_enable_lora = enable_lora
-        self.lora_rank = lora_rank
 
         if enable_lora:
             # LoRA scaling is always 0.125, the same as the LoRAs in AttnProcessor_LoRA_Capture
@@ -2913,15 +2914,18 @@ class DiffusersUNetWrapper(pl.LightningModule):
             unet_lora_modules = {}
 
         self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
-        self.unet_lora_modules.update(self.hooked_attn_procs)
+        for i, hooked_attn_proc in enumerate(hooked_attn_procs):
+            self.unet_lora_modules[hooked_attn_proc_names[i]] = hooked_attn_proc
         for param in self.unet_lora_modules.parameters():
             param.requires_grad = True
+        print(f"Set up LoRA with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def setup_attn_processors(self):
         unet = self.diffusion_model
         attn_procs = {}
-        hooked_attn_procs = {}
+        hooked_attn_procs = []
+        hooked_attn_proc_names = []
 
         for name, attn_proc in unet.attn_processors.items():
             # Only capture the activations of the last 3 CA layers.
@@ -2951,12 +2955,16 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
                 lora_rank=128, lora_scale=0.125
             )
-            attn_procs[name]        = hooked_attn_proc
-            hooked_attn_procs[name] = hooked_attn_proc
+            # attn_procs has to use the original names.
+            attn_procs[name] = hooked_attn_proc
+            # ModuleDict doesn't allow "." in the key.
+            name = name.replace(".", "_")
+            hooked_attn_procs.append(hooked_attn_proc)
+            hooked_attn_proc_names.append(name)
         
         unet.set_attn_processor(attn_procs)
-        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_procs.keys()}.")
-        return hooked_attn_procs
+        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_proc_names}.")
+        return hooked_attn_procs, hooked_attn_proc_names
     
     def setup_loras(self, lora_rank=128, lora_alpha=16):
         # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
@@ -2981,7 +2989,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 lora_modules[name + "_B"] = module.lora_B
 
         self.unet_lora_layers = lora_layers
-        print(f"Set up LoRA with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
         self.diffusion_model.print_trainable_parameters()
         return lora_modules
 
@@ -3041,7 +3048,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
         # Restore capture_ca_activations to False.
-        self.hooked_attn_procs[layer_idx2].reset_attn_cache_and_flags(False, enable_lora=False)
+        for hooked_attn_proc in self.hooked_attn_procs:
+            hooked_attn_proc.reset_attn_cache_and_flags(False, enable_lora=False)
         # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
         # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
         # This loop will exit immediately.

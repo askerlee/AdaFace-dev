@@ -274,6 +274,38 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict):
+        attn_procs = {}
+        hooked_attn_procs = []
+        hooked_attn_proc_names = []
+
+        for name, attn_proc in unet.attn_processors.items():
+            # Only capture the activations of the last 3 CA layers.
+            if not name.startswith("up_blocks.3"):
+                attn_procs[name] = attn_proc
+                continue
+            # cross_attention_dim: 768.
+            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+            if cross_attention_dim is None:
+                # Self attention. Skip.
+                attn_procs[name] = attn_proc
+                continue
+
+            block_id = 3
+            # hidden_size: 320
+            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+            hooked_attn_proc = AttnProcessor_LoRA_Capture(
+                capture_ca_activations=False, enable_lora=True,
+                hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
+                lora_rank=128, lora_scale=0.125
+            )
+            attn_procs[name]        = hooked_attn_proc
+            hooked_attn_procs.append(hooked_attn_proc)
+            # ModuleDict doesn't allow "." in the key.
+            name = name.replace(".", "_")            
+            hooked_attn_proc_names.append(name)
+        
+        unet.set_attn_processor(attn_procs)
+        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_proc_names}.")        
         # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
         peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
                                  target_modules="up_blocks.3.resnets...conv.+")
@@ -287,6 +319,9 @@ class AdaFaceWrapper(nn.Module):
                 lora_modules[name + "_B"] = module.lora_B
 
         self.unet_lora_modules = torch.nn.ModuleDict(lora_modules)
+        for i, hooked_attn_proc in enumerate(hooked_attn_procs):
+            self.unet_lora_modules[hooked_attn_proc_names[i]] = hooked_attn_proc
+            
         print(f"Set up LoRA with {len(self.unet_lora_modules)} weights: {self.unet_lora_modules.keys()}")
         unet.print_trainable_parameters()
 
