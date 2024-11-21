@@ -306,9 +306,9 @@ class AdaFaceWrapper(nn.Module):
         
         unet.set_attn_processor(attn_procs)
         print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_proc_names}.")        
-        # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
+        # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
         peft_config = LoraConfig(inference_mode=False, r=128, lora_alpha=16, lora_dropout=0.1,
-                                 target_modules="up_blocks.3.resnets...conv.+")
+                                 target_modules="up_blocks.3.resnets.[12].conv.+")
         unet = get_peft_model(unet, peft_config)
         lora_modules = {}
         for name, module in unet.named_modules():

@@ -2967,9 +2967,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         return hooked_attn_procs, hooked_attn_proc_names
     
     def setup_loras(self, lora_rank=128, lora_alpha=16):
-        # up_blocks[3].resnets[0~2].conv1, conv2, conv_shortcut
+        # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
         peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
-                                 target_modules="up_blocks.3.resnets...conv.+")
+                                 target_modules="up_blocks.3.resnets.[12].conv.+")
         self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
         # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
         # lora_layers are used to set the flag, not used for optimization.
@@ -3039,14 +3039,12 @@ class DiffusersUNetWrapper(pl.LightningModule):
             for layer_idx in self.captured_layer_indices:
                 # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
                 # 23, 24 -> 0, 1.
-                attn_layer_idx2 = layer_idx - 23
-                # 23, 24 -> 1, 2.
-                ffn_layer_idx2  = layer_idx - 22
+                layer_idx2 = layer_idx - 23
                 for k in captured_activations.keys():
                     if k == 'outfeat':
-                        captured_activations['outfeat'][layer_idx] = cached_outfeats[ffn_layer_idx2].to(out_dtype)
+                        captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx2].to(out_dtype)
                     else:
-                        cached_activations = self.hooked_attn_procs[attn_layer_idx2].cached_activations
+                        cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
         # Restore capture_ca_activations to False.
