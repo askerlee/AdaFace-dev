@@ -275,7 +275,7 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict):
-        attn_capture_procs, attn_capture_proc_names = setup_attn_processors(unet)
+        attn_capture_procs, attn_capture_proc_names = setup_attn_processors(unet, enable_lora=True)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
         unet, ffn_lora_layers, unet_lora_modules = setup_ffn_loras(unet)
 
