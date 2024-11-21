@@ -458,14 +458,14 @@ class LatentDiffusion(DDPM):
         if self.comp_distill_iter_gap > 0:
             # Use SAR UNet to prime x_start for compositional distillation, since 
             # it's more compositional than SD15 UNet and closer to SD15 UNet than RealisticVision4 UNet.
-            unet = UNet2DConditionModel.from_pretrained('models/ensemble/sar-unet', torch_dtype=torch.float16)
+            unet = UNet2DConditionModel.from_pretrained('models/ensemble/rv4-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
             self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
                                     # A trick to avoid creating multiple UNet instances.
-                                    unets = [unet, unet, unet],
+                                    unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
                                     # unet_weights: [0.2, 0.24, 0.56]. The "first unet" uses subject embeddings, 
@@ -2103,8 +2103,7 @@ class LatentDiffusion(DDPM):
                                                    # with subj_single_prompt_emb, subj_comp_prompt_emb and cls_comp_prompt_emb, then average the results.
                                                    # It's similar to do averaging on the prompt embeddings, but yields sharper results.
                                                    # From the outside, the unet ensemble is transparent, like a single unet.
-                                                   teacher_context=[subj_single_prompt_emb, 
-                                                        subj_comp_prompt_emb, cls_comp_prompt_emb], 
+                                                   teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb], 
                                                    negative_context=uncond_emb,
                                                    num_denoising_steps=num_shared_denoising_steps,
                                                    # Same t and noise across instances.
@@ -2153,8 +2152,7 @@ class LatentDiffusion(DDPM):
                                                 # with subj_single_prompt_emb, subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
                                                 # It's similar to do averaging on the prompt embeddings, but yields sharper results.
                                                 # From the outside, the unet ensemble is transparent, like a single unet.
-                                                teacher_context=[subj_single_prompt_emb, 
-                                                    subj_double_prompt_emb, cls_double_prompt_emb], 
+                                                teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb], 
                                                 negative_context=uncond_emb,
                                                 num_denoising_steps=num_sep_denoising_steps,
                                                 # Same t and noise across instances.
