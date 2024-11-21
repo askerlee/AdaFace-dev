@@ -23,7 +23,8 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from adaface.diffusers_attn_lora_capture import AttnProcessor_LoRA_Capture, CrossAttnUpBlock2D_forward_capture
+from adaface.diffusers_attn_lora_capture import setup_attn_processors, setup_ffn_loras, \
+                                                set_lora_and_capture_flags, CrossAttnUpBlock2D_forward_capture
 from ldm.prodigy import Prodigy
 from adaface.unet_teachers import create_unet_teacher
 from gma.network import GMA
@@ -34,7 +35,6 @@ from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 from evaluation.arcface_wrapper import ArcFaceWrapper
-from peft import LoraConfig, get_peft_model
 
 import sys
 torch.set_printoptions(precision=4, sci_mode=False)
@@ -323,7 +323,7 @@ class DDPM(pl.LightningModule):
                             'id2img_neg_prompt_embs':           None,
                             'perturb_face_id_embs':             False,
                             'faceless_img_count':               0,
-                            'do_feat_distill_on_comp_prompt':   False,
+                            'do_comp_feat_distill':   False,
                             'do_prompt_emb_delta_reg':          False,
                             'unet_distill_uses_comp_prompt':    False,
                             'use_fp_trick':                     False,
@@ -345,13 +345,13 @@ class DDPM(pl.LightningModule):
         # ** Due to grad accumulation (global_step increases 1 after 2 iterations), 
         # ** each type of iter is actually executed twice in a row.
         if self.comp_distill_iter_gap > 0 and batch_idx % self.comp_distill_iter_gap == 0:
-            self.iter_flags['do_feat_distill_on_comp_prompt']   = True
+            self.iter_flags['do_comp_feat_distill']   = True
             self.iter_flags['do_normal_recon']                  = False
             self.iter_flags['do_unet_distill']                  = False
             self.iter_flags['do_prompt_emb_delta_reg']          = self.do_prompt_emb_delta_reg
             self.comp_iters_count += 1
         else:
-            self.iter_flags['do_feat_distill_on_comp_prompt']   = False
+            self.iter_flags['do_comp_feat_distill']   = False
             self.non_comp_iters_count += 1
             if self.unet_distill_iter_gap > 0 and self.non_comp_iters_count % self.unet_distill_iter_gap == 0:
                 self.iter_flags['do_normal_recon']  = False
@@ -613,7 +613,7 @@ class LatentDiffusion(DDPM):
         return self.scale_factor * z
 
     # Number of calls to get_text_conditioning() during training:
-    # If do_feat_distill_on_comp_prompt, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
+    # If do_comp_feat_distill, then 1 call on delta prompts (NOTE: delta prompts have a large batch size).
     # If do_normal_recon / do_unet_distll with delta loss, then 2 calls (one on delta prompts, one on subject single prompts). 
     # NOTE: the delta prompts consumes extram RAM.
     # If do_normal_recon / do_unet_distll without delta loss, then 1 call.
@@ -636,7 +636,7 @@ class LatentDiffusion(DDPM):
             
         if text_conditioning_iter_type is None:
             # Guess text_conditioning_iter_type from the iteration flags.
-            if self.iter_flags['do_feat_distill_on_comp_prompt']:
+            if self.iter_flags['do_comp_feat_distill']:
                 text_conditioning_iter_type = 'compos_distill_iter'
             elif self.iter_flags['do_unet_distill']:
                 text_conditioning_iter_type = 'unet_distill_iter'
@@ -721,6 +721,7 @@ class LatentDiffusion(DDPM):
                         'prompt_emb_mask':               copy.copy(self.embedding_manager.prompt_emb_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
                         'capture_ca_activations':  False,
+                        'enable_lora':             False,
                      }
 
         c = (prompt_embeddings, cond_in, extra_info)
@@ -812,7 +813,7 @@ class LatentDiffusion(DDPM):
         # They highlight the face features compared to the normal prompts.
         # Always use the trick on compositional distillation iterations.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
-            if self.iter_flags['do_feat_distill_on_comp_prompt']:
+            if self.iter_flags['do_comp_feat_distill']:
                 p_use_fp_trick = 1
             # If compositional distillation is enabled, then in normal recon iterations,
             # we use the fp_trick most of the time, to better reconstructing single-face input images.
@@ -830,8 +831,8 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
-        if self.iter_flags['do_feat_distill_on_comp_prompt'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # If do_feat_distill_on_comp_prompt, comp_init_fg_from_training_image is always enabled.
+        if self.iter_flags['do_comp_feat_distill'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+            # If do_comp_feat_distill, comp_init_fg_from_training_image is always enabled.
             # It's OK, since when do_zero_shot, we have a large diverse set of training images,
             # and always initializing from training images won't lead to overfitting.
             p_comp_init_fg_from_training_image = 1
@@ -848,8 +849,8 @@ class LatentDiffusion(DDPM):
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
             CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
-        # Either do_feat_distill_on_comp_prompt but not use_fp_trick_iter, 
-        # or recon/unet_distill iters (not do_feat_distill_on_comp_prompt).
+        # Either do_comp_feat_distill but not use_fp_trick_iter, 
+        # or recon/unet_distill iters (not do_comp_feat_distill).
         # We don't use_fp_trick on training images. 
         else:
             SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
@@ -889,9 +890,9 @@ class LatentDiffusion(DDPM):
         print(f"Rank {self.trainer.global_rank}: {batch['subject_name']}")
 
         BS = len(batch['subject_name'])
-        # If do_feat_distill_on_comp_prompt, we repeat the instances in the batch, 
+        # If do_comp_feat_distill, we repeat the instances in the batch, 
         # so that all instances are the same.
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:
+        if self.iter_flags['do_comp_feat_distill']:
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
@@ -921,7 +922,7 @@ class LatentDiffusion(DDPM):
 
         # gen_rand_id_for_id2img. The recon/distillation is on random ID embeddings. So there's no ground truth input images.
         # Therefore, zs_clip_fgbg_features are not available and are randomly generated as well.
-        # gen_rand_id_for_id2img implies (not do_feat_distill_on_comp_prompt).
+        # gen_rand_id_for_id2img implies (not do_comp_feat_distill).
         # NOTE: the faces generated with gen_rand_id_for_id2img are usually atypical outliers,
         # so adding a small proportion of them to the training data may help increase the authenticity on
         # atypical faces, but adding too much of them may harm the performance on typical faces.
@@ -954,7 +955,7 @@ class LatentDiffusion(DDPM):
             # Otherwise:                                    zs_clip_fgbg_features: [3, 514, 1280]. face_id_embs: [3, 512].
             # If self.iter_flags['same_subject_in_batch'], then we average the zs_clip_fgbg_features and face_id_embs to get 
             # less noisy zero-shot embeddings. Otherwise, we use instance-wise zero-shot embeddings.
-            # If do_feat_distill_on_comp_prompt, then we have repeated the instances in the batch, 
+            # If do_comp_feat_distill, then we have repeated the instances in the batch, 
             # so that all instances are the same, and self.iter_flags['same_subject_in_batch'] == True.
             # ** We don't cache and provide zs_clip_neg_features later, as it is constant and
             # is cached in the FaceID2AdaPrompt object.
@@ -972,8 +973,8 @@ class LatentDiffusion(DDPM):
             if faceless_img_count > 0:
                 self.iter_flags['do_normal_recon'] = False
                 self.iter_flags['do_unet_distill'] = True
-                # Disable do_feat_distill_on_comp_prompt during unet distillation.
-                self.iter_flags['do_feat_distill_on_comp_prompt']  = False
+                # Disable do_comp_feat_distill during unet distillation.
+                self.iter_flags['do_comp_feat_distill']  = False
 
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
         # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -991,7 +992,7 @@ class LatentDiffusion(DDPM):
         if id2img_neg_prompt_embs is not None:
             id2img_neg_prompt_embs = id2img_neg_prompt_embs.to(x_start.dtype)
 
-        # If do_feat_distill_on_comp_prompt, then we don't add noise to the zero-shot ID embeddings, 
+        # If do_comp_feat_distill, then we don't add noise to the zero-shot ID embeddings, 
         # to avoid distorting the ID information.
         p_perturb_face_id_embs = self.p_perturb_face_id_embs if self.iter_flags['do_unet_distill'] else 0                
         # p_perturb_face_id_embs: default 0.6.
@@ -1111,7 +1112,7 @@ class LatentDiffusion(DDPM):
         # In get_text_conditioning(), text_conditioning_iter_type will be set again.
         # Setting it here is necessary, as set_curr_batch_subject_names() maps curr_batch_subj_names to cls_delta_strings,
         # whose behavior depends on the correct text_conditioning_iter_type.
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:
+        if self.iter_flags['do_comp_feat_distill']:
             text_conditioning_iter_type = 'compos_distill_iter'
         elif self.iter_flags['do_unet_distill']:
             text_conditioning_iter_type = 'unet_distill_iter'
@@ -1145,7 +1146,7 @@ class LatentDiffusion(DDPM):
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
 
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:                        
+        if self.iter_flags['do_comp_feat_distill']:                        
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE  = 1
             # Only keep the first half of batched prompts to save RAM.
@@ -1217,7 +1218,7 @@ class LatentDiffusion(DDPM):
                                   cls_single_emb,  cls_comp_emb], dim=0)
         extra_info['c_prompt_emb_4b'] = c_prompt_emb
 
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:
+        if self.iter_flags['do_comp_feat_distill']:
             # c_in = delta_prompts is used to generate ada embeddings.
             # c_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
             # The cls_single_prompts/cls_comp_prompts within c_in will only be used to 
@@ -1278,22 +1279,25 @@ class LatentDiffusion(DDPM):
         return self.p_losses(x_start, c_prompt_emb, c_in, extra_info)
 
     # apply_model() is called both during training and inference.
-    def apply_model(self, x_noisy, t, cond_context):
+    def apply_model(self, x_noisy, t, cond_context, enable_lora=False):
         # self.model: DiffusionWrapper -> 
         # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
+        # cond_context[2]: extra_info.
+        cond_context[2]['enable_lora'] = enable_lora
         x_recon = self.model(x_noisy, t, cond_context)
         return x_recon
 
-    def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, enable_grad, enable_lora):
+    def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, 
+                           enable_grad, enable_lora=False):
         x_noisy_ = x_noisy[slice_inst]
         t_ = t[slice_inst]
         c_prompt_emb, c_in, extra_info = cond_context
         c_prompt_emb_ = c_prompt_emb[slice_inst]
         c_in_ = c_in[slice_inst]
         extra_info_ = copy.copy(extra_info)
-        extra_info_['enable_lora'] = enable_lora
         with torch.set_grad_enabled(enable_grad):
-            model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info_))
+            model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info_), 
+                                            enable_lora=enable_lora)
         return model_output, extra_info_
 
     # do_pixel_recon: return denoised images for CLIP evaluation. 
@@ -1302,7 +1306,8 @@ class LatentDiffusion(DDPM):
     # batch_part_has_grad: 'all', 'none', 'subject-compos'.
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, batch_part_has_grad='all', 
-                       do_pixel_recon=False, cfg_scale=-1, capture_ca_activations=False):
+                       do_pixel_recon=False, cfg_scale=-1, 
+                       capture_ca_activations=False, enable_lora=False):
         
         x_noisy = self.q_sample(x_start, t, noise)
         ca_layers_activations = None
@@ -1317,13 +1322,13 @@ class LatentDiffusion(DDPM):
         # Subject embeddings will naturally have gradients.
         if batch_part_has_grad == 'none':
             with torch.no_grad():
-                model_output = self.apply_model(x_noisy, t, cond_context)
+                model_output = self.apply_model(x_noisy, t, cond_context, enable_lora=enable_lora)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'all':
-            model_output = self.apply_model(x_noisy, t, cond_context)
+            model_output = self.apply_model(x_noisy, t, cond_context, enable_lora=enable_lora)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
@@ -1332,7 +1337,7 @@ class LatentDiffusion(DDPM):
             # Although enable_lora is set to True, if self.unet_uses_lora is False, it will be overridden
             # in the unet.
             model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
-                                                                     enable_grad=False, enable_lora=True)
+                                                                     enable_grad=False, enable_lora=False)
             model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
                                                                      enable_grad=True,  enable_lora=True)
             model_output_c2, extra_info_c2 = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(2, 4),
@@ -1365,7 +1370,7 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 x_noisy = self.q_sample(x_start, t, noise)
                 # model_output_uncond: [BS, 4, 64, 64]
-                model_output_uncond = self.apply_model(x_noisy, t, uncond_context)
+                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, enable_lora=False)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             noise_pred = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
@@ -1379,11 +1384,11 @@ class LatentDiffusion(DDPM):
         
         return noise_pred, x_recon, ca_layers_activations
 
-    def multistep_denoise(self, x_start, noise, t, cond_context, 
-                          uncond_emb=None, img_mask=None, batch_part_has_grad='subject-compos', 
-                          cfg_scale=-1, capture_ca_activations=False,
-                          num_denoising_steps=1, 
-                          same_t_noise_across_instances=True):
+    def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
+                                       uncond_emb=None, img_mask=None, 
+                                       cfg_scale=-1, capture_ca_activations=False,
+                                       num_denoising_steps=1, 
+                                       same_t_noise_across_instances=True):
         assert num_denoising_steps <= 10
 
         if same_t_noise_across_instances:
@@ -1407,7 +1412,7 @@ class LatentDiffusion(DDPM):
             # batch_part_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
-                                    uncond_emb, img_mask, batch_part_has_grad, 
+                                    uncond_emb, img_mask, batch_part_has_grad='subject-compos', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations)
             
@@ -1461,7 +1466,7 @@ class LatentDiffusion(DDPM):
         # Then combine all subject indices into all_subj_indices.
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.subject_string_dict)
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:
+        if self.iter_flags['do_comp_feat_distill']:
             # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
@@ -1473,9 +1478,9 @@ class LatentDiffusion(DDPM):
 
         noise = torch.randn_like(x_start) 
 
-        # If do_feat_distill_on_comp_prompt, we prepare the attention activations 
+        # If do_comp_feat_distill, we prepare the attention activations 
         # for computing distillation losses.
-        if self.iter_flags['do_feat_distill_on_comp_prompt']:
+        if self.iter_flags['do_comp_feat_distill']:
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
@@ -1486,7 +1491,7 @@ class LatentDiffusion(DDPM):
             # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
             # We return noise to make the gt_target up-to-date, which is the recon objective.
             # But gt_target is probably not referred to in the following loss computations,
-            # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
+            # since the current iteration is do_comp_feat_distill. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
                 self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
@@ -1523,9 +1528,8 @@ class LatentDiffusion(DDPM):
             # noise_preds is not used for loss computation.
             # x_recons[-1] will be used for arcface align loss computation.
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-                self.multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
+                self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                        uncond_emb=uncond_emb, img_mask=None, 
-                                       batch_part_has_grad='subject-compos', 
                                        cfg_scale=5, capture_ca_activations=True,
                                        num_denoising_steps=num_comp_denoising_steps,
                                        same_t_noise_across_instances=True)
@@ -1606,7 +1610,8 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True,
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
-                                    cfg_scale=-1, capture_ca_activations=True)
+                                    cfg_scale=-1, capture_ca_activations=True,
+                                    enable_lora=False)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -1662,8 +1667,8 @@ class LatentDiffusion(DDPM):
             loss += loss_unet_distill * self.unet_distill_weight
         ##### end of do_unet_distill #####
 
-        ###### begin of do_feat_distill_on_comp_prompt ######
-        elif self.iter_flags['do_feat_distill_on_comp_prompt']:
+        ###### begin of do_comp_feat_distill ######
+        elif self.iter_flags['do_comp_feat_distill']:
             losses_comp_fg_bg_preserve = []
             losses_sc_mc_bg_match = []
             losses_subj_attn_norm_distill = []
@@ -1762,8 +1767,8 @@ class LatentDiffusion(DDPM):
                 max_arcface_loss_calc_count = 1
                 for sel_step in range(len(x_recons)):
                     x_recon  = x_recons[sel_step]
-                    # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
-                    # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
+                    # If there are faceless input images, then do_comp_feat_distill is always False.
+                    # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
                     x_start0    = x_start.chunk(4)[0]
                     subj_recon  = x_recon.chunk(2)[0]
                     loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
@@ -1789,7 +1794,7 @@ class LatentDiffusion(DDPM):
                 # And only use a small weight feat_delta_align_loss_weight = 1e-4.
                 loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
                                 
-        ##### end of do_feat_distill_on_comp_prompt #####
+        ##### end of do_comp_feat_distill #####
 
         else:
             breakpoint()
@@ -1803,8 +1808,8 @@ class LatentDiffusion(DDPM):
         return loss, loss_dict
 
     def calc_arcface_align_loss(self, x_start, x_recon):
-        # If there are faceless input images, then do_feat_distill_on_comp_prompt is always False.
-        # Thus, here do_feat_distill_on_comp_prompt is always True, and x_start[0] is a valid face image.
+        # If there are faceless input images, then do_comp_feat_distill is always False.
+        # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
         x_start_pixels    = self.decode_first_stage(x_start)
         # subj-comp instance. 
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
@@ -1962,7 +1967,8 @@ class LatentDiffusion(DDPM):
                                     uncond_emb=uncond_emb, img_mask=None,
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
-                                    capture_ca_activations=False)
+                                    capture_ca_activations=False,
+                                    enable_lora=False)
             model_outputs.append(model_output_s)
 
             recon_images_s = self.decode_first_stage(x_recon_s)
@@ -2177,7 +2183,7 @@ class LatentDiffusion(DDPM):
         # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
         # We return noise to make the gt_target up-to-date, which is the recon objective.
         # But gt_target is probably not referred to in the following loss computations,
-        # since the current iteration is do_feat_distill_on_comp_prompt. We update it just in case.
+        # since the current iteration is do_comp_feat_distill. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
     
@@ -2254,7 +2260,7 @@ class LatentDiffusion(DDPM):
     
     # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
     def calc_feat_delta_and_attn_norm_loss(self, ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
-        # do_feat_distill_on_comp_prompt iterations. No ordinary image reconstruction loss.
+        # do_comp_feat_distill iterations. No ordinary image reconstruction loss.
         # Only regularize on intermediate features, i.e., intermediate features generated 
         # under subj_comp_prompts should satisfy the delta loss constraint:
         # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
@@ -2894,12 +2900,15 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # Only capture the activations of the last 3 CA layers.
         self.captured_layer_indices = [23, 24] # => 13, 14, 15
-        # Keep a reference to self.hooked_attn_procs to change their flags later.
-        hooked_attn_procs, hooked_attn_proc_names = self.setup_attn_processors()
-        self.hooked_attn_procs = torch.nn.ModuleList(hooked_attn_procs)
+        # Keep a reference to self.attn_capture_procs to change their flags later.
+        attn_capture_procs, attn_capture_proc_names = \
+            setup_attn_processors(self.diffusion_model, self.global_enable_lora)
+        self.attn_capture_procs = attn_capture_procs
         # Replace the forward() method of the last up block with a capturing method.
-        self.diffusion_model.up_blocks[3].forward = \
-            CrossAttnUpBlock2D_forward_capture.__get__(self.diffusion_model.up_blocks[3])
+        self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
+        # Intercept the forward() method of the last 3 CA layers.
+        for block in self.outfeat_capture_blocks:
+            block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
         
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
@@ -2907,112 +2916,40 @@ class DiffusersUNetWrapper(pl.LightningModule):
         if enable_lora:
             # LoRA scaling is always 0.125, the same as the LoRAs in AttnProcessor_LoRA_Capture
             # for cross attention layers.
-            unet_lora_modules = self.setup_loras(lora_rank=lora_rank, lora_alpha=lora_rank // 8)
+            # attn_capture_procs and ffn_lora_layers are used to set the flags.
+            # Replace self.diffusion_model with the PEFT wrapper model.
+            self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
+                setup_ffn_loras(self.diffusion_model,
+                                lora_rank=lora_rank, lora_alpha=lora_rank // 8)
+            self.ffn_lora_layers = ffn_lora_layers
+            # unet_lora_modules is for optimization.
+            self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
+            for i, attn_capture_proc in enumerate(attn_capture_procs):
+                self.unet_lora_modules[attn_capture_proc_names[i]] = attn_capture_proc
+
+            for param in self.unet_lora_modules.parameters():
+                param.requires_grad = True
         else:
-            self.unet_lora_layers = torch.nn.ModuleDict()
-            unet_lora_modules = {}
+            self.attn_capture_procs = []
+            self.ffn_lora_layers    = []
+            self.unet_lora_modules  = torch.nn.ModuleDict()
 
-        self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
-        for i, hooked_attn_proc in enumerate(hooked_attn_procs):
-            self.unet_lora_modules[hooked_attn_proc_names[i]] = hooked_attn_proc
-        for param in self.unet_lora_modules.parameters():
-            param.requires_grad = True
         print(f"Set up LoRA with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
-
-    # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def setup_attn_processors(self):
-        unet = self.diffusion_model
-        attn_procs = {}
-        hooked_attn_procs = []
-        hooked_attn_proc_names = []
-
-        for name, attn_proc in unet.attn_processors.items():
-            # Only capture the activations of the last 3 CA layers.
-            if not name.startswith("up_blocks.3"):
-                # Not the last 3 CA layers. Don't enable LoRA or capture activations.
-                # The difference with the default attn_proc is that AttnProcessor_LoRA_Capture handles img_mask.
-                attn_procs[name] = AttnProcessor_LoRA_Capture(
-                    capture_ca_activations=False, enable_lora=False)
-                continue
-            # cross_attention_dim: 768.
-            cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-            # Self attention. Don't enable LoRA or capture activations.
-            if cross_attention_dim is None or (name.startswith("up_blocks.3.attentions.0")):
-                # We replace the default attn_proc with AttnProcessor_LoRA_Capture, 
-                # as it can handle img_mask.
-                attn_procs[name] = AttnProcessor_LoRA_Capture(
-                    capture_ca_activations=False, enable_lora=False)
-                continue
-
-            block_id = 3
-            # hidden_size: 320
-            hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-            # The LoRAs in the cross attention layers are traditional implementations, 
-            # not based on PEFT.
-            hooked_attn_proc = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=True, enable_lora=self.global_enable_lora,
-                hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
-                # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
-                lora_rank=128, lora_scale=0.125
-            )
-            # attn_procs has to use the original names.
-            attn_procs[name] = hooked_attn_proc
-            # ModuleDict doesn't allow "." in the key.
-            name = name.replace(".", "_")
-            hooked_attn_procs.append(hooked_attn_proc)
-            hooked_attn_proc_names.append(name)
-        
-        unet.set_attn_processor(attn_procs)
-        print(f"Set {len(hooked_attn_procs)} CrossAttn processors on {hooked_attn_proc_names}.")
-        return hooked_attn_procs, hooked_attn_proc_names
-    
-    def setup_loras(self, lora_rank=128, lora_alpha=16):
-        # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
-        peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
-                                 target_modules="up_blocks.3.resnets.[12].conv.+")
-        self.diffusion_model = get_peft_model(self.diffusion_model, peft_config)
-        # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
-        # lora_layers are used to set the flag, not used for optimization.
-        # lora_modules contain only the LoRA A and B matrices, so they are used for optimization.
-        lora_layers = {}
-        lora_modules = {}
-        for name, module in self.diffusion_model.named_modules():
-            if hasattr(module, "lora_alpha"):
-                # ModuleDict doesn't allow "." in the key.
-                name = name.replace(".", "_")
-                lora_layers[name] = module
-                # lora_alpha is applied through the scaling dict.
-                # So we back up the original scaling dict as scaling_.
-                module.scaling_      = module.scaling
-                module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
-                lora_modules[name + "_A"] = module.lora_A
-                lora_modules[name + "_B"] = module.lora_B
-
-        self.unet_lora_layers = lora_layers
-        self.diffusion_model.print_trainable_parameters()
-        return lora_modules
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
         # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
+
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
         # self.global_enable_lora is the global flag. 
         # We can override this call by setting extra_info['enable_lora'].
         enable_lora = extra_info.get('enable_lora', True) if extra_info is not None else True
         # If enable_lora is set to False globally, then disable it in this call.
         enable_lora = enable_lora and self.global_enable_lora
-
-        # capture_ca_activations is set to capture_ca_activations in reset_attn_cache_and_flags().
-        for hooked_attn_proc in self.hooked_attn_procs:
-            hooked_attn_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=enable_lora)
-        # Only get the 3-layer output features of the last up blocks (which contains the last 3 CA layers).
-        self.diffusion_model.up_blocks[3].capture_outfeats = capture_ca_activations
-
-        # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
-        # This loop will exit immediately.
-        for lora_layer in self.unet_lora_layers.values():
-            lora_layer.scaling = lora_layer.scaling_ if enable_lora else lora_layer.zero_scaling_
+        # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
+        # and self.outfeat_capture_blocks.
+        set_lora_and_capture_flags(self, enable_lora, capture_ca_activations)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3028,36 +2965,34 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
             # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
             #LINK ldm/modules/diffusionmodules/openaimodel.py#unet_layers
-            cached_outfeats = self.diffusion_model.up_blocks[3].cached_outfeats
 
-            # Restore everything.
-            # capture_ca_activations is set to False in reset_attn_cache_and_flags().
-            self.diffusion_model.up_blocks[3].capture_outfeats = False
-            # Release one of the references to the cached outfeats.
-            self.diffusion_model.up_blocks[3].cached_outfeats = {}
+            all_cached_outfeats = []
+            for block in self.outfeat_capture_blocks:
+                all_cached_outfeats.append(block.cached_outfeats)
+                # Clear the capture flag and cached outfeats.
+                block.cached_outfeats = {}
+                block.capture_outfeats = False
 
             for layer_idx in self.captured_layer_indices:
-                # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].
-                # 23, 24 -> 0, 1.
-                layer_idx2 = layer_idx - 23
+                # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].cached_outfeats.
+                # 23, 24 -> 1, 2.
+                internal_idx = layer_idx - 22
                 for k in captured_activations.keys():
                     if k == 'outfeat':
-                        captured_activations['outfeat'][layer_idx] = cached_outfeats[layer_idx2].to(out_dtype)
+                        captured_activations['outfeat'][layer_idx] = all_cached_outfeats[0][internal_idx].to(out_dtype)
                     else:
-                        cached_activations = self.hooked_attn_procs[layer_idx2].cached_activations
+                        # internal_idx is the index of layers in up_blocks.3. Layers 23 and 24 map to 1 and 2.
+                        # But layers in attn_capture_procs correspond to up_blocks.3.attentions[1:].
+                        # Therefore, we need to subtract 1 from internal_idx to match the index in attn_capture_procs.
+                        cached_activations = self.attn_capture_procs[internal_idx - 1].cached_activations
                         captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
-        # Restore capture_ca_activations to False.
-        for hooked_attn_proc in self.hooked_attn_procs:
-            hooked_attn_proc.reset_attn_cache_and_flags(False, enable_lora=False)
-        # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
-        # If not global_enable_lora, unet_lora_layers is an empty ModuleDict.
-        # This loop will exit immediately.
-        if enable_lora:
-            for lora_layer in self.unet_lora_layers.values():
-                lora_layer.scaling = lora_layer.zero_scaling_
+            extra_info['ca_layers_activations'] = captured_activations
 
-        extra_info['ca_layers_activations'] = captured_activations
+        # Restore capture_ca_activations to False, and disable all loras.
+        # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
+        # and self.outfeat_capture_blocks.        
+        set_lora_and_capture_flags(self, False, False)
 
         out = out.to(out_dtype)
         return out

@@ -6,6 +6,7 @@ from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
 from diffusers.models.lora import LoRALinearLayer
+from peft import LoraConfig, get_peft_model
 
 from einops import rearrange
 import math
@@ -323,3 +324,89 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
         attn_i += 1
 
     return hidden_states
+
+
+# Adapted from ConsistentIDPipeline:set_ip_adapter().
+def setup_attn_processors(unet, enable_lora):
+    attn_procs = {}
+    attn_capture_procs = []
+    attn_capture_proc_names = []
+
+    for name, attn_proc in unet.attn_processors.items():
+        # Only capture the activations of the last 3 CA layers.
+        if not name.startswith("up_blocks.3"):
+            # Not the last 3 CA layers. Don't enable LoRA or capture activations.
+            # The difference with the default attn_proc is that AttnProcessor_LoRA_Capture handles img_mask.
+            attn_procs[name] = AttnProcessor_LoRA_Capture(
+                capture_ca_activations=False, enable_lora=False)
+            continue
+        # cross_attention_dim: 768.
+        cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
+        # Self attention. Don't enable LoRA or capture activations.
+        if cross_attention_dim is None or (name.startswith("up_blocks.3.attentions.0")):
+            # We replace the default attn_proc with AttnProcessor_LoRA_Capture, 
+            # as it can handle img_mask.
+            attn_procs[name] = AttnProcessor_LoRA_Capture(
+                capture_ca_activations=False, enable_lora=False)
+            continue
+
+        block_id = 3
+        # hidden_size: 320
+        hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+        # The LoRAs in the cross attention layers are traditional implementations, 
+        # not based on PEFT.
+        attn_capture_proc = AttnProcessor_LoRA_Capture(
+            capture_ca_activations=True, enable_lora=enable_lora,
+            hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
+            # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
+            lora_rank=128, lora_scale=0.125
+        )
+        # attn_procs has to use the original names.
+        attn_procs[name] = attn_capture_proc
+        # ModuleDict doesn't allow "." in the key.
+        name = name.replace(".", "_")
+        attn_capture_procs.append(attn_capture_proc)
+        attn_capture_proc_names.append(name)
+    
+    unet.set_attn_processor(attn_procs)
+    print(f"Set {len(attn_capture_procs)} CrossAttn processors on {attn_capture_proc_names}.")
+    return attn_capture_procs, attn_capture_proc_names
+
+def setup_ffn_loras(unet, lora_rank=128, lora_alpha=16):
+    # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
+    peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
+                                target_modules="up_blocks.3.resnets.[12].conv.+")
+    unet = get_peft_model(unet, peft_config)
+    # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
+    # lora_layers are used to set the flag, not used for optimization.
+    # lora_modules contain only the LoRA A and B matrices, so they are used for optimization.
+    ffn_lora_layers = []
+    lora_modules = {}
+    for name, module in unet.named_modules():
+        if hasattr(module, "lora_alpha"):
+            # ModuleDict doesn't allow "." in the key.
+            name = name.replace(".", "_")
+            ffn_lora_layers.append(module)
+            # lora_alpha is applied through the scaling dict.
+            # So we back up the original scaling dict as scaling_.
+            module.scaling_      = module.scaling
+            module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
+            lora_modules[name + "_A"] = module.lora_A
+            lora_modules[name + "_B"] = module.lora_B
+
+    unet.print_trainable_parameters()
+    return unet, ffn_lora_layers, lora_modules
+
+def set_lora_and_capture_flags(host, enable_lora, capture_ca_activations):
+    # For attn capture procs, capture_ca_activations and enable_lora are set in reset_attn_cache_and_flags().
+    for attn_capture_proc in host.attn_capture_procs:
+        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=enable_lora)
+    # outfeat_capture_blocks only contains the last up block, up_blocks[3].
+    # It contains 3 FFN layers. We want to capture their output features.
+    for block in host.outfeat_capture_blocks:
+        block.capture_outfeats = capture_ca_activations
+    # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
+    # If not global_enable_lora, ffn_lora_layers is an empty ModuleDict.
+    # This loop will exit immediately. So we don't have to worry about the presence of .scaling_.
+    for lora_layer in host.ffn_lora_layers:
+        lora_layer.scaling = lora_layer.scaling_ if enable_lora else lora_layer.zero_scaling_
