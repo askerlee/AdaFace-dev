@@ -279,9 +279,10 @@ class AdaFaceWrapper(nn.Module):
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
         unet, ffn_lora_layers, unet_lora_modules = setup_ffn_loras(unet)
 
-        self.ffn_lora_layers = ffn_lora_layers
-        # unet_lora_modules is for optimization.
-        self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
+        self.attn_capture_procs = attn_capture_procs
+        self.ffn_lora_layers    = ffn_lora_layers
+        # unet_lora_modules is for optimization and loading/saving.
+        self.unet_lora_modules  = torch.nn.ModuleDict(unet_lora_modules)
         for i, attn_capture_proc in enumerate(attn_capture_procs):
             self.unet_lora_modules[attn_capture_proc_names[i]] = attn_capture_proc
 
