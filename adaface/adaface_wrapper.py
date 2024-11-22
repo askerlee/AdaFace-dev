@@ -523,6 +523,7 @@ class AdaFaceWrapper(nn.Module):
                 else:
                     breakpoint()
             else:
+                # "text2img" and "img2img" pipelines.
                 # prompt_embeds_, negative_prompt_embeds_: [1, 77, 768]
                 prompt_embeds_, negative_prompt_embeds_ = \
                     self.pipeline.encode_prompt(prompt, device=device, 
@@ -585,12 +586,12 @@ class AdaFaceWrapper(nn.Module):
             prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, \
                 negative_pooled_prompt_embeds_ = \
                     self.encode_prompt(prompt, negative_prompt, 
-                                    placeholder_tokens_pos=placeholder_tokens_pos,
-                                    ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
-                                    ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
-                                    repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
-                                    device=self.device, 
-                                    verbose=verbose)
+                                       placeholder_tokens_pos=placeholder_tokens_pos,
+                                       ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
+                                       ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
+                                       repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
+                                       device=self.device, 
+                                       verbose=verbose)
         else:   
             if len(prompt_embeds) == 2:
                 prompt_embeds_, negative_prompt_embeds_ = prompt_embeds

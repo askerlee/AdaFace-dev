@@ -1279,6 +1279,7 @@ class LatentDiffusion(DDPM):
         return self.p_losses(x_start, c_prompt_emb, c_in, extra_info)
 
     # apply_model() is called both during training and inference.
+    # apply_model() is called in sliced_apply_model() and guided_denoise().
     def apply_model(self, x_noisy, t, cond_context, enable_lora=False):
         # self.model: DiffusionWrapper -> 
         # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
@@ -1287,6 +1288,7 @@ class LatentDiffusion(DDPM):
         x_recon = self.model(x_noisy, t, cond_context)
         return x_recon
 
+    # sliced_apply_model() is only called within guided_denoise().
     def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, 
                            enable_grad, enable_lora=False):
         x_noisy_ = x_noisy[slice_inst]
@@ -1337,9 +1339,10 @@ class LatentDiffusion(DDPM):
             # Although enable_lora is set to True, if self.unet_uses_lora is False, it will be overridden
             # in the unet.
             model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
-                                                                     enable_grad=False, enable_lora=False)
+                                                                     enable_grad=False, enable_lora=enable_lora)
             model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
-                                                                     enable_grad=True,  enable_lora=True)
+                                                                     enable_grad=True,  enable_lora=enable_lora)
+            # Always disable LoRAs on class instances.
             model_output_c2, extra_info_c2 = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(2, 4),
                                                                      enable_grad=False, enable_lora=False)
             
@@ -1370,7 +1373,9 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 x_noisy = self.q_sample(x_start, t, noise)
                 # model_output_uncond: [BS, 4, 64, 64]
-                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, enable_lora=False)
+                # During inference, due to the pipeline rigidness, LoRAs are enabled on negative prompts.
+                # Therefore, we also enable LoRAs during the training time.
+                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, enable_lora=enable_lora)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             noise_pred = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
@@ -1414,7 +1419,8 @@ class LatentDiffusion(DDPM):
                 self.guided_denoise(x_start, noise, t, cond_context,
                                     uncond_emb, img_mask, batch_part_has_grad='subject-compos', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                    capture_ca_activations=capture_ca_activations)
+                                    capture_ca_activations=capture_ca_activations,
+                                    enable_lora=self.unet_uses_lora)
             
             noise_preds.append(noise_pred)
             pred_x0 = x_recon
@@ -1611,7 +1617,7 @@ class LatentDiffusion(DDPM):
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
                                     cfg_scale=-1, capture_ca_activations=True,
-                                    enable_lora=False)
+                                    enable_lora=self.unet_uses_lora)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -1968,7 +1974,8 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    enable_lora=False)
+                                    enable_lora=False)    # ** Always disable LoRAs on unet distillation.
+
             model_outputs.append(model_output_s)
 
             recon_images_s = self.decode_first_stage(x_recon_s)
