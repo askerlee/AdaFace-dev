@@ -7,7 +7,7 @@ from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
 from diffusers.models.lora import LoRALinearLayer
 from peft import LoraConfig, get_peft_model
-from peft.tuners.lora import LoraLayer
+from peft.tuners.lora import LoraLayer, Linear
 from peft.tuners.lora.dora import DoraLinearLayer
 
 from einops import rearrange
@@ -53,14 +53,17 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     """
 
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
+                 use_diffusers_lora=False, use_dora=False, proj_layers=None, 
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
-                 lora_rank: int = 128, lora_scale: float = 1.0):
+                 lora_rank: int = 128, lora_alpha: float = 16):
         super().__init__()
         self.global_enable_lora = enable_lora
         # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
         self.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
         self.lora_rank = lora_rank
-        self.lora_scale = lora_scale
+        self.lora_alpha = lora_alpha
+        self.lora_scale = self.lora_alpha / self.lora_rank
+        self.use_diffusers_lora = False
 
         '''
         network_alpha (`float`, `optional`, defaults to `None`):
@@ -69,12 +72,22 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
         '''
         if self.global_enable_lora:
-            self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
-            self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
-            self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
-            self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+            if (not use_dora) and self.use_diffusers_lora:
+                self.to_q_lora   = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+                self.to_k_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+                self.to_v_lora   = LoRALinearLayer(cross_attention_dim or hidden_size, hidden_size, lora_rank, network_alpha=None)
+                self.to_out_lora = LoRALinearLayer(hidden_size, hidden_size, lora_rank, network_alpha=None)
+            else:
+                to_q, to_k, to_v, to_out = proj_layers
+                self.to_q_lora   = Linear(to_q,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                self.to_k_lora   = Linear(to_k,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                self.to_v_lora   = Linear(to_v,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                self.to_out_lora = Linear(to_out, 'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
         else:
-            self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = (lambda x: 0)
+            if self.use_diffusers_lora:
+                self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = (lambda x: 0)
+            else:
+                self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
 
     # LoRA layers can be enabled/disabled dynamically.
     def reset_attn_cache_and_flags(self, capture_ca_activations, enable_lora):
@@ -121,7 +134,13 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        query = attn.to_q(hidden_states) + self.enable_lora * self.lora_scale * self.to_q_lora(hidden_states)
+        if self.use_diffusers_lora:
+            query = attn.to_q(hidden_states) + self.enable_lora * self.lora_scale * self.to_q_lora(hidden_states)
+        elif self.enable_lora:
+            query = self.to_q_lora(hidden_states)
+        else:
+            query = attn.to_q(hidden_states)
+
         scale = 1 / math.sqrt(query.size(-1))
 
         is_cross_attn = (encoder_hidden_states is not None)
@@ -150,8 +169,15 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         elif attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
-        key = attn.to_k(encoder_hidden_states)   + self.enable_lora * self.lora_scale * self.to_k_lora(encoder_hidden_states)
-        value = attn.to_v(encoder_hidden_states) + self.enable_lora * self.lora_scale * self.to_v_lora(encoder_hidden_states)
+        if self.use_diffusers_lora:
+            key   = attn.to_k(encoder_hidden_states) + self.enable_lora * self.lora_scale * self.to_k_lora(encoder_hidden_states)
+            value = attn.to_v(encoder_hidden_states) + self.enable_lora * self.lora_scale * self.to_v_lora(encoder_hidden_states)
+        elif self.enable_lora:
+            key   = self.to_k_lora(encoder_hidden_states)
+            value = self.to_v_lora(encoder_hidden_states)
+        else:
+            key   = attn.to_k(encoder_hidden_states)
+            value = attn.to_v(encoder_hidden_states)
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
@@ -180,7 +206,13 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         hidden_states = hidden_states.to(query.dtype)
 
         # linear proj
-        hidden_states = attn.to_out[0](hidden_states) + self.enable_lora * self.lora_scale * self.to_out_lora(hidden_states)
+        if self.use_diffusers_lora:
+            hidden_states = attn.to_out[0](hidden_states) + self.enable_lora * self.lora_scale * self.to_out_lora(hidden_states)
+        elif self.enable_lora:
+            hidden_states = self.to_out_lora(hidden_states)
+        else:
+            hidden_states = attn.to_out[0](hidden_states)
+
         # dropout
         hidden_states = attn.to_out[1](hidden_states)
 
@@ -333,6 +365,7 @@ def setup_attn_processors(unet, enable_lora):
     attn_procs = {}
     attn_capture_procs = []
     attn_capture_proc_names = []
+    unet_modules = dict(unet.named_modules())
 
     for name, attn_proc in unet.attn_processors.items():
         # Only capture the activations of the last 3 CA layers.
@@ -355,13 +388,20 @@ def setup_attn_processors(unet, enable_lora):
         block_id = 3
         # hidden_size: 320
         hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
-        # The LoRAs in the cross attention layers are traditional implementations, 
-        # not based on PEFT.
+        # 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.processor' ->
+        # 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.to_q'
+        to_q   = unet_modules[name[:-9] + "to_q"]
+        to_k   = unet_modules[name[:-9] + "to_k"]
+        to_v   = unet_modules[name[:-9] + "to_v"]
+        # to_out is a ModuleList(Linear, Dropout).
+        to_out = unet_modules[name[:-9] + "to_out"][0]
+
         attn_capture_proc = AttnProcessor_LoRA_Capture(
-            capture_ca_activations=True, enable_lora=enable_lora,
+            capture_ca_activations=True, enable_lora=enable_lora, use_diffusers_lora=False,
+            use_dora=True, proj_layers=(to_q, to_k, to_v, to_out),
             hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
-            lora_rank=128, lora_scale=0.125
+            lora_rank=128, lora_alpha=16
         )
         # attn_procs has to use the original names.
         attn_procs[name] = attn_capture_proc
