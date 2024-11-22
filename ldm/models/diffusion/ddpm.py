@@ -2920,11 +2920,15 @@ class DiffusersUNetWrapper(pl.LightningModule):
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
 
-        if enable_lora:
+        if self.global_enable_lora:
             # LoRA scaling is always 0.125, the same as the LoRAs in AttnProcessor_LoRA_Capture
             # for cross attention layers.
             # attn_capture_procs and ffn_lora_layers are used to set the flags.
             # Replace self.diffusion_model with the PEFT wrapper model.
+            # NOTE: cross-attn layers are included in the returned lora_modules.
+            # cross-attn layers are not included in ffn_lora_layers.
+            # The first returned value is the PEFT wrapper model, 
+            # which replaces the original unet, self.diffusion_model.
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
                 setup_ffn_loras(self.diffusion_model, use_dora=True,
                                 lora_rank=lora_rank, lora_alpha=lora_rank // 8,
@@ -2932,9 +2936,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.ffn_lora_layers = ffn_lora_layers
             # unet_lora_modules is for optimization and loading/saving.
             self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
-            for i, attn_capture_proc in enumerate(attn_capture_procs):
-                self.unet_lora_modules[attn_capture_proc_names[i]] = attn_capture_proc
-
             for param in self.unet_lora_modules.parameters():
                 param.requires_grad = True
         else:

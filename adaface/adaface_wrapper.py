@@ -279,14 +279,28 @@ class AdaFaceWrapper(nn.Module):
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
         unet, ffn_lora_layers, unet_lora_modules = setup_ffn_loras(unet, use_dora=True)
 
+        # self.attn_capture_procs and ffn_lora_layers will be used in set_lora_and_capture_flags().
         self.attn_capture_procs = attn_capture_procs
-        self.ffn_lora_layers    = ffn_lora_layers
+        self.ffn_lora_layers    = ffn_lora_layers.values()
         # unet_lora_modules is for optimization and loading/saving.
         self.unet_lora_modules  = torch.nn.ModuleDict(unet_lora_modules)
-        for i, attn_capture_proc in enumerate(attn_capture_procs):
-            self.unet_lora_modules[attn_capture_proc_names[i]] = attn_capture_proc
 
-        self.unet_lora_modules.load_state_dict(unet_lora_modules_state_dict)
+        for key0 in list(unet_lora_modules_state_dict.keys()):
+            key = key0.replace(".lora_A", "_lora_A")
+            key = key.replace(".lora_B", "_lora_B")
+            key = re.sub(r"to_(q|k|v|out)_lora_(A|B)", r"to_\1_lora_lora_\2", key)
+            key = re.sub(r"\.to_(q|k|v|out)_lora", r"_to_\1_lora", key)
+            key = re.sub(r"^up_blocks", "base_model_model_up_blocks", key)
+            key = key.replace("_dora.", "_lora_magnitude_vector.")
+            key = re.sub(r"(conv[0-9A-Za-z_]+)_(A|B)\.", r"\1_lora_\2.", key)
+            unet_lora_modules_state_dict[key] = unet_lora_modules_state_dict.pop(key0)
+
+        missing, unexpected = self.unet_lora_modules.load_state_dict(unet_lora_modules_state_dict, strict=False)
+        if len(missing) > 0:
+            print(f"Missing Keys: {missing}")
+        if len(unexpected) > 0:
+            print(f"Unexpected Keys: {unexpected}")
+
         print(f"Loaded {len(unet_lora_modules_state_dict)} LoRA weights on the UNet:\n{unet_lora_modules.keys()}")
         self.outfeat_capture_blocks.append(unet.up_blocks[3])
 

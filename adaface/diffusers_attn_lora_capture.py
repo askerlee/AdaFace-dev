@@ -11,7 +11,7 @@ from peft.tuners.lora import LoraLayer, Linear
 from peft.tuners.lora.dora import DoraLinearLayer
 
 from einops import rearrange
-import math
+import math, re
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -63,7 +63,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
-        self.use_diffusers_lora = False
+        self.use_diffusers_lora = use_diffusers_lora
 
         '''
         network_alpha (`float`, `optional`, defaults to `None`):
@@ -414,33 +414,41 @@ def setup_attn_processors(unet, enable_lora):
     print(f"Set {len(attn_capture_procs)} CrossAttn processors on {attn_capture_proc_names}.")
     return attn_capture_procs, attn_capture_proc_names
 
-def setup_ffn_loras(unet, use_dora=False, lora_rank=128, lora_alpha=16):
+# NOTE: cross-attn layers are included in the returned lora_modules.
+def setup_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
+                    use_dora=False, lora_rank=128, lora_alpha=16):
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
     peft_config = LoraConfig(use_dora=use_dora, inference_mode=False, r=lora_rank, 
                              lora_alpha=lora_alpha, lora_dropout=0.1,
-                             target_modules="up_blocks.3.resnets.[12].conv.+")
+                             target_modules=target_modules_pat)
     unet = get_peft_model(unet, peft_config)
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
     # lora_layers are used to set the flag, not used for optimization.
     # lora_modules contain only the LoRA A and B matrices, so they are used for optimization.
-    ffn_lora_layers = []
+    ffn_lora_layers = {}
     lora_modules = {}
     for name, module in unet.named_modules():
         if isinstance(module, LoraLayer):
+            # We don't want to include cross-attn layers in ffn_lora_layers.
+            if re.search(target_modules_pat, name):
+                ffn_lora_layers[name] = module
             # ModuleDict doesn't allow "." in the key.
             name = name.replace(".", "_")
-            ffn_lora_layers.append(module)
             # lora_alpha is applied through the scaling dict.
             # So we back up the original scaling dict as scaling_.
             # No matter whether using DoRA or not, the scaling controls 
             # the impact of the LoRA output.
+            # NOTE: cross-attn layers are included in lora_modules.
             module.scaling_      = module.scaling
             module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
-            lora_modules[name + "_A"] = module.lora_A
-            lora_modules[name + "_B"] = module.lora_B
+            # Since ModuleDict doesn't allow "." in the key, we manually collect
+            # the LoRA matrices in each module.
+            lora_modules[name + "_lora_A"] = module.lora_A
+            lora_modules[name + "_lora_B"] = module.lora_B
             if use_dora:
-                lora_modules[name + "_dora"] = module.lora_magnitude_vector
+                lora_modules[name + "_lora_magnitude_vector"] = module.lora_magnitude_vector
 
+    print(f"Set {len(ffn_lora_layers)} FFN LoRA layers: {ffn_lora_layers.keys()}.")
     unet.print_trainable_parameters()
     return unet, ffn_lora_layers, lora_modules
 
