@@ -2888,7 +2888,7 @@ class DiffusionWrapper(pl.LightningModule):
 
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
-    def __init__(self, unet_dirpath, torch_dtype=torch.bfloat16,
+    def __init__(self, unet_dirpath, torch_dtype=torch.float16,
                  enable_lora=False, lora_rank=128):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
