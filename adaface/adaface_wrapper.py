@@ -285,6 +285,7 @@ class AdaFaceWrapper(nn.Module):
         # unet_lora_modules is for optimization and loading/saving.
         self.unet_lora_modules  = torch.nn.ModuleDict(unet_lora_modules)
 
+        '''
         for key0 in list(unet_lora_modules_state_dict.keys()):
             key = key0.replace(".lora_A", "_lora_A")
             key = key.replace(".lora_B", "_lora_B")
@@ -294,7 +295,8 @@ class AdaFaceWrapper(nn.Module):
             key = key.replace("_dora.", "_lora_magnitude_vector.")
             key = re.sub(r"(conv[0-9A-Za-z_]+)_(A|B)\.", r"\1_lora_\2.", key)
             unet_lora_modules_state_dict[key] = unet_lora_modules_state_dict.pop(key0)
-
+        '''
+        
         missing, unexpected = self.unet_lora_modules.load_state_dict(unet_lora_modules_state_dict, strict=False)
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")

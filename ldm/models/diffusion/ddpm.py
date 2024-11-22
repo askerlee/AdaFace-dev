@@ -2925,7 +2925,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # for cross attention layers.
             # attn_capture_procs and ffn_lora_layers are used to set the flags.
             # Replace self.diffusion_model with the PEFT wrapper model.
-            # NOTE: cross-attn layers are included in the returned lora_modules.
+            # NOTE: cross-attn layers are INCLUDED in the returned lora_modules.
             # cross-attn layers are not included in ffn_lora_layers.
             # The first returned value is the PEFT wrapper model, 
             # which replaces the original unet, self.diffusion_model.
@@ -2958,6 +2958,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
         enable_lora = enable_lora and self.global_enable_lora
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.
+        # The activation capture flags and caches in attn_capture_procs and outfeat_capture_blocks are set differently.
+        # So we keep them in different lists.
+        # The scaling factors of attn_capture_procs and ffn_lora_layers are also set differently.
+        # (They can be unified, but currently it's more convenient to keep them separate.)
         set_lora_and_capture_flags(self, enable_lora, capture_ca_activations)
 
         # x: x_noisy from LatentDiffusion.apply_model().
