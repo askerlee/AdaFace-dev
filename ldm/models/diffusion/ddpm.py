@@ -2933,7 +2933,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 setup_ffn_loras(self.diffusion_model, use_dora=True,
                                 lora_rank=lora_rank, lora_alpha=lora_rank // 8,
                                 )
-            self.ffn_lora_layers = ffn_lora_layers
+            self.ffn_lora_layers = ffn_lora_layers.values()
             # unet_lora_modules is for optimization and loading/saving.
             self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
             for param in self.unet_lora_modules.parameters():

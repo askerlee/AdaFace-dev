@@ -443,6 +443,8 @@ def setup_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
             module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
             # Since ModuleDict doesn't allow "." in the key, we manually collect
             # the LoRA matrices in each module.
+            # NOTE: We cannot put every sub-module of module into lora_modules,
+            # as base_layer is also a sub-module of module, which we shouldn't optimize.
             lora_modules[name + "_lora_A"] = module.lora_A
             lora_modules[name + "_lora_B"] = module.lora_B
             if use_dora:
