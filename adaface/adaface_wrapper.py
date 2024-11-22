@@ -277,7 +277,7 @@ class AdaFaceWrapper(nn.Module):
     def load_unet_loras(self, unet, unet_lora_modules_state_dict):
         attn_capture_procs, attn_capture_proc_names = setup_attn_processors(unet, enable_lora=True)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
-        unet, ffn_lora_layers, unet_lora_modules = setup_ffn_loras(unet)
+        unet, ffn_lora_layers, unet_lora_modules = setup_ffn_loras(unet, use_dora=True)
 
         self.attn_capture_procs = attn_capture_procs
         self.ffn_lora_layers    = ffn_lora_layers

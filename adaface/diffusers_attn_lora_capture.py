@@ -7,6 +7,8 @@ from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
 from diffusers.models.lora import LoRALinearLayer
 from peft import LoraConfig, get_peft_model
+from peft.tuners.lora import LoraLayer
+from peft.tuners.lora.dora import DoraLinearLayer
 
 from einops import rearrange
 import math
@@ -372,10 +374,11 @@ def setup_attn_processors(unet, enable_lora):
     print(f"Set {len(attn_capture_procs)} CrossAttn processors on {attn_capture_proc_names}.")
     return attn_capture_procs, attn_capture_proc_names
 
-def setup_ffn_loras(unet, lora_rank=128, lora_alpha=16):
+def setup_ffn_loras(unet, use_dora=False, lora_rank=128, lora_alpha=16):
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
-    peft_config = LoraConfig(inference_mode=False, r=lora_rank, lora_alpha=lora_alpha, lora_dropout=0.1,
-                                target_modules="up_blocks.3.resnets.[12].conv.+")
+    peft_config = LoraConfig(use_dora=use_dora, inference_mode=False, r=lora_rank, 
+                             lora_alpha=lora_alpha, lora_dropout=0.1,
+                             target_modules="up_blocks.3.resnets.[12].conv.+")
     unet = get_peft_model(unet, peft_config)
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
     # lora_layers are used to set the flag, not used for optimization.
@@ -383,16 +386,20 @@ def setup_ffn_loras(unet, lora_rank=128, lora_alpha=16):
     ffn_lora_layers = []
     lora_modules = {}
     for name, module in unet.named_modules():
-        if hasattr(module, "lora_alpha"):
+        if isinstance(module, LoraLayer):
             # ModuleDict doesn't allow "." in the key.
             name = name.replace(".", "_")
             ffn_lora_layers.append(module)
             # lora_alpha is applied through the scaling dict.
             # So we back up the original scaling dict as scaling_.
+            # No matter whether using DoRA or not, the scaling controls 
+            # the impact of the LoRA output.
             module.scaling_      = module.scaling
             module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
             lora_modules[name + "_A"] = module.lora_A
             lora_modules[name + "_B"] = module.lora_B
+            if use_dora:
+                lora_modules[name + "_dora"] = module.lora_magnitude_vector
 
     unet.print_trainable_parameters()
     return unet, ffn_lora_layers, lora_modules

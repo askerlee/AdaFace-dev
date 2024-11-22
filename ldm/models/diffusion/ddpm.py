@@ -2926,8 +2926,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # attn_capture_procs and ffn_lora_layers are used to set the flags.
             # Replace self.diffusion_model with the PEFT wrapper model.
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
-                setup_ffn_loras(self.diffusion_model,
-                                lora_rank=lora_rank, lora_alpha=lora_rank // 8)
+                setup_ffn_loras(self.diffusion_model, use_dora=True,
+                                lora_rank=lora_rank, lora_alpha=lora_rank // 8,
+                                )
             self.ffn_lora_layers = ffn_lora_layers
             # unet_lora_modules is for optimization and loading/saving.
             self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
