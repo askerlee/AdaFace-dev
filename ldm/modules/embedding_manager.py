@@ -194,6 +194,8 @@ class EmbeddingManager(nn.Module):
         self.clear_prompt_adhoc_info()
         # 'recon_iter', 'unet_distill_iter', 'compos_distill_iter', 'plain_text_iter'.
         self.iter_type = None       
+        # real_batch_size = 10000: an arbitrary large number. Will be set in set_image_prompts_and_iter_type().
+        self.real_batch_size = 10000   
         self.set_curr_batch_subject_names(["default"])
         self.set_image_prompts_and_iter_type(None, None, 'plain_text_iter')
 
@@ -375,8 +377,12 @@ class EmbeddingManager(nn.Module):
             # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
             # matching the batch structure of (subject-single, subject-single, ...).
             if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
-                # This should only happen in a compos_distill_iter, where all subjects are the same.
-                if self.iter_type != 'compos_distill_iter':
+                # adaface_subj_embs.shape[0] == 0 should only happen in a compos_distill_iter, 
+                # in which all the subjects are the same.
+                # In a recon_iter, even if adaface_subj_embs.shape[0] > 0, it may still < REAL_OCCURS_IN_BATCH,
+                # when the prompts are a batch of the 4-type prompts.
+                # (in that case, adaface_subj_embs.shape[0] == REAL_OCCURS_IN_BATCH / 2)
+                if adaface_subj_embs.shape[0] < self.real_batch_size and self.iter_type != 'compos_distill_iter':
                     breakpoint()
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)
 
@@ -550,7 +556,8 @@ class EmbeddingManager(nn.Module):
             print(f"training perturbance std range: {training_perturb_std_range}"
                   f", with prob = {training_perturb_prob}")
 
-    def set_image_prompts_and_iter_type(self, id2img_prompt_embs, clip_bg_features, iter_type):
+    def set_image_prompts_and_iter_type(self, id2img_prompt_embs, clip_bg_features, 
+                                        iter_type, real_batch_size):
         #                     consistentID       arc2face          jointIDs
         # id2img_prompt_embs: [1, 16, 768]   or [1, 4, 768]    or [1, 20, 768].
         # clip_bg_features:   [1, 257, 1280] or [1, 257, 1024] or [1, 257, 1280+1024].
@@ -558,6 +565,7 @@ class EmbeddingManager(nn.Module):
                                    'bg':   clip_bg_features,
                                  }
         self.iter_type = iter_type
+        self.real_batch_size = real_batch_size
         # In a compos_distill_iter, all subjects are the same. So we only keep the first cls_delta_string.
         if self.cls_delta_strings is not None and self.iter_type == 'compos_distill_iter':
             self.cls_delta_strings = self.cls_delta_strings[:1]

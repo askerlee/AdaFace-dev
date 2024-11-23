@@ -633,7 +633,7 @@ class LatentDiffusion(DDPM):
     # without them going through CLIP.
     def get_text_conditioning(self, cond_in, subj_id2img_prompt_embs=None, clip_bg_features=None, 
                               randomize_clip_weights=False, return_prompt_embs_type='text', 
-                              text_conditioning_iter_type=None):
+                              text_conditioning_iter_type=None, real_batch_size=-1):
         # cond_in: a list of prompts: ['an illustration of a dirty z', 'an illustration of the cool z']
         # each prompt in c is encoded as [1, 77, 768].
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
@@ -657,7 +657,8 @@ class LatentDiffusion(DDPM):
         # If the prompt is "" (negative prompt), then clip_bg_features is None.
         # Also update the iteration type of the embedding manager, according to the arguments passed in.
         self.embedding_manager.set_image_prompts_and_iter_type(subj_id2img_prompt_embs, clip_bg_features,
-                                                               text_conditioning_iter_type)
+                                                               text_conditioning_iter_type,
+                                                               real_batch_size)
 
         # prompt_embeddings: [B, 77, 768]
         prompt_embeddings = self.cond_stage_model.encode(cond_in, embedding_manager=self.embedding_manager)
@@ -1195,7 +1196,8 @@ class LatentDiffusion(DDPM):
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
                                        randomize_clip_weights=True,
-                                       text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'])
+                                       text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
+                                       real_batch_size=ORIG_BS)
 
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
             c_prompt_emb.chunk(4)
