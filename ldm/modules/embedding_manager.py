@@ -65,6 +65,7 @@ class EmbeddingManager(nn.Module):
             gen_ss_from_frozen_subj_basis_generator=False,
             multi_token_filler=',',
             unet_lora_modules=None,
+            load_unet_lora_modules_from_ckpt=True,
     ):
         super().__init__()
 
@@ -184,7 +185,7 @@ class EmbeddingManager(nn.Module):
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
         # but instead use self.load().
         if adaface_ckpt_paths is not None:
-            self.load(adaface_ckpt_paths)
+            self.load(adaface_ckpt_paths, load_unet_lora_modules_from_ckpt)
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, subj_name_to_cls_delta_string, cls_delta_string)
@@ -584,7 +585,7 @@ class EmbeddingManager(nn.Module):
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, adaface_ckpt_paths):
+    def load(self, adaface_ckpt_paths, load_unet_lora_modules_from_ckpt=True):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict   = {}
@@ -650,7 +651,8 @@ class EmbeddingManager(nn.Module):
                     self.string_to_token_dict[km2] = k2_token
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
-            if 'unet_lora_modules' in ckpt and self.unet_lora_modules is not None:
+            if self.unet_lora_modules is not None and load_unet_lora_modules_from_ckpt \
+              and 'unet_lora_modules' in ckpt:
                 unet_lora_modules = ckpt['unet_lora_modules']
                 try:
                     self.unet_lora_modules.load_state_dict(unet_lora_modules)
@@ -666,8 +668,10 @@ class EmbeddingManager(nn.Module):
             elif self.unet_lora_modules is None:
                 # unet unet_lora_modules are not enabled.
                 continue
-            else:
+            elif 'unet_lora_modules' not in ckpt:
                 print(f"'unet_lora_modules' not found in {adaface_ckpt_path}")
+            elif not load_unet_lora_modules_from_ckpt:
+                print(f"Instructed to skip loading unet_lora_modules from {adaface_ckpt_path}")
 
         # ',' is used as filler tokens.
         self.string_to_token_dict[self.multi_token_filler] = \
