@@ -361,7 +361,7 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def set_up_attn_processors(unet, enable_lora):
+def set_up_attn_processors(unet, enable_lora, lora_rank=128, lora_scale_down=8):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
@@ -400,8 +400,8 @@ def set_up_attn_processors(unet, enable_lora):
             use_dora=True, proj_layers=(to_q, to_k, to_v, to_out),
             hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
-            lora_rank=128, lora_alpha=16
-        )
+            lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down)
+        
         # attn_procs has to use the original names.
         attn_procs[name] = attn_capture_proc
         # ModuleDict doesn't allow "." in the key.

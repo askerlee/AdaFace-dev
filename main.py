@@ -231,6 +231,8 @@ def get_parser(**parser_kwargs):
                         help="Path to the Diffusers UNet model")
     parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the Diffusers UNet model")
+    parser.add_argument("--unet_lora_scale_down", type=float, default=8,
+                        help="Scale down factor for the LoRA in the Diffusers UNet model")
 
     parser.add_argument("--prompt_emb_delta_reg_weight",
         type=float, default=argparse.SUPPRESS,
@@ -715,10 +717,12 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.use_fp_trick = opt.use_fp_trick
+
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
-        config.model.params.use_ldm_unet = opt.use_ldm_unet
-        config.model.params.diffusers_unet_path = opt.diffusers_unet_path
-        config.model.params.unet_uses_lora = opt.unet_uses_lora
+        config.model.params.use_ldm_unet            = opt.use_ldm_unet
+        config.model.params.diffusers_unet_path     = opt.diffusers_unet_path
+        config.model.params.unet_uses_lora          = opt.unet_uses_lora
+        config.model.params.unet_lora_scale_down    = opt.unet_lora_scale_down
         
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):
