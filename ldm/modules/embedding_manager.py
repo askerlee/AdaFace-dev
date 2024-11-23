@@ -375,6 +375,9 @@ class EmbeddingManager(nn.Module):
             # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
             # matching the batch structure of (subject-single, subject-single, ...).
             if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
+                # This should only happen in a compos_distill_iter, where all subjects are the same.
+                if self.iter_type != 'compos_distill_iter':
+                    breakpoint()
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)
 
             # Replace the first adaface_subj_embs with adaface_subj_embs0 from a frozen encoder.
@@ -435,6 +438,7 @@ class EmbeddingManager(nn.Module):
                 if adaface_subj_emb_k.shape[0] != REAL_OCCURS_IN_BATCH:
                     breakpoint()
 
+                # placeholder_indices_k is the indices of the k-th placeholder token of the whole batch.
                 placeholder_indices_k = (placeholder_indices_1st[0], placeholder_indices_1st[1] + k2)
                 # There could be a gap between "z , , , ..." and ", , , ...". For example, during inference,
                 # the original prompt is repeated twice for the two encoders. The first segment contains 3 ", ",
@@ -450,6 +454,8 @@ class EmbeddingManager(nn.Module):
                     breakpoint()
 
                 # Assign the k-th token embedding (along the text dim).
+                # Note adaface_subj_emb_k is a batch of the k-th ID embeddings (of possibly different subjects), 
+                # not a single embedding.
                 embedded_text[placeholder_indices_k] = adaface_subj_emb_k
                 k2 += 1
                 

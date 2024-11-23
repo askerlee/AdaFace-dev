@@ -330,7 +330,7 @@ class DDPM(pl.LightningModule):
                             'id2img_neg_prompt_embs':           None,
                             'perturb_face_id_embs':             False,
                             'faceless_img_count':               0,
-                            'do_comp_feat_distill':   False,
+                            'do_comp_feat_distill':             False,
                             'do_prompt_emb_delta_reg':          False,
                             'unet_distill_uses_comp_prompt':    False,
                             'use_fp_trick':                     False,
@@ -996,6 +996,7 @@ class LatentDiffusion(DDPM):
                 self.iter_flags['do_unet_distill'] = True
                 # Disable do_comp_feat_distill during unet distillation.
                 self.iter_flags['do_comp_feat_distill']  = False
+                # The captions will be set to subj_comp_prompts in forward().
 
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
         # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -1169,7 +1170,7 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_comp_feat_distill']:                        
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
-            BLOCK_SIZE  = 1
+            BLOCK_SIZE = 1
             # Only keep the first half of batched prompts to save RAM.
             subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
                 subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
@@ -2973,7 +2974,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
             for param in self.unet_lora_modules.parameters():
                 param.requires_grad = True
         else:
-            self.attn_capture_procs = []
             self.ffn_lora_layers    = []
             self.unet_lora_modules  = torch.nn.ModuleDict()
 
