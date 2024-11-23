@@ -1620,6 +1620,7 @@ class LatentDiffusion(DDPM):
                 # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
                 # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
                 cfg_scale  = np.random.uniform(1.5, 2.5)
+                print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
             else:
                 # Use the default negative prompts.
                 uncond_emb = None
