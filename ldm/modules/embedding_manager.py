@@ -377,11 +377,12 @@ class EmbeddingManager(nn.Module):
             # If the subject-single batch is like [s1, s2], then the repeated batch is [s1, s2, s1, s2], 
             # matching the batch structure of (subject-single, subject-single, ...).
             if adaface_subj_embs.shape[0] < REAL_OCCURS_IN_BATCH:
-                # adaface_subj_embs.shape[0] == 0 should only happen in a compos_distill_iter, 
-                # in which all the subjects are the same.
+                # adaface_subj_embs.shape[0] < self.real_batch_size should only happen in a compos_distill_iter, 
+                # in which all the subjects are the same and adaface_subj_embs.shape[0] == 1.
                 # In a recon_iter, even if adaface_subj_embs.shape[0] > 0, it may still < REAL_OCCURS_IN_BATCH,
                 # when the prompts are a batch of the 4-type prompts.
-                # (in that case, adaface_subj_embs.shape[0] == REAL_OCCURS_IN_BATCH / 2)
+                # (in that case, adaface_subj_embs.shape[0] == self.real_batch_size == REAL_OCCURS_IN_BATCH / 2)
+                # So we check self.real_batch_size instead of REAL_OCCURS_IN_BATCH.
                 if adaface_subj_embs.shape[0] < self.real_batch_size and self.iter_type != 'compos_distill_iter':
                     breakpoint()
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)

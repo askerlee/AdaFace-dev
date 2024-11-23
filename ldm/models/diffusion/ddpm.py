@@ -827,9 +827,9 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 p_use_fp_trick = 1
             # recon_on_comp_prompt is enabled. So we add "portrait" to the prompts.
-            # By doing so, the subject model is easier to reconstruct the subject portraits,
-            # otherwise it has a tendency to implicitly encode "portrait" in the ID embeddings 
-            # for easy reconstruction.
+            # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
+            # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
+            # for better reconstruction, which is undesirable.
             elif self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_comp_prompt']:
                 p_use_fp_trick = 1
             # If compositional distillation is enabled, then in normal recon iterations,
