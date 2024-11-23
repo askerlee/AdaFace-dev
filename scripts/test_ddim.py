@@ -64,27 +64,32 @@ def test_dec_enc(pipeline, latents):
 # Initialize noisy latents
 latents0 = torch.randn((1, model.config.in_channels, 64, 64), dtype=torch.float16).to(model.device)
 prompt0          = "portrait, taylor swift"
-prompt_cls0      = "portrait, a woman"       + " " + args.comp
+prompt_cls0      = "portrait, a woman"
 negative_prompt0 = "blurry, low resolution, bad composition, deformed buildings"
 
 guidance_scale = 6
 # Perform DDIM denoising
 scheduler.set_timesteps(50)  # Number of DDIM steps
+# N = 2: noise_pred = noise_pred * (guidance_scale - 0.05) - noise_pred_negative * (guidance_scale - 1)
+# The diffusion model is robust enough to handle this level of dampening.
+cfg_dampens = [0, 0, 0.05, 0]
 
 if args.test_clsneg:
-    for N in range(3):
+    for N in range(4):
         if N == 0:
             # The normal CFG prompts
             prompt = ", ".join([prompt0, args.comp])
             negative_prompt = negative_prompt0
-        elif N == 1:
+        elif N == 1 or N == 2:
             # The CLSNEG prompts
             prompt = ", ".join([prompt0, args.comp])
             negative_prompt = ", ".join([prompt_cls0, args.comp, negative_prompt0])
-        elif N == 2:
+        elif N == 3:
             # The non-compositional prompts
             prompt = prompt0
             negative_prompt = negative_prompt0
+
+        cfg_dampen = cfg_dampens[N]
 
         print(f"Prompt: {prompt}")
         print(f"Negative Prompt: {negative_prompt}")
@@ -104,7 +109,7 @@ if args.test_clsneg:
                 noise_pred          = model(latents, t, text_embeddings)["sample"]
                 noise_pred_negative = model(latents, t, negative_embeddings)["sample"]
             
-                noise_pred = noise_pred * (0.95 + guidance_scale) + noise_pred_negative * (- guidance_scale)
+                noise_pred = noise_pred * (guidance_scale - cfg_dampen) - noise_pred_negative * (guidance_scale - 1)
                 latents = scheduler.step(noise_pred, t, latents).prev_sample
 
             if i % 10 == 9:
@@ -113,9 +118,9 @@ if args.test_clsneg:
                     out_image = Image.fromarray((image[0] * 255).astype("uint8"))
                     if N == 0:
                         out_filepath = f"{N}-normal-{i+1}.png"
-                    elif N == 1:
+                    elif N == 1 or N == 2:
                         out_filepath = f"{N}-clsneg-{i+1}.png"
-                    elif N == 2:
+                    elif N == 3:
                         out_filepath = f"{N}-nocomp-{i+1}.png"
 
                     out_image.save(out_filepath)
