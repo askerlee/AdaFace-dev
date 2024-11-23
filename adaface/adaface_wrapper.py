@@ -275,12 +275,12 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict):
-        attn_capture_procs, attn_capture_proc_names = set_up_attn_processors(unet, enable_lora=True)
+        attn_capture_procs = set_up_attn_processors(unet, enable_lora=True)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
         unet, ffn_lora_layers, unet_lora_modules = set_up_ffn_loras(unet, use_dora=True)
 
         # self.attn_capture_procs and ffn_lora_layers will be used in set_lora_and_capture_flags().
-        self.attn_capture_procs = attn_capture_procs
+        self.attn_capture_procs = attn_capture_procs.values()
         self.ffn_lora_layers    = ffn_lora_layers.values()
         # unet_lora_modules is for optimization and loading/saving.
         self.unet_lora_modules  = torch.nn.ModuleDict(unet_lora_modules)
