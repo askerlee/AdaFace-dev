@@ -1619,7 +1619,7 @@ class LatentDiffusion(DDPM):
                 uncond_emb = extra_info['cls_comp_prompts']
                 # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
                 # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
-                cfg_scale  = np.random.uniform([1.5, 2.5])
+                cfg_scale  = np.random.uniform(1.5, 2.5)
             else:
                 # Use the default negative prompts.
                 uncond_emb = None
