@@ -89,6 +89,7 @@ class DDPM(pl.LightningModule):
                  unet_weights=None,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
+                 p_recon_on_comp_prompt=0.4,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -151,6 +152,7 @@ class DDPM(pl.LightningModule):
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
+        self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
@@ -667,7 +669,7 @@ class LatentDiffusion(DDPM):
             # class instances. Therefore, cls_delta_string_indices is used here.
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                            self.embedding_manager.cls_delta_string_indices)
-            
+
         # return_prompt_embs_type: ['id', 'text_id']. Training default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         # 'id': the subject embeddings only. 
@@ -867,7 +869,12 @@ class LatentDiffusion(DDPM):
         cls_single_prompts  = batch[CLS_SINGLE_PROMPT]
         subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
-        captions            = subj_single_prompts
+
+        self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < self.p_recon_on_comp_prompt).item()
+        if self.iter_flags['recon_on_comp_prompt']:
+            captions = subj_comp_prompts
+        else:
+            captions = subj_single_prompts
 
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
@@ -1169,8 +1176,6 @@ class LatentDiffusion(DDPM):
         # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
         delta_prompts = subj_single_prompts + subj_comp_prompts \
                         + cls_single_prompts + cls_comp_prompts
-        #print(delta_prompts)
-        # breakpoint()
         # c_prompt_emb: the prompt embeddings for prompt delta loss [4, 77, 768].
         # delta_prompts: the concatenation of
         # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
@@ -1540,10 +1545,10 @@ class LatentDiffusion(DDPM):
             # x_recons[-1] will be used for arcface align loss computation.
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
-                                       uncond_emb=uncond_emb, img_mask=None, 
-                                       cfg_scale=5, capture_ca_activations=True,
-                                       num_denoising_steps=num_comp_denoising_steps,
-                                       same_t_noise_across_instances=True)
+                                                    uncond_emb=uncond_emb, img_mask=None, 
+                                                    cfg_scale=5, capture_ca_activations=True,
+                                                    num_denoising_steps=num_comp_denoising_steps,
+                                                    same_t_noise_across_instances=True)
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
@@ -1609,6 +1614,17 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
+            if self.iter_flags['recon_on_comp_prompt']:
+                # Use class comp prompts as the negative prompts.
+                uncond_emb = extra_info['cls_comp_prompts']
+                # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
+                # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
+                cfg_scale  = np.random.uniform([1.5, 2.5])
+            else:
+                # Use the default negative prompts.
+                uncond_emb = None
+                cfg_scale  = -1
+
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -1621,7 +1637,7 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True,
                                     # Do not use cfg_scale for normal recon iterations. Only do recon 
                                     # using the positive prompt.
-                                    cfg_scale=-1, capture_ca_activations=True,
+                                    cfg_scale=cfg_scale, capture_ca_activations=True,
                                     enable_lora=self.unet_uses_lora)
 
             # If do_normal_recon, then there's only 1 objective:
@@ -1639,7 +1655,11 @@ class LatentDiffusion(DDPM):
             if loss_subj_mb_suppress > 0:
                 loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
 
-            loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+            if self.iter_flags['recon_on_comp_prompt']:
+                loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
+            else:
+                loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+                
             loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
             print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
             # loss_recon: 0.02~0.03.
