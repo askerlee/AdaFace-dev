@@ -194,10 +194,10 @@ class EmbeddingManager(nn.Module):
         self.clear_prompt_adhoc_info()
         # 'recon_iter', 'unet_distill_iter', 'compos_distill_iter', 'plain_text_iter'.
         self.iter_type = None       
-        # real_batch_size = 10000: an arbitrary large number. Will be set in set_image_prompts_and_iter_type().
-        self.real_batch_size = 10000   
         self.set_curr_batch_subject_names(["default"])
-        self.set_image_prompts_and_iter_type(None, None, 'plain_text_iter')
+        # real_batch_size = 10000: an arbitrary large number. 
+        # Will be updated through set_image_prompts_and_iter_type() during training.
+        self.set_image_prompts_and_iter_type(None, None, 'plain_text_iter', real_batch_size=10000)
 
         self.loss_call_count = 0
 
