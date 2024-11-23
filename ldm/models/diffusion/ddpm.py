@@ -1246,7 +1246,7 @@ class LatentDiffusion(DDPM):
             # Use the original "captions" prompts and embeddings.
             # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
             # it holds in all other cases.
-            if not self.iter_flags['unet_distill_uses_comp_prompt']:
+            if not self.iter_flags['unet_distill_uses_comp_prompt'] and not self.iter_flags['recon_on_comp_prompt']:
                 assert captions == subj_single_prompts
             else:
                 assert captions == subj_comp_prompts
