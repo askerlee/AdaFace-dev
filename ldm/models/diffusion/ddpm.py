@@ -2909,7 +2909,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs = \
             set_up_attn_processors(self.diffusion_model, self.global_enable_lora)
-        self.attn_capture_procs = attn_capture_procs.values()
+        self.attn_capture_procs = list(attn_capture_procs.values())
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
         # Intercept the forward() method of the last 3 CA layers.
@@ -2932,7 +2932,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 set_up_ffn_loras(self.diffusion_model, use_dora=True,
                                 lora_rank=lora_rank, lora_alpha=lora_rank // 8,
                                 )
-            self.ffn_lora_layers = ffn_lora_layers.values()
+            self.ffn_lora_layers = list(ffn_lora_layers.values())
             # unet_lora_modules is for optimization and loading/saving.
             self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
             for param in self.unet_lora_modules.parameters():

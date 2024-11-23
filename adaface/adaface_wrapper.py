@@ -280,8 +280,8 @@ class AdaFaceWrapper(nn.Module):
         unet, ffn_lora_layers, unet_lora_modules = set_up_ffn_loras(unet, use_dora=True)
 
         # self.attn_capture_procs and ffn_lora_layers will be used in set_lora_and_capture_flags().
-        self.attn_capture_procs = attn_capture_procs.values()
-        self.ffn_lora_layers    = ffn_lora_layers.values()
+        self.attn_capture_procs = list(attn_capture_procs.values())
+        self.ffn_lora_layers    = list(ffn_lora_layers.values())
         # unet_lora_modules is for optimization and loading/saving.
         self.unet_lora_modules  = torch.nn.ModuleDict(unet_lora_modules)
 

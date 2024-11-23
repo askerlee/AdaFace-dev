@@ -409,7 +409,7 @@ def set_up_attn_processors(unet, enable_lora):
         attn_capture_procs[name] = attn_capture_proc
     
     unet.set_attn_processor(attn_procs)
-    print(f"Set {len(attn_capture_procs)} CrossAttn processors on {attn_capture_procs.keys()}.")
+    print(f"Set up {len(attn_capture_procs)} CrossAttn processors on {attn_capture_procs.keys()}.")
     return attn_capture_procs
 
 # NOTE: cross-attn layers are included in the returned lora_modules.
@@ -448,7 +448,7 @@ def set_up_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
             if use_dora:
                 lora_modules[name + "_lora_magnitude_vector"] = module.lora_magnitude_vector
 
-    print(f"Set {len(ffn_lora_layers)} FFN LoRA layers: {ffn_lora_layers.keys()}.")
+    print(f"Set up {len(ffn_lora_layers)} FFN LoRA layers: {ffn_lora_layers.keys()}.")
     unet.print_trainable_parameters()
     return unet, ffn_lora_layers, lora_modules
 
