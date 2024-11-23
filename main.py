@@ -91,7 +91,7 @@ def get_parser(**parser_kwargs):
         "-s",
         "--seed",
         type=int,
-        default=23,
+        default=-1,
         help="seed for seed_everything",
     )
     parser.add_argument(
@@ -570,9 +570,11 @@ if __name__ == "__main__":
     cfgdir  = os.path.join(logdir, "configs")
     # If do zeroshot and setting seed, then the whole training sequence is deterministic, limiting the random space
     # it can explore. Therefore we don't set seed when doing zero-shot learning.
-    # seed_everything(opt.seed, workers=True)
-    #torch.backends.cudnn.deterministic = True
-    #torch.backends.cudnn.benchmark = False
+    if opt.seed > 0:
+        seed_everything(opt.seed, workers=True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
     torch.backends.cuda.matmul.allow_tf32 = True
 
     '''    

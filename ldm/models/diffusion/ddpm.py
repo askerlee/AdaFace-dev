@@ -816,11 +816,20 @@ class LatentDiffusion(DDPM):
         self.batch_1st_subject_name  = batch['subject_name'][0]
         self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
+        p_recon_on_comp_prompt = self.p_recon_on_comp_prompt if self.iter_flags['do_normal_recon'] else 0
+        self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < p_recon_on_comp_prompt).item()
+
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
         # Always use the trick on compositional distillation iterations.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_comp_feat_distill']:
+                p_use_fp_trick = 1
+            # recon_on_comp_prompt is enabled. So we add "portrait" to the prompts.
+            # By doing so, the subject model is easier to reconstruct the subject portraits,
+            # otherwise it has a tendency to implicitly encode "portrait" in the ID embeddings 
+            # for easy reconstruction.
+            elif self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_comp_prompt']:
                 p_use_fp_trick = 1
             # If compositional distillation is enabled, then in normal recon iterations,
             # we use the fp_trick most of the time, to better reconstructing single-face input images.
@@ -830,7 +839,8 @@ class LatentDiffusion(DDPM):
                 p_use_fp_trick = 0.8
             else:
                 # If not doing compositional distillation and only doing do_normal_recon, 
-                # then use_fp_trick is disabled, so that the ID embeddings alone are expected 
+                # and not recon_on_comp_prompt, then use_fp_trick is disabled, 
+                # so that the ID embeddings alone are expected 
                 # to reconstruct the subject portraits.
                 p_use_fp_trick = 0
         else:
@@ -870,7 +880,6 @@ class LatentDiffusion(DDPM):
         subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
 
-        self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < self.p_recon_on_comp_prompt).item()
         if self.iter_flags['recon_on_comp_prompt']:
             captions = subj_comp_prompts
         else:
