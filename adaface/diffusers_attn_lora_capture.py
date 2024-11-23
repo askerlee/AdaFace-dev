@@ -361,10 +361,9 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def setup_attn_processors(unet, enable_lora):
+def set_up_attn_processors(unet, enable_lora):
     attn_procs = {}
-    attn_capture_procs = []
-    attn_capture_proc_names = []
+    attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
 
     for name, attn_proc in unet.attn_processors.items():
@@ -407,15 +406,14 @@ def setup_attn_processors(unet, enable_lora):
         attn_procs[name] = attn_capture_proc
         # ModuleDict doesn't allow "." in the key.
         name = name.replace(".", "_")
-        attn_capture_procs.append(attn_capture_proc)
-        attn_capture_proc_names.append(name)
+        attn_capture_procs[name] = attn_capture_proc
     
     unet.set_attn_processor(attn_procs)
-    print(f"Set {len(attn_capture_procs)} CrossAttn processors on {attn_capture_proc_names}.")
-    return attn_capture_procs, attn_capture_proc_names
+    print(f"Set {len(attn_capture_procs)} CrossAttn processors on {attn_capture_procs.keys()}.")
+    return attn_capture_procs
 
 # NOTE: cross-attn layers are included in the returned lora_modules.
-def setup_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
+def set_up_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
                     use_dora=False, lora_rank=128, lora_alpha=16):
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
     peft_config = LoraConfig(use_dora=use_dora, inference_mode=False, r=lora_rank, 
@@ -454,16 +452,48 @@ def setup_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
     unet.print_trainable_parameters()
     return unet, ffn_lora_layers, lora_modules
 
-def set_lora_and_capture_flags(host, enable_lora, capture_ca_activations):
+def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
+                               enable_lora, capture_ca_activations):
     # For attn capture procs, capture_ca_activations and enable_lora are set in reset_attn_cache_and_flags().
-    for attn_capture_proc in host.attn_capture_procs:
+    for attn_capture_proc in attn_capture_procs:
         attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=enable_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
-    for block in host.outfeat_capture_blocks:
+    for block in outfeat_capture_blocks:
         block.capture_outfeats = capture_ca_activations
     # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
     # If not global_enable_lora, ffn_lora_layers is an empty ModuleDict.
     # This loop will exit immediately. So we don't have to worry about the presence of .scaling_.
-    for lora_layer in host.ffn_lora_layers:
+    for lora_layer in ffn_lora_layers:
         lora_layer.scaling = lora_layer.scaling_ if enable_lora else lora_layer.zero_scaling_
+
+def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
+                             captured_layer_indices=[23, 24], out_dtype=torch.float32):
+    captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
+
+    if not capture_ca_activations:
+        return captured_activations
+    
+    all_cached_outfeats = []
+    for block in outfeat_capture_blocks:
+        all_cached_outfeats.append(block.cached_outfeats)
+        # Clear the capture flag and cached outfeats.
+        block.cached_outfeats = {}
+        block.capture_outfeats = False
+
+    for layer_idx in captured_layer_indices:
+        # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].cached_outfeats.
+        # 23, 24 -> 1, 2 (!! not 0, 1 !!)
+        internal_idx = layer_idx - 22
+        for k in captured_activations.keys():
+            if k == 'outfeat':
+                # Currently we only capture one block, up_blocks.3. So we hard-code the index 0.
+                captured_activations['outfeat'][layer_idx] = all_cached_outfeats[0][internal_idx].to(out_dtype)
+            else:
+                # internal_idx is the index of layers in up_blocks.3. Layers 23 and 24 map to 1 and 2.
+                # But layers in attn_capture_procs correspond to up_blocks.3.attentions[1:].
+                # Therefore, we need to subtract 1 from internal_idx to match the index in attn_capture_procs.
+                cached_activations = attn_capture_procs[internal_idx - 1].cached_activations
+                captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
+
+    return captured_activations

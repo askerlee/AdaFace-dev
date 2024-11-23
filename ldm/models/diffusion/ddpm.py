@@ -23,8 +23,9 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
-from adaface.diffusers_attn_lora_capture import setup_attn_processors, setup_ffn_loras, \
-                                                set_lora_and_capture_flags, CrossAttnUpBlock2D_forward_capture
+from adaface.diffusers_attn_lora_capture import set_up_attn_processors, set_up_ffn_loras, \
+                                                set_lora_and_capture_flags, CrossAttnUpBlock2D_forward_capture, \
+                                                get_captured_activations
 from ldm.prodigy import Prodigy
 from adaface.unet_teachers import create_unet_teacher
 from gma.network import GMA
@@ -2905,12 +2906,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.global_enable_lora = enable_lora
         self.lora_rank = lora_rank
 
-        # Only capture the activations of the last 3 CA layers.
-        self.captured_layer_indices = [23, 24] # => 13, 14, 15
         # Keep a reference to self.attn_capture_procs to change their flags later.
-        attn_capture_procs, attn_capture_proc_names = \
-            setup_attn_processors(self.diffusion_model, self.global_enable_lora)
-        self.attn_capture_procs = attn_capture_procs
+        attn_capture_procs = \
+            set_up_attn_processors(self.diffusion_model, self.global_enable_lora)
+        self.attn_capture_procs = attn_capture_procs.values()
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
         # Intercept the forward() method of the last 3 CA layers.
@@ -2930,7 +2929,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # The first returned value is the PEFT wrapper model, 
             # which replaces the original unet, self.diffusion_model.
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
-                setup_ffn_loras(self.diffusion_model, use_dora=True,
+                set_up_ffn_loras(self.diffusion_model, use_dora=True,
                                 lora_rank=lora_rank, lora_alpha=lora_rank // 8,
                                 )
             self.ffn_lora_layers = ffn_lora_layers.values()
@@ -2962,7 +2961,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # So we keep them in different lists.
         # The scaling factors of attn_capture_procs and ffn_lora_layers are also set differently.
         # (They can be unified, but currently it's more convenient to keep them separate.)
-        set_lora_and_capture_flags(self, enable_lora, capture_ca_activations)
+        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
+                                   enable_lora, capture_ca_activations)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -2972,40 +2972,22 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                    cross_attention_kwargs={'img_mask': img_mask},
                                    return_dict=False)[0]
 
-        captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
-
-        if capture_ca_activations:
-            # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
-            # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
-            #LINK ldm/modules/diffusionmodules/openaimodel.py#unet_layers
-
-            all_cached_outfeats = []
-            for block in self.outfeat_capture_blocks:
-                all_cached_outfeats.append(block.cached_outfeats)
-                # Clear the capture flag and cached outfeats.
-                block.cached_outfeats = {}
-                block.capture_outfeats = False
-
-            for layer_idx in self.captured_layer_indices:
-                # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].cached_outfeats.
-                # 23, 24 -> 1, 2.
-                internal_idx = layer_idx - 22
-                for k in captured_activations.keys():
-                    if k == 'outfeat':
-                        captured_activations['outfeat'][layer_idx] = all_cached_outfeats[0][internal_idx].to(out_dtype)
-                    else:
-                        # internal_idx is the index of layers in up_blocks.3. Layers 23 and 24 map to 1 and 2.
-                        # But layers in attn_capture_procs correspond to up_blocks.3.attentions[1:].
-                        # Therefore, we need to subtract 1 from internal_idx to match the index in attn_capture_procs.
-                        cached_activations = self.attn_capture_procs[internal_idx - 1].cached_activations
-                        captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
-
-            extra_info['ca_layers_activations'] = captured_activations
+        # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
+        # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
+        #LINK ldm/modules/diffusionmodules/openaimodel.py#unet_layers
+        # If not capture_ca_activations, then get_captured_activations() returns a dict with only keys and empty values.
+        extra_info['ca_layers_activations'] = \
+            get_captured_activations(capture_ca_activations, self.attn_capture_procs, 
+                                     self.outfeat_capture_blocks,
+                                     # Only capture the activations of the last 3 CA layers.
+                                     captured_layer_indices = [23, 24],
+                                     out_dtype=out_dtype)
 
         # Restore capture_ca_activations to False, and disable all loras.
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.        
-        set_lora_and_capture_flags(self, False, False)
+        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
+                                   False, False)
 
         out = out.to(out_dtype)
         return out

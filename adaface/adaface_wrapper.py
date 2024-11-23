@@ -16,7 +16,7 @@ from diffusers import (
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.util import UNetEnsemble
 from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
-from adaface.diffusers_attn_lora_capture import setup_attn_processors, setup_ffn_loras, \
+from adaface.diffusers_attn_lora_capture import set_up_attn_processors, set_up_ffn_loras, \
                                                 set_lora_and_capture_flags, CrossAttnUpBlock2D_forward_capture
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
@@ -275,9 +275,9 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict):
-        attn_capture_procs, attn_capture_proc_names = setup_attn_processors(unet, enable_lora=True)
+        attn_capture_procs, attn_capture_proc_names = set_up_attn_processors(unet, enable_lora=True)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
-        unet, ffn_lora_layers, unet_lora_modules = setup_ffn_loras(unet, use_dora=True)
+        unet, ffn_lora_layers, unet_lora_modules = set_up_ffn_loras(unet, use_dora=True)
 
         # self.attn_capture_procs and ffn_lora_layers will be used in set_lora_and_capture_flags().
         self.attn_capture_procs = attn_capture_procs
@@ -306,7 +306,8 @@ class AdaFaceWrapper(nn.Module):
         print(f"Loaded {len(unet_lora_modules_state_dict)} LoRA weights on the UNet:\n{unet_lora_modules.keys()}")
         self.outfeat_capture_blocks.append(unet.up_blocks[3])
 
-        set_lora_and_capture_flags(self, enable_lora=True, capture_ca_activations=False)
+        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
+                                   enable_lora=True, capture_ca_activations=False)
 
         return unet
 
