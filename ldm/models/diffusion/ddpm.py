@@ -12,7 +12,7 @@ import bitsandbytes as bnb
 from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
-                        calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
+                        calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
                         calc_recon_and_complem_losses, calc_feat_delta_and_attn_norm_loss, \
                         save_grid, init_x_with_fg_from_training_image, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
@@ -316,7 +316,7 @@ class DDPM(pl.LightningModule):
                             'do_prompt_emb_delta_reg':          False,
                             'unet_distill_uses_comp_prompt':    False,
                             'use_fp_trick':                     False,
-                            'comp_init_fg_from_training_image': False,
+                            'is_comp_init_fg_from_training_image': False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -832,15 +832,12 @@ class LatentDiffusion(DDPM):
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
         if self.iter_flags['do_comp_feat_distill'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # If do_comp_feat_distill, comp_init_fg_from_training_image is always enabled.
+            # If do_comp_feat_distill, is_comp_init_fg_from_training_image is always enabled.
             # It's OK, since when do_zero_shot, we have a large diverse set of training images,
             # and always initializing from training images won't lead to overfitting.
-            p_comp_init_fg_from_training_image = 1
+            self.iter_flags['is_comp_init_fg_from_training_image'] = True
         else:
-            p_comp_init_fg_from_training_image = 0
-
-        self.iter_flags['comp_init_fg_from_training_image'] \
-            = (torch.rand(1) < p_comp_init_fg_from_training_image).item()
+            self.iter_flags['is_comp_init_fg_from_training_image'] = False
 
         # ** use_fp_trick is only for compositional iterations. **
         if self.iter_flags['use_fp_trick']:
@@ -1530,7 +1527,7 @@ class LatentDiffusion(DDPM):
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
             # But we don't use img_mask in compositional iterations. Because in compositional iterations,
-            # the original images don't play a role (even if comp_init_fg_from_training_image,
+            # the original images don't play a role (even if is_comp_init_fg_from_training_image,
             # the unet doesn't consider the actual pixels outside of the subject areas, so img_mask is
             # set to None).
 
@@ -1714,10 +1711,12 @@ class LatentDiffusion(DDPM):
                 # i.e., more strict for the first step, and more relaxed for the last step.
                 recon_loss_discard_thres = 0.4 + 0.05 * step_idx
                 loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
-                    self.calc_comp_prompt_distill_loss(ca_layers_activations, filtered_fg_mask, 
-                                                       instances_have_fg_mask, all_subj_indices_1b, 
-                                                       BLOCK_SIZE, loss_dict, session_prefix,
-                                                       recon_loss_discard_thres=recon_loss_discard_thres)
+                    calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
+                                                  self.iter_flags['is_comp_init_fg_from_training_image'],
+                                                  self.iter_flags['fg_mask_avail_ratio'],
+                                                  filtered_fg_mask, instances_have_fg_mask, 
+                                                  all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
+                                                  recon_loss_discard_thres=recon_loss_discard_thres)
 
                 # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
                 # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -1765,10 +1764,10 @@ class LatentDiffusion(DDPM):
                 sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
                 loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
 
-            # loss_comp_fg_bg_preserve = 0 if comp_init_fg_from_training_image and there's a valid fg_mask.
+            # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
             if loss_comp_fg_bg_preserve > 0:
                 loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
-                # Keep track of the number of iterations that use comp_init_fg_from_training_image.
+                # Keep track of the number of iterations that use is_comp_init_fg_from_training_image.
                 self.comp_init_fg_from_training_image_count += 1
                 comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.comp_iters_count + 1)
                 loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
@@ -2042,9 +2041,9 @@ class LatentDiffusion(DDPM):
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
         img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask = masks
 
-        if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
+        if self.iter_flags['is_comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-            # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
+            # Therefore, using fg_mask for is_comp_init_fg_from_training_image will force the model remember 
             # the background in the training images, which is not desirable.
             # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
             # fg_mask is 4D (added 1D in shared_step()). So expand instances_have_fg_mask to 4D.
@@ -2194,77 +2193,6 @@ class LatentDiffusion(DDPM):
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
     
-    def calc_comp_prompt_distill_loss(self, ca_layers_activations, filtered_fg_mask, instances_have_fg_mask,
-                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
-                                      recon_loss_discard_thres=0.4):
-        # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
-        # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
-        # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
-        ca_outfeats  = ca_layers_activations['outfeat']
-
-        # NOTE: loss_comp_fg_bg_preserve is applied only when this 
-        # iteration is teachable, because at such iterations the unet gradient is enabled.
-        # If comp_init_fg_from_training_image, then we need to preserve the fg/bg areas.
-        # Although fg_mask_avail_ratio > 0 when comp_init_fg_from_training_image,
-        # fg_mask_avail_ratio may have been updated after doing teacher filtering 
-        # (since x_start has been filtered, masks are also filtered accordingly, 
-        # and the same as to fg_mask_avail_ratio). So we need to check it here.
-        if self.iter_flags['comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-            # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
-            # the background in the training images, which is not desirable.
-            # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
-            # excluding the instance from the fg_bg_preserve_loss.
-
-            comp_subj_bg_preserve_loss_dict = \
-                calc_comp_subj_bg_preserve_loss(self.flow_model, ca_outfeats,
-                                                ca_layers_activations['attn_out'],
-                                                ca_layers_activations['q'],
-                                                ca_layers_activations['attn'], 
-                                                filtered_fg_mask, instances_have_fg_mask,
-                                                all_subj_indices_1b, BLOCK_SIZE,
-                                                recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
-                                                bg_align_loss_scheme='L2',
-                                                recon_loss_discard_thres=recon_loss_discard_thres,
-                                                do_feat_attn_pooling=True)
-            
-            loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
-                           'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
-                           'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
-            
-            # loss_sc_recon_ss_fg_attn_agg and loss_sc_recon_ss_fg_flow, loss_comp_cls_bg_attn_suppress 
-            # are returned to be monitored, not to be optimized.
-            # Only their counterparts -- loss_sc_recon_ss_fg_min, loss_comp_subj_bg_attn_suppress 
-            # are optimized.
-            loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
-            loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, loss_sc_mc_bg_match, \
-            loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
-                = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
-
-            for loss_name in loss_names:
-                if loss_name in comp_subj_bg_preserve_loss_dict and comp_subj_bg_preserve_loss_dict[loss_name] > 0:
-                    loss_name2 = loss_name.replace('loss_', '')
-                    # Accumulate the loss values to loss_dict when there are multiple denoising steps.
-                    add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
-
-            # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
-            subj_comp_map_single_align_with_cls_loss_scale = 1
-            comp_subj_bg_attn_suppress_loss_scale = 0.02
-            sc_recon_ss_fg_min_loss_scale = 10
-
-            # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
-            loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
-            # loss_sc_mc_bg_match:             0.005~0.008 -> 0.25~0.4.
-            # loss_comp_subj_bg_attn_suppress: 0.1~0.2     -> 0.002~0.004.
-            # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.
-            # Therefore, we use a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
-            loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
-                                        + loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
-        else:
-            loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = 0
-
-        return loss_comp_fg_bg_preserve, loss_sc_mc_bg_match
-
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
     # Data type of samples could be uint (0-25), or float (-1, 1) or (0, 1).

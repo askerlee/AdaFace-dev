@@ -2564,3 +2564,72 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                             'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
     
     return loss_dict
+
+
+def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations, 
+                                  is_comp_init_fg_from_training_image, fg_mask_avail_ratio,
+                                  filtered_fg_mask, instances_have_fg_mask,
+                                  all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
+                                  recon_loss_discard_thres=0.4):
+    # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
+    # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
+    # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
+    ca_outfeats  = ca_layers_activations['outfeat']
+
+    # NOTE: loss_comp_fg_bg_preserve is applied only when comp_init_fg_from_training_image, 
+    # i.e., when the fg_mask is available.
+    if is_comp_init_fg_from_training_image and fg_mask_avail_ratio > 0:
+        # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+        # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
+        # the background in the training images, which is not desirable.
+        # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
+        # excluding the instance from the fg_bg_preserve_loss.
+
+        comp_subj_bg_preserve_loss_dict = \
+            calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats,
+                                            ca_layers_activations['attn_out'],
+                                            ca_layers_activations['q'],
+                                            ca_layers_activations['attn'], 
+                                            filtered_fg_mask, instances_have_fg_mask,
+                                            all_subj_indices_1b, BLOCK_SIZE,
+                                            recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
+                                            bg_align_loss_scheme='L2',
+                                            recon_loss_discard_thres=recon_loss_discard_thres,
+                                            do_feat_attn_pooling=True)
+        
+        loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
+                        'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
+        
+        # loss_sc_recon_ss_fg_attn_agg and loss_sc_recon_ss_fg_flow, loss_comp_cls_bg_attn_suppress 
+        # are returned to be monitored, not to be optimized.
+        # Only their counterparts -- loss_sc_recon_ss_fg_min, loss_comp_subj_bg_attn_suppress 
+        # are optimized.
+        loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
+        loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, loss_sc_mc_bg_match, \
+        loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
+            = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
+
+        for loss_name in loss_names:
+            if loss_name in comp_subj_bg_preserve_loss_dict and comp_subj_bg_preserve_loss_dict[loss_name] > 0:
+                loss_name2 = loss_name.replace('loss_', '')
+                # Accumulate the loss values to loss_dict when there are multiple denoising steps.
+                add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
+
+        # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
+        subj_comp_map_single_align_with_cls_loss_scale = 1
+        comp_subj_bg_attn_suppress_loss_scale = 0.02
+        sc_recon_ss_fg_min_loss_scale = 10
+
+        # loss_sc_recon_ss_fg_min: 0.1~0.12. -> 1~1.2.
+        loss_sc_ss_fg_recon = loss_sc_recon_ss_fg_min * sc_recon_ss_fg_min_loss_scale
+        # loss_sc_mc_bg_match:             0.005~0.008 -> 0.25~0.4.
+        # loss_comp_subj_bg_attn_suppress: 0.1~0.2     -> 0.002~0.004.
+        # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.
+        # Therefore, we use a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
+        loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
+                                    + loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
+    else:
+        loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = 0
+
+    return loss_comp_fg_bg_preserve, loss_sc_mc_bg_match
