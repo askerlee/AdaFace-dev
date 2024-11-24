@@ -24,6 +24,7 @@ class FacialAreaRegion:
         h: int,
         left_eye: Optional[Tuple[int, int]] = None,
         right_eye: Optional[Tuple[int, int]] = None,
+        nose: Optional[Tuple[int, int]] = None,
         confidence: Optional[float] = None,
     ):
         """
@@ -47,7 +48,10 @@ class FacialAreaRegion:
         self.h = h
         self.left_eye = left_eye
         self.right_eye = right_eye
-        self.confidence = confidence
+        self.nose = nose
+        self.mouth_left  = None
+        self.mouth_right = None
+        self.confidence  = confidence
 
 class RetinaFaceClient(nn.Module):
     def __init__(self, device='cuda'):
@@ -93,6 +97,7 @@ class RetinaFaceClient(nn.Module):
             # Returns 5-point facial landmarks: right eye, left eye, nose, right mouth, left mouth
             left_eye = identity["landmarks"][1]
             right_eye = identity["landmarks"][0]
+            nose      = identity["landmarks"][2]
 
             # eyes are list of float, need to cast them tuple of int
             left_eye = tuple(int(i) for i in left_eye)
@@ -109,6 +114,7 @@ class RetinaFaceClient(nn.Module):
                 h=h,
                 left_eye=left_eye,
                 right_eye=right_eye,
+                nose=nose,
                 confidence=confidence,
             )
 

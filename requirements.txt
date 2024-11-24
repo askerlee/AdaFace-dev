@@ -29,7 +29,7 @@ prodigyopt
 numpy>=1.24.0
 onnxruntime-gpu
 insightface
-deepface
+deepface>=0.0.94
 ftfy
 peft
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch

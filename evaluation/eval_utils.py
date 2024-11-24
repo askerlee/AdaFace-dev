@@ -16,6 +16,7 @@ from evaluation.dino_eval import DINOEvaluator
 from evaluation.community_prompts import community_prompt_list
 from ldm.data.personalized import PersonalizedBase
 from adaface.util import pad_image_obj_to_square
+import traceback
 
 def set_tf_gpu(gpu_id):
     import tensorflow as tf
@@ -198,7 +199,7 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
 
         except Exception as e: 
             print(img_path)
-            print(e)
+            traceback.print_exc()
             continue
         
         start = time.time()
