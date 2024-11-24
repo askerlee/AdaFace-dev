@@ -13,7 +13,7 @@ from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
-                        calc_subj_masked_bg_suppress_loss, calc_feat_delta_and_attn_norm_loss, \
+                        calc_recon_and_complem_losses, calc_feat_delta_and_attn_norm_loss, \
                         save_grid, init_x_with_fg_from_training_image, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
@@ -46,7 +46,6 @@ class DDPM(pl.LightningModule):
                  automatic_optimization=True,
                  timesteps=1000,
                  beta_schedule="linear",
-                 loss_type="l2",
                  monitor=None,
                  first_stage_key="image",
                  image_size=256,
@@ -198,8 +197,6 @@ class DDPM(pl.LightningModule):
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
 
-        self.loss_type = loss_type
-
     def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
         if exists(given_betas):
@@ -296,20 +293,6 @@ class DDPM(pl.LightningModule):
         noise = default(noise, lambda: torch.randn_like(x_start))
         return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
-
-    # self.loss_type: default 'l2'.
-    def get_loss_func(self, loss_type=None):
-        if loss_type is None:
-            loss_type = self.loss_type
-
-        if loss_type == 'l1':
-            loss_func = F.l1_loss
-        elif loss_type == 'l2':
-            loss_func = F.mse_loss
-        else:
-            raise NotImplementedError("Unknown loss type '{loss_type}'")
-
-        return loss_func
 
     def get_input(self, batch, k):
         x = batch[k]
@@ -1658,9 +1641,9 @@ class LatentDiffusion(DDPM):
             bg_pixel_weight = 0 
 
             loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
-                self.calc_recon_and_complem_losses(model_output, gt_target, ca_layers_activations,
-                                                   all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
-                                                   bg_pixel_weight, x_start.shape[0])
+                calc_recon_and_complem_losses(model_output, gt_target, ca_layers_activations,
+                                              all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
+                                              bg_pixel_weight, x_start.shape[0])
             v_loss_recon = loss_recon.mean().detach().item()
         
             # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
@@ -1860,25 +1843,6 @@ class LatentDiffusion(DDPM):
         loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels)
         loss_arcface_align = loss_arcface_align.to(x_start.dtype)
         return loss_arcface_align
-    
-    # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
-    # (But there are still other losses used after calling this function.)
-    def calc_recon_and_complem_losses(self, model_output, target, ca_layers_activations,
-                                      all_subj_indices, img_mask, fg_mask, instances_have_fg_mask, 
-                                      bg_pixel_weight, BLOCK_SIZE):
-
-        loss_subj_mb_suppress = calc_subj_masked_bg_suppress_loss(ca_layers_activations['attnscore'],
-                                                                  all_subj_indices, BLOCK_SIZE, fg_mask, 
-                                                                  instances_have_fg_mask)
-
-        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-        loss_recon, _ = calc_recon_loss(self.get_loss_func(), model_output, target, img_mask, fg_mask, 
-                                        fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
-
-        # Calc the L2 norm of model_output.
-        loss_pred_l2 = (model_output ** 2).mean()
-        return loss_subj_mb_suppress, loss_recon, loss_pred_l2
-
 
     def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, img_mask, fg_mask):
         c_prompt_emb, c_in, extra_info = cond_context
@@ -2046,7 +2010,7 @@ class LatentDiffusion(DDPM):
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
-                calc_recon_loss(self.get_loss_func(), model_output, target.to(model_output.dtype), 
+                calc_recon_loss(F.mse_loss, model_output, target.to(model_output.dtype), 
                                 img_mask, fg_mask, fg_pixel_weight=1,
                                 bg_pixel_weight=bg_pixel_weight)
 

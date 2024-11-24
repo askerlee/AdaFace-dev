@@ -1702,6 +1702,24 @@ def calc_recon_loss(loss_func, model_output, target, img_mask, fg_mask,
 
     return loss_recon, loss_recon_pixels
 
+# Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
+# (But there are still other losses used after calling this function.)
+def calc_recon_and_complem_losses(model_output, target, ca_layers_activations,
+                                  all_subj_indices, img_mask, fg_mask, instances_have_fg_mask, 
+                                  bg_pixel_weight, BLOCK_SIZE):
+
+    loss_subj_mb_suppress = calc_subj_masked_bg_suppress_loss(ca_layers_activations['attnscore'],
+                                                                all_subj_indices, BLOCK_SIZE, fg_mask, 
+                                                                instances_have_fg_mask)
+
+    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+    loss_recon, _ = calc_recon_loss(F.mse_loss, model_output, target, img_mask, fg_mask, 
+                                    fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
+
+    # Calc the L2 norm of model_output.
+    loss_pred_l2 = (model_output ** 2).mean()
+    return loss_subj_mb_suppress, loss_recon, loss_pred_l2
+
 # calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
 def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
     # do_comp_feat_distill iterations. No ordinary image reconstruction loss.
