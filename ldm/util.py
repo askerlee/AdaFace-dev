@@ -1702,6 +1702,221 @@ def calc_recon_loss(loss_func, model_output, target, img_mask, fg_mask,
 
     return loss_recon, loss_recon_pixels
 
+# calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
+def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
+    # do_comp_feat_distill iterations. No ordinary image reconstruction loss.
+    # Only regularize on intermediate features, i.e., intermediate features generated 
+    # under subj_comp_prompts should satisfy the delta loss constraint:
+    # F(subj_comp_prompts)  - F(mix(subj_comp_prompts, cls_comp_prompts)) \approx 
+    # F(subj_single_prompts) - F(cls_single_prompts)
+
+    # Avoid doing distillation on the first few bottom layers (little difference).
+    # distill_layer_weights: relative weight of each distillation layer. 
+    # distill_layer_weights are normalized using distill_overall_weight.
+    # Most important conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
+    # But intermediate layers also contribute to distillation. They have small weights.
+
+    # feature map distillation only uses delta loss on the features to reduce the 
+    # class polluting the subject features.
+    # Feature map spatial sizes are all 64*64.
+    feat_distill_layer_weights = { 23: 1, 24: 1, 
+                                 }
+
+    # attn norm distillation is applied to almost all conditioning layers.
+    attn_norm_distill_layer_weights = { 
+                                        23: 1., 24: 1.,                                   
+                                      }
+
+    # Normalize the weights above so that each set sum to 1.
+    feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
+    attn_norm_distill_layer_weights     = normalize_dict_values(attn_norm_distill_layer_weights)
+
+    # K_subj: 4, number of embeddings per subject token.
+    K_subj = len(subj_indices_2b[0]) // len(torch.unique(subj_indices_2b[0]))
+    subj_indices_4b = double_token_indices(subj_indices_2b, BLOCK_SIZE * 2)
+
+    loss_layers_feat_delta_align        = []
+    loss_layers_subj_attn_norm_distill  = []
+
+    subj_single_feat_grad_scaler = gen_gradient_scaler(0.1)
+
+    for unet_layer_idx, ca_outfeat in ca_outfeats.items():
+        if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
+            continue
+
+        # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
+        # We don't need BP through attention into UNet.
+        attn_mat = ca_attns[unet_layer_idx].permute(0, 3, 1, 2)
+        # subj_attn_4b: [4, 8, 256]  (1 embedding  for 1 token)  => [4, 1, 8, 256] => [4, 8, 256]
+        # or            [16, 8, 256] (4 embeddings for 1 token)  => [4, 4, 8, 256] => [4, 8, 256]
+        # BLOCK_SIZE*4: this batch contains 4 blocks. Each block should have one instance.
+        subj_attn_4b = attn_mat[subj_indices_4b].reshape(BLOCK_SIZE*4, K_subj, *attn_mat.shape[2:]).sum(dim=1)
+        # subj_single_subj_attn, ...: [1, 8, 256] (1 embedding  for 1 token) 
+        # or                          [1, 8, 256] (4 embeddings for 1 token)
+        subj_single_subj_attn, subj_comp_subj_attn, cls_single_subj_attn, cls_comp_subj_attn \
+            = subj_attn_4b.chunk(4)
+
+        if unet_layer_idx in attn_norm_distill_layer_weights:
+            attn_norm_distill_layer_weight     = attn_norm_distill_layer_weights[unet_layer_idx]
+
+            cls_comp_subj_attn_gs       = cls_comp_subj_attn.detach()
+            cls_single_subj_attn_gs     = cls_single_subj_attn.detach()
+
+            # mean(dim=-1): average across the 64 feature channels.
+            # Align the attention corresponding to each embedding individually.
+            # Note cls_*subj_attn use *_gs versions.
+            # The L1 loss of the average attention values of the subject tokens, at each head and each instance.
+            loss_layer_subj_comp_attn_norm   = F.l1_loss(subj_comp_subj_attn.abs().mean(dim=-1), cls_comp_subj_attn_gs.abs().mean(dim=-1))
+            loss_layer_subj_single_attn_norm = F.l1_loss(subj_single_subj_attn.abs().mean(dim=-1), cls_single_subj_attn_gs.abs().mean(dim=-1))
+            # loss_subj_attn_norm_distill uses L1 loss, which tends to be in 
+            # smaller magnitudes than the delta loss. So it will be scaled up later in p_losses().
+            loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
+                                                        * attn_norm_distill_layer_weight)
+
+        if unet_layer_idx not in feat_distill_layer_weights:
+            continue
+
+        feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
+
+        # [4, 320, 64, 64] -> [4, 320, 31, 31]
+        ca_outfeat = pool_feat_or_attn_mat(ca_outfeat)
+        # ca_outfeat_3d: [4, 320, 31, 31] -> [4, 320, 961] -> [4, 961, 320]
+        ca_outfeat_3d = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1).permute(0, 2, 1)
+        # subj_single_feat_3d, ...: [1, 961, 320]
+        subj_single_feat_3d, subj_comp_feat_3d, cls_single_feat_3d, cls_comp_feat_3d \
+            = ca_outfeat_3d.chunk(4)
+
+        cls_single_feat_3d_gs  = cls_single_feat_3d.detach()
+        cls_comp_feat_3d_gs    = cls_comp_feat_3d.detach()
+        # subj_single_feat_grad_scaler reduces grad by 10x.
+        subj_single_feat_3d_gs = subj_single_feat_grad_scaler(subj_single_feat_3d)
+
+        # ortho_subtract() is done on each image token individually, potentially with different scales.
+        comp_feat_delta   = ortho_subtract(subj_comp_feat_3d,      cls_comp_feat_3d_gs)
+        # subj_single_feat is gs'ed by 10x to avoid it from degeneration.
+        single_feat_delta = ortho_subtract(subj_single_feat_3d_gs, cls_single_feat_3d_gs)
+            
+        # single_feat_delta, comp_feat_delta: [1, 320], ...
+        # Pool the spatial dimensions H, W to remove spatial information.
+        # The gradient goes back to single_feat_delta -> subj_comp_feat,
+        # as well as comp_feat_delta -> cls_comp_feat.
+        # If stop_single_grad, the gradients to subj_single_feat and cls_single_feat are stopped, 
+        # as these two images should look good by themselves (since they only contain the subject).
+        # Note the learning strategy to the single image features should be different from 
+        # the single embeddings, as the former should be optimized to look good by itself,
+        # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
+        # and 2) the embeddings are amendable to composition.
+        loss_layer_feat_delta_align = \
+            calc_ref_cosine_loss(comp_feat_delta, single_feat_delta, 
+                                 emb_mask=None,
+                                 exponent=2, do_demeans=[False, False],
+                                 first_n_dims_into_instances=2, 
+                                 aim_to_align=True, 
+                                 ref_grad_scale=1)
+        loss_layers_feat_delta_align.append(loss_layer_feat_delta_align * feat_distill_layer_weight)
+
+    loss_feat_delta_align       = sum(loss_layers_feat_delta_align)
+    loss_subj_attn_norm_distill = sum(loss_layers_subj_attn_norm_distill)
+
+    return loss_feat_delta_align, loss_subj_attn_norm_distill
+
+def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, 
+                                      fg_mask, instance_has_fg_mask=None):
+    if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
+        or (instance_has_fg_mask is not None and instance_has_fg_mask.sum() == 0):
+        return 0
+
+    # Discard the first few bottom layers from alignment.
+    # attn_align_layer_weights: relative weight of each layer. 
+    # Feature map spatial sizes are all 64*64.
+    attn_align_layer_weights = { 23: 1, 24: 1, 
+                                }
+            
+    # Normalize the weights above so that each set sum to 1.
+    attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
+    # K_subj: 9, number of embeddings per subject token.
+    K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+    subj_mb_suppress_scale      = 0.05
+    mfmb_contrast_attn_margin   = 0.4
+
+    # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+    #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+    subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
+
+    loss_layers_subj_mb_suppress    = []
+
+    for unet_layer_idx, unet_attn in ca_attnscore.items():
+        if (unet_layer_idx not in attn_align_layer_weights):
+            continue
+
+        attn_align_layer_weight = attn_align_layer_weights[unet_layer_idx]
+        # [2, 8, 256, 77] / [2, 8, 64, 77] =>
+        # [2, 77, 8, 256] / [2, 77, 8, 64]
+        attn_mat = unet_attn.permute(0, 3, 1, 2)
+
+        # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
+        subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, do_sum=True, do_mean=False)
+
+        fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
+                                                mode="nearest|bilinear")
+        # Repeat 8 times to match the number of attention heads (for normalization).
+        fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
+        fg_mask3 = torch.zeros_like(fg_mask2)
+        # Set fractional values (due to resizing) to 1.
+        fg_mask3[fg_mask2 >  1e-6] = 1.
+
+        bg_mask3 = (1 - fg_mask3)
+
+        if (fg_mask3.sum(dim=(1, 2)) == 0).any():
+            # Very rare cases. Safe to skip.
+            print("WARNING: fg_mask3 has all-zero masks.")
+            continue
+        if (bg_mask3.sum(dim=(1, 2)) == 0).any():
+            # Very rare cases. Safe to skip.
+            print("WARNING: bg_mask3 has all-zero masks.")
+            continue
+
+        subj_attn_at_mf = subj_attn * fg_mask3
+        # Protect subject emb activations on fg areas.
+        subj_attn_at_mf = subj_attn_at_mf.detach()
+        # subj_attn_at_mb: [BLOCK_SIZE, 8, 64].
+        # mb: mask foreground locations, mask background locations.
+        subj_attn_at_mb = subj_attn * bg_mask3
+
+        # fg_mask3: [BLOCK_SIZE, 8, 64]
+        # avg_subj_attn_at_mf: [BLOCK_SIZE, 1, 1]
+        # keepdim=True, since attn probs at all locations will use them as references (subtract them).
+        avg_subj_attn_at_mf = masked_mean(subj_attn_at_mf, fg_mask3, dim=(1,2), keepdim=True)
+
+        '''
+        avg_subj_attn_at_mb = masked_mean(subj_attn_at_mb, bg_mask3, dim=(1,2), keepdim=True)
+        if 'DEBUG' in os.environ and os.environ['DEBUG'] == '1':
+            print(f'layer {unet_layer_idx}')
+            print(f'avg_subj_attn_at_mf: {avg_subj_attn_at_mf.mean():.4f}, avg_subj_attn_at_mb: {avg_subj_attn_at_mb.mean():.4f}')
+        '''
+
+        # Encourage avg_subj_attn_at_mf (subj_attn averaged at foreground locations) 
+        # to be at least larger by mfmb_contrast_attn_margin = 0.4 than 
+        # subj_attn_at_mb at any background locations.
+        # If not, clamp() > 0, incurring a loss.
+        # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
+        layer_subj_mb_excess = subj_attn_at_mb + mfmb_contrast_attn_margin - avg_subj_attn_at_mf
+        # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
+        # activations conform to the margin restrictions.
+        loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
+                                                    layer_subj_mb_excess > 0, 
+                                                    instance_weights=instance_has_fg_mask)
+
+        # loss_layer_subj_bg_contrast_at_mf is usually 0, 
+        # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
+        # subj_mb_suppress_scale: 0.05.
+        loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress \
+                                            * attn_align_layer_weight * subj_mb_suppress_scale)
+        
+    loss_subj_mb_suppress = sum(loss_layers_subj_mb_suppress)
+
+    return loss_subj_mb_suppress
+
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
 # according to the feature map size.
@@ -2167,3 +2382,167 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     
     return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
            loss_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ms_fg_prob_below_mean
+
+
+# Intuition of comp_fg_bg_preserve_loss: 
+# In distillation iterations, if comp_init_fg_from_training_image, then at fg_mask areas, x_start is initialized with 
+# the noisy input images. (Otherwise in distillation iterations, x_start is initialized as pure noise.)
+# Essentially, it's to mask the background out of the input images with noise.
+# Therefore, intermediate features at the foreground with single prompts should be close to those of the original images.
+# Features with comp prompts should be similar with the original images at the foreground.
+# So features under comp prompts should be close to features under single prompts, at fg_mask areas.
+# (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
+# NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
+def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
+                                    fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
+                                    recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'cosine'},
+                                    bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4,
+                                    do_feat_attn_pooling=True):
+    # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
+    if fg_mask is None or instances_have_fg_mask.sum() == 0:
+        return {}
+
+    # Feature map spatial sizes are all 64*64.
+    # Remove layer 22, as the losses at this layer are often too large 
+    # and are discarded at a high percentage.
+    elastic_matching_layer_weights = { 23: 1, 24: 1, 
+                                        }
+    
+    # Normalize the weights above so that each set sum to 1.
+    elastic_matching_layer_weights  = normalize_dict_values(elastic_matching_layer_weights)
+    
+    # fg_mask is 4D. So expand instances_have_fg_mask to 4D.
+    # *_4b means it corresponds to a 4-block batch (batch size = 4 * BLOCK_SIZE).
+    fg_mask_4b = fg_mask * instances_have_fg_mask.view(-1, 1, 1, 1)
+
+    # K_subj: 4, number of embeddings per subject token.
+    K_subj   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
+    # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
+    #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
+    # ind_subj_subj_B_1b, ind_subj_subj_N_1b: [0, 0, 0, 0], [5, 6, 7, 8].
+    ind_subj_subj_B_1b, ind_subj_subj_N_1b = subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj]
+    ind_subj_B = torch.cat([ind_subj_subj_B_1b,                     ind_subj_subj_B_1b + BLOCK_SIZE,
+                            ind_subj_subj_B_1b + 2 * BLOCK_SIZE,    ind_subj_subj_B_1b + 3 * BLOCK_SIZE], dim=0)
+    ind_subj_N = ind_subj_subj_N_1b.repeat(4)
+    
+    loss_dict = {}
+    
+    for unet_layer_idx, ca_outfeat in ca_outfeats.items():
+        if unet_layer_idx not in elastic_matching_layer_weights:
+            continue
+        elastic_matching_layer_weight = elastic_matching_layer_weights[unet_layer_idx]
+
+        # ca_outfeat: [4, 1280, 8, 8]
+        ca_feat_h, ca_feat_w = ca_outfeat.shape[-2:]
+
+        # ca_layer_q: [4, 1280, 64] -> [4, 1280, 8, 8]
+        ca_layer_q  = ca_qs[unet_layer_idx]
+        ca_attn_out = ca_attn_outs[unet_layer_idx]
+        # This way of calculation ca_q_h is to consider the case when the height and width might not be the same.
+        ca_q_h = int(np.sqrt(ca_layer_q.shape[2] * ca_outfeat.shape[2] // ca_outfeat.shape[3]))
+        ca_q_w = ca_layer_q.shape[2] // ca_q_h
+        ca_layer_q = ca_layer_q.reshape(ca_layer_q.shape[0], -1, ca_q_h, ca_q_w)
+
+        # ca_attn_out: [B, D, N] -> [B, D, H, W].
+        ca_attn_out = ca_attn_out.reshape(*ca_attn_out.shape[:2], ca_feat_h, ca_feat_w)
+
+        # Some layers resize the input feature maps. So we need to resize ca_outfeat to match ca_layer_q.
+        if ca_outfeat.shape[2:] != ca_layer_q.shape[2:]:
+            ca_outfeat = F.interpolate(ca_outfeat, size=ca_layer_q.shape[2:], mode="bilinear", align_corners=False)
+            
+        ###### elastic matching loss ######
+        # q of each layer is used to compute the correlation matrix between subject-single and subject-comp instances,
+        # as well as class-single and class-comp instances.
+        # ca_attn_out is used to compute the reconstruction loss between subject-single and subject-comp instances 
+        # (using the correlation matrix), as well as class-single and class-comp instances.
+        # Flatten the spatial dimensions of ca_attn_out.
+        # ca_layer_q, ca_attn_out, ca_outfeat: [4, 1280, 8, 8] -> [4, 1280, 64].
+        ca_layer_q  = ca_layer_q.reshape(*ca_layer_q.shape[:2], -1)
+        ca_attn_out = ca_attn_out.reshape(*ca_attn_out.shape[:2], -1)
+        ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
+        # fg_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
+        fg_mask_4b \
+            = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
+                                            mode="nearest|bilinear", warn_on_all_zero=False)
+        # ss_fg_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
+        ss_fg_mask = fg_mask_4b.chunk(4)[0]
+        # ss_fg_mask: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
+        ss_fg_mask = ss_fg_mask.reshape(*ss_fg_mask.shape[:2], -1)
+
+        # sc_map_ss_fg_prob, mc_map_ms_fg_prob: [1, 1, 64]
+        # removed loss_layer_ms_mc_fg_match to save computation.
+        # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_map_ss_prob and mc_map_ms_prob.
+        # sc_map_ss_fg_prob_below_mean and mc_map_ms_fg_prob_below_mean are used as fg/bg soft masks of comp instances
+        # to suppress the activations on background areas.
+        
+        loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
+        loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
+            = calc_elastic_matching_loss(unet_layer_idx, flow_model, 
+                                            ca_layer_q, ca_attn_out, ca_outfeat, 
+                                            ss_fg_mask, ca_feat_h, ca_feat_w, 
+                                            recon_feat_objectives=recon_feat_objectives,
+                                            bg_align_loss_scheme=bg_align_loss_scheme,
+                                            recon_loss_discard_thres=recon_loss_discard_thres,
+                                            num_flow_est_iters=12,
+                                            do_feat_attn_pooling=do_feat_attn_pooling)
+
+        loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
+
+        add_dict_to_dict(loss_dict, 
+                            { 'loss_subj_comp_map_single_align_with_cls': loss_layer_subj_comp_map_single_align_with_cls * elastic_matching_layer_weight,
+                            'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * elastic_matching_layer_weight,
+                            'loss_sc_recon_ss_fg_flow':       loss_sc_recon_ss_fg_flow * elastic_matching_layer_weight,
+                            'loss_sc_recon_ss_fg_min':        loss_sc_recon_ss_fg_min * elastic_matching_layer_weight,
+                            'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * elastic_matching_layer_weight })
+            
+        if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
+            continue
+        
+        ##### unet_attn fg preservation loss & bg suppression loss #####
+        unet_attn = ca_attns[unet_layer_idx]
+        # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256] 
+        attn_mat = unet_attn.permute(0, 3, 1, 2)
+        # subj_subj_attn: [4, 77, 8, 256] -> [4 * K_subj, 8, 256] -> [4, K_subj, 8, 256]
+        # attn_mat and subj_subj_attn are not pooled.
+        subj_attn = attn_mat[ind_subj_B, ind_subj_N].reshape(BLOCK_SIZE * 4, K_subj, *attn_mat.shape[2:])
+        # Sum over 9 subject embeddings. [4, K_subj, 8, 256] -> [4, 8, 256].
+        # The scale of the summed attention won't be overly large, since we've done 
+        # distribute_embedding_to_M_tokens() to them.
+        subj_attn = subj_attn.sum(dim=1)
+        H = int(np.sqrt(subj_attn.shape[-1]))
+        # subj_attn_hw: [4, 8, 256] -> [4, 8, 8, 8].
+        subj_attn_hw = subj_attn.reshape(*subj_attn.shape[:2], H, H)
+        # At some layers, the output features are upsampled. So we need to 
+        # upsample the attn map to match the output features.
+        if subj_attn_hw.shape[2:] != (ca_feat_h, ca_feat_w):
+            subj_attn_hw = F.interpolate(subj_attn_hw, size=(ca_feat_h, ca_feat_w), mode="bilinear", align_corners=False)
+
+        # subj_attn_hw: [4, 8, 8, 8] -> [4, 8, 8, 8] -> [4, 8, 64].
+        subj_attn_flat = subj_attn_hw.reshape(*subj_attn_hw.shape[:2], -1)
+
+        subj_single_subj_attn, subj_comp_subj_attn, cls_single_subj_attn, cls_comp_subj_attn \
+            = subj_attn_flat.chunk(4)
+
+        cls_comp_subj_attn_gs = cls_comp_subj_attn.detach()
+
+        subj_comp_subj_attn_pos   = subj_comp_subj_attn.clamp(min=0)
+        cls_comp_subj_attn_gs_pos = cls_comp_subj_attn_gs.clamp(min=0)
+
+        if do_feat_attn_pooling:
+            subj_comp_subj_attn_pos   = pool_feat_or_attn_mat(subj_comp_subj_attn_pos,   (ca_feat_h, ca_feat_w))
+            cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_feat_h, ca_feat_w))
+
+        # Suppress the subj attention probs on background areas in comp instances.
+        # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
+        # sc_map_ss_fg_prob_below_mean: bg token should have fg attn probs below mean. Therefore
+        # these token are regarded as bg tokens.
+        loss_layer_comp_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
+                                                            sc_map_ss_fg_prob_below_mean)
+        loss_layer_comp_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
+                                                            mc_map_ss_fg_prob_below_mean)
+
+        add_dict_to_dict(loss_dict,
+                            { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * elastic_matching_layer_weight,
+                            'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
+    
+    return loss_dict
