@@ -1648,15 +1648,25 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
 
     # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
     pad_w1 = int((x_start.shape[3] - x_mask_scaled.shape[3]) / 2)
-    pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
     pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
+    pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
     pad_h2 =      x_start.shape[2] - x_mask_scaled.shape[2] - pad_h1
-    x_mask_scaled_padded = F.pad(x_mask_scaled, 
-                                    (pad_w1, pad_w2, pad_h1, pad_h2),
-                                    mode='constant', value=0)
+    # Add random perturbation to pad_w1 and pad_h1 to reduce overfitting.
+    # Max perturbation is 25% of the smaller padding.
+    max_w_perturb = int(min(pad_w1, pad_w2) * 0.25)
+    max_h_perturb = int(min(pad_h1, pad_h2) * 0.25)
+    delta_w1 = torch.randint(-max_w_perturb, max_w_perturb, (1,)).item()
+    delta_h1 = torch.randint(-max_h_perturb, max_h_perturb, (1,)).item()
+    pad_w1 += delta_w1
+    pad_h1 += delta_h1
+    pad_w2 -= delta_w1
+    pad_h2 -= delta_h1
+
+    x_mask_scaled_padded = F.pad(x_mask_scaled, (pad_w1, pad_w2, pad_h1, pad_h2),
+                                 mode='constant', value=0)
 
     C1, C2, C3 = x_start_maskfilled.shape[1], fg_mask.shape[1], filtered_fg_mask.shape[1]
-    # Unpack x_start, fg_mask and filtered_fg_mask from x_mask_scaled_padded.
+    # Unpack x_mask_scaled_padded into x_start, fg_mask and filtered_fg_mask.
     # x_start_scaled_padded: [2, 4, 64, 64]. fg_mask/filtered_fg_mask: [2, 1, 64, 64].
     x_start_scaled_padded, fg_mask, filtered_fg_mask \
         = x_mask_scaled_padded.split([C1, C2, C3], dim=1)
