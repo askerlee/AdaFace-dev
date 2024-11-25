@@ -136,7 +136,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     batch_size:  1
-    num_workers: 1
+    num_workers: 4
     wrap: false
     max_steps: 60000
     train:

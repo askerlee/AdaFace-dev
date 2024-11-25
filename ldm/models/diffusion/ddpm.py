@@ -1064,15 +1064,15 @@ class LatentDiffusion(DDPM):
             # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
             # NOTE: 'recon_or_distill_on_comp_cfg_prompt' is applicable to all teachers.
-            # 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
-            # They will never be enabled at the same time.
+            # While 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
+            # They are exclusive to each other, and are never enabled at the same time.
             if not self.iter_flags['recon_or_distill_on_comp_cfg_prompt'] \
               and (torch.rand(1) < self.p_unet_distill_uses_comp_prompt):
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
                 captions = batch[SUBJ_COMP_PROMPT]
 
             if num_unet_denoising_steps > 1:
-                # Only use the first 1/num_unet_denoising_steps of the batch to avoid OOM.
+                # If denoising steps are a few, then reduce batch size to avoid OOM.
                 # If num_unet_denoising_steps >= 2, BS == 1 or 2, then HALF_BS = 1.
                 # If num_unet_denoising_steps == 2 or 3, BS == 4, then HALF_BS = 2. 
                 # If num_unet_denoising_steps == 4 or 5, BS == 4, then HALF_BS = 1.
@@ -1094,14 +1094,14 @@ class LatentDiffusion(DDPM):
                 id2img_prompt_embs, id2img_neg_prompt_embs, \
                 captions, subj_single_prompts, subj_comp_prompts, \
                 cls_single_prompts, cls_comp_prompts \
-                = select_and_repeat_instances(slice(0, HALF_BS), 1, 
-                                              x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                              instances_have_fg_mask, self.batch_subject_names, 
-                                              zs_clip_fgbg_features,
-                                              id2img_prompt_embs, id2img_neg_prompt_embs,
-                                              captions, subj_single_prompts, subj_comp_prompts,
-                                              cls_single_prompts, cls_comp_prompts)
-                
+                    = select_and_repeat_instances(slice(0, HALF_BS), 1, 
+                                                  x_start, batch_images_unnorm, img_mask, fg_mask, 
+                                                  instances_have_fg_mask, self.batch_subject_names, 
+                                                  zs_clip_fgbg_features,
+                                                  id2img_prompt_embs, id2img_neg_prompt_embs,
+                                                  captions, subj_single_prompts, subj_comp_prompts,
+                                                  cls_single_prompts, cls_comp_prompts)
+                    
                 # Update delta_prompts to have the first HALF_BS prompts.
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
