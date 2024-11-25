@@ -87,7 +87,8 @@ class DDPM(pl.LightningModule):
                  unet_weights=None,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
-                 p_recon_on_comp_prompt=0.4,
+                 p_recon_on_comp_cfg_prompt=0.4,
+                 p_unet_distill_on_comp_cfg_prompt=0.1,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -109,7 +110,7 @@ class DDPM(pl.LightningModule):
         self.clip_denoised = clip_denoised
         self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
-        self.image_size = image_size  # try conv?
+        self.image_size = image_size
         self.channels = channels
 
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
@@ -150,7 +151,8 @@ class DDPM(pl.LightningModule):
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
-        self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
+        self.p_recon_on_comp_cfg_prompt             = p_recon_on_comp_cfg_prompt
+        self.p_unet_distill_on_comp_cfg_prompt      = p_unet_distill_on_comp_cfg_prompt
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
@@ -799,8 +801,14 @@ class LatentDiffusion(DDPM):
         self.batch_1st_subject_name  = batch['subject_name'][0]
         self.batch_1st_subject_is_in_mix_subj_folder = batch['is_in_mix_subj_folder'][0]
 
-        p_recon_on_comp_prompt = self.p_recon_on_comp_prompt if self.iter_flags['do_normal_recon'] else 0
-        self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < p_recon_on_comp_prompt).item()
+        if self.iter_flags['do_normal_recon']:
+            p_recon_or_distill_on_comp_cfg_prompt = self.p_recon_on_comp_cfg_prompt
+        elif  self.iter_flags['do_unet_distill']:
+            p_recon_or_distill_on_comp_cfg_prompt = self.p_unet_distill_on_comp_cfg_prompt
+        else:
+            p_recon_or_distill_on_comp_cfg_prompt = 0
+
+        self.iter_flags['recon_or_distill_on_comp_cfg_prompt'] = (torch.rand(1) < p_recon_or_distill_on_comp_cfg_prompt).item()
 
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
@@ -808,11 +816,11 @@ class LatentDiffusion(DDPM):
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_comp_feat_distill']:
                 p_use_fp_trick = 1
-            # recon_on_comp_prompt is enabled. So we add "portrait" to the prompts.
+            # recon_or_distill_on_comp_cfg_prompt. So we add "portrait" to the prompts.
             # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
             # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
             # for better reconstruction, which is undesirable.
-            elif self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_comp_prompt']:
+            elif self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
                 p_use_fp_trick = 1
             # If compositional distillation is enabled, then in normal recon iterations,
             # we use the fp_trick most of the time, to better reconstructing single-face input images.
@@ -822,7 +830,7 @@ class LatentDiffusion(DDPM):
                 p_use_fp_trick = 0.8
             else:
                 # If not doing compositional distillation and only doing do_normal_recon, 
-                # and not recon_on_comp_prompt, then use_fp_trick is disabled, 
+                # and not recon_on_comp_cfg_prompt, then use_fp_trick is disabled, 
                 # so that the ID embeddings alone are expected 
                 # to reconstruct the subject portraits.
                 p_use_fp_trick = 0
@@ -860,7 +868,7 @@ class LatentDiffusion(DDPM):
         subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
 
-        if self.iter_flags['recon_on_comp_prompt']:
+        if self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
             captions = subj_comp_prompts
         else:
             captions = subj_single_prompts
@@ -1054,7 +1062,11 @@ class LatentDiffusion(DDPM):
             # never use the compositional prompts as the distillation target of arc2face.
             # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
-            if torch.rand(1) < self.p_unet_distill_uses_comp_prompt:
+            # NOTE: 'recon_or_distill_on_comp_cfg_prompt' is applicable to all teachers.
+            # 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
+            # They will never be enabled at the same time.
+            if not self.iter_flags['recon_or_distill_on_comp_cfg_prompt'] \
+              and (torch.rand(1) < self.p_unet_distill_uses_comp_prompt):
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
                 captions = batch[SUBJ_COMP_PROMPT]
 
@@ -1237,7 +1249,8 @@ class LatentDiffusion(DDPM):
             # Use the original "captions" prompts and embeddings.
             # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
             # it holds in all other cases.
-            if not self.iter_flags['unet_distill_uses_comp_prompt'] and not self.iter_flags['recon_on_comp_prompt']:
+            if not self.iter_flags['unet_distill_uses_comp_prompt'] \
+              and not self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
                 assert captions == subj_single_prompts
             else:
                 assert captions == subj_comp_prompts
@@ -1605,13 +1618,13 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
-            if self.iter_flags['recon_on_comp_prompt']:
+            if self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
                 # Use class comp prompts as the negative prompts.
                 uncond_emb = extra_info['cls_comp_prompts']
                 # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
                 # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
                 cfg_scale  = np.random.uniform(1.5, 2.5)
-                print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
+                print(f"Rank {self.trainer.global_rank} recon_on_comp_cfg_prompt cfg_scale: {cfg_scale:.2f}")
             else:
                 # Use the default negative prompts.
                 uncond_emb = None
@@ -1647,7 +1660,7 @@ class LatentDiffusion(DDPM):
             if loss_subj_mb_suppress > 0:
                 loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
 
-            if self.iter_flags['recon_on_comp_prompt']:
+            if self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
                 loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
             else:
                 loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
@@ -1896,6 +1909,9 @@ class LatentDiffusion(DDPM):
                         # self.uncond_context is a tuple of (uncond_embs, uncond_c_in, extra_info).
                         # Truncate the uncond_embs to the same length as teacher_context.
                         LEN_POS_PROMPT = teacher_context.shape[1]
+                        # NOTE: Since arc2face doesn't respond to compositional prompts, 
+                        # even if recon_or_distill_on_comp_cfg_prompt,
+                        # we don't need to set teacher_neg_context as the negative compositional prompts.
                         teacher_neg_context = self.uncond_context[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
                         # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
                         teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
@@ -1904,7 +1920,11 @@ class LatentDiffusion(DDPM):
                     global_id_embeds = all_id2img_prompt_embs[teacher_idx]
                     # global_id_embeds: [BS, 4,  768]
                     # cls_prompt_embs:  [BS, 77, 768]
-                    cls_emb_key = 'cls_comp_emb' if self.iter_flags['unet_distill_uses_comp_prompt'] else 'cls_single_emb'
+                    if self.iter_flags['unet_distill_uses_comp_prompt'] or self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
+                        cls_emb_key = 'cls_comp_emb'  
+                    else:
+                        cls_emb_key = 'cls_single_emb'
+
                     cls_prompt_embs = extra_info[cls_emb_key]
                     # Always append the ID prompt embeddings to the class (general) prompt embeddings.
                     # teacher_context: [BS, 81, 768]
@@ -1914,8 +1934,13 @@ class LatentDiffusion(DDPM):
                         # to the teacher.
                         global_neg_id_embs = all_id2img_neg_prompt_embs[teacher_idx]
                         # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
-                        # uncond_context[0]: [16, 77, 768] -> [1, 77, 768] -> [BS, 77, 768]
-                        cls_neg_prompt_embs = self.uncond_context[0][:1].repeat(teacher_context.shape[0], 1, 1)
+                        # uncond_context[0]: [1, 77, 768] -> [BS, 77, 768]
+                        if not self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
+                            cls_neg_prompt_embs = self.uncond_context[0].repeat(teacher_context.shape[0], 1, 1)
+                        else:
+                            # Use class compositional prompts as the negative prompts.
+                            cls_neg_prompt_embs = extra_info['cls_comp_prompts']
+
                         # teacher_neg_context: [BS, 81, 768]
                         teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
                         # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
