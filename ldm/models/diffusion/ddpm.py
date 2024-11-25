@@ -2258,7 +2258,7 @@ class LatentDiffusion(DDPM):
             # samples:    a (B, C, H, W) tensor.
             # img_colors: a tensor of (B,) ints.
             # samples should be between [0, 255] (uint8).
-            asyncio.run(save_grid(cached_images, cached_img_colors, grid_filename, nrow=12))
+            asyncio.run(save_grid(cached_images, cached_img_colors, grid_filename, nrow=12, async_mode=True))
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             # Clear the cache. If num_cached_generations > max_cache_size,

@@ -962,7 +962,7 @@ def list_np_images_to_4d_tensor(list_np, dtype=np.uint8):
 # samples:   a (B, C, H, W) tensor.
 # img_flags: a tensor of (B,) ints.
 # samples should be between [0, 255] (uint8).
-async def save_grid(samples, img_flags, grid_filepath, nrow):
+async def save_grid(samples, img_flags, grid_filepath, nrow, async_mode=False):
     # img_box indicates the whole image region.
     img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
 
@@ -979,8 +979,13 @@ async def save_grid(samples, img_flags, grid_filepath, nrow):
     # samples is transposed to: (H2, W2, C)
     grid_img = Image.fromarray(grid_samples.transpose([1, 2, 0]))
     if grid_filepath is not None:
-        await asyncio.to_thread(grid_img.save, grid_filepath)
-    
+        if async_mode:
+            # Asynchronous saving
+            await asyncio.to_thread(grid_img.save, grid_filepath)
+        else:
+            # Synchronous saving
+            grid_img.save(grid_filepath)
+            
     # return image to be shown on webui
     return grid_img
 
