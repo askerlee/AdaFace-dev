@@ -37,6 +37,7 @@ from safetensors.torch import save_file as safetensors_save_file
 from evaluation.arcface_wrapper import ArcFaceWrapper
 
 import sys
+import asyncio
 torch.set_printoptions(precision=4, sci_mode=False)
 
 class DDPM(pl.LightningModule):
@@ -2257,7 +2258,7 @@ class LatentDiffusion(DDPM):
             # samples:    a (B, C, H, W) tensor.
             # img_colors: a tensor of (B,) ints.
             # samples should be between [0, 255] (uint8).
-            save_grid(cached_images, cached_img_colors, grid_filename, nrow=12)
+            asyncio.run(save_grid(cached_images, cached_img_colors, grid_filename, nrow=12))
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             # Clear the cache. If num_cached_generations > max_cache_size,
