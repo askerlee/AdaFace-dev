@@ -1655,7 +1655,7 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
     # Max perturbation is 25% of the smaller padding.
     max_w_perturb = min(pad_w1 - 1, pad_w2 - 1, 4)
     max_h_perturb = min(pad_h1 - 1, pad_h2 - 1, 4)
-    
+
     if max_w_perturb > 0:
         delta_w1 = torch.randint(-max_w_perturb, max_w_perturb, (1,)).item()
     else:
@@ -1666,8 +1666,8 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
         delta_h1 = 0
 
     pad_w1 += delta_w1
-    pad_h1 += delta_h1
     pad_w2 -= delta_w1
+    pad_h1 += delta_h1
     pad_h2 -= delta_h1
 
     x_mask_scaled_padded = F.pad(x_mask_scaled, (pad_w1, pad_w2, pad_h1, pad_h2),

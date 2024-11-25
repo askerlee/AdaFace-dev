@@ -35,8 +35,11 @@ def clean_log_folders(root_log_folder, pat):
     # Iterate through all subfolders (log folders)
     for subfolder in os.listdir(root_log_folder):
         folder_path = os.path.join(root_log_folder, subfolder, 'checkpoints')
-        if os.path.isdir(folder_path) and pat in folder_path:
+        if os.path.isdir(folder_path) and re.search(pat, folder_path):
+            print(f"Cleaning: {folder_path}")
             delete_all_but_largest_checkpoint(folder_path)
+        else:
+            print(f"Skipping: {folder_path}")
 
 if __name__ == "__main__":
     # Set the path to the root folder containing all log folders
