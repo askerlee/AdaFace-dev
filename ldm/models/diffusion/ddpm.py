@@ -1620,7 +1620,7 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
                 # Use class comp prompts as the negative prompts.
-                uncond_emb = extra_info['cls_comp_prompts']
+                uncond_emb = extra_info['cls_comp_emb']
                 # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
                 # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
                 cfg_scale  = np.random.uniform(1.5, 2.5)
@@ -1636,12 +1636,10 @@ class LatentDiffusion(DDPM):
             # Don't do CFG. So uncond_emb is None.
             model_output, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context, 
-                                    uncond_emb=None, img_mask=img_mask,
+                                    uncond_emb=uncond_emb, img_mask=img_mask,
                                     batch_part_has_grad='all', 
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     do_pixel_recon=True,
-                                    # Do not use cfg_scale for normal recon iterations. Only do recon 
-                                    # using the positive prompt.
                                     cfg_scale=cfg_scale, capture_ca_activations=True,
                                     enable_lora=self.unet_uses_lora)
 
@@ -1939,7 +1937,7 @@ class LatentDiffusion(DDPM):
                             cls_neg_prompt_embs = self.uncond_context[0].repeat(teacher_context.shape[0], 1, 1)
                         else:
                             # Use class compositional prompts as the negative prompts.
-                            cls_neg_prompt_embs = extra_info['cls_comp_prompts']
+                            cls_neg_prompt_embs = extra_info['cls_comp_emb']
 
                         # teacher_neg_context: [BS, 81, 768]
                         teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
