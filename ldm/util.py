@@ -989,6 +989,9 @@ async def save_grid(samples, img_flags, grid_filepath, nrow, async_mode=False):
     # return image to be shown on webui
     return grid_img
 
+def save_grid_sync(*args, **kwargs):
+    asyncio.run(save_grid(*args, **kwargs, async_mode=False))
+
 def chunk_list(lst, num_chunks):
     chunk_size = int(np.ceil(len(lst) / num_chunks))
     # looping till length lst

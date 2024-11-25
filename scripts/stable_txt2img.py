@@ -14,7 +14,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import save_grid, load_model_from_config
+from ldm.util import save_grid_sync, load_model_from_config
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                   init_evaluators, set_tf_gpu
@@ -772,7 +772,7 @@ def main(opt):
 
                 # all_samples is a list of 4D tensors [batch_size, C, H, W]
                 all_samples_cat = torch.cat(all_samples, 0)
-                img = save_grid(all_samples_cat, None, grid_filepath, nrow=n_rows)
+                img = save_grid_sync(all_samples_cat, None, grid_filepath, nrow=n_rows)
                 
             toc = time.time()
         
