@@ -455,6 +455,8 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
+# The primary purpose of ModeSwapCallback is to dynamically switch the optimizer 
+# during training based on a specified swap_step.
 # ModeSwapCallback is never used in the code.
 class ModeSwapCallback(Callback):
 
@@ -587,7 +589,7 @@ if __name__ == "__main__":
     See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
     '''
 
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'expandable_segments:True'
+    #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'expandable_segments:True'
 
     try:
         # init and save configs
