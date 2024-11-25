@@ -88,7 +88,7 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_cfg_prompt=0.4,
-                 p_unet_distill_on_comp_cfg_prompt=0.1,
+                 p_unet_distill_on_comp_cfg_prompt=0.2,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -1897,7 +1897,7 @@ class LatentDiffusion(DDPM):
                 if unet_teacher_type == 'arc2face':
                     # img_prompt_prefix_embs: the embeddings of a template prompt "photo of a"
                     # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
-                    img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(x_start.shape[0], 1, 1)
+                    img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(BLOCK_SIZE, 1, 1)
                     # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
                     teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[teacher_idx]], dim=1)
 
@@ -1910,7 +1910,7 @@ class LatentDiffusion(DDPM):
                         # NOTE: Since arc2face doesn't respond to compositional prompts, 
                         # even if recon_or_distill_on_comp_cfg_prompt,
                         # we don't need to set teacher_neg_context as the negative compositional prompts.
-                        teacher_neg_context = self.uncond_context[0][:1, :LEN_POS_PROMPT].repeat(x_start.shape[0], 1, 1)
+                        teacher_neg_context = self.uncond_context[0][:, :LEN_POS_PROMPT].repeat(BLOCK_SIZE, 1, 1)
                         # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
                         teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
 
@@ -1968,9 +1968,11 @@ class LatentDiffusion(DDPM):
         model_outputs = []
         #all_recon_images = []
 
-        # DON'T apply neg_id_emb for recon iterations. 
-        # But still apply CFG to match the teacher. So uncond_emb is the real uncond_emb.
-        uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+        if not self.iter_flags['recon_or_distill_on_comp_cfg_prompt']:
+            uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+        else:
+            # Use class compositional prompts as the negative prompts, to match with the teacher.
+            uncond_emb = extra_info['cls_comp_emb']
 
         for s in range(num_unet_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
