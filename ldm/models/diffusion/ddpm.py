@@ -2287,24 +2287,33 @@ class LatentDiffusion(DDPM):
         scheduler   = None
 
         opt_params_with_lrs = []
+        opt_params = []
         if self.embedding_manager_trainable:
             embedding_params = self.embedding_manager.optimized_parameters()
             embedding_params_with_lrs = [ {'params': embedding_params, 'lr': lr} ]
             opt_params_with_lrs += embedding_params_with_lrs
+            # For CAdamW, we are unable to set the learning rate of the embedding_params individually.
+            opt_params += embedding_params
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_unet: 
             model_params = list(self.model.parameters())
             # unet_lr: default 2e-6 set in finetune-unet.yaml.
             opt_params_with_lrs += [ {"params": model_params, "lr": self.unet_lr} ]
+            # For CAdamW, we are unable to set the learning rate of the model parameters individually.
+            opt_params += model_params
 
         count_optimized_params(opt_params_with_lrs)
 
-        # Adam series, AdEMAMix series.
+        # Adam series.
         if 'Prodigy' not in self.optimizer_type:
             if 'adam' in self.optimizer_type.lower():
-                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                    betas=self.adam_config.betas)
+                if self.optimizer_type == 'CAdamW':
+                    opt = OptimizerClass(opt_params, lr=lr, weight_decay=self.weight_decay,
+                                         betas=self.adam_config.betas)
+                else:
+                    opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
+                                        betas=self.adam_config.betas)
 
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps

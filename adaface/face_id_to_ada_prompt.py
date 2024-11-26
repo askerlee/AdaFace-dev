@@ -234,6 +234,7 @@ class FaceID2AdaPrompt(nn.Module):
             image_obj, _, _ = pad_image_obj_to_square(image_obj)
             image_np = np.array(image_obj.resize(size, Image.NEAREST))
             face_info = self.face_app.get(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+
             if len(face_info) > 0:
                 face_info = sorted(face_info, key=lambda x:(x['bbox'][2]-x['bbox'][0])*x['bbox'][3]-x['bbox'][1])[-1] # only use the maximum face
                 # id_emb: [512,]
