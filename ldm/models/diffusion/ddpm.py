@@ -18,7 +18,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        count_optimized_params, count_params, add_dict_to_dict, calc_dyn_loss_scale
+                        count_optimized_params, count_params, calc_dyn_loss_scale
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -89,7 +89,7 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_cfg_prompt=0.4,
-                 p_unet_distill_on_comp_cfg_prompt=0.2,
+                 p_unet_distill_on_comp_cfg_prompt=0,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,

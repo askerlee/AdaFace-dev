@@ -1,15 +1,11 @@
 import torch
 from torch import nn
 import torch.distributed as dist
-from einops import rearrange
-from adaface.subj_basis_generator import SubjBasisGenerator
 import sys
 #sys.modules['ldm.modules']                      = sys.modules['adaface']
-sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
-sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
+#sys.modules['ldm.modules.subj_basis_generator'] = sys.modules['adaface.subj_basis_generator']
+#sys.modules['ldm.modules.arc2face_models']      = sys.modules['adaface.arc2face_models']
 from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
-
-import torch.nn.functional as F
 import numpy as np
 
 from ldm.util import extract_first_index_in_each_instance, anneal_perturb_embedding, \
@@ -214,7 +210,7 @@ class EmbeddingManager(nn.Module):
         # Add the search span by 1, just to be safe.
         self.CLS_DELTA_STRING_MAX_SEARCH_SPAN += 1
         print(f"CLS_DELTA_STRING_MAX_SEARCH_SPAN={self.CLS_DELTA_STRING_MAX_SEARCH_SPAN}")
-        
+    
     def init_cls_delta_tokens(self, get_tokens_for_string, subj_name_to_cls_delta_string, 
                               cls_delta_string=None):
         if subj_name_to_cls_delta_string is None:

@@ -624,7 +624,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
                                             providers=['CPUExecutionProvider'])
         self.face_app.prepare(ctx_id=0, det_size=(512, 512))
-        print(f'Face encoder loaded on CPU.')
+        print(f'Arc2Face Face encoder loaded on CPU.')
 
         self.text_to_image_prompt_encoder = CLIPTextModelWrapper.from_pretrained(
                                                 'models/arc2face', subfolder="encoder", 
@@ -650,6 +650,23 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         print(f"{self.name} ada prompt encoder initialized, "
               f"ID vecs: {self.num_id_vecs0}, static suffix: {self.num_static_img_suffix_embs}.")
 
+    def _apply(self, fn):
+        super()._apply(fn)  # Call the parent _apply to handle parameters and buffers
+        # A dirty hack to get the device of the model, passed from 
+        # parent.model.to(self.root_device) => parent._apply(convert) => module._apply(fn)
+        test_tensor = torch.zeros(1)  # Create a test tensor
+        transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
+        device = transformed_tensor.device  # Get the device of the transformed tensor
+
+        device_id = device.index
+
+        self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
+                                     providers=['CUDAExecutionProvider'],
+                                     provider_options=[{"device_id": str(device_id)}])
+        self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
+        print(f'Arc2Face Face encoder reloaded on {device}.')
+        return 
+        
     # Arc2Face_ID2AdaPrompt never uses clip_features or called_for_neg_img_prompt.
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
@@ -764,6 +781,25 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
 
         print(f"{self.name} ada prompt encoder initialized, "
               f"ID vecs: {self.num_id_vecs0}, static suffix: {self.num_static_img_suffix_embs}.")
+
+    def _apply(self, fn):
+        super()._apply(fn)  # Call the parent _apply to handle parameters and buffers
+        # A dirty hack to get the device of the model, passed from 
+        # parent.model.to(self.root_device) => parent._apply(convert) => module._apply(fn)
+        test_tensor = torch.zeros(1)  # Create a test tensor
+        transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
+        device = transformed_tensor.device  # Get the device of the transformed tensor
+
+        device_id = device.index
+
+        # face_app: FaceAnalysis object
+        self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
+                                     providers=['CUDAExecutionProvider'],
+                                     provider_options=[{"device_id": str(device_id)}])
+        self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
+        self.pipe.face_app = self.face_app
+        print(f'ConsistentID Face encoder reloaded on {device}.')
+        
 
     def map_init_id_to_img_prompt_embs(self, init_id_embs, 
                                        clip_features=None,
