@@ -54,6 +54,7 @@ class FaceID2AdaPrompt(nn.Module):
         self.tokenizer                      = None
         self.dtype                          = kwargs.get('dtype', torch.float16)
         self.img2txt_dtype                  = kwargs.get('img2txt_dtype', torch.float16)
+        self.device                         = torch.device("cpu")
 
         # Load Img2Ada SubjectBasisGenerator.
         self.subject_string                 = kwargs.get('subject_string', 'z')
@@ -657,7 +658,10 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         test_tensor = torch.zeros(1)  # Create a test tensor
         transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
         device = transformed_tensor.device  # Get the device of the transformed tensor
-
+        # No need to reload face_app on the same device.
+        if device == self.device:
+            return
+        
         if str(device) == 'cpu':
             self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
                                         providers=['CPUExecutionProvider'])
@@ -669,6 +673,7 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
                                         provider_options=[{"device_id": str(device_id)}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
+        self.device = device
         print(f'Arc2Face Face encoder reloaded on {device}.')
         return 
         
@@ -779,7 +784,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.clip_embedding_dim             = 1280
         self.s_scale                        = 1.0
         self.shortcut                       = False
-
+        
         self.init_img2txt_projection()
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
@@ -794,6 +799,9 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         test_tensor = torch.zeros(1)  # Create a test tensor
         transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
         device = transformed_tensor.device  # Get the device of the transformed tensor
+        # No need to reload face_app on the same device.
+        if device == self.device:
+            return
 
         if str(device) == 'cpu':
             self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
@@ -806,6 +814,7 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
                                         provider_options=[{"device_id": str(device_id)}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
+        self.device = device
         self.pipe.face_app = self.face_app
         print(f'ConsistentID Face encoder reloaded on {device}.')
         
