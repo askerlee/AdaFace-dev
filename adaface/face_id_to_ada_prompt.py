@@ -658,12 +658,17 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
         device = transformed_tensor.device  # Get the device of the transformed tensor
 
-        device_id = device.index
+        if str(device) == 'cpu':
+            self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
+                                        providers=['CPUExecutionProvider'])
+            self.face_app.prepare(ctx_id=0, det_size=(512, 512))
+        else:
+            device_id = device.index
+            self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
+                                        providers=['CUDAExecutionProvider'],
+                                        provider_options=[{"device_id": str(device_id)}])
+            self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
-        self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
-                                     providers=['CUDAExecutionProvider'],
-                                     provider_options=[{"device_id": str(device_id)}])
-        self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
         print(f'Arc2Face Face encoder reloaded on {device}.')
         return 
         
@@ -790,13 +795,17 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
         device = transformed_tensor.device  # Get the device of the transformed tensor
 
-        device_id = device.index
+        if str(device) == 'cpu':
+            self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
+                                        providers=['CPUExecutionProvider'])
+            self.face_app.prepare(ctx_id=0, det_size=(512, 512))
+        else:
+            device_id = device.index
+            self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
+                                        providers=['CUDAExecutionProvider'],
+                                        provider_options=[{"device_id": str(device_id)}])
+            self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
-        # face_app: FaceAnalysis object
-        self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
-                                     providers=['CUDAExecutionProvider'],
-                                     provider_options=[{"device_id": str(device_id)}])
-        self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
         self.pipe.face_app = self.face_app
         print(f'ConsistentID Face encoder reloaded on {device}.')
         
