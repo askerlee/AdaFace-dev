@@ -9,6 +9,7 @@ from ldm.modules.lr_scheduler import SequentialLR2
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
+from ldm.c_adamw import AdamW as CAdamW
 from diffusers import UNet2DConditionModel
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
@@ -2263,6 +2264,8 @@ class LatentDiffusion(DDPM):
     def configure_optimizers(self):
         if self.optimizer_type == 'AdamW':
             OptimizerClass = torch.optim.AdamW
+        elif self.optimizer_type == 'CAdamW':
+            OptimizerClass = CAdamW
         elif self.optimizer_type == 'NAdam':
             # In torch 1.13, decoupled_weight_decay is not supported. 
             # But since we disabled weight decay, it doesn't matter.

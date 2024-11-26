@@ -140,8 +140,7 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--optimizer", dest='optimizer_type',
                         type=str, default=argparse.SUPPRESS, 
-                        choices=['AdamW', 'AdamW8bit', 'Adam8bit', 'NAdam', 'Prodigy',
-                                 'AdEMAMix', 'AdEMAMixDistributedShampoo', 'OrthogonalNesterov'],
+                        choices=['AdamW', 'AdamW8bit', 'Prodigy', 'CAdamW'],
                         help="Type of optimizer")
     parser.add_argument("--warmup_steps", type=int, default=argparse.SUPPRESS,
                         help="Number of warm up steps")
