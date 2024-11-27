@@ -73,7 +73,8 @@ class AdamW(Optimizer):
         """
         loss = None
         if closure is not None:
-            loss = closure()
+            with torch.enable_grad():            
+                loss = closure()
 
         for group in self.param_groups:
             for i, p in enumerate(group["params"]):
