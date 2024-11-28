@@ -98,7 +98,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=True,
                  diffusers_unet_path='models/ensemble/sd15-unet',
                  unet_uses_lora=True,
-                 unet_lora_scale_down=4,
+                 unet_lora_scale_down=8,
                  ):
         
         super().__init__()
@@ -179,7 +179,7 @@ class DDPM(pl.LightningModule):
                                               attn_lora_layer_names=['q'],
                                               use_lora_on_ffns=False,
                                               lora_rank=128, 
-                                              lora_scale_down=self.unet_lora_scale_down)    # 4
+                                              lora_scale_down=self.unet_lora_scale_down)    # 8
 
         count_params(self.model, verbose=True)
 

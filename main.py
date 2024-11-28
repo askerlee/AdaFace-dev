@@ -230,7 +230,7 @@ def get_parser(**parser_kwargs):
                         help="Path to the Diffusers UNet model")
     parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use LoRA in the Diffusers UNet model")
-    parser.add_argument("--unet_lora_scale_down", type=float, default=4,
+    parser.add_argument("--unet_lora_scale_down", type=float, default=8,
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
     parser.add_argument("--load_unet_loras_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to load the LoRA modules from the checkpoint")
