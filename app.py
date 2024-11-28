@@ -144,7 +144,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
 
     for i, sample in enumerate(samples):
-        filename = f"{ckpt_sig}-{i+1}.png"
+        filename = f"adaface{ckpt_sig}-{i+1}.png"
         filepath = os.path.join(temp_folder, filename)
 
         # Save the image
