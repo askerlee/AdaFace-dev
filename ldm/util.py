@@ -2263,11 +2263,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
     ss_q = ss_q.detach()
 
-    num_heads = 8
     # Similar to the scale of the attention scores.
     # Disable matching_score_scale, since when we were caching q, we've scaled it by 1/sqrt(sqrt(dim)).
     # Two q's multiplied together will be scaled by 1/sqrt(dim). Moreover, currently sc_map_ss_prob is quite uniform,
     # and disabling matching_score_scale can make sc_map_ss_prob more polarized.
+    # num_heads = 8
     matching_score_scale = 1 #(ca_outfeat.shape[1] / num_heads) ** -0.5
     # sc_map_ss_score:        [1, 961, 961]. 
     # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single image tokens).

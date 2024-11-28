@@ -49,9 +49,9 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     r"""
     Revised from AttnProcessor2_0
     """
-
+    # lora_proj_layers is a dict of lora_layer_name -> lora_proj_layer.
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
-                 use_dora=False, proj_layers=None, 
+                 use_dora=False, lora_proj_layers=None, 
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_alpha: float = 16):
         super().__init__()
@@ -68,14 +68,17 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             meaning as the `--network_alpha` option in the kohya-ss trainer script. See
             https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
         '''
+        self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
         if self.global_enable_lora:
-            to_q, to_k, to_v, to_out = proj_layers
-            self.to_q_lora   = Linear(to_q,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
-            self.to_k_lora   = Linear(to_k,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
-            self.to_v_lora   = Linear(to_v,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
-            self.to_out_lora = Linear(to_out, 'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
-        else:
-            self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
+            for lora_layer_name, lora_proj_layer in lora_proj_layers:
+                if lora_layer_name == 'q':
+                    self.to_q_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                elif lora_layer_name == 'k':
+                    self.to_k_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                elif lora_layer_name == 'v':
+                    self.to_v_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                elif lora_layer_name == 'out':
+                    self.to_out_lora = Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
 
     # LoRA layers can be enabled/disabled dynamically.
     def reset_attn_cache_and_flags(self, capture_ca_activations, enable_lora):
@@ -122,7 +125,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
-        if self.enable_lora:
+        if self.enable_lora and self.to_q_lora is not None:
             query = self.to_q_lora(hidden_states)
         else:
             query = attn.to_q(hidden_states)
@@ -155,11 +158,14 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         elif attn.norm_cross:
             encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
 
-        if self.enable_lora:
+        if self.enable_lora and self.to_k_lora is not None:
             key   = self.to_k_lora(encoder_hidden_states)
-            value = self.to_v_lora(encoder_hidden_states)
         else:
             key   = attn.to_k(encoder_hidden_states)
+
+        if self.enable_lora and self.to_v_lora is not None:
+            value = self.to_v_lora(encoder_hidden_states)
+        else:
             value = attn.to_v(encoder_hidden_states)
 
         if attn.norm_q is not None:
@@ -189,7 +195,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         hidden_states = hidden_states.to(query.dtype)
 
         # linear proj
-        if self.enable_lora:
+        if self.enable_lora and self.to_out_lora is not None:
             hidden_states = self.to_out_lora(hidden_states)
         else:
             hidden_states = attn.to_out[0](hidden_states)
@@ -323,7 +329,7 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def set_up_attn_processors(unet, enable_lora, lora_rank=128, lora_scale_down=8):
+def set_up_attn_processors(unet, enable_lora, lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
@@ -351,15 +357,21 @@ def set_up_attn_processors(unet, enable_lora, lora_rank=128, lora_scale_down=8):
         hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
         # 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.processor' ->
         # 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.to_q'
-        to_q   = unet_modules[name[:-9] + "to_q"]
-        to_k   = unet_modules[name[:-9] + "to_k"]
-        to_v   = unet_modules[name[:-9] + "to_v"]
+        lora_layer_dict = {}
+        lora_layer_dict['q']    = unet_modules[name[:-9] + "to_q"]
+        lora_layer_dict['k']    = unet_modules[name[:-9] + "to_k"]
+        lora_layer_dict['v']    = unet_modules[name[:-9] + "to_v"]
         # to_out is a ModuleList(Linear, Dropout).
-        to_out = unet_modules[name[:-9] + "to_out"][0]
+        lora_layer_dict['out']  = unet_modules[name[:-9] + "to_out"][0]
+
+        lora_proj_layers = {}
+        # Only apply LoRA to the specified layers.
+        for lora_layer_name in lora_layer_names:
+            lora_proj_layers[lora_layer_name] = lora_layer_dict[lora_layer_name]
 
         attn_capture_proc = AttnProcessor_LoRA_Capture(
             capture_ca_activations=True, enable_lora=enable_lora, 
-            use_dora=True, proj_layers=(to_q, to_k, to_v, to_out),
+            use_dora=True, lora_proj_layers=lora_proj_layers,
             hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down)

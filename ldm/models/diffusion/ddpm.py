@@ -98,7 +98,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=True,
                  diffusers_unet_path='models/ensemble/sd15-unet',
                  unet_uses_lora=True,
-                 unet_lora_scale_down=8,
+                 unet_lora_scale_down=4,
                  ):
         
         super().__init__()
@@ -176,7 +176,9 @@ class DDPM(pl.LightningModule):
             self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, 
                                               torch_dtype=torch.float16,
                                               enable_lora=self.unet_uses_lora,
-                                              lora_scale_down=self.unet_lora_scale_down)
+                                              lora_layer_names=['q'],
+                                              lora_rank=128, 
+                                              lora_scale_down=self.unet_lora_scale_down)    # 4
 
         count_params(self.model, verbose=True)
 
@@ -1635,7 +1637,7 @@ class LatentDiffusion(DDPM):
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     do_pixel_recon=True,
                                     cfg_scale=cfg_scale, capture_ca_activations=True,
-                                    enable_lora=False)
+                                    enable_lora=self.unet_uses_lora)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -2458,7 +2460,7 @@ class DiffusionWrapper(pl.LightningModule):
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, unet_dirpath, torch_dtype=torch.float16,
-                 enable_lora=False, lora_rank=128, lora_scale_down=8):
+                 enable_lora=False, lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -2477,7 +2479,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs = \
             set_up_attn_processors(self.diffusion_model, self.global_enable_lora, 
-                                   lora_rank, lora_scale_down)
+                                   lora_layer_names=lora_layer_names,
+                                   lora_rank=lora_rank, lora_scale_down=lora_scale_down)
         self.attn_capture_procs = list(attn_capture_procs.values())
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
@@ -2499,7 +2502,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # which replaces the original unet, self.diffusion_model.
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
                 set_up_ffn_loras(self.diffusion_model, use_dora=True,
-                                lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
+                                 lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
                                 )
             self.ffn_lora_layers = list(ffn_lora_layers.values())
             # unet_lora_modules is for optimization and loading/saving.
