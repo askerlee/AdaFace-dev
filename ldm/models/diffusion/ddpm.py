@@ -61,7 +61,7 @@ class DDPM(pl.LightningModule):
                  unfreeze_unet=False,
                  unet_lr=0.,
                  parameterization="eps",  # all assuming fixed variance schedules
-                 optimizer_type='AdamW',
+                 optimizer_type='CAdamW',
                  grad_clip=0.5,
                  adam_config=None,
                  prodigy_config=None,

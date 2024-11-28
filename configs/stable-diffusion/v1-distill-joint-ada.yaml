@@ -64,9 +64,8 @@ model:
     feat_delta_align_loss_weight:      1e-4
     pred_l2_loss_weight:               1e-4
 
-    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, adopt,
-    # AdEMAMix, AdEMAMix8bit, OrthogonalNesterov
-    optimizer_type:           AdamW8bit #AdEMAMix
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
+    optimizer_type:           CAdamW 
     # This grad_clip is used when manual optimization is enabled.
     grad_clip:                0.5
     adam_config:

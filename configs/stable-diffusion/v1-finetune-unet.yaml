@@ -43,11 +43,8 @@ model:
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 3e-3
     recon_subj_bg_suppress_loss_weight:  2e-3
 
-    # Finetuning the u-net consumes a huge amount of RAM. Even if we have BS=1,
-    # using optimizers other than Adam8bit and "--max_num_unet_distill_denoising_steps 2" will cause OOM.
-    # It's possible to use Prodigy with "--max_num_unet_distill_denoising_steps 1", but I'm not sure 
-    # how well it works.
-    optimizer_type: Adam8bit           # AdamW, Adam8bit, NAdam, Prodigy
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
+    optimizer_type:           CAdamW 
     grad_clip:  0.5
     adam_config:
       betas:    [0.9,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        

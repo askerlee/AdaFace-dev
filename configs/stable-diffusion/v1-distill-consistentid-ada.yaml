@@ -57,9 +57,8 @@ model:
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 3e-3
     recon_subj_bg_suppress_loss_weight:  2e-3
 
-    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, 
-    # AdEMAMix, AdEMAMixDistributedShampoo, OrthogonalNesterov
-    optimizer_type:           AdamW8bit
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
+    optimizer_type:           CAdamW 
     grad_clip:                0.5
     adam_config:
       # Half life:
