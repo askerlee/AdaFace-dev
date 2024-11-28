@@ -239,7 +239,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             "portrait, dancing pose among folks in a park, waving hands",
                             "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
                             "portrait, jedi wielding a lightsaber, star wars, eye level shot",
-                            "portrait, night view of a city, neon lights, futuristic",
+                            "portrait, night view of tokyo street, neon light",
                             "portrait, playing guitar on a boat, ocean waves",
                             "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
                             "portrait, running pose in a park, eye level shot",
