@@ -328,30 +328,27 @@ class DDPM(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         self.init_iteration_flags()
         
-        # NOTE: No need to have standalone ada prompt delta reg, 
-        # since each prompt mix reg iter will also do ada prompt delta reg.
-
-        # If N_CAND_REGS == 0, then no prompt distillation/regularizations, 
-        # and the flags below take the default False value.
-        # ** Due to grad accumulation (global_step increases 1 after 2 iterations), 
-        # ** each type of iter is actually executed twice in a row.
+        # If we use global_step to decide the iter type, then
+        # ** due to grad accumulation (global_step increases 1 after 2 iterations), 
+        # ** each type of iter is actually executed twice in a row,
+        # which is not ideal for optimization (iter types are not diversified).
         if self.comp_distill_iter_gap > 0 and batch_idx % self.comp_distill_iter_gap == 0:
-            self.iter_flags['do_comp_feat_distill']   = True
-            self.iter_flags['do_normal_recon']                  = False
-            self.iter_flags['do_unet_distill']                  = False
-            self.iter_flags['do_prompt_emb_delta_reg']          = self.do_prompt_emb_delta_reg
+            self.iter_flags['do_comp_feat_distill']     = True
+            self.iter_flags['do_normal_recon']          = False
+            self.iter_flags['do_unet_distill']          = False
+            self.iter_flags['do_prompt_emb_delta_reg']  = self.do_prompt_emb_delta_reg
             self.comp_iters_count += 1
         else:
-            self.iter_flags['do_comp_feat_distill']   = False
+            self.iter_flags['do_comp_feat_distill']     = False
             self.non_comp_iters_count += 1
             if self.unet_distill_iter_gap > 0 and self.non_comp_iters_count % self.unet_distill_iter_gap == 0:
-                self.iter_flags['do_normal_recon']  = False
-                self.iter_flags['do_unet_distill']  = True
+                self.iter_flags['do_normal_recon']      = False
+                self.iter_flags['do_unet_distill']      = True
                 # Disable do_prompt_emb_delta_reg during unet distillation.
                 self.iter_flags['do_prompt_emb_delta_reg'] = False
             else:
-                self.iter_flags['do_normal_recon']  = True
-                self.iter_flags['do_unet_distill']  = False
+                self.iter_flags['do_normal_recon']      = True
+                self.iter_flags['do_unet_distill']      = False
                 self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
 
         loss, loss_dict = self.shared_step(batch)
