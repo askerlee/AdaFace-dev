@@ -5,6 +5,7 @@ from adaface.adaface_wrapper import AdaFaceWrapper
 import torch
 import numpy as np
 import random
+import os, re
 
 import gradio as gr
 import spaces
@@ -131,7 +132,26 @@ def generate_image(image_paths, guidance_scale, perturb_std,
                       out_image_count=num_images, generator=generator, 
                       repeat_prompt_for_each_encoder=True,
                       verbose=True)
-    return samples
+
+    session_signature = ",".join(image_paths + [prompt, str(seed)])
+    temp_folder = os.path.join("/tmp/gradio", f"{hash(session_signature)}")
+    os.makedirs(temp_folder, exist_ok=True)
+
+    saved_image_paths = []
+    # adaface_ckpt_path = "VGGface2_HQ_masks2024-11-28T13-13-20_zero3-ada/checkpoints/embeddings_gs-2000.pt"
+    matches = re.search(r"\d{4}-(\d{2})-(\d{2})T(\d{2})-\d{2}-\d{2}_zero3-ada/checkpoints/embeddings_gs-(\d+).pt", args.adaface_ckpt_path)
+    # Extract the checkpoint signature as 112813-2000
+    ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
+
+    for i, sample in enumerate(samples):
+        filename = f"{ckpt_sig}-{i+1}.png"
+        filepath = os.path.join(temp_folder, filename)
+
+        # Save the image
+        sample.save(filepath)  # Adjust to your image saving method
+        saved_image_paths.append(filepath)
+
+    return saved_image_paths
 
 
 def check_prompt_and_model_type(prompt, model_style_type):
