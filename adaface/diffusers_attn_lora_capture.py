@@ -70,7 +70,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         '''
         self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
         if self.global_enable_lora:
-            for lora_layer_name, lora_proj_layer in lora_proj_layers:
+            for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
                 if lora_layer_name == 'q':
                     self.to_q_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
                 elif lora_layer_name == 'k':
