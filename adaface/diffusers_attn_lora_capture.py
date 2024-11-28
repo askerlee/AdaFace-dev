@@ -433,7 +433,7 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     return unet, ffn_lora_layers, lora_modules
 
 def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
-                               enable_lora, capture_ca_activations):
+                               enable_lora, enable_lora_on_ffns, capture_ca_activations):
     # For attn capture procs, capture_ca_activations and enable_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
         attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=enable_lora)
@@ -445,7 +445,7 @@ def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_l
     # If not global_enable_lora, ffn_lora_layers is an empty ModuleDict.
     # This loop will exit immediately. So we don't have to worry about the presence of .scaling_.
     for lora_layer in ffn_lora_layers:
-        lora_layer.scaling = lora_layer.scaling_ if enable_lora else lora_layer.zero_scaling_
+        lora_layer.scaling = lora_layer.scaling_ if enable_lora_on_ffns else lora_layer.zero_scaling_
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[23, 24], out_dtype=torch.float32):

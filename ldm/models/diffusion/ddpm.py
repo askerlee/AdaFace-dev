@@ -177,7 +177,7 @@ class DDPM(pl.LightningModule):
                                               torch_dtype=torch.float16,
                                               enable_lora=self.unet_uses_lora,
                                               attn_lora_layer_names=['q'],
-                                              apply_lora_on_ffns=False,
+                                              enable_lora_on_ffns=False,
                                               lora_rank=128, 
                                               lora_scale_down=self.unet_lora_scale_down)    # 8
 
@@ -2462,7 +2462,7 @@ class DiffusionWrapper(pl.LightningModule):
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, unet_dirpath, torch_dtype=torch.float16,
-                 enable_lora=False, attn_lora_layer_names=['q'], apply_lora_on_ffns=False,
+                 enable_lora=False, attn_lora_layer_names=['q'], enable_lora_on_ffns=False,
                  lora_rank=128, lora_scale_down=4):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
@@ -2477,6 +2477,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.to(torch_dtype)
 
         self.global_enable_lora = enable_lora
+        self.enable_lora_on_ffns = enable_lora_on_ffns
         self.lora_rank = lora_rank
 
         # Keep a reference to self.attn_capture_procs to change their flags later.
@@ -2503,10 +2504,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # cross-attn layers are not included in ffn_lora_layers.
             # The first returned value is the PEFT wrapper model, 
             # which replaces the original unet, self.diffusion_model.
-            if apply_lora_on_ffns:
-                target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
-            else:
-                target_modules_pat = None
+            # Even if enable_lora_on_ffns is False, we still generate ffn_lora_layers.
+            # We'll always disable them in set_lora_and_capture_flags().
+            # This is to convert the unet to a PEFT model, which can handle fp16 well.
+            target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
 
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
                 set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
@@ -2541,7 +2542,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # The scaling factors of attn_capture_procs and ffn_lora_layers are also set differently.
         # (They can be unified, but currently it's more convenient to keep them separate.)
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   enable_lora, capture_ca_activations)
+                                   enable_lora, self.enable_lora_on_ffns, capture_ca_activations)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -2566,7 +2567,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.        
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   False, False)
+                                   False, False, False)
 
         out = out.to(out_dtype)
         return out
