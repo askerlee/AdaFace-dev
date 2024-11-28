@@ -90,7 +90,7 @@ def remove_back_to_files():
 @spaces.GPU
 def generate_image(image_paths, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
-                   seed, progress=gr.Progress(track_tqdm=True)):
+                   seed, name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
 
@@ -145,6 +145,8 @@ def generate_image(image_paths, guidance_scale, perturb_std,
 
     for i, sample in enumerate(samples):
         filename = f"adaface{ckpt_sig}-{i+1}.png"
+        if len(name_sig) > 0:
+            filename = f"{name_sig}-{filename}"
         filepath = os.path.join(temp_folder, filename)
 
         # Save the image
@@ -237,6 +239,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             "portrait, dancing pose among folks in a park, waving hands",
                             "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
                             "portrait, jedi wielding a lightsaber, star wars, eye level shot",
+                            "portrait, night view of a city, neon lights, futuristic",
                             "portrait, playing guitar on a boat, ocean waves",
                             "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
                             "portrait, running pose in a park, eye level shot",
@@ -245,6 +248,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
                                        info="Enhance the face features by prepending 'face portrait' to the prompt")
+
+            name_sig = gr.Textbox(
+                label="Name of Subject", 
+                value="",
+            )
 
             submit = gr.Button("Submit", variant="primary")
 
@@ -311,7 +319,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         ).then(
             fn=generate_image,
             inputs=[img_files, guidance_scale, perturb_std, num_images, 
-                    prompt, negative_prompt, enhance_face, seed],
+                    prompt, negative_prompt, enhance_face, seed, name_sig],
             outputs=[out_gallery]
         )
 
