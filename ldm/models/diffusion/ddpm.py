@@ -177,7 +177,7 @@ class DDPM(pl.LightningModule):
                                               torch_dtype=torch.float16,
                                               enable_lora=self.unet_uses_lora,
                                               attn_lora_layer_names=['q'],
-                                              use_lora_on_ffns=False,
+                                              apply_lora_on_ffns=False,
                                               lora_rank=128, 
                                               lora_scale_down=self.unet_lora_scale_down)    # 8
 
@@ -1631,6 +1631,7 @@ class LatentDiffusion(DDPM):
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
             # Don't do CFG. So uncond_emb is None.
+            enable_unet_lora = self.unet_uses_lora and (torch.rand(1).item() < 0.5)
             model_output, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=img_mask,
@@ -1638,7 +1639,7 @@ class LatentDiffusion(DDPM):
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     do_pixel_recon=True,
                                     cfg_scale=cfg_scale, capture_ca_activations=True,
-                                    enable_lora=self.unet_uses_lora)
+                                    enable_lora=enable_unet_lora)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -2461,7 +2462,7 @@ class DiffusionWrapper(pl.LightningModule):
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, unet_dirpath, torch_dtype=torch.float16,
-                 enable_lora=False, attn_lora_layer_names=['q'], use_lora_on_ffns=False,
+                 enable_lora=False, attn_lora_layer_names=['q'], apply_lora_on_ffns=False,
                  lora_rank=128, lora_scale_down=4):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
@@ -2502,7 +2503,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # cross-attn layers are not included in ffn_lora_layers.
             # The first returned value is the PEFT wrapper model, 
             # which replaces the original unet, self.diffusion_model.
-            if use_lora_on_ffns:
+            if apply_lora_on_ffns:
                 target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
             else:
                 target_modules_pat = None
