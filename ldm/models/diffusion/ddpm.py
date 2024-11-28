@@ -1635,7 +1635,7 @@ class LatentDiffusion(DDPM):
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     do_pixel_recon=True,
                                     cfg_scale=cfg_scale, capture_ca_activations=True,
-                                    enable_lora=self.unet_uses_lora)
+                                    enable_lora=False)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.

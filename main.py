@@ -234,13 +234,10 @@ def get_parser(**parser_kwargs):
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
     parser.add_argument("--load_unet_lora_modules_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to load the LoRA modules from the checkpoint")
-    parser.add_argument("--prompt_emb_delta_reg_weight",
-        type=float, default=argparse.SUPPRESS,
-        help="Prompt delta regularization weight")
+    parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
+                        help="Prompt delta regularization weight")
 
-    parser.add_argument("--rand_scale_range",
-                        type=float, nargs=2, 
-                        default=[0.7, 1.0],
+    parser.add_argument("--rand_scale_range", type=float, nargs=2, default=[0.7, 1.0],
                         help="Range of random scaling on training images (set to 1 1 to disable)")
 
     parser.add_argument("--comp_distill_iter_gap",
