@@ -51,7 +51,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     """
     # lora_proj_layers is a dict of lora_layer_name -> lora_proj_layer.
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
-                 use_dora=False, lora_proj_layers=None, 
+                 lora_uses_dora=True, lora_proj_layers=None, 
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_alpha: float = 16):
         super().__init__()
@@ -72,13 +72,17 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if self.global_enable_lora:
             for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
                 if lora_layer_name == 'q':
-                    self.to_q_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                    self.to_q_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, 
+                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'k':
-                    self.to_k_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                    self.to_k_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, 
+                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'v':
-                    self.to_v_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                    self.to_v_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, 
+                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'out':
-                    self.to_out_lora = Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, use_dora=use_dora)
+                    self.to_out_lora = Linear(lora_proj_layer, 'default', r=lora_rank, 
+                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
 
     # LoRA layers can be enabled/disabled dynamically.
     def reset_attn_cache_and_flags(self, capture_ca_activations, enable_lora):
@@ -329,7 +333,7 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def set_up_attn_processors(unet, enable_lora, lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
+def set_up_attn_processors(unet, enable_lora, attn_lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
@@ -366,12 +370,12 @@ def set_up_attn_processors(unet, enable_lora, lora_layer_names=['q'], lora_rank=
 
         lora_proj_layers = {}
         # Only apply LoRA to the specified layers.
-        for lora_layer_name in lora_layer_names:
+        for lora_layer_name in attn_lora_layer_names:
             lora_proj_layers[lora_layer_name] = lora_layer_dict[lora_layer_name]
 
         attn_capture_proc = AttnProcessor_LoRA_Capture(
             capture_ca_activations=True, enable_lora=enable_lora, 
-            use_dora=True, lora_proj_layers=lora_proj_layers,
+            lora_uses_dora=True, lora_proj_layers=lora_proj_layers,
             hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down)
@@ -387,13 +391,14 @@ def set_up_attn_processors(unet, enable_lora, lora_layer_names=['q'], lora_rank=
     return attn_capture_procs
 
 # NOTE: cross-attn layers are included in the returned lora_modules.
-def set_up_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
-                    use_dora=False, lora_rank=128, lora_alpha=16):
+def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=128, lora_alpha=16):
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
-    peft_config = LoraConfig(use_dora=use_dora, inference_mode=False, r=lora_rank, 
-                             lora_alpha=lora_alpha, lora_dropout=0.1,
-                             target_modules=target_modules_pat)
-    unet = get_peft_model(unet, peft_config)
+    if target_modules_pat is not None:
+        peft_config = LoraConfig(use_dora=lora_uses_dora, inference_mode=False, r=lora_rank, 
+                                lora_alpha=lora_alpha, lora_dropout=0.1,
+                                target_modules=target_modules_pat)
+        unet = get_peft_model(unet, peft_config)
+
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
     # lora_layers are used to set the flag, not used for optimization.
     # lora_modules contain only the LoRA A and B matrices, so they are used for optimization.
@@ -402,7 +407,7 @@ def set_up_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
     for name, module in unet.named_modules():
         if isinstance(module, LoraLayer):
             # We don't want to include cross-attn layers in ffn_lora_layers.
-            if re.search(target_modules_pat, name):
+            if target_modules_pat is not None and re.search(target_modules_pat, name):
                 ffn_lora_layers[name] = module
             # ModuleDict doesn't allow "." in the key.
             name = name.replace(".", "_")
@@ -419,11 +424,12 @@ def set_up_ffn_loras(unet, target_modules_pat='up_blocks.3.resnets.[12].conv.+',
             # as base_layer is also a sub-module of module, which we shouldn't optimize.
             lora_modules[name + "_lora_A"] = module.lora_A
             lora_modules[name + "_lora_B"] = module.lora_B
-            if use_dora:
+            if lora_uses_dora:
                 lora_modules[name + "_lora_magnitude_vector"] = module.lora_magnitude_vector
 
     print(f"Set up {len(ffn_lora_layers)} FFN LoRA layers: {ffn_lora_layers.keys()}.")
-    unet.print_trainable_parameters()
+    if target_modules_pat is not None:
+        unet.print_trainable_parameters()
     return unet, ffn_lora_layers, lora_modules
 
 def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 

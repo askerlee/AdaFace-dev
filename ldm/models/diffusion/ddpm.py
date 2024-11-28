@@ -176,7 +176,8 @@ class DDPM(pl.LightningModule):
             self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, 
                                               torch_dtype=torch.float16,
                                               enable_lora=self.unet_uses_lora,
-                                              lora_layer_names=['q'],
+                                              attn_lora_layer_names=['q'],
+                                              use_lora_on_ffns=False,
                                               lora_rank=128, 
                                               lora_scale_down=self.unet_lora_scale_down)    # 4
 
@@ -2460,7 +2461,8 @@ class DiffusionWrapper(pl.LightningModule):
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, unet_dirpath, torch_dtype=torch.float16,
-                 enable_lora=False, lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
+                 enable_lora=False, attn_lora_layer_names=['q'], use_lora_on_ffns=False,
+                 lora_rank=128, lora_scale_down=4):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -2479,7 +2481,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs = \
             set_up_attn_processors(self.diffusion_model, self.global_enable_lora, 
-                                   lora_layer_names=lora_layer_names,
+                                   attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=lora_rank, lora_scale_down=lora_scale_down)
         self.attn_capture_procs = list(attn_capture_procs.values())
         # Replace the forward() method of the last up block with a capturing method.
@@ -2500,9 +2502,14 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # cross-attn layers are not included in ffn_lora_layers.
             # The first returned value is the PEFT wrapper model, 
             # which replaces the original unet, self.diffusion_model.
+            if use_lora_on_ffns:
+                target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
+            else:
+                target_modules_pat = None
+
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
-                set_up_ffn_loras(self.diffusion_model, use_dora=True,
-                                 lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
+                set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
+                                 lora_uses_dora=True, lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
                                 )
             self.ffn_lora_layers = list(ffn_lora_layers.values())
             # unet_lora_modules is for optimization and loading/saving.
