@@ -274,11 +274,20 @@ class AdaFaceWrapper(nn.Module):
         return unet_state_dict
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def load_unet_loras(self, unet, unet_lora_modules_state_dict):
+    def load_unet_loras(self, unet, unet_lora_modules_state_dict, enable_lora_on_ffns=False):
         attn_capture_procs = set_up_attn_processors(unet, enable_lora=True, lora_layer_names=['q'],
                                                     lora_rank=128, lora_scale_down=8)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
-        unet, ffn_lora_layers, unet_lora_modules = set_up_ffn_loras(unet, use_dora=True)
+        if enable_lora_on_ffns:
+            target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
+        else:
+            # A special pattern that tells PEFT to add loras on NONE of the layers.
+            # We couldn't simply skip PEFT initialization (converting unet to a PEFT model),
+            # otherwise the attn lora layers will cause nan quickly during a fp16 training.
+            target_modules_pat = 'dummy-target-modules'
+
+        unet, ffn_lora_layers, unet_lora_modules = \
+            set_up_ffn_loras(unet, target_modules_pat=target_modules_pat, lora_uses_dora=True)
 
         # self.attn_capture_procs and ffn_lora_layers will be used in set_lora_and_capture_flags().
         self.attn_capture_procs = list(attn_capture_procs.values())

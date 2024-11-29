@@ -395,8 +395,8 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
     if target_modules_pat is not None:
         peft_config = LoraConfig(use_dora=lora_uses_dora, inference_mode=False, r=lora_rank, 
-                                lora_alpha=lora_alpha, lora_dropout=0.1,
-                                target_modules=target_modules_pat)
+                                 lora_alpha=lora_alpha, lora_dropout=0.1,
+                                 target_modules=target_modules_pat)
         unet = get_peft_model(unet, peft_config)
 
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
