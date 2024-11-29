@@ -2507,7 +2507,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # Even if enable_lora_on_ffns is False, we still generate ffn_lora_layers.
             # We'll always disable them in set_lora_and_capture_flags().
             # This is to convert the unet to a PEFT model, which can handle fp16 well.
-            target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
+            if self.enable_lora_on_ffns:
+                target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
+            else:
+                # A special pattern that tells PEFT to add loras on NONE of the layers.
+                # We couldn't simply skip PEFT initialization (converting unet to a PEFT model),
+                # otherwise the attn lora layers will cause nan quickly during a fp16 training.
+                target_modules_pat = 'dummy-target-modules'
 
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
                 set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
