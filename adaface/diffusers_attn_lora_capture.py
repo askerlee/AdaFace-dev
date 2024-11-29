@@ -55,6 +55,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 128, lora_alpha: float = 16):
         super().__init__()
+
         self.global_enable_lora = enable_lora
         # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
         self.reset_attn_cache_and_flags(capture_ca_activations, enable_lora)
@@ -411,13 +412,6 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
                 ffn_lora_layers[name] = module
             # ModuleDict doesn't allow "." in the key.
             name = name.replace(".", "_")
-            # lora_alpha is applied through the scaling dict.
-            # So we back up the original scaling dict as scaling_.
-            # No matter whether using DoRA or not, the scaling controls 
-            # the impact of the LoRA output.
-            # NOTE: cross-attn layers are included in lora_modules.
-            module.scaling_      = module.scaling
-            module.zero_scaling_ = { k: 0 for k in module.scaling.keys() }
             # Since ModuleDict doesn't allow "." in the key, we manually collect
             # the LoRA matrices in each module.
             # NOTE: We cannot put every sub-module of module into lora_modules,
@@ -441,11 +435,12 @@ def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_l
     # It contains 3 FFN layers. We want to capture their output features.
     for block in outfeat_capture_blocks:
         block.capture_outfeats = capture_ca_activations
-    # Reset the LoRA scaling of the LoRA modules to 0, to disable them.
+    # We no longer manipulate the lora_layer.scaling to disable a LoRA.
+    # That method is slow and seems LoRA params are still optimized.
+    # Instead we directly set the disable_adapters_ flag in the LoRA layers.
     # If not global_enable_lora, ffn_lora_layers is an empty ModuleDict.
-    # This loop will exit immediately. So we don't have to worry about the presence of .scaling_.
     for lora_layer in ffn_lora_layers:
-        lora_layer.scaling = lora_layer.scaling_ if enable_lora_on_ffns else lora_layer.zero_scaling_
+        lora_layer.disable_adapters_ = not (enable_lora and enable_lora_on_ffns)
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[23, 24], out_dtype=torch.float32):

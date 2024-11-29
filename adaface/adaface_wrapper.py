@@ -277,7 +277,7 @@ class AdaFaceWrapper(nn.Module):
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, enable_lora_on_ffns=False):
         attn_capture_procs = set_up_attn_processors(unet, enable_lora=True, lora_layer_names=['q'],
                                                     lora_rank=128, lora_scale_down=8)
-        # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
+        # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
         if enable_lora_on_ffns:
             target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
         else:
