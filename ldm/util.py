@@ -2656,6 +2656,6 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
                                     + loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
     else:
-        loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = 0
+        loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = torch.zeros(0., device=ca_outfeats[23].device)
 
     return loss_comp_fg_bg_preserve, loss_sc_mc_bg_match
