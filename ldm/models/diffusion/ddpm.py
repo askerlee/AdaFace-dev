@@ -178,9 +178,9 @@ class DDPM(pl.LightningModule):
         else:
             self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, 
                                               torch_dtype=torch.float16,
-                                              attn_enables_lora=self.unet_uses_attn_lora,
+                                              use_attn_lora=self.unet_uses_attn_lora,
                                               attn_lora_layer_names=['q'],
-                                              ffn_enables_lora=self.unet_uses_ffn_lora,
+                                              use_ffn_lora=self.unet_uses_ffn_lora,
                                               lora_rank=128, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
                                               ffn_lora_scale_down=self.unet_lora_scale_down * 2 # 16
@@ -718,8 +718,8 @@ class LatentDiffusion(DDPM):
                         'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
                         'capture_ca_activations':       False,
-                        'attn_enables_lora':            False,
-                        'ffn_enables_lora':             False,
+                        'use_attn_lora':            False,
+                        'use_ffn_lora':             False,
                      }
 
         c = (prompt_embeddings, cond_in, extra_info)
@@ -1296,18 +1296,18 @@ class LatentDiffusion(DDPM):
 
     # apply_model() is called both during training and inference.
     # apply_model() is called in sliced_apply_model() and guided_denoise().
-    def apply_model(self, x_noisy, t, cond_context, attn_enables_lora=False, ffn_enables_lora=False):
+    def apply_model(self, x_noisy, t, cond_context, use_attn_lora=False, use_ffn_lora=False):
         # self.model: DiffusionWrapper -> 
         # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
         # cond_context[2]: extra_info.
-        cond_context[2]['attn_enables_lora'] = attn_enables_lora
-        cond_context[2]['ffn_enables_lora']  = ffn_enables_lora
+        cond_context[2]['use_attn_lora'] = use_attn_lora
+        cond_context[2]['use_ffn_lora']  = use_ffn_lora
         x_recon = self.model(x_noisy, t, cond_context)
         return x_recon
 
     # sliced_apply_model() is only called within guided_denoise().
     def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, 
-                           enable_grad, attn_enables_lora=False, ffn_enables_lora=False):
+                           enable_grad, use_attn_lora=False, use_ffn_lora=False):
         x_noisy_ = x_noisy[slice_inst]
         t_ = t[slice_inst]
         c_prompt_emb, c_in, extra_info = cond_context
@@ -1316,7 +1316,7 @@ class LatentDiffusion(DDPM):
         extra_info_ = copy.copy(extra_info)
         with torch.set_grad_enabled(enable_grad):
             model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info_), 
-                                            attn_enables_lora=attn_enables_lora, ffn_enables_lora=ffn_enables_lora)
+                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
         return model_output, extra_info_
 
     # do_pixel_recon: return denoised images for CLIP evaluation. 
@@ -1326,7 +1326,7 @@ class LatentDiffusion(DDPM):
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, batch_part_has_grad='all', 
                        do_pixel_recon=False, cfg_scale=-1, 
-                       capture_ca_activations=False, attn_enables_lora=False, ffn_enables_lora=False):
+                       capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
         x_noisy = self.q_sample(x_start, t, noise)
         ca_layers_activations = None
@@ -1341,32 +1341,32 @@ class LatentDiffusion(DDPM):
         # Subject embeddings will naturally have gradients.
         if batch_part_has_grad == 'none':
             with torch.no_grad():
-                model_output = self.apply_model(x_noisy, t, cond_context, attn_enables_lora=attn_enables_lora,
-                                                ffn_enables_lora=ffn_enables_lora)
+                model_output = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
+                                                use_ffn_lora=use_ffn_lora)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'all':
-            model_output = self.apply_model(x_noisy, t, cond_context, attn_enables_lora=attn_enables_lora,
-                                            ffn_enables_lora=ffn_enables_lora)
+            model_output = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
+                                            use_ffn_lora=use_ffn_lora)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'subject-compos':
-            # Although attn_enables_lora is set to True, if self.unet_uses_attn_lora is False, it will be overridden
+            # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, it will be overridden
             # in the unet.
             model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
-                                                                     enable_grad=False, attn_enables_lora=attn_enables_lora,
-                                                                     ffn_enables_lora=ffn_enables_lora)
+                                                                     enable_grad=False, use_attn_lora=use_attn_lora,
+                                                                     use_ffn_lora=use_ffn_lora)
             model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
-                                                                     enable_grad=True,  attn_enables_lora=attn_enables_lora,
-                                                                     ffn_enables_lora=ffn_enables_lora)
+                                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
+                                                                     use_ffn_lora=use_ffn_lora)
             # Always disable LoRAs on class instances.
             model_output_c2, extra_info_c2 = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(2, 4),
-                                                                     enable_grad=False, attn_enables_lora=False, 
-                                                                     ffn_enables_lora=False)
+                                                                     enable_grad=False, use_attn_lora=False, 
+                                                                     use_ffn_lora=False)
             
             model_output = torch.cat([model_output_ss, model_output_sc, model_output_c2], dim=0)
             extra_info = cond_context[2]
@@ -1397,8 +1397,8 @@ class LatentDiffusion(DDPM):
                 # model_output_uncond: [BS, 4, 64, 64]
                 # During inference, due to the pipeline rigidness, LoRAs are enabled on negative prompts.
                 # Therefore, we also enable LoRAs during the training time.
-                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, attn_enables_lora=attn_enables_lora, 
-                                                       ffn_enables_lora=ffn_enables_lora)
+                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=use_attn_lora, 
+                                                       use_ffn_lora=use_ffn_lora)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             noise_pred = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
@@ -1443,8 +1443,8 @@ class LatentDiffusion(DDPM):
                                     uncond_emb, img_mask, batch_part_has_grad='subject-compos', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
-                                    attn_enables_lora=self.unet_uses_attn_lora,
-                                    ffn_enables_lora=False)
+                                    use_attn_lora=self.unet_uses_attn_lora,
+                                    use_ffn_lora=False)
             
             noise_preds.append(noise_pred)
             pred_x0 = x_recon
@@ -1652,8 +1652,8 @@ class LatentDiffusion(DDPM):
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     do_pixel_recon=True,
                                     cfg_scale=cfg_scale, capture_ca_activations=True,
-                                    attn_enables_lora=enable_unet_lora,
-                                    ffn_enables_lora=False)
+                                    use_attn_lora=enable_unet_lora,
+                                    use_ffn_lora=False)
 
             # If do_normal_recon, then there's only 1 objective:
             # **Objective 1**: Align the student predicted noise with the ground truth noise.
@@ -2003,9 +2003,9 @@ class LatentDiffusion(DDPM):
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
                                     # ** Always disable attn LoRAs on unet distillation.
-                                    attn_enables_lora=False,                    
+                                    use_attn_lora=False,                    
                                     # ** Enable ffn LoRAs on unet distillation to reduce domain gap.
-                                    ffn_enables_lora=self.unet_uses_ffn_lora)   
+                                    use_ffn_lora=self.unet_uses_ffn_lora)   
 
             model_outputs.append(model_output_s)
 
@@ -2479,8 +2479,8 @@ class DiffusionWrapper(pl.LightningModule):
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, unet_dirpath, torch_dtype=torch.float16,
-                 attn_enables_lora=False, attn_lora_layer_names=['q'], 
-                 ffn_enables_lora=False, lora_rank=128, 
+                 use_attn_lora=False, attn_lora_layer_names=['q'], 
+                 use_ffn_lora=False, lora_rank=128, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=16):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
@@ -2494,13 +2494,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # _DeviceDtypeModuleMixin class sets self.dtype = torch_dtype.
         self.to(torch_dtype)
 
-        self.attn_enables_lora = attn_enables_lora
-        self.ffn_enables_lora  = ffn_enables_lora
+        self.use_attn_lora = use_attn_lora
+        self.use_ffn_lora  = use_ffn_lora
         self.lora_rank = lora_rank
 
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs = \
-            set_up_attn_processors(self.diffusion_model, self.attn_enables_lora, 
+            set_up_attn_processors(self.diffusion_model, self.use_attn_lora, 
                                    attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down)
         self.attn_capture_procs = list(attn_capture_procs.values())
@@ -2513,7 +2513,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
 
-        if self.attn_enables_lora or self.ffn_enables_lora:
+        if self.use_attn_lora or self.use_ffn_lora:
             # LoRA scaling is always 0.125, the same as the LoRAs in AttnProcessor_LoRA_Capture
             # for cross attention layers.
             # attn_capture_procs and ffn_lora_layers are used to set the flags.
@@ -2522,10 +2522,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # cross-attn layers are not included in ffn_lora_layers.
             # The first returned value is the PEFT wrapper model, 
             # which replaces the original unet, self.diffusion_model.
-            # Even if ffn_enables_lora is False, we still generate ffn_lora_layers.
+            # Even if use_ffn_lora is False, we still generate ffn_lora_layers.
             # We'll always disable them in set_lora_and_capture_flags().
             # This is to convert the unet to a PEFT model, which can handle fp16 well.
-            if self.ffn_enables_lora:
+            if self.use_ffn_lora:
                 target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
             else:
                 # A special pattern, "dummy-target-modules" tells PEFT to add loras on NONE of the layers.
@@ -2556,11 +2556,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
         img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
 
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
-        # self.attn_enables_lora and self.ffn_enables_lora are the global flag. 
-        # We can override them by setting extra_info['attn_enables_lora'] and extra_info['ffn_enables_lora'].
-        # If attn_enables_lora is set to False globally, then disable it in this call.
-        attn_enables_lora = extra_info.get('attn_enables_lora', self.attn_enables_lora) if extra_info is not None else self.attn_enables_lora
-        ffn_enables_lora  = extra_info.get('ffn_enables_lora',  self.ffn_enables_lora)  if extra_info is not None else self.ffn_enables_lora
+        # self.use_attn_lora and self.use_ffn_lora are the global flag. 
+        # We can override them by setting extra_info['use_attn_lora'] and extra_info['use_ffn_lora'].
+        # If use_attn_lora is set to False globally, then disable it in this call.
+        use_attn_lora = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
+        use_ffn_lora  = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.
@@ -2569,7 +2569,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # The scaling factors of attn_capture_procs and ffn_lora_layers are also set differently.
         # (They can be unified, but currently it's more convenient to keep them separate.)
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   attn_enables_lora, ffn_enables_lora, capture_ca_activations)
+                                   use_attn_lora, use_ffn_lora, capture_ca_activations)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \

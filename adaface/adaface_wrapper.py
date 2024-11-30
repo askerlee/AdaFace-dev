@@ -274,11 +274,11 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
-                        attn_enables_lora=True, ffn_enables_lora=False):
+                        use_attn_lora=True, use_ffn_lora=False):
         attn_capture_procs = set_up_attn_processors(unet, enable_lora=True, lora_layer_names=['q'],
                                                     lora_rank=128, lora_scale_down=8)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
-        if ffn_enables_lora:
+        if use_ffn_lora:
             target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
         else:
             # A special pattern, "dummy-target-modules" tells PEFT to add loras on NONE of the layers.
@@ -305,7 +305,7 @@ class AdaFaceWrapper(nn.Module):
         self.outfeat_capture_blocks.append(unet.up_blocks[3])
 
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   attn_enables_lora, ffn_enables_lora, capture_ca_activations=False)
+                                   use_attn_lora, use_ffn_lora, capture_ca_activations=False)
 
         return unet
 
