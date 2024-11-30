@@ -334,7 +334,7 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def set_up_attn_processors(unet, enable_lora, attn_lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
+def set_up_attn_processors(unet, attn_enables_lora, attn_lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
@@ -375,7 +375,7 @@ def set_up_attn_processors(unet, enable_lora, attn_lora_layer_names=['q'], lora_
             lora_proj_layers[lora_layer_name] = lora_layer_dict[lora_layer_name]
 
         attn_capture_proc = AttnProcessor_LoRA_Capture(
-            capture_ca_activations=True, enable_lora=enable_lora, 
+            capture_ca_activations=True, enable_lora=attn_enables_lora, 
             lora_uses_dora=True, lora_proj_layers=lora_proj_layers,
             hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
@@ -427,10 +427,10 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     return unet, ffn_lora_layers, lora_modules
 
 def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
-                               enable_lora, enable_lora_on_ffns, capture_ca_activations):
-    # For attn capture procs, capture_ca_activations and enable_lora are set in reset_attn_cache_and_flags().
+                               attn_enables_lora, ffn_enables_lora, capture_ca_activations):
+    # For attn capture procs, capture_ca_activations and attn_enables_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
-        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=enable_lora)
+        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, enable_lora=attn_enables_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
     for block in outfeat_capture_blocks:
@@ -440,7 +440,7 @@ def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_l
     # Instead we directly set the disable_adapters_ flag in the LoRA layers.
     # If not global_enable_lora, ffn_lora_layers is an empty ModuleDict.
     for lora_layer in ffn_lora_layers:
-        lora_layer.disable_adapters_ = not (enable_lora and enable_lora_on_ffns)
+        lora_layer.disable_adapters_ = not ffn_enables_lora
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[23, 24], out_dtype=torch.float32):

@@ -16,12 +16,11 @@ from diffusers import (
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
 from adaface.util import UNetEnsemble
 from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
-from adaface.diffusers_attn_lora_capture import set_up_attn_processors, set_up_ffn_loras, \
-                                                set_lora_and_capture_flags, CrossAttnUpBlock2D_forward_capture
+from adaface.diffusers_attn_lora_capture import set_up_attn_processors, set_up_ffn_loras, set_lora_and_capture_flags
 from safetensors.torch import load_file as safetensors_load_file
 import re, os
 import numpy as np
-from peft import LoraConfig, get_peft_model
+from peft.utils.constants import DUMMY_TARGET_MODULES
 
 class AdaFaceWrapper(nn.Module):
     def __init__(self, pipeline_name, base_model_path, adaface_encoder_types, 
@@ -30,7 +29,7 @@ class AdaFaceWrapper(nn.Module):
                  num_inference_steps=50, subject_string='z', negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
-                 enable_static_img_suffix_embs=None, unet_uses_lora=False,
+                 enable_static_img_suffix_embs=None, unet_uses_attn_lora=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -46,7 +45,7 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.enabled_encoders = enabled_encoders
         self.enable_static_img_suffix_embs = enable_static_img_suffix_embs
-        self.unet_uses_lora = unet_uses_lora
+        self.unet_uses_attn_lora = unet_uses_attn_lora
         self.use_lcm = use_lcm
         self.subject_string = subject_string
 
@@ -180,7 +179,7 @@ class AdaFaceWrapper(nn.Module):
             pipeline.unet = unet_ensemble
 
         print(f"Loaded pipeline from {self.base_model_path}.")
-        if not remove_unet and self.unet_uses_lora:
+        if not remove_unet and self.unet_uses_attn_lora:
             unet2 = self.load_unet_lora_weights(pipeline.unet)
             pipeline.unet = unet2
 
@@ -274,17 +273,18 @@ class AdaFaceWrapper(nn.Module):
         return unet_state_dict
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
-    def load_unet_loras(self, unet, unet_lora_modules_state_dict, enable_lora_on_ffns=False):
+    def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
+                        attn_enables_lora=True, ffn_enables_lora=False):
         attn_capture_procs = set_up_attn_processors(unet, enable_lora=True, lora_layer_names=['q'],
                                                     lora_rank=128, lora_scale_down=8)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
-        if enable_lora_on_ffns:
+        if ffn_enables_lora:
             target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
         else:
-            # A special pattern that tells PEFT to add loras on NONE of the layers.
+            # A special pattern, "dummy-target-modules" tells PEFT to add loras on NONE of the layers.
             # We couldn't simply skip PEFT initialization (converting unet to a PEFT model),
             # otherwise the attn lora layers will cause nan quickly during a fp16 training.
-            target_modules_pat = 'dummy-target-modules'
+            target_modules_pat = DUMMY_TARGET_MODULES
 
         unet, ffn_lora_layers, unet_lora_modules = \
             set_up_ffn_loras(unet, target_modules_pat=target_modules_pat, lora_uses_dora=True)
@@ -305,7 +305,7 @@ class AdaFaceWrapper(nn.Module):
         self.outfeat_capture_blocks.append(unet.up_blocks[3])
 
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   enable_lora=True, capture_ca_activations=False)
+                                   attn_enables_lora, ffn_enables_lora, capture_ca_activations=False)
 
         return unet
 

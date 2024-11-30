@@ -40,7 +40,7 @@ parser.add_argument('--unet_weights', type=float, nargs="+", default=[1],
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
-parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
+parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
 
 parser.add_argument('--gpu', type=int, default=None)
@@ -67,7 +67,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
                          unet_weights=args.unet_weights, 
-                         unet_uses_lora=args.unet_uses_lora,
+                         unet_uses_attn_lora=args.unet_uses_attn_lora,
                          device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
@@ -85,12 +85,12 @@ def remove_back_to_files():
     # Hide uploaded_files_gallery,    show clear_button_column,      hide files,           reset init_img_selected_idx
     # Or:
     # Hide uploaded_init_img_gallery, hide init_clear_button_column, show init_img_files,  reset init_img_selected_idx
-    return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True)
+    return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True), gr.update(value="")
 
 @spaces.GPU
 def generate_image(image_paths, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face,
-                   seed, name_sig, progress=gr.Progress(track_tqdm=True)):
+                   seed, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
 
@@ -143,18 +143,27 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     # Extract the checkpoint signature as 112813-2000
     ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
 
-    for i, sample in enumerate(samples):
-        filename = f"adaface{ckpt_sig}-{i+1}.png"
-        if len(name_sig) > 0:
-            filename = f"{name_sig}-{filename}"
-        filepath = os.path.join(temp_folder, filename)
+    prompt_keywords = ['armor', 'beach', 'chef', 'dance', 'ironman', 'jedi', 
+                       'street', 'guitar', 'reading', 'running', 'superman']
+    prompt_sig = ""
+    for keyword in prompt_keywords:
+        if keyword in prompt.lower():
+            prompt_sig = keyword
+            break
 
+    if len(prompt_sig) > 0:
+        prompt_sig = "-" + prompt_sig
+
+    for i, sample in enumerate(samples):
+        filename = f"adaface{ckpt_sig}{prompt_sig}-{i+1}.png"
+        if len(subj_name_sig) > 0:
+            filename = f"{subj_name_sig}-{filename}"
+        filepath = os.path.join(temp_folder, filename)
         # Save the image
         sample.save(filepath)  # Adjust to your image saving method
         saved_image_paths.append(filepath)
 
     return saved_image_paths
-
 
 def check_prompt_and_model_type(prompt, model_style_type):
     global adaface
@@ -229,11 +238,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
             prompt = gr.Dropdown(label="Prompt",
                        info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
-                       value="portrait, ((best quality)), ((masterpiece)), ((realistic)), highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
+                       value="portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
                        allow_custom_value=True,
                        filterable=False,
                        choices=[
-                            "portrait, ((best quality)), ((masterpiece)), ((realistic)), highlighted hair, futuristic silver armor suit, confident stance, high-resolution, living room, smiling, head tilted, perfect smooth skin",
+                            "portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
                             "portrait, walking on the beach, sunset, orange sky",
                             "portrait, in a white apron and chef hat, garnishing a gourmet dish",
                             "portrait, dancing pose among folks in a park, waving hands",
@@ -249,8 +258,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
                                        info="Enhance the face features by prepending 'face portrait' to the prompt")
 
-            name_sig = gr.Textbox(
-                label="Name of Subject", 
+            subj_name_sig = gr.Textbox(
+                label="Nickname of Subject", 
                 value="",
             )
 
@@ -307,7 +316,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                      elem_classes="custom-gallery")
 
         img_files.upload(fn=swap_to_gallery, inputs=img_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
-        remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
+        remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files, subj_name_sig])
 
         submit.click(fn=check_prompt_and_model_type,
                      inputs=[prompt, model_style_type],outputs=None).success(
@@ -319,7 +328,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         ).then(
             fn=generate_image,
             inputs=[img_files, guidance_scale, perturb_std, num_images, 
-                    prompt, negative_prompt, enhance_face, seed, name_sig],
+                    prompt, negative_prompt, enhance_face, seed, subj_name_sig],
             outputs=[out_gallery]
         )
 

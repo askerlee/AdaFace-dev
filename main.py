@@ -228,8 +228,10 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--diffusers_unet_path", type=str, default='models/ensemble/sd15-unet',
                         help="Path to the Diffusers UNet model")
-    parser.add_argument("--unet_uses_lora", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use LoRA in the Diffusers UNet model")
+    parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to use LoRA in the cross-attn layers of the Diffusers UNet model")
+    parser.add_argument("--unet_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use LoRA in the FFNs of the Diffusers UNet model")    
     parser.add_argument("--unet_lora_scale_down", type=float, default=8,
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
     parser.add_argument("--load_unet_loras_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
@@ -723,7 +725,8 @@ if __name__ == "__main__":
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
         config.model.params.use_ldm_unet            = opt.use_ldm_unet
         config.model.params.diffusers_unet_path     = opt.diffusers_unet_path
-        config.model.params.unet_uses_lora          = opt.unet_uses_lora
+        config.model.params.unet_uses_attn_lora     = opt.unet_uses_attn_lora
+        config.model.params.unet_uses_ffn_lora      = opt.unet_uses_ffn_lora
         config.model.params.unet_lora_scale_down    = opt.unet_lora_scale_down
         
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
