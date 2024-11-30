@@ -334,7 +334,7 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def set_up_attn_processors(unet, attn_enables_lora, attn_lora_layer_names=['q'], lora_rank=128, lora_scale_down=4):
+def set_up_attn_processors(unet, attn_enables_lora, attn_lora_layer_names=['q'], lora_rank=128, lora_scale_down=8):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())

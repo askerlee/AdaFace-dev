@@ -182,7 +182,9 @@ class DDPM(pl.LightningModule):
                                               attn_lora_layer_names=['q'],
                                               ffn_enables_lora=self.unet_uses_ffn_lora,
                                               lora_rank=128, 
-                                              lora_scale_down=self.unet_lora_scale_down)    # 8
+                                              attn_lora_scale_down=self.unet_lora_scale_down,   # 8
+                                              ffn_lora_scale_down=self.unet_lora_scale_down * 2 # 16
+                                              )
 
         count_params(self.model, verbose=True)
 
@@ -2478,7 +2480,8 @@ class DiffusionWrapper(pl.LightningModule):
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, unet_dirpath, torch_dtype=torch.float16,
                  attn_enables_lora=False, attn_lora_layer_names=['q'], 
-                 ffn_enables_lora=False, lora_rank=128, lora_scale_down=4):
+                 ffn_enables_lora=False, lora_rank=128, 
+                 attn_lora_scale_down=8, ffn_lora_scale_down=16):
         super().__init__()
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -2499,7 +2502,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         attn_capture_procs = \
             set_up_attn_processors(self.diffusion_model, self.attn_enables_lora, 
                                    attn_lora_layer_names=attn_lora_layer_names,
-                                   lora_rank=lora_rank, lora_scale_down=lora_scale_down)
+                                   lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down)
         self.attn_capture_procs = list(attn_capture_procs.values())
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
@@ -2530,9 +2533,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 # otherwise the attn lora layers will cause nan quickly during a fp16 training.
                 target_modules_pat = DUMMY_TARGET_MODULES
 
+            # By default, ffn_lora_scale_down = 16, i.e., the impact of LoRA is 1/16.
             self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
                 set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
-                                 lora_uses_dora=True, lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
+                                 lora_uses_dora=True, lora_rank=lora_rank, 
+                                 lora_alpha=lora_rank // ffn_lora_scale_down,
                                 )
             self.ffn_lora_layers = list(ffn_lora_layers.values())
             # unet_lora_modules is for optimization and loading/saving.

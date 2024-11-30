@@ -650,16 +650,13 @@ class EmbeddingManager(nn.Module):
             if self.unet_lora_modules is not None and load_unet_loras_from_ckpt \
               and 'unet_lora_modules' in ckpt:
                 unet_lora_modules = ckpt['unet_lora_modules']
-                try:
-                    self.unet_lora_modules.load_state_dict(unet_lora_modules)
-                    # Each cross-attn layer has 4 lora layers, and each lora layer has 2 weights (weight and bias).
-                    # So the total number of weights is 4 * 2 * 3 = 24.
-                    print(f"Loaded {len(unet_lora_modules)} LoRA weights")
-                except Exception as e:
-                    # For example if LoRA weight types have been changed to DoRA. Then
-                    # loading will fail. We just skip it.
-                    print(f"Failed to load LoRA weights from {adaface_ckpt_path}:\n{e}")
-                    continue
+                ret = self.unet_lora_modules.load_state_dict(unet_lora_modules, strict=False)
+                print(f"Loaded {len(unet_lora_modules)} LoRA weights")
+
+                if ret is not None and len(ret.missing_keys) > 0:
+                    print(f"Missing keys: {ret.missing_keys}")
+                if ret is not None and len(ret.unexpected_keys) > 0:
+                    print(f"Unexpected keys: {ret.unexpected_keys}")
 
             elif self.unet_lora_modules is None:
                 # unet unet_lora_modules are not enabled.
