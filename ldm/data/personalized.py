@@ -615,32 +615,47 @@ class PersonalizedBase(Dataset):
         else:
             subj_type = "object"
 
-        single_partials, compos_partials = sample_compositions(1, subj_type)
-        single_partial = single_partials[0]
-        compos_partial = compos_partials[0]
+        compos_partials, modifiers = sample_compositions(1, subj_type)
+        modifier            = modifiers[0]
+        compos_partial      = compos_partials[0]
+        compos_mod_partial  = modifier + ", " + compos_partial
 
         template = random.choice(imagenet_templates_small)
-        single_prompt_tmpl  = template + " " + single_partial
-        comp_prompt_tmpl    = template + " " + compos_partial
+        single_prompt_tmpl      = template
+        # modifier starts with a ",", so no need to add ", " before it.
+        single_mod_prompt_tmpl  = template + " " + modifier
+        comp_prompt_tmpl        = template + " " + compos_partial
+        comp_mod_prompt_tmpl    = template + " " + compos_mod_partial
 
         # "face portrait" trick for humans/animals.
         # Note in comp_prompt_tmpl, "face portrait" is replaced by "a portrait",
         # to avoid the face being too dominant in the image.
-        single_fp_prompt_tmpl    = "face portrait of a {}" + " " + single_partial
-        subj_comp_fp_prompt_tmpl =    "a portrait of a {}" + " " + compos_partial
-        cls_comp_fp_prompt_tmpl  = "face portrait of a {}" + " " + compos_partial
+        single_fp_prompt_tmpl        = "face portrait of a {}" + " "
+        single_fp_mod_prompt_tmpl    = "face portrait of a {}" + " " + modifier
+        subj_comp_fp_prompt_tmpl     =    "a portrait of a {}" + " " + compos_partial
+        subj_comp_fp_mod_prompt_tmpl =    "a portrait of a {}" + " " + compos_mod_partial
+        cls_comp_fp_prompt_tmpl      = "face portrait of a {}" + " " + compos_partial
+        cls_comp_fp_mod_prompt_tmpl  = "face portrait of a {}" + " " + compos_mod_partial
 
-        example["subj_single_prompt"]   = single_prompt_tmpl.format(subject_string)
-        example["cls_single_prompt"]    = single_prompt_tmpl.format(cls_delta_string)
-        example["subj_comp_prompt"]     = comp_prompt_tmpl.format(  subject_string) 
-        example["cls_comp_prompt"]      = comp_prompt_tmpl.format(  cls_delta_string)
+        example["subj_single_prompt"]     = single_prompt_tmpl.format(subject_string)
+        example["subj_single_mod_prompt"] = single_mod_prompt_tmpl.format(subject_string)
+        example["cls_single_prompt"]      = single_prompt_tmpl.format(cls_delta_string)
+        example["cls_single_mod_prompt"]  = single_mod_prompt_tmpl.format(cls_delta_string)
+        example["subj_comp_prompt"]       = comp_prompt_tmpl.format(  subject_string) 
+        example["subj_comp_mod_prompt"]   = comp_mod_prompt_tmpl.format(subject_string)
+        example["cls_comp_prompt"]        = comp_prompt_tmpl.format(  cls_delta_string)
+        example["cls_comp_mod_prompt"]    = comp_mod_prompt_tmpl.format(cls_delta_string)
 
         # Delta loss requires subj_single_prompt/cls_single_prompt to be token-wise aligned
         # with subj_comp_prompt/cls_comp_prompt, so we need to specify them in the dataloader as well.
-        example["subj_single_prompt_fp"] = single_fp_prompt_tmpl.format(   subject_string)
-        example["subj_comp_prompt_fp"]   = subj_comp_fp_prompt_tmpl.format(subject_string)
-        example["cls_single_prompt_fp"]  = single_fp_prompt_tmpl.format(   cls_delta_string)
-        example["cls_comp_prompt_fp"]    = cls_comp_fp_prompt_tmpl.format( cls_delta_string)
+        example["subj_single_prompt_fp"]     = single_fp_prompt_tmpl.format(    subject_string)
+        example["subj_single_mod_prompt_fp"] = single_fp_mod_prompt_tmpl.format(subject_string)
+        example["subj_comp_prompt_fp"]       = subj_comp_fp_prompt_tmpl.format( subject_string)
+        example["subj_comp_mod_prompt_fp"]   = subj_comp_fp_mod_prompt_tmpl.format(subject_string)
+        example["cls_single_prompt_fp"]      = single_fp_prompt_tmpl.format(    cls_delta_string)
+        example["cls_single_mod_prompt_fp"]  = single_fp_mod_prompt_tmpl.format(cls_delta_string)
+        example["cls_comp_prompt_fp"]        = cls_comp_fp_prompt_tmpl.format(  cls_delta_string)
+        example["cls_comp_mod_prompt_fp"]    = cls_comp_fp_mod_prompt_tmpl.format(cls_delta_string)
 
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.

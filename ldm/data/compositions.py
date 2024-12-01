@@ -121,15 +121,15 @@ PRESET_DEBUG_PROMPTS = [ 'with a city in the background',
 
 def sample_compositions(N, subj_type):
     compos_prompts = []
-    single_prompts = []
+    modifiers = []
 
     if Debug_Prompts:
         K = len(PRESET_DEBUG_PROMPTS)
         for i in range(N):
             idx = np.random.choice(K)
             compos_prompts.append(PRESET_DEBUG_PROMPTS[idx])
-            single_prompts.append("")
-        return single_prompts, compos_prompts
+            modifiers.append("")
+        return compos_prompts, modifiers
     
     if subj_type == 'animal':
         composition_regexs = all_composition_regexs
@@ -209,16 +209,16 @@ def sample_compositions(N, subj_type):
         else:
             light = ""
 
-        single_prompt = f"{time}{style}{art_by}{light}"
-        compos_prompt = f"{single_prompt}, {composition}{obj_loc2}{background}"
-        single_prompts.append(single_prompt)
+        modifier = f"{time}{style}{art_by}{light}"
+        compos_prompt = f"{composition}{obj_loc2}{background}"
+        modifiers.append(modifier)
         compos_prompts.append(compos_prompt)
-    return single_prompts, compos_prompts
+    return compos_prompts, modifiers
 
 if __name__ == "__main__":
-    single_prompts, compos_prompts = sample_compositions(20, 'animal')
+    compos_prompts, modifiers = sample_compositions(20, 'animal')
     for i in range(20):
-        print(f"{i+1}:\t{single_prompts[i]}")
+        print(f"{i+1}:\t{modifiers[i]}")
         print(f"    \t{compos_prompts[i]}")
         print()
 

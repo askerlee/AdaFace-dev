@@ -851,18 +851,40 @@ class LatentDiffusion(DDPM):
         else:
             self.iter_flags['is_comp_init_fg_from_training_image'] = False
 
-        # ** use_fp_trick is only for compositional iterations. **
         if self.iter_flags['use_fp_trick']:
-            # Never use_fp_trick for recon iters. So no need to have "caption_fp".
-            SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
-            SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
-            CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
-            CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
+            if self.iter_flags['do_comp_feat_distill']:
+                # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
+                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
+                # CLS_SINGLE_PROMPT has to match SUBJ_SINGLE_PROMPT for prompt delta regularization.
+                CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
+            else:
+                # If normal recon, then use the subj single prompts without styles, lighting, etc.
+                SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
+                CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
+
+            if self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']:
+                # If doing normal recon, then use the subj single/comp prompts without styles, lighting, etc.
+                # recon_on_comp_prompt uses the subj_comp prompts without styles, lighting, etc.
+                # Otherwise there's a gap with the input realistic face images.
+                SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
+                # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta regularization.
+                CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
+            else:
+                # If doing compositional distillation, then use the subj single/comp prompts with styles, lighting, etc.
+                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
+
         # Either do_comp_feat_distill but not use_fp_trick_iter, 
         # or recon/unet_distill iters (not do_comp_feat_distill).
         # We don't use_fp_trick on training images. 
         else:
-            SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
+            if self.iter_flags['do_comp_feat_distill']:
+                # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
+                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt'
+            else:
+                # If normal recon, then use the subj single prompts without styles, lighting, etc.
+                SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
+
             SUBJ_COMP_PROMPT   = 'subj_comp_prompt'
             CLS_COMP_PROMPT    = 'cls_comp_prompt'
             CLS_SINGLE_PROMPT  = 'cls_single_prompt'
