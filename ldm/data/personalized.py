@@ -626,7 +626,7 @@ class PersonalizedBase(Dataset):
         # "face portrait" trick for humans/animals.
         # Note in comp_prompt_tmpl, "face portrait" is replaced by "a portrait",
         # to avoid the face being too dominant in the image.
-        single_fp_prompt_tmpl    = "face portrait of a {}"
+        single_fp_prompt_tmpl    = "face portrait of a {}" + " " + single_partial
         subj_comp_fp_prompt_tmpl =    "a portrait of a {}" + " " + compos_partial
         cls_comp_fp_prompt_tmpl  = "face portrait of a {}" + " " + compos_partial
 
