@@ -87,31 +87,24 @@ all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "ste
                "as a crochet figure", "as a 3d model", "closeup shot", "close view", "D&D sci-fi",
                "pop art", "portrait art", "watercolour painting", "chalk art", "concepture art", "bauhaus style", 
                "photorealistic painting", "surrealism painting", "impressionism", "expressionism", "abstract art", "minimalism",
-               "low poly", "cubism style", "funko pop"
-             ]
-# other style modifiers.
-all_modifiers = [ "concept art", "realistic painting", "character design", "anime sketch", 
-                  "trending in artstation", "hyper realistic", "vivid colors", "clear face", 
-                  "detailed face", "semirealism", "hyperrealistic", "highly detailed", "octane render",
-                  "unreal 5", "photorealistic", "sharp focus", "digital painting", "illustration",
-                  "volumetric lighting", "dreamy", "cinematic", 
-                  "surreal", "hd", "4k", "8k", "3d", "4d", "pixelate", "blur", 
-                  "beautiful", "very beautiful", "symmetrical", "macabre", "at night" 
-                ]
+               "low poly", "cubism style", "funko pop",
+               "concept art", "realistic painting", "character design", "anime sketch", 
+               "trending in artstation", "vivid colors", "clear face", 
+               "detailed face", "semirealism", "octane render",
+               "unreal 5", "digital painting", "illustration",  "volumetric lighting", "dreamy", 
+               "cinematic", "surreal", "pixelate", "macabre"
+            ]
 
 #add time prompts
-all_time = [ "futuristic", "modern", "ancient", "antique","retro","old-fashioned", "youthful" ]
+all_time = [ "futuristic", "modern", "ancient", "antique", "retro", "old-fashioned", "youthful" ]
 
 #add light prompts
 all_light = [ "daylight", "moonlight", "night sky", "natural light", "front light", 
               "backlight", "soft light", "hard light", "moody light", "dramatic light", 
-              "dynamic light", "natural light" ]
-
+              "dynamic light", "natural light", "at night" ]
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
-               "mark ryden", "hayao miyazaki", 
-               #add artist 
-               "agnes Lawrence", "disney animation studio"]
+               "mark ryden", "hayao miyazaki", "agnes Lawrence", "disney animation studio"]
 
 #add background prompts
 all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", "a theme park",
@@ -126,15 +119,17 @@ PRESET_DEBUG_PROMPTS = [ 'with a city in the background',
                         #'on a cobblestone street', 'on top of a wooden floor' 
                        ]
 
-def sample_compositions(N, subj_type, is_training=False):
-    compositions = []
+def sample_compositions(N, subj_type):
+    compos_prompts = []
+    single_prompts = []
 
     if Debug_Prompts:
         K = len(PRESET_DEBUG_PROMPTS)
         for i in range(N):
             idx = np.random.choice(K)
-            compositions.append(PRESET_DEBUG_PROMPTS[idx])
-        return compositions
+            compos_prompts.append(PRESET_DEBUG_PROMPTS[idx])
+            single_prompts.append("")
+        return single_prompts, compos_prompts
     
     if subj_type == 'animal':
         composition_regexs = all_composition_regexs
@@ -145,17 +140,13 @@ def sample_compositions(N, subj_type, is_training=False):
     
     K = len(composition_regexs)
 
-    if is_training:
-        # Lower variations during training, to focus on the main semantics.
-        # 0.75: option 0 (without certain components), 
-        # 0.25: option 1 (with    certain components).
-        option_probs     = [0.75, 0.25]
-        # 0.4:  option 0 (without background),
-        # 0.6:  option 1 (with    background).
-        background_probs = [0.4,  0.6]
-    else:
-        option_probs = [0.3, 0.7]
-        background_probs = option_probs
+    # Lower variations during training, to focus on the main semantics.
+    # 0.75: option 0 (without certain components), 
+    # 0.25: option 1 (with    certain components).
+    option_probs     = [0.75, 0.25]
+    # 0.4:  option 0 (without background),
+    # 0.6:  option 1 (with    background).
+    background_probs = [0.4,  0.6]
 
     for i in range(N):
         idx = np.random.choice(K)
@@ -175,23 +166,17 @@ def sample_compositions(N, subj_type, is_training=False):
         else:
             obj_loc2  = ""
 
-        # Choose a few common styles
-        has_styles = np.random.choice([0, 1], p=option_probs)
-        if has_styles:
+        style_probs = [0.3, 0.2, 0.5]
+        has_styles = np.random.choice([0, 1, 2], p=style_probs)
+        if has_styles == 2:     # 50% with 1 or 2 styles
             num_styles = np.random.choice([1, 2])
             styles = np.random.choice(all_styles, size=num_styles, replace=False)
             # style = np.random.choice(all_styles) + ' '
             style = ", in " + " and ".join(styles) + " style"
-        else:
+        elif has_styles == 1:   # 20% with photorealistic as the style
+            style = ", photorealistic"
+        elif has_styles == 0:   # 30% without style
             style = ""
-
-        has_modifiers = np.random.choice([0, 1], p=option_probs)
-        if has_modifiers:
-            num_modifiers = np.random.choice([1, 2, 3])
-            modifiers = np.random.choice(all_modifiers, size=num_modifiers, replace=False)
-            modifier = ", " + ", ".join(modifiers)          
-        else:
-            modifier = ""
 
         has_art_by = np.random.choice([0, 1], p=option_probs)
     
@@ -224,21 +209,16 @@ def sample_compositions(N, subj_type, is_training=False):
         else:
             light = ""
 
-        if is_training:
-            composition = f"{composition}{modifier}{time}{style}{background}{art_by}{light}{obj_loc2}"
-        else:
-            image = ", " + np.random.choice(['photo', 'drawing', 'illustration', 'picture'])
-            composition = f"{modifier}{time}{style}{image} of z {composition}{background}{art_by}{light}{obj_loc2}"
-            if composition.startswith(", "):
-                composition = composition[2:]
-        
-        compositions.append(composition)
-        
-    return compositions
+        single_prompt = f"{time}{style}{art_by}{light}"
+        compos_prompt = f"{single_prompt}, {composition}{obj_loc2}{background}"
+        single_prompts.append(single_prompt)
+        compos_prompts.append(compos_prompt)
+    return single_prompts, compos_prompts
 
 if __name__ == "__main__":
-    print("Test:")
-    print("\n".join(sample_compositions(20, 'animal')))
-    print()
-    print("Training:")
-    print("\n".join(sample_compositions(20, 'animal', is_training=True)))
+    single_prompts, compos_prompts = sample_compositions(20, 'animal')
+    for i in range(20):
+        print(f"{i+1}:\t{single_prompts[i]}")
+        print(f"    \t{compos_prompts[i]}")
+        print()
+

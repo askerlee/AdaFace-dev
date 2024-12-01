@@ -615,19 +615,20 @@ class PersonalizedBase(Dataset):
         else:
             subj_type = "object"
 
-        compositions_partial = sample_compositions(1, subj_type, is_training=True)
-        composition_partial = compositions_partial[0]
+        single_partials, compos_partials = sample_compositions(1, subj_type)
+        single_partial = single_partials[0]
+        compos_partial = compos_partials[0]
 
         template = random.choice(imagenet_templates_small)
-        single_prompt_tmpl  = template
-        comp_prompt_tmpl    = template + " " + composition_partial
+        single_prompt_tmpl  = template + " " + single_partial
+        comp_prompt_tmpl    = template + " " + compos_partial
 
         # "face portrait" trick for humans/animals.
         # Note in comp_prompt_tmpl, "face portrait" is replaced by "a portrait",
         # to avoid the face being too dominant in the image.
         single_fp_prompt_tmpl    = "face portrait of a {}"
-        subj_comp_fp_prompt_tmpl =    "a portrait of a {}" + " " + composition_partial
-        cls_comp_fp_prompt_tmpl  = "face portrait of a {}" + " " + composition_partial
+        subj_comp_fp_prompt_tmpl =    "a portrait of a {}" + " " + compos_partial
+        cls_comp_fp_prompt_tmpl  = "face portrait of a {}" + " " + compos_partial
 
         example["subj_single_prompt"]   = single_prompt_tmpl.format(subject_string)
         example["cls_single_prompt"]    = single_prompt_tmpl.format(cls_delta_string)
