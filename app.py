@@ -42,7 +42,7 @@ parser.add_argument("--guidance_scale", type=float, default=8.0,
                     help="The guidance scale for the diffusion model. Default: 8.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
-
+parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
@@ -154,6 +154,10 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     if len(prompt_sig) > 0:
         prompt_sig = "-" + prompt_sig
 
+    extra_save_dir = args.extra_save_dir
+    if extra_save_dir is not None:
+        os.makedirs(extra_save_dir, exist_ok=True)
+
     for i, sample in enumerate(samples):
         filename = f"adaface{ckpt_sig}{prompt_sig}-{i+1}.png"
         if len(subj_name_sig) > 0:
@@ -163,6 +167,11 @@ def generate_image(image_paths, guidance_scale, perturb_std,
         sample.save(filepath)  # Adjust to your image saving method
         saved_image_paths.append(filepath)
 
+        if extra_save_dir is not None:
+            extra_filepath = os.path.join(extra_save_dir, filename)
+            sample.save(extra_filepath)
+            print(extra_filepath)
+            
     return saved_image_paths
 
 def check_prompt_and_model_type(prompt, model_style_type):
