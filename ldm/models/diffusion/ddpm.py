@@ -855,24 +855,22 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
-                # CLS_SINGLE_PROMPT has to match SUBJ_SINGLE_PROMPT for prompt delta regularization.
+                # CLS_SINGLE_PROMPT has to match SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
+                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
             else:
                 # If normal recon, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
                 CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
-
-            if self.iter_flags['do_normal_recon'] or self.iter_flags['do_unet_distill']:
-                # If doing normal recon, then use the subj single/comp prompts without styles, lighting, etc.
-                # recon_on_comp_prompt uses the subj_comp prompts without styles, lighting, etc.
-                # Otherwise there's a gap with the input realistic face images.
+                # recon_on_comp_prompt uses the subj comp prompts without styles, lighting, etc.
+                # Otherwise there's a gap betwen the generated images and the input realistic face images,
+                # making distillation less effective.
+                # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet, 
+                # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
                 SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
-                # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta regularization.
+                # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta loss.
                 CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
-            else:
-                # If doing compositional distillation, then use the subj single/comp prompts with styles, lighting, etc.
-                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
-                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
 
         # Either do_comp_feat_distill but not use_fp_trick_iter, 
         # or recon/unet_distill iters (not do_comp_feat_distill).
@@ -881,13 +879,22 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt'
+                # CLS_SINGLE_PROMPT has to match SUBJ_SINGLE_PROMPT for prompt delta loss.
+                CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
+                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt'
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
             else:
                 # If normal recon, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
-
-            SUBJ_COMP_PROMPT   = 'subj_comp_prompt'
-            CLS_COMP_PROMPT    = 'cls_comp_prompt'
-            CLS_SINGLE_PROMPT  = 'cls_single_prompt'
+                CLS_SINGLE_PROMPT  = 'cls_single_prompt'
+                # recon_on_comp_prompt uses the subj comp prompts without styles, lighting, etc.
+                # Otherwise there's a gap betwen the generated images and the input realistic face images,
+                # making distillation less effective.
+                # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet,
+                # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
+                SUBJ_COMP_PROMPT   = 'subj_comp_prompt'
+                # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta loss.
+                CLS_COMP_PROMPT    = 'cls_comp_prompt'
 
         subj_single_prompts = batch[SUBJ_SINGLE_PROMPT]
         cls_single_prompts  = batch[CLS_SINGLE_PROMPT]

@@ -618,6 +618,8 @@ class PersonalizedBase(Dataset):
         compos_partials, modifiers = sample_compositions(1, subj_type)
         modifier            = modifiers[0]
         compos_partial      = compos_partials[0]
+        # First modifier, then compos_partial, to align with single_mod_prompt_tmpl,
+        # which ends with the modifier.
         compos_mod_partial  = modifier + ", " + compos_partial
 
         template = random.choice(imagenet_templates_small)
