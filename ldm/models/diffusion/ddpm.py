@@ -92,8 +92,8 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
-                 p_recon_with_adv_mod=0.5,
-                 recon_adv_mod_lr=1,
+                 p_recon_with_adv_mod=1,
+                 recon_adv_mod_lr=50,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -1669,6 +1669,8 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
+            # Although we set p_recon_with_adv_mod = 1, since sometimes faces are not detected,
+            # effectively do_adv_mod is enabled around 60%-70% of the time.
             do_adv_mod = torch.rand(1).item() < self.p_recon_with_adv_mod
             if do_adv_mod:
                 # Add adversarial grad to x_start
@@ -1680,12 +1682,13 @@ class LatentDiffusion(DDPM):
 
                 adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
                 if adv_grad is not None:
-                    calc_stats('adv_grad', adv_grad)
-                    # adv_grad norm min: 0.0000, norm max: 0.0028, norm mean: 0.0001, norm std: 0.0003.
-                    # adv_grad already has a small magnitude. So we choose recon_adv_mod_lr = 1
+                    # adv_grad has a very small magnitude. So we choose recon_adv_mod_lr = 50.
                     # x_noisy = a * x_start + b * noise, so when we subtract adv_grad from noise,
                     # we effectively subtract adv_grad from x_noisy, which 
                     # minimizes self_align_loss = (embs * embs).mean().
+                    # L1: 0.0005, L2: 0.0019, Norms: min: 0.0716, max: 0.2222, mean: 0.1358, std: 0.0434.
+                    adv_grad = adv_grad * self.recon_adv_mod_lr
+                    calc_stats('adv_grad', adv_grad, norm_dim=(2,3))
                     noise[:ADV_BS] -= adv_grad * self.recon_adv_mod_lr
 
             if self.iter_flags['recon_on_comp_prompt']:
