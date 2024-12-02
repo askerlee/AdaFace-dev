@@ -1672,7 +1672,13 @@ class LatentDiffusion(DDPM):
             do_adv_mod = torch.rand(1).item() < self.p_recon_with_adv_mod
             if do_adv_mod:
                 # Add adversarial grad to x_start
-                adv_grad = self.calc_arcface_adv_grad(x_start[:1])
+                if self.use_ldm_unet:
+                    ADV_BS = 1
+                else:
+                    # diffusers vae is fp16, more memory efficient.
+                    ADV_BS = 2
+
+                adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
                 if adv_grad is not None:
                     calc_stats('adv_grad', adv_grad)
                     # adv_grad norm min: 0.0000, norm max: 0.0028, norm mean: 0.0001, norm std: 0.0003.
@@ -1680,7 +1686,7 @@ class LatentDiffusion(DDPM):
                     # x_noisy = a * x_start + b * noise, so when we subtract adv_grad from noise,
                     # we effectively subtract adv_grad from x_noisy, which 
                     # minimizes self_align_loss = (embs * embs).mean().
-                    noise[:1] -= adv_grad * self.recon_adv_mod_lr
+                    noise[:ADV_BS] -= adv_grad * self.recon_adv_mod_lr
 
             if self.iter_flags['recon_on_comp_prompt']:
                 # Use class comp prompts as the negative prompts.
