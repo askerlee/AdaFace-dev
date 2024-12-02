@@ -57,7 +57,7 @@ def perturb_np_array(np_array, perturb_std, perturb_std_is_relative=True, std_di
     ts = perturb_tensor(ts, perturb_std, perturb_std_is_relative, std_dim=std_dim)
     return ts.numpy().astype(np_array.dtype)
 
-def calc_stats(emb_name, embeddings, mean_dim=0):
+def calc_stats(emb_name, embeddings, mean_dim=-1):
     print("%s:" %emb_name)
     repeat_count = [1] * embeddings.ndim
     repeat_count[mean_dim] = embeddings.shape[mean_dim]
