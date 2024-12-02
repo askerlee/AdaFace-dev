@@ -7,7 +7,7 @@ model:
     log_every_t: 200
     timesteps: 1000
     # first_stage_key: used as batch[key] in DDPM.get_input()
-    first_stage_key: "jpg"
+    first_stage_key: "images"
     cond_stage_key: "txt"
     image_size: 64
     channels: 4

@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        count_optimized_params, count_params, calc_dyn_loss_scale
+                        count_optimized_params, count_params, calc_dyn_loss_scale, calc_stats
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -36,7 +36,7 @@ import copy
 from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
-from evaluation.arcface_wrapper import ArcFaceWrapper
+from ldm.modules.arcface_wrapper import ArcFaceWrapper
 
 import sys
 import asyncio
@@ -91,6 +91,8 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
+                 p_recon_with_adv_mod=0.5,
+                 recon_adv_mod_lr=1,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -155,6 +157,8 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
+        self.p_recon_with_adv_mod                   = p_recon_with_adv_mod
+        self.recon_adv_mod_lr                       = recon_adv_mod_lr
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
@@ -790,7 +794,7 @@ class LatentDiffusion(DDPM):
     # 'caption' is not named 'subj_single_prompt' to keep it compatible with older code.
     # ANCHOR[id=shared_step]
     def shared_step(self, batch):
-        # Encode noise as 4-channel latent features.
+        # Encode the input image/noise as 4-channel latent features.
         # first_stage_key="image"
         x_start = self.get_input(batch, self.first_stage_key)
 
@@ -1628,15 +1632,6 @@ class LatentDiffusion(DDPM):
         ###### Begin of loss computation. ######
         loss_dict = {}
         session_prefix = 'train' if self.training else 'val'
-
-        if self.parameterization == "x0":
-            gt_target = x_start
-        # default is "eps", i.e., the UNet predicts noise.
-        elif self.parameterization == "eps":
-            gt_target = noise
-        else:
-            raise NotImplementedError()
-
         loss = 0
 
         # do_prompt_emb_delta_reg is always done, regardless of the iter_type.
@@ -1657,6 +1652,19 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
+            do_adv_mod = torch.rand(1).item() < self.p_recon_with_adv_mod
+            if do_adv_mod:
+                # Add adversarial grad to x_start
+                adv_grad = self.calc_arcface_adv_grad(x_start[:1])
+                if adv_grad is not None:
+                    calc_stats('adv_grad', adv_grad)
+                    # adv_grad norm min: 0.0000, norm max: 0.0028, norm mean: 0.0001, norm std: 0.0003.
+                    # adv_grad already has a small magnitude. So we choose recon_adv_mod_lr = 1
+                    # x_noisy = a * x_start + b * noise, so when we subtract adv_grad from noise,
+                    # we effectively subtract adv_grad from x_noisy, which 
+                    # minimizes self_align_loss = (embs * embs).mean().
+                    noise[:1] -= adv_grad * self.recon_adv_mod_lr
+
             if self.iter_flags['recon_on_comp_prompt']:
                 # Use class comp prompts as the negative prompts.
                 uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) #extra_info['cls_comp_emb']
@@ -1673,7 +1681,8 @@ class LatentDiffusion(DDPM):
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
             # Don't do CFG. So uncond_emb is None.
-            enable_unet_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+            # If unet_uses_attn_lora, then enable use_attn_lora with 50% chance during normal recon.
+            enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
             model_output, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=img_mask,
@@ -1681,7 +1690,7 @@ class LatentDiffusion(DDPM):
                                     # Reconstruct the images at the pixel level for CLIP loss.
                                     do_pixel_recon=True,
                                     cfg_scale=cfg_scale, capture_ca_activations=True,
-                                    use_attn_lora=enable_unet_lora,
+                                    use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=False)
 
             # If do_normal_recon, then there's only 1 objective:
@@ -1690,7 +1699,7 @@ class LatentDiffusion(DDPM):
             bg_pixel_weight = 0 
 
             loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
-                calc_recon_and_complem_losses(model_output, gt_target, ca_layers_activations,
+                calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
                                               all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
                                               bg_pixel_weight, x_start.shape[0])
             v_loss_recon = loss_recon.mean().detach().item()
@@ -1895,6 +1904,25 @@ class LatentDiffusion(DDPM):
         loss_arcface_align = loss_arcface_align.to(x_start.dtype)
         return loss_arcface_align
 
+    def calc_arcface_adv_grad(self, x_start):
+        x_start.requires_grad = True
+        orig_image = self.decode_first_stage_with_grad(x_start)
+        embs, failed_indices = self.arcface.embed_image_tensor(orig_image, T=20, use_whole_image_if_no_face=False, enable_grad=True)
+        if len(failed_indices) > 0:
+            print(f"Failed to detect faces in image-{failed_indices}")
+            return None
+        # We want to push embs towards the negative direction, i.e., minimize (embs*embs).mean().
+        # Therefore there's no negative sign when computing self_align_loss.
+        # It's not simply reduce the magnitude of the face embedding. Since we add noise to the face image,
+        # which introduces other random directions of the face embedding. When we reduce the  
+        # face embedding magnitude along the original direction, we boost the noisy face embedding 
+        # along the other directions more effectively.
+        self_align_loss = (embs * embs).mean()
+        self_align_loss.backward()
+        adv_grad = x_start.grad
+        x_start.requires_grad = False
+        return adv_grad
+    
     def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, img_mask, fg_mask):
         c_prompt_emb, c_in, extra_info = cond_context
         BLOCK_SIZE = x_start.shape[0]
@@ -2023,7 +2051,7 @@ class LatentDiffusion(DDPM):
             # If not self.p_unet_teacher_uses_cfg, then self.unet_teacher.cfg_scale = 1, 
             # and the cfg_scale is not used in guided_denoise().
             # ca_layers_activations is not used in unet distillation.
-            # ** Intentionally do not use img_mask in unet distillation. 
+            # We intentionally do not use img_mask in unet distillation. 
             # Otherwise the task will be too easy for the student.
             model_output_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
@@ -2033,7 +2061,7 @@ class LatentDiffusion(DDPM):
                                     capture_ca_activations=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
-                                    # ** Enable ffn LoRAs on unet distillation to reduce domain gap.
+                                    # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
                                     use_ffn_lora=self.unet_uses_ffn_lora)   
 
             model_outputs.append(model_output_s)
