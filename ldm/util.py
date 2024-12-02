@@ -283,8 +283,8 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     # Compute it manually.
     l2_loss = ((embeddings - emb_mean) ** 2).mean().sqrt()
     norms = torch.norm(embeddings, dim=norm_dim).detach().cpu().numpy()
-    print("{emb_name}: L1 %.4f, L2 %.4f" %(l1_loss.item(), l2_loss.item()), end=", ")
-    print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
+    print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
+    print(f"Norms: min: {norms.min():.4f}, max: {norms.max():.4f}, mean: {norms.mean():.4f}, std: {norms.std():.4f}")
 
 
 def split_string(input_string):
