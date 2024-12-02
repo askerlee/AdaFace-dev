@@ -1676,7 +1676,7 @@ class LatentDiffusion(DDPM):
                     ADV_BS = 1
                 else:
                     # diffusers vae is fp16, more memory efficient.
-                    ADV_BS = 2
+                    ADV_BS = x_start.shape[0]
 
                 adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
                 if adv_grad is not None:
