@@ -273,7 +273,6 @@ def parallel_data_prefetch(
 # Calculate the norms along the channel dim at each spatial location.
 # Then calculate the min, max, mean and std of the norms.
 def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
-    print("%s:" %emb_name)
     repeat_count = [1] * embeddings.ndim
     repeat_count[mean_dim] = embeddings.shape[mean_dim]
     # Average across the mean_dim dim. 
@@ -284,7 +283,7 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     # Compute it manually.
     l2_loss = ((embeddings - emb_mean) ** 2).mean().sqrt()
     norms = torch.norm(embeddings, dim=norm_dim).detach().cpu().numpy()
-    print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()), end=", ")
+    print("{emb_name}: L1 %.4f, L2 %.4f" %(l1_loss.item(), l2_loss.item()), end=", ")
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
 

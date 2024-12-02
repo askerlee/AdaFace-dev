@@ -1672,8 +1672,9 @@ class LatentDiffusion(DDPM):
             # Although we set p_recon_with_adv_mod = 1, since sometimes faces are not detected,
             # effectively do_adv_mod is enabled around 60%-70% of the time.
             do_adv_mod = torch.rand(1).item() < self.p_recon_with_adv_mod
+            # Add adversarial grad to x_start
             if do_adv_mod:
-                # Add adversarial grad to x_start
+                # LDM VAE uses fp32, and we can only afford a BS=1.
                 if self.use_ldm_unet:
                     ADV_BS = 1
                 else:
