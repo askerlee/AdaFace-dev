@@ -280,7 +280,7 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     emb_mean = embeddings.mean(mean_dim, keepdim=True).repeat(repeat_count)
     l1_loss = F.l1_loss(embeddings, emb_mean)
     # F.l2_loss doesn't take sqrt. So the loss is very small. 
-    # Compute it manually.
+    # We compute it manually by taking sqrt.
     l2_loss = ((embeddings - emb_mean) ** 2).mean().sqrt()
     norms = torch.norm(embeddings, dim=norm_dim).detach().cpu().numpy()
     print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
