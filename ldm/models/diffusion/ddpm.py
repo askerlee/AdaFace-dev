@@ -10,7 +10,7 @@ from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 import bitsandbytes as bnb
 from ldm.c_adamw import AdamW as CAdamW
-from diffusers import UNet2DConditionModel
+from diffusers import UNet2DConditionModel, StableDiffusionPipeline
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
@@ -46,6 +46,7 @@ class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
                  unet_config,
+                 base_model_path,
                  automatic_optimization=True,
                  timesteps=1000,
                  beta_schedule="linear",
@@ -99,7 +100,6 @@ class DDPM(pl.LightningModule):
                  use_arcface_loss=True,
                  arcface_align_loss_weight=4e-2,
                  use_ldm_unet=True,
-                 diffusers_unet_path='models/ensemble/sd15-unet',
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
                  unet_lora_scale_down=8,
@@ -180,7 +180,7 @@ class DDPM(pl.LightningModule):
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
         else:
-            self.model = DiffusersUNetWrapper(unet_dirpath=diffusers_unet_path, 
+            self.model = DiffusersUNetWrapper(base_model_path=base_model_path, 
                                               torch_dtype=torch.float16,
                                               use_attn_lora=self.unet_uses_attn_lora,
                                               attn_lora_layer_names=['q'],
@@ -189,6 +189,7 @@ class DDPM(pl.LightningModule):
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
                                               ffn_lora_scale_down=self.unet_lora_scale_down * 2 # 16
                                               )
+            self.vae = self.model.pipeline.vae
 
         count_params(self.model, verbose=True)
 
@@ -409,7 +410,7 @@ class LatentDiffusion(DDPM):
         use_ldm_unet    = kwargs.get("use_ldm_unet", True)
 
         # base_model_path and ignore_keys are popped from kwargs, so they won't be passed to the base class DDPM.
-        base_model_path = kwargs.pop("base_model_path", None)
+        base_model_path = kwargs.get("base_model_path", None)
         ignore_keys = kwargs.pop("ignore_keys", [])
 
         super().__init__(*args, **kwargs)
@@ -765,15 +766,31 @@ class LatentDiffusion(DDPM):
     # output: -1 ~ 1.
     @torch.no_grad()
     def decode_first_stage(self, z):
-        z = 1. / self.scale_factor * z
-        return self.first_stage_model.decode(z)
-
+        if self.use_ldm_unet:
+            z = 1. / self.scale_factor * z
+            # first_stage_model: AutoencoderKL
+            #LINK ldm/models/autoencoder.py#AutoencoderKL
+            return self.first_stage_model.decode(z)
+        else:
+            z = z.to(self.model.pipeline.dtype)
+            z = 1 / self.vae.config.scaling_factor * z
+            # image: [-1, 1]
+            image = self.vae.decode(z, return_dict=False)[0]
+            return image
+        
     # same as decode_first_stage() but without torch.no_grad() decorator
     # output: -1 ~ 1.
     def decode_first_stage_with_grad(self, z):
-        z = 1. / self.scale_factor * z
-        return self.first_stage_model.decode(z)
-
+        if self.use_ldm_unet:
+            z = 1. / self.scale_factor * z
+            return self.first_stage_model.decode(z)
+        else:
+            z = z.to(self.model.pipeline.dtype)
+            z = 1 / self.vae.config.scaling_factor * z
+            # image: [-1, 1]
+            image = self.vae.decode(z, return_dict=False)[0]
+            return image
+        
     @torch.no_grad()
     def encode_first_stage(self, x, mask=None):
         return self.first_stage_model.encode(x, mask)
@@ -2535,17 +2552,16 @@ class DiffusionWrapper(pl.LightningModule):
 
 # The diffusers UNet wrapper.
 class DiffusersUNetWrapper(pl.LightningModule):
-    def __init__(self, unet_dirpath, torch_dtype=torch.float16,
+    def __init__(self, base_model_path, torch_dtype=torch.float16,
                  use_attn_lora=False, attn_lora_layer_names=['q'], 
                  use_ffn_lora=False, lora_rank=128, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=16):
         super().__init__()
+        self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
         # By default, .eval() is called in the constructor to deactivate DropOut modules.
-        self.diffusion_model = UNet2DConditionModel.from_pretrained(
-                                unet_dirpath, torch_dtype=torch_dtype
-                               )
+        self.diffusion_model = self.pipeline.unet
         # Conform with main.py() which sets debug_attn.
         self.diffusion_model.debug_attn = False
         # _DeviceDtypeModuleMixin class sets self.dtype = torch_dtype.

@@ -336,7 +336,6 @@ def main(opt):
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
         config.model.params.use_ldm_unet = opt.use_ldm_unet
-        config.model.params.diffusers_unet_path = opt.main_unet_filepath
         config.model.params.unet_uses_attn_lora = opt.unet_uses_attn_lora
 
         ldm_model = load_model_from_config(config, f"{opt.ckpt}")

@@ -8,7 +8,7 @@ from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 
 from ldm.util import instantiate_from_config
 
-
+# ANCHOR[id=AutoencoderKL]
 class AutoencoderKL(pl.LightningModule):
     def __init__(self,
                  ddconfig,
