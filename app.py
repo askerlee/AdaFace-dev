@@ -38,8 +38,8 @@ parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=[],
                     help="Extra paths to the checkpoints of the UNet models")
 parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
                     help="Weights for the UNet models")
-parser.add_argument("--guidance_scale", type=float, default=8.0,
-                    help="The guidance scale for the diffusion model. Default: 8.0")
+parser.add_argument("--guidance_scale", type=float, default=6.0,
+                    help="The guidance scale for the diffusion model. Default: 6.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")

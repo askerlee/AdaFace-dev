@@ -876,7 +876,8 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
-                # CLS_SINGLE_PROMPT has to match SUBJ_SINGLE_PROMPT for prompt delta loss.
+                # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
+                # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
                 SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
                 CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
@@ -900,7 +901,8 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt'
-                # CLS_SINGLE_PROMPT has to match SUBJ_SINGLE_PROMPT for prompt delta loss.
+                # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
+                # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
                 SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt'
                 CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
@@ -908,13 +910,13 @@ class LatentDiffusion(DDPM):
                 # If normal recon, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
                 CLS_SINGLE_PROMPT  = 'cls_single_prompt'
-                # recon_on_comp_prompt uses the subj comp prompts without styles, lighting, etc.
+                # If recon_on_comp_prompt, we still uses the subj comp prompts without styles, lighting, etc.
                 # Otherwise there's a gap betwen the generated images and the input realistic face images,
                 # making distillation less effective.
                 # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet,
                 # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
                 SUBJ_COMP_PROMPT   = 'subj_comp_prompt'
-                # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta loss.
+                # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_COMP_PROMPT    = 'cls_comp_prompt'
 
         subj_single_prompts = batch[SUBJ_SINGLE_PROMPT]
@@ -1696,7 +1698,7 @@ class LatentDiffusion(DDPM):
 
             if self.iter_flags['recon_on_comp_prompt']:
                 # Use class comp prompts as the negative prompts.
-                uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1) #extra_info['cls_comp_emb']
+                uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
                 # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
                 # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
                 cfg_scale  = np.random.uniform(1.5, 2.5)
