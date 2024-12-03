@@ -93,7 +93,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  p_recon_with_adv_attack=1,
-                 recon_adv_mod_lr=50,
+                 recon_adv_mod_lr=100,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -157,7 +157,7 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
-        self.p_recon_with_adv_attack                   = p_recon_with_adv_attack
+        self.p_recon_with_adv_attack                = p_recon_with_adv_attack
         self.recon_adv_mod_lr                       = recon_adv_mod_lr
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
@@ -1691,8 +1691,8 @@ class LatentDiffusion(DDPM):
                     # leads to a smaller self_align_loss = (embs * embs).mean(), i.e., 
                     # try to destroy the face embeddings detected from the input images.
                     adv_grad = adv_grad * self.recon_adv_mod_lr
-                    calc_stats('adv_grad', adv_grad, norm_dim=(2,3))
-                    noise[:ADV_BS] -= adv_grad * self.recon_adv_mod_lr
+                    calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
+                    noise[:ADV_BS] -= adv_grad
 
             if self.iter_flags['recon_on_comp_prompt']:
                 # Use class comp prompts as the negative prompts.
