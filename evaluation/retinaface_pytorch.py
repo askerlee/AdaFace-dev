@@ -76,6 +76,10 @@ class RetinaFaceClient(nn.Module):
         objs = self.model.predict_jsons(img, confidence_threshold=0.9)
         H, W = img.shape[:2]
 
+        '''
+            {'bbox': [78.36, 113.11, 276.53, 375.64], 'score': 1.0, 
+            'landmarks': [[130.65, 218.37], [224.65, 214.67], [182.26, 260.41], [140.13, 305.17], [227.34, 301.35]]}        
+        '''
         for identity in objs:
             detection = identity["bbox"]
             if len(detection) != 4:
@@ -95,7 +99,7 @@ class RetinaFaceClient(nn.Module):
             # retinaface sets left and right eyes with respect to the person
             # The landmark seems to be mirrored compared with deepface detectors.
             # Returns 5-point facial landmarks: right eye, left eye, nose, right mouth, left mouth
-            left_eye = identity["landmarks"][1]
+            left_eye  = identity["landmarks"][1]
             right_eye = identity["landmarks"][0]
             nose      = identity["landmarks"][2]
 
