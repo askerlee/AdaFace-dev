@@ -1770,13 +1770,13 @@ class LatentDiffusion(DDPM):
 
             if self.use_arcface_loss and (self.arcface is not None):
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
-                loss_arcface_align = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
-                if loss_arcface_align > 0:
-                    loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align.mean().item():.4f}")
-                    # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
+                loss_arcface_align_recon = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
+                if loss_arcface_align_recon > 0:
+                    loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
+                    # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
                     # This loss is around 1/5 of recon/distill losses (0.1).
-                    loss += loss_arcface_align * self.arcface_align_loss_weight
+                    loss += loss_arcface_align_recon * self.arcface_align_loss_weight
 
             recon_images = self.decode_first_stage(x_recon)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
@@ -1906,14 +1906,16 @@ class LatentDiffusion(DDPM):
                     # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
                     x_start0    = x_start.chunk(4)[0]
                     subj_recon  = x_recon.chunk(2)[0]
-                    loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
-                    # Found valid face images. Stop trying, since we cannot afford calculating arcface_align_loss for > 1 steps.
-                    if loss_arcface_align > 0:
+                    loss_arcface_align_comp = self.calc_arcface_align_loss(x_start0, subj_recon)
+                    # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
+                    if loss_arcface_align_comp > 0:
                         print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
-                        loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align.mean().detach().item() })
-                        # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                        loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
+                        # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
                         # This loss is around 1/150 of recon/distill losses (0.1).
-                        loss += loss_arcface_align * self.arcface_align_loss_weight
+                        # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
+                        arcface_align_comp_loss_scale = self.comp_distill_iter_gap
+                        loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
                         arcface_loss_calc_count += 1
                         if arcface_loss_calc_count >= max_arcface_loss_calc_count:
                             break

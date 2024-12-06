@@ -2218,7 +2218,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
         loss_sc_recon_ss_fg_min = [ loss for loss in losses_sc_recon_ss_fg if loss != 0 ][0]
 
     losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg_min)
-    print(f"min : {loss_sc_recon_ss_fg_min}")
+    print(f"min loss: {loss_sc_recon_ss_fg_min}")
 
     return losses_sc_recon_ss_fg, s2c_flow
 
