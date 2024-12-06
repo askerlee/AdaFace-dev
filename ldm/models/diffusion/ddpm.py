@@ -92,7 +92,7 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
-                 p_recon_with_adv_attack=0.6,
+                 recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_lr=100,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
@@ -157,12 +157,14 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
-        self.p_recon_with_adv_attack                = p_recon_with_adv_attack
+        self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_lr                       = recon_adv_mod_lr
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
+        self.normal_recon_iters_count                = 0
+        self.unet_distill_iters_count                = 0
         self.comp_iters_face_detected_count          = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.comp_init_fg_from_training_image_count  = 0
@@ -359,10 +361,12 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_unet_distill']      = True
                 # Disable do_prompt_emb_delta_reg during unet distillation.
                 self.iter_flags['do_prompt_emb_delta_reg'] = False
+                self.unet_distill_iters_count += 1
             else:
                 self.iter_flags['do_normal_recon']      = True
                 self.iter_flags['do_unet_distill']      = False
                 self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
+                self.normal_recon_iters_count += 1
 
         loss, loss_dict = self.shared_step(batch)
         self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
@@ -1110,7 +1114,7 @@ class LatentDiffusion(DDPM):
             # which would be faster for synchronization.
             # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
             # Otherwise, some values, e.g., 0 and 3, will never be chosen.
-            num_unet_denoising_steps = self.non_comp_iters_count % 3 + 2
+            num_unet_denoising_steps = self.unet_distill_iters_count % 3 + 2
             self.iter_flags['num_unet_denoising_steps'] = num_unet_denoising_steps
 
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
@@ -1671,9 +1675,9 @@ class LatentDiffusion(DDPM):
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
 
-            # Although we set p_recon_with_adv_attack = 1, since sometimes faces are not detected,
-            # effectively do_adv_attack is enabled around 60%-70% of the time.
-            do_adv_attack = torch.rand(1).item() < self.p_recon_with_adv_attack
+            # recon_with_adv_attack_iter_gap = 2, i.e., in half of the iterations, 
+            # we do adversarial attack on the input images.
+            do_adv_attack = (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
             # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
             # This way, we force the adaface encoders to better reconstruct the subject.
             if do_adv_attack:
@@ -1681,7 +1685,7 @@ class LatentDiffusion(DDPM):
                 if self.use_ldm_unet:
                     ADV_BS = 1
                 else:
-                    # diffusers vae is fp16, more memory efficient. So we can afford a BS=3 or 4.
+                    # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
                     ADV_BS = x_start.shape[0]
 
                 adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
