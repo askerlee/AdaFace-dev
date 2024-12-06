@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        count_optimized_params, count_params, calc_dyn_loss_scale, calc_stats
+                        count_optimized_params, count_params, calc_dyn_loss_scale, calc_stats, torch_uniform
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -93,7 +93,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  recon_with_adv_attack_iter_gap=2,
-                 recon_adv_mod_lr=100,
+                 recon_adv_mod_max_range=[0.04, 0.08],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -158,7 +158,7 @@ class DDPM(pl.LightningModule):
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
-        self.recon_adv_mod_lr                       = recon_adv_mod_lr
+        self.recon_adv_mod_max_range                = recon_adv_mod_max_range
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
@@ -1690,13 +1690,12 @@ class LatentDiffusion(DDPM):
 
                 adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
                 if adv_grad is not None:
-                    # adv_grad: L1 0.0005, L2 0.0019, Norms: min: 0.0716, max: 0.2222, mean: 0.1358, std: 0.0434.
-                    # adv_grad has a very small magnitude. So we choose recon_adv_mod_lr = 50 to boost its impact.
-                    # x_noisy = a * x_start + b * noise, so when we subtract adv_grad from noise,
-                    # we effectively subtract adv_grad from x_noisy, which 
-                    # leads to a smaller self_align_loss = (embs * embs).mean(), i.e., 
-                    # try to destroy the face embeddings detected from the input images.
-                    adv_grad = adv_grad * self.recon_adv_mod_lr
+                    loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad.abs().max().item()})
+                    loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                    recon_adv_mod_norm = torch_uniform(*self.recon_adv_mod_max_range).item()
+                    adv_grad_scale = recon_adv_mod_norm / (adv_grad.abs().max().item() + 1e-5)
+                    loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
+                    adv_grad = adv_grad_scale * adv_grad
                     calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
                     noise[:ADV_BS] -= adv_grad
 
