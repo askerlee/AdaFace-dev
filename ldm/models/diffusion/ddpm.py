@@ -1691,7 +1691,10 @@ class LatentDiffusion(DDPM):
                 adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
                 if adv_grad is not None:
                     loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad.abs().max().item()})
-                    loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                    # adv_grad_mean is always 4e-6 ~ 5e-6.
+                    # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                    adv_grad_fg_mean = adv_grad[fg_mask[:ADV_BS]].abs().mean().item()
+                    loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                     recon_adv_mod_norm = torch_uniform(*self.recon_adv_mod_max_range).item()
                     adv_grad_scale = recon_adv_mod_norm / (adv_grad.abs().max().item() + 1e-5)
                     loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})

@@ -1192,7 +1192,7 @@ def rand_annealed(training_percent, final_percent, mean_range,
     
     return torch.rand(1).item() * (rand_ub - rand_lb) + rand_lb
 
-def torch_uniform(low, high, size, device=None):
+def torch_uniform(low, high, size=1, device=None):
     return torch.rand(size, device=device) * (high - low) + low
 
 # true_prob_range = (p_init, p_final). 
