@@ -789,6 +789,7 @@ class LatentDiffusion(DDPM):
             z = 1. / self.scale_factor * z
             return self.first_stage_model.decode(z)
         else:
+            # Revised from StableDiffusionPipeline::decode_latents().
             z = z.to(self.model.pipeline.dtype)
             z = 1 / self.vae.config.scaling_factor * z
             # image: [-1, 1]
@@ -1674,33 +1675,35 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_normal_recon']:          
             BLOCK_SIZE = x_start.shape[0]
             t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
+            # LDM VAE uses fp32, and we can only afford a BS=1.
+            if self.use_ldm_unet:
+                FACELOSS_BS = 1
+            else:
+                # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
+                FACELOSS_BS = x_start.shape[0]
 
             # recon_with_adv_attack_iter_gap = 2, i.e., in half of the iterations, 
             # we do adversarial attack on the input images.
             do_adv_attack = (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
             # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
             # This way, we force the adaface encoders to better reconstruct the subject.
+            # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
+            # otherwise the face embeddings will be inaccurate.
             if do_adv_attack:
-                # LDM VAE uses fp32, and we can only afford a BS=1.
-                if self.use_ldm_unet:
-                    ADV_BS = 1
-                else:
-                    # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
-                    ADV_BS = x_start.shape[0]
 
-                adv_grad = self.calc_arcface_adv_grad(x_start[:ADV_BS])
+                adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
                 if adv_grad is not None:
                     loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad.abs().max().item()})
                     # adv_grad_mean is always 4e-6 ~ 5e-6.
                     # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
-                    adv_grad_fg_mean = adv_grad[fg_mask[:ADV_BS]].abs().mean().item()
+                    adv_grad_fg_mean = adv_grad[fg_mask[:FACELOSS_BS]].abs().mean().item()
                     loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                     recon_adv_mod_norm = torch_uniform(*self.recon_adv_mod_max_range).item()
                     adv_grad_scale = recon_adv_mod_norm / (adv_grad.abs().max().item() + 1e-5)
                     loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
                     adv_grad = adv_grad_scale * adv_grad
                     calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
-                    noise[:ADV_BS] -= adv_grad
+                    noise[:FACELOSS_BS] -= adv_grad
 
             if self.iter_flags['recon_on_comp_prompt']:
                 # Use class comp prompts as the negative prompts.
@@ -1757,9 +1760,10 @@ class LatentDiffusion(DDPM):
             loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
                     + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
 
-            if self.use_arcface_loss and (self.arcface is not None):
+            # Don't do_adv_attack and apply arcface_align_loss at the same time. They are functionally very similar.
+            if not do_adv_attack and  self.use_arcface_loss and (self.arcface is not None):
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
-                loss_arcface_align = self.calc_arcface_align_loss(x_start[:2], x_recon[:2])
+                loss_arcface_align = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
                 if loss_arcface_align > 0:
                     loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
                     # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
