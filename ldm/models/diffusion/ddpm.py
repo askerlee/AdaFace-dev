@@ -929,11 +929,6 @@ class LatentDiffusion(DDPM):
         subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
 
-        if self.iter_flags['recon_on_comp_prompt']:
-            captions = subj_comp_prompts
-        else:
-            captions = subj_single_prompts
-
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         if 'aug_mask' in batch:
@@ -1041,11 +1036,12 @@ class LatentDiffusion(DDPM):
             # be a large recon error, as the face ID embeddings don't correspond to input images.
             # If this is an compositional distillation iteration, then it's OK to use random ID embeddings.
             if faceless_img_count > 0:
-                self.iter_flags['do_normal_recon'] = False
-                self.iter_flags['do_unet_distill'] = True
-                # Disable do_comp_feat_distill during unet distillation.
+                # If the iteration is do_comp_feat_distill/do_normal_recon, convert it to a do_unet_distill iteration.
+                # We don't have to update self.unet_distill_iters_count, self.normal_recon_iters_count, etc., 
+                # as they don't have to be so precise.
+                self.iter_flags['do_normal_recon']       = False
                 self.iter_flags['do_comp_feat_distill']  = False
-                # The captions will be set to subj_comp_prompts in forward().
+                self.iter_flags['do_unet_distill']       = True
 
         # get_batched_img_prompt_embs() encodes face_id_embs to id2img_prompt_embs.
         # results is (face_image_count, faceid_embeds, pos_prompt_embs, neg_prompt_embs).
@@ -1110,14 +1106,9 @@ class LatentDiffusion(DDPM):
                                          perturb_prob=1, perturb_std_is_relative=True, 
                                          keep_norm=True, verbose=True)
 
-        if self.iter_flags['do_unet_distill']:
-            # Iterate among 3 ~ 5. We don't draw random numbers, so that different ranks have the same num_unet_denoising_steps,
-            # which would be faster for synchronization.
-            # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
-            # Otherwise, some values, e.g., 0 and 3, will never be chosen.
-            num_unet_denoising_steps = self.unet_distill_iters_count % 3 + 2
-            self.iter_flags['num_unet_denoising_steps'] = num_unet_denoising_steps
-
+        if self.iter_flags['recon_on_comp_prompt']:
+            captions = subj_comp_prompts
+        elif self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_unet_distill_uses_comp_prompt):
             # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
             # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
             # never use the compositional prompts as the distillation target of arc2face.
@@ -1126,9 +1117,18 @@ class LatentDiffusion(DDPM):
             # NOTE: 'recon_on_comp_prompt' is applicable to all teachers.
             # While 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
             # They are exclusive to each other, and are never enabled at the same time.
-            if torch.rand(1) < self.p_unet_distill_uses_comp_prompt:
-                self.iter_flags['unet_distill_uses_comp_prompt'] = True
-                captions = batch[SUBJ_COMP_PROMPT]
+            self.iter_flags['unet_distill_uses_comp_prompt'] = True
+            captions = subj_comp_prompts
+        else:
+            captions = subj_single_prompts
+
+        if self.iter_flags['do_unet_distill']:
+            # Iterate among 3 ~ 5. We don't draw random numbers, so that different ranks have the same num_unet_denoising_steps,
+            # which would be faster for synchronization.
+            # Note since comp_distill_iter_gap == 3 or 4, we should choose a number that is co-prime with 3 and 4.
+            # Otherwise, some values, e.g., 0 and 3, will never be chosen.
+            num_unet_denoising_steps = self.unet_distill_iters_count % 3 + 2
+            self.iter_flags['num_unet_denoising_steps'] = num_unet_denoising_steps
 
             if num_unet_denoising_steps > 1:
                 # If denoising steps are a few, then reduce batch size to avoid OOM.
@@ -1309,8 +1309,7 @@ class LatentDiffusion(DDPM):
             # Use the original "captions" prompts and embeddings.
             # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
             # it holds in all other cases.
-            if not self.iter_flags['unet_distill_uses_comp_prompt'] \
-              and not self.iter_flags['recon_on_comp_prompt']:
+            if not (self.iter_flags['unet_distill_uses_comp_prompt'] or self.iter_flags['recon_on_comp_prompt']):
                 assert captions == subj_single_prompts
             else:
                 assert captions == subj_comp_prompts
