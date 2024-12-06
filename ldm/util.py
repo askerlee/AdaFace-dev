@@ -2163,7 +2163,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 
     matching_type_names = ['attn', 'flow']
 
-    print(f"Layer {layer_idx}: {objective_name} sc->ss-fg:", end=' ')
+    #print(f"Layer {layer_idx}: {objective_name} sc->ss-fg:", end=' ')
 
     for i, sc_recon_ss_fg_feat in enumerate((sc_recon_ss_fg_feat_attn_agg, sc_recon_ss_fg_feat_flow)):
         if sc_recon_ss_fg_feat is None:
@@ -2205,7 +2205,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
             all_token_losses_sc_recon_ss_fg.append(token_losses_sc_recon_ss_fg)
 
         losses_sc_recon_ss_fg.append(loss_sc_recon_ss_fg)
-        print(f"{matching_type_names[i]}: {loss_sc_recon_ss_fg}", end=' ')
+        # print(f"{matching_type_names[i]}: {loss_sc_recon_ss_fg}", end=' ')
 
     # We have both attn and flow token losses.
     if len(all_token_losses_sc_recon_ss_fg) > 1:
@@ -2589,7 +2589,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
 
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * elastic_matching_layer_weight,
-                            'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
+                              'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
     
     return loss_dict
 

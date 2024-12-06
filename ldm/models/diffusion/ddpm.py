@@ -93,7 +93,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  recon_with_adv_attack_iter_gap=2,
-                 recon_adv_mod_max_range=[0.04, 0.08],
+                 recon_adv_mod_mag_range=[0.001, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
@@ -158,7 +158,7 @@ class DDPM(pl.LightningModule):
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
-        self.recon_adv_mod_max_range                = recon_adv_mod_max_range
+        self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
 
         self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
@@ -1693,16 +1693,24 @@ class LatentDiffusion(DDPM):
 
                 adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
                 if adv_grad is not None:
-                    loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad.abs().max().item()})
-                    # adv_grad_mean is always 4e-6 ~ 5e-6.
+                    # adv_grad_max: 1~1.5e-3
+                    adv_grad_max = adv_grad.abs().max().item()
+                    loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
+                    # adv_grad_mean is always 4~5e-6.
                     # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
-                    adv_grad_fg_mean = adv_grad[fg_mask[:FACELOSS_BS]].abs().mean().item()
+                    faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
+                    # adv_grad_fg_mean: ~1e-5.
+                    adv_grad_fg_mean = adv_grad[faceloss_fg_mask].abs().mean().item()
                     loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
-                    recon_adv_mod_norm = torch_uniform(*self.recon_adv_mod_max_range).item()
-                    adv_grad_scale = recon_adv_mod_norm / (adv_grad.abs().max().item() + 1e-5)
+                    # adv_grad_mag: ~1e-4.
+                    adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
+                    recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
+                    # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: 10~200.
+                    adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
                     loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                    adv_grad = adv_grad_scale * adv_grad
-                    calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
+                    # Cap the adv_grad_scale to 500.
+                    adv_grad = adv_grad * min(adv_grad_scale, 500)
+                    #calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
                     noise[:FACELOSS_BS] -= adv_grad
 
             if self.iter_flags['recon_on_comp_prompt']:
@@ -1760,12 +1768,12 @@ class LatentDiffusion(DDPM):
             loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
                     + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
 
-            # Don't do_adv_attack and apply arcface_align_loss at the same time. They are functionally very similar.
-            if not do_adv_attack and  self.use_arcface_loss and (self.arcface is not None):
+            if self.use_arcface_loss and (self.arcface is not None):
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
                 loss_arcface_align = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
                 if loss_arcface_align > 0:
-                    loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
+                    loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align.mean().detach().item() })
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align.mean().item():.4f}")
                     # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
                     # This loss is around 1/5 of recon/distill losses (0.1).
                     loss += loss_arcface_align * self.arcface_align_loss_weight
@@ -1901,8 +1909,8 @@ class LatentDiffusion(DDPM):
                     loss_arcface_align = self.calc_arcface_align_loss(x_start0, subj_recon)
                     # Found valid face images. Stop trying, since we cannot afford calculating arcface_align_loss for > 1 steps.
                     if loss_arcface_align > 0:
-                        print(f"Rank-{self.trainer.global_rank} arcface_align step {sel_step+1}/{len(x_recons)}")
-                        loss_dict.update({f'{session_prefix}/arcface_align': loss_arcface_align.mean().detach().item() })
+                        print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
+                        loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align.mean().detach().item() })
                         # loss_arcface_align: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
                         # This loss is around 1/150 of recon/distill losses (0.1).
                         loss += loss_arcface_align * self.arcface_align_loss_weight
