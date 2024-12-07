@@ -68,7 +68,7 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
-                 cls_subj_mix_scale=0.7,
+                 cls_subj_mix_scale=0.6,
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_bg_suppress_loss_weight=0.,
@@ -474,12 +474,11 @@ class LatentDiffusion(DDPM):
                                     unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
-                                    # unet_weights: [0.2, 0.24, 0.56]. The "first unet" uses subject embeddings, 
+                                    # unet_weights: [0.4, 0.6]. The "first unet" uses subject embeddings, 
                                     # the second uses class embeddings. This means that,
                                     # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
-                                    unet_weights = [0.2, (1 - self.cls_subj_mix_scale) * 0.8, 
-                                                    self.cls_subj_mix_scale * 0.8],
+                                    unet_weights = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
                                     p_uses_cfg=1, # Always uses CFG for priming denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)
@@ -1639,6 +1638,8 @@ class LatentDiffusion(DDPM):
             x_start_maskfilled_decoded = self.decode_first_stage(x_start_maskfilled)
             self.cache_and_log_generations(x_start_maskfilled_decoded, log_image_colors, do_normalize=True)
 
+            # NOTE: x_start_primed is primed with 0.3 subj embeddings and 0.7 cls embeddings. Therefore,
+            # the faces still don't look like the subject. What matters is that the background is compositional.
             x_start_primed = x_start_primed.chunk(2)[0]
             log_image_colors = torch.ones(x_start_primed.shape[0], dtype=int, device=x_start.device)
             x_start_primed_decoded = self.decode_first_stage(x_start_primed)
@@ -2219,9 +2220,11 @@ class LatentDiffusion(DDPM):
         # num_shared_denoising_steps = max(num_primed_denoising_steps - MAX_N_SEP, MIN_N_SHARED) is always valid.
         MIN_N_SHARED = 1
         MAX_N_SEP = 2
+        
         # If num_primed_denoising_steps > MAX_N_SEP, then we split the denoising steps into
         # shared denoising steps and separate denoising steps.
         # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
+        MIN_N_SHARED               = min(num_primed_denoising_steps, MIN_N_SHARED)
         num_shared_denoising_steps = max(num_primed_denoising_steps - MAX_N_SEP, MIN_N_SHARED)
         num_sep_denoising_steps    = num_primed_denoising_steps - num_shared_denoising_steps
         all_t_list = []
