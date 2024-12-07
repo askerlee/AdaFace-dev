@@ -168,6 +168,8 @@ class DDPM(pl.LightningModule):
         self.comp_iters_face_detected_count          = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.comp_init_fg_from_training_image_count  = 0
+        self.adaface_adv_iters_count                 = 0
+        self.adaface_adv_success_iters_count         = 0
 
         self.cached_inits = {}
         self.do_prompt_emb_delta_reg = (self.prompt_emb_delta_reg_weight > 0)
@@ -1689,8 +1691,8 @@ class LatentDiffusion(DDPM):
             # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
             # otherwise the face embeddings will be inaccurate.
             if do_adv_attack:
-
                 adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
+                self.adaface_adv_iters_count += 1
                 if adv_grad is not None:
                     # adv_grad_max: 1~1.5e-3
                     adv_grad_max = adv_grad.abs().max().item()
@@ -1711,6 +1713,9 @@ class LatentDiffusion(DDPM):
                     adv_grad = adv_grad * min(adv_grad_scale, 500)
                     #calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
                     noise[:FACELOSS_BS] -= adv_grad
+                    self.adaface_adv_success_iters_count += 1
+                    adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
+                    loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
 
             if self.iter_flags['recon_on_comp_prompt']:
                 # Use class comp prompts as the negative prompts.
