@@ -341,4 +341,18 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             outputs=[out_gallery]
         )
 
+        subj_name_sig.submit(fn=check_prompt_and_model_type,
+                     inputs=[prompt, model_style_type],outputs=None).success(
+            fn=randomize_seed_fn,
+            inputs=[seed, randomize_seed],
+            outputs=seed,
+            queue=False,
+            api_name=False,
+        ).then(
+            fn=generate_image,
+            inputs=[img_files, guidance_scale, perturb_std, num_images, 
+                    prompt, negative_prompt, enhance_face, seed, subj_name_sig],
+            outputs=[out_gallery]
+        )
+        
 demo.launch(share=True, server_name=args.ip, ssl_verify=False)

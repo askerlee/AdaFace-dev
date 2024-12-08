@@ -29,4 +29,4 @@ fi
 # Use awk to extract the numbers like 0.xxx
 distances=$(echo "$output" | sed -n 's/.*: \(0\.[0-9]\+\).*/\1/p')
 echo $SUBJECT${PROMPT_SIG} $ITER $distances >> $LOGFILE
-grep -E "^$SUBJECT${PROMPT_SIG}" $LOGFILE | tail -n 5
+grep -E "^$SUBJECT${PROMPT_SIG}" $LOGFILE | tail -n 10
