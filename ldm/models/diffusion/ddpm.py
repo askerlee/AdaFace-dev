@@ -1824,7 +1824,7 @@ class LatentDiffusion(DDPM):
             for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
                 # If we take 3 denoising steps, then recon_loss_discard_thres will be 0.3, 0.35, 0.4, respectively,
                 # i.e., more strict for the first step, and more relaxed for the last step.
-                recon_loss_discard_thres = 0.3 #+ 0.05 * step_idx
+                recon_loss_discard_thres = 0.3 + 0.05 * step_idx
                 loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
                     calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
                                                   self.iter_flags['is_comp_init_fg_from_training_image'],
