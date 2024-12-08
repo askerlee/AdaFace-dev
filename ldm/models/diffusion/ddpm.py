@@ -1822,15 +1822,23 @@ class LatentDiffusion(DDPM):
                 loss_dict[loss_name2] = 0
 
             for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
+                # Since we scale down L2 outfeat recon loss, most recon losses will < 0.1.
+                # So we don't need a stepwise recon_loss_discard_thres.
+                '''
                 # If we take 3 denoising steps, then recon_loss_discard_thres will be 0.3, 0.35, 0.4, respectively,
                 # i.e., more strict for the first step, and more relaxed for the last step.
                 recon_loss_discard_thres = 0.3 + 0.05 * step_idx
+                '''
+                recon_loss_discard_thres = 0.2
                 loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
                     calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
                                                   self.iter_flags['is_comp_init_fg_from_training_image'],
                                                   self.iter_flags['fg_mask_avail_ratio'],
                                                   filtered_fg_mask, instances_have_fg_mask, 
                                                   all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
+                                                  # If outfeat uses cosine loss, the subject authenticity will be higher,
+                                                  # but the composition will degrade. So we use L2 loss.
+                                                  recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
                                                   recon_loss_discard_thres=recon_loss_discard_thres)
 
                 # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
@@ -1891,12 +1899,14 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
             
             # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
-            # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED.
+            # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
             # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 5x to 50x.
             # loss_sc_mc_bg_match: 0.002~0.01, sc_mc_bg_match_loss_scale: 10~50 => 0.02~5.
-            # rel_scale_range=(0, 1): the absolute range of the scale will be 5~50.
+            # rel_scale_range=(0, 4): the absolute range of the scale will be 8~320.
             sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.001, 8), (0.01, 80), 
                                                             rel_scale_range=(0, 4))
+            # loss_sc_recon_ss_fg_min is absorbed into loss_comp_fg_bg_preserve.
+            # We didn't absorb loss_sc_mc_bg_match here into loss_comp_fg_bg_preserve, because it requires a dynamic scale.
             loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
                     * self.comp_fg_bg_preserve_loss_weight
 
