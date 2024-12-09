@@ -844,10 +844,13 @@ class LatentDiffusion(DDPM):
 
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
-        # Always use the trick on compositional distillation iterations.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_comp_feat_distill']:
-                p_use_fp_trick = 1
+                # Use the fp trick 50% of the time on compositional distillation iterations.
+                # If we always enable the fp trick, the subj-comp instance may become very similar to subj-single
+                # instance, which leads to smaller loss_sc_recon_ss_fg_min. However, this implies worse composition 
+                # and is not desirable.
+                p_use_fp_trick = 0.5
             # recon_on_comp_prompt. So we add "portrait" to the prompts.
             # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
             # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
