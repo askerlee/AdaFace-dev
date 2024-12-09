@@ -1546,7 +1546,6 @@ class LatentDiffusion(DDPM):
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
         instances_have_fg_mask  = self.iter_flags['instances_have_fg_mask']
-        filtered_fg_mask    = self.iter_flags.get('filtered_fg_mask', None)
 
         # all_subj_indices are used to extract the attention weights
         # of the subject tokens for the attention loss computation.
@@ -1571,7 +1570,7 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            masks = (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask)
+            masks = (img_mask, fg_mask, None, instances_have_fg_mask)
             # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
             # and the bg mask area filled with noise. Returned only for logging.
             # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
@@ -1674,278 +1673,33 @@ class LatentDiffusion(DDPM):
             loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
 
         ##### begin of do_normal_recon #####
-        if self.iter_flags['do_normal_recon']:          
-            BLOCK_SIZE = x_start.shape[0]
-            t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
-            # LDM VAE uses fp32, and we can only afford a BS=1.
-            if self.use_ldm_unet:
-                FACELOSS_BS = 1
-            else:
-                # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
-                FACELOSS_BS = x_start.shape[0]
-
-            # recon_with_adv_attack_iter_gap = 2, i.e., in half of the iterations, 
-            # we do adversarial attack on the input images.
-            do_adv_attack = (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
-            # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
-            # This way, we force the adaface encoders to better reconstruct the subject.
-            # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
-            # otherwise the face embeddings will be inaccurate.
-            if do_adv_attack:
-                adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
-                self.adaface_adv_iters_count += 1
-                if adv_grad is not None:
-                    # adv_grad_max: 1~1.5e-3
-                    adv_grad_max = adv_grad.abs().max().item()
-                    loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
-                    # adv_grad_mean is always 4~5e-6.
-                    # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
-                    faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
-                    # adv_grad_fg_mean: ~1e-5.
-                    adv_grad_fg_mean = adv_grad[faceloss_fg_mask].abs().mean().item()
-                    loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
-                    # adv_grad_mag: ~1e-4.
-                    adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
-                    recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
-                    # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: 10~200.
-                    adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
-                    loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                    # Cap the adv_grad_scale to 500.
-                    adv_grad = adv_grad * min(adv_grad_scale, 500)
-                    #calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
-                    noise[:FACELOSS_BS] -= adv_grad
-                    self.adaface_adv_success_iters_count += 1
-                    adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
-                    loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
-
-            if self.iter_flags['recon_on_comp_prompt']:
-                # Use class comp prompts as the negative prompts.
-                uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
-                # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
-                # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
-                cfg_scale  = np.random.uniform(1.5, 2.5)
-                print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
-            else:
-                # Use the default negative prompts.
-                uncond_emb = None
-                cfg_scale  = -1
-
-            # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
-            # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
-            # (img_mask is not used in the prompt-guided cross-attention layers).
-            # Don't do CFG. So uncond_emb is None.
-            # If unet_uses_attn_lora, then enable use_attn_lora with 50% chance during normal recon.
-            enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-            model_output, x_recon, ca_layers_activations = \
-                self.guided_denoise(x_start, noise, t, cond_context, 
-                                    uncond_emb=uncond_emb, img_mask=img_mask,
-                                    batch_part_has_grad='all', 
-                                    # Reconstruct the images at the pixel level for CLIP loss.
-                                    do_pixel_recon=True,
-                                    cfg_scale=cfg_scale, capture_ca_activations=True,
-                                    use_attn_lora=enable_unet_attn_lora,
-                                    use_ffn_lora=False)
-
-            # If do_normal_recon, then there's only 1 objective:
-            # **Objective 1**: Align the student predicted noise with the ground truth noise.
-            # bg loss is completely ignored. 
-            bg_pixel_weight = 0 
-
-            loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
-                calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
-                                              all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
-                                              bg_pixel_weight, x_start.shape[0])
-            v_loss_recon = loss_recon.mean().detach().item()
-        
-            # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
-            if loss_subj_mb_suppress > 0:
-                loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
-
-            if self.iter_flags['recon_on_comp_prompt']:
-                loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
-            else:
-                loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
-                
-            loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
-            print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
-            # loss_recon: 0.02~0.03.
-            # loss_pred_l2: 0.97~0.99. Quite stable. pred_l2_loss_weight: 1e-3 -> 1e-3. 1/20~1/30 of recon loss.
-            loss += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
-                    + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
-
-            if self.use_arcface_loss and (self.arcface is not None):
-                # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
-                loss_arcface_align_recon = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
-                if loss_arcface_align_recon > 0:
-                    loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
-                    # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
-                    # This loss is around 1/5 of recon/distill losses (0.1).
-                    loss += loss_arcface_align_recon * self.arcface_align_loss_weight
-
-            recon_images = self.decode_first_stage(x_recon)
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # all of them are 2, indicating red.
-            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
-            self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+        if self.iter_flags['do_normal_recon']:  
+            loss_normal_recon = \
+                self.calc_normal_recon_loss(x_start, noise, cond_context, img_mask, fg_mask, 
+                                             instances_have_fg_mask, all_subj_indices, 
+                                             loss_dict, session_prefix)
+            loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
         ##### begin of do_unet_distill #####
         elif self.iter_flags['do_unet_distill']:
-            t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
-
             # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
-                self.calc_unet_distill_loss(x_start, noise, t, cond_context, extra_info, img_mask, fg_mask)
-
-            v_loss_unet_distill = loss_unet_distill.mean().detach().item()
-            loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
-            # loss_unet_distill: ~0.01, so we use a very large unet_distill_weight==8 to
-            # make it comparable to the recon loss.
+                self.calc_unet_distill_loss(x_start, noise, cond_context, extra_info, 
+                                            img_mask, fg_mask, loss_dict, session_prefix)
+            # loss_unet_distill: < 0.01, so we use a very large unet_distill_weight==8 to
+            # make it comparable to the recon loss. Otherwise, loss_unet_distill will 
+            # be dominated by the recon loss.
             loss += loss_unet_distill * self.unet_distill_weight
         ##### end of do_unet_distill #####
 
         ###### begin of do_comp_feat_distill ######
         elif self.iter_flags['do_comp_feat_distill']:
-            losses_comp_fg_bg_preserve = []
-            losses_sc_mc_bg_match = []
-            losses_subj_attn_norm_distill = []
-            losses_feat_delta_align = []
-
-            loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
-                           'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
-                           'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
-            
-            for loss_name in loss_names:
-                loss_name2 = loss_name.replace('loss_', '')
-                loss_name2 = f'{session_prefix}/{loss_name2}'
-                loss_dict[loss_name2] = 0
-
-            for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
-                # Since we scale down L2 outfeat recon loss, most recon losses will < 0.1.
-                # So we don't need a stepwise recon_loss_discard_thres.
-                '''
-                # If we take 3 denoising steps, then recon_loss_discard_thres will be 0.3, 0.35, 0.4, respectively,
-                # i.e., more strict for the first step, and more relaxed for the last step.
-                recon_loss_discard_thres = 0.3 + 0.05 * step_idx
-                '''
-                recon_loss_discard_thres = 0.2
-                loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
-                    calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
-                                                  self.iter_flags['is_comp_init_fg_from_training_image'],
-                                                  self.iter_flags['fg_mask_avail_ratio'],
-                                                  filtered_fg_mask, instances_have_fg_mask, 
-                                                  all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
-                                                  # If outfeat uses cosine loss, the subject authenticity will be higher,
-                                                  # but the composition will degrade. So we use L2 loss.
-                                                  recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
-                                                  recon_loss_discard_thres=recon_loss_discard_thres)
-
-                # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
-                # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
-                # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
-
-                # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
-                # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
-                # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
-                # NOTE: loss_feat_delta_align is disabled. It doesn't have spatial correspondance when 
-                # doing the feature delta calculation.
-                # These two losses are only used for monitoring the training process.
-
-                # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
-                # to index subj single and subj comp embeddings.
-                # The indices will be shifted along the batch dimension (size doubled) 
-                # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
-                loss_feat_delta_align, loss_subj_attn_norm_distill \
-                    = calc_feat_delta_and_attn_norm_loss(ca_layers_activations['outfeat'], 
-                                                         ca_layers_activations['attn'], 
-                                                         all_subj_indices_2b, BLOCK_SIZE)
-
-                # loss_feat_delta_align: 0.02~0.03. 
-                if loss_feat_delta_align > 0:
-                    loss_dict.update({f'{session_prefix}/feat_delta_align': \
-                                      loss_feat_delta_align.mean().detach().item() })
-
-                losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
-                losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
-                losses_sc_mc_bg_match.append(loss_sc_mc_bg_match)
-                losses_feat_delta_align.append(loss_feat_delta_align)
-            
-            for loss_name in loss_names:
-                loss_name2 = loss_name.replace('loss_', '')
-                loss_name2 = f'{session_prefix}/{loss_name2}'
-                if loss_name2 in loss_dict:
-                    loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
-
-            loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
-            loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
-            loss_sc_mc_bg_match         = torch.stack(losses_sc_mc_bg_match).mean()
-            loss_feat_delta_align       = torch.stack(losses_feat_delta_align).mean()
-
-            if loss_sc_mc_bg_match > 0:
-                self.comp_iters_bg_match_loss_count += 1
-                sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
-                loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
-
-            # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
-            if loss_comp_fg_bg_preserve > 0:
-                loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
-                # Keep track of the number of iterations that use is_comp_init_fg_from_training_image.
-                self.comp_init_fg_from_training_image_count += 1
-                comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.comp_iters_count + 1)
-                loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
-            # loss_subj_attn_norm_distill: 0.08~0.12.
-            if loss_subj_attn_norm_distill > 0:
-                loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
-            
-            # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
-            # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
-            # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 5x to 50x.
-            # loss_sc_mc_bg_match: 0.002~0.01, sc_mc_bg_match_loss_scale: 10~50 => 0.02~5.
-            # rel_scale_range=(0, 4): the absolute range of the scale will be 8~320.
-            sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.001, 8), (0.01, 80), 
-                                                            rel_scale_range=(0, 4))
-            # loss_sc_recon_ss_fg_min is absorbed into loss_comp_fg_bg_preserve.
-            # We didn't absorb loss_sc_mc_bg_match here into loss_comp_fg_bg_preserve, because it requires a dynamic scale.
-            loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
-                    * self.comp_fg_bg_preserve_loss_weight
-
-            arcface_loss_calc_count = 0
-            if self.use_arcface_loss and (self.arcface is not None):
-                # Trying to calc arcface_align_loss from difficult to easy steps.
-                # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
-                max_arcface_loss_calc_count = 1
-                for sel_step in range(len(x_recons)):
-                    x_recon  = x_recons[sel_step]
-                    # If there are faceless input images, then do_comp_feat_distill is always False.
-                    # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
-                    x_start0    = x_start.chunk(4)[0]
-                    subj_recon  = x_recon.chunk(2)[0]
-                    loss_arcface_align_comp = self.calc_arcface_align_loss(x_start0, subj_recon)
-                    # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
-                    if loss_arcface_align_comp > 0:
-                        print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
-                        loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
-                        # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
-                        # This loss is around 1/150 of recon/distill losses (0.1).
-                        # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
-                        arcface_align_comp_loss_scale = self.comp_distill_iter_gap
-                        loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
-                        arcface_loss_calc_count += 1
-                        if arcface_loss_calc_count >= max_arcface_loss_calc_count:
-                            break
-
-                if arcface_loss_calc_count > 0:
-                    self.comp_iters_face_detected_count += 1
-                    comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
-                    loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
-
-            if loss_sc_mc_bg_match == 0 and arcface_loss_calc_count == 0:
-                # loss_feat_delta_align is less accurate, so we only use it when 
-                # loss_sc_mc_bg_match is 0 (large fg matching errors) and no faces have been detected.
-                # And only use a small weight feat_delta_align_loss_weight = 1e-4.
-                loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
-                                
+            loss_comp_feat_distill_loss = \
+                self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
+                                                 filtered_fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                                 BLOCK_SIZE, loss_dict, session_prefix)
+            loss += loss_comp_feat_distill_loss
         ##### end of do_comp_feat_distill #####
 
         else:
@@ -1988,8 +1742,135 @@ class LatentDiffusion(DDPM):
         adv_grad = x_start.grad
         x_start.requires_grad = False
         return adv_grad
+
+    def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
+                                instances_have_fg_mask, all_subj_indices, 
+                                loss_dict, session_prefix):
+        loss_normal_recon = 0
+        BLOCK_SIZE = x_start.shape[0]
+        t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
+        # LDM VAE uses fp32, and we can only afford a BS=1.
+        if self.use_ldm_unet:
+            FACELOSS_BS = 1
+        else:
+            # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
+            FACELOSS_BS = x_start.shape[0]
+
+        # recon_with_adv_attack_iter_gap = 2, i.e., in half of the iterations, 
+        # we do adversarial attack on the input images.
+        do_adv_attack = (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+        # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
+        # This way, we force the adaface encoders to better reconstruct the subject.
+        # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
+        # otherwise the face embeddings will be inaccurate.
+        if do_adv_attack:
+            adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
+            self.adaface_adv_iters_count += 1
+            if adv_grad is not None:
+                # adv_grad_max: 1~1.5e-3
+                adv_grad_max = adv_grad.abs().max().item()
+                loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
+                # adv_grad_mean is always 4~5e-6.
+                # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
+                # adv_grad_fg_mean: ~1e-5.
+                adv_grad_fg_mean = adv_grad[faceloss_fg_mask].abs().mean().item()
+                loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
+                # adv_grad_mag: ~1e-4.
+                adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
+                recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
+                # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: 10~200.
+                adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
+                loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
+                # Cap the adv_grad_scale to 500.
+                adv_grad = adv_grad * min(adv_grad_scale, 500)
+                #calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
+                noise[:FACELOSS_BS] -= adv_grad
+                self.adaface_adv_success_iters_count += 1
+                adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
+                loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
+
+        if self.iter_flags['recon_on_comp_prompt']:
+            # Use class comp prompts as the negative prompts.
+            uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+            # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
+            # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
+            cfg_scale  = np.random.uniform(1.5, 2.5)
+            print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
+        else:
+            # Use the default negative prompts.
+            uncond_emb = None
+            cfg_scale  = -1
+
+        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+        # (img_mask is not used in the prompt-guided cross-attention layers).
+        # Don't do CFG. So uncond_emb is None.
+        # If unet_uses_attn_lora, then enable use_attn_lora with 50% chance during normal recon.
+        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+        model_output, x_recon, ca_layers_activations = \
+            self.guided_denoise(x_start, noise, t, cond_context, 
+                                uncond_emb=uncond_emb, img_mask=img_mask,
+                                batch_part_has_grad='all', 
+                                # Reconstruct the images at the pixel level for CLIP loss.
+                                do_pixel_recon=True,
+                                cfg_scale=cfg_scale, capture_ca_activations=True,
+                                use_attn_lora=enable_unet_attn_lora,
+                                use_ffn_lora=False)
+
+        # If do_normal_recon, then there's only 1 objective:
+        # **Objective 1**: Align the student predicted noise with the ground truth noise.
+        # bg loss is completely ignored. 
+        bg_pixel_weight = 0 
+
+        loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
+            calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
+                                            all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
+                                            bg_pixel_weight, x_start.shape[0])
+        v_loss_recon = loss_recon.mean().detach().item()
     
-    def calc_unet_distill_loss(self, x_start, noise, t, cond_context, extra_info, img_mask, fg_mask):
+        # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
+        if loss_subj_mb_suppress > 0:
+            loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
+
+        if self.iter_flags['recon_on_comp_prompt']:
+            loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
+        else:
+            loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+            
+        loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+        print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
+        # loss_recon: 0.02~0.03.
+        # loss_pred_l2: 0.92~0.99. pred_l2_loss_weight: 0, DISABLED.
+        # If pred_l2_loss_weight == 1e-3 -> 1e-3, 1/20~1/30 of recon loss.
+        loss_normal_recon += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
+                + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
+
+        if self.use_arcface_loss and (self.arcface is not None):
+            # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
+            loss_arcface_align_recon = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
+            if loss_arcface_align_recon > 0:
+                loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
+                print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
+                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
+                # This loss is around 1/5 of recon/distill losses (0.1).
+                loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
+
+        recon_images = self.decode_first_stage(x_recon)
+        # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+        # all of them are 2, indicating red.
+        log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
+        self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+
+        v_loss_normal_recon = loss_normal_recon.mean().detach().item()
+        loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
+
+        return loss_normal_recon
+
+    def calc_unet_distill_loss(self, x_start, noise, cond_context, extra_info, 
+                               img_mask, fg_mask, loss_dict, session_prefix):
+        t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), 
+                          device=self.device).long()
         c_prompt_emb, c_in, extra_info = cond_context
         BLOCK_SIZE = x_start.shape[0]
 
@@ -2181,6 +2062,9 @@ class LatentDiffusion(DDPM):
         # Instead, only increase the normalizer sub-linearly.
         loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_unet_denoising_steps)
 
+        v_loss_unet_distill = loss_unet_distill.mean().detach().item()
+        loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
+
         return loss_unet_distill
 
     # Do denoising, collect the attention activations for computing the losses later.
@@ -2194,11 +2078,12 @@ class LatentDiffusion(DDPM):
 
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
-        img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask = masks
+        # filtered_fg_mask is always passed in as None, so we don't assign it here.
+        img_mask, fg_mask, _, instances_have_fg_mask = masks
 
         if self.iter_flags['is_comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
             # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-            # Therefore, using fg_mask for is_comp_init_fg_from_training_image will force the model remember 
+            # Therefore, using fg_mask for init_x_with_fg_from_training_image() will force the model remember 
             # the background in the training images, which is not desirable.
             # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
             # fg_mask is 4D (added 1D in shared_step()). So expand instances_have_fg_mask to 4D.
@@ -2349,7 +2234,150 @@ class LatentDiffusion(DDPM):
         # since the current iteration is do_comp_feat_distill. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
-    
+
+    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, 
+                                     filtered_fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                     BLOCK_SIZE, loss_dict, session_prefix):
+        losses_comp_fg_bg_preserve = []
+        losses_sc_mc_bg_match = []
+        losses_subj_attn_norm_distill = []
+        losses_feat_delta_align = []
+        loss_comp_feat_distill_loss = 0
+
+        loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
+                        'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
+        
+        for loss_name in loss_names:
+            loss_name2 = loss_name.replace('loss_', '')
+            loss_name2 = f'{session_prefix}/{loss_name2}'
+            loss_dict[loss_name2] = 0
+
+        for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
+            # Since we scale down L2 outfeat recon loss, most recon losses will < 0.1.
+            # So we don't need a step-dependent recon_loss_discard_thres.
+            recon_loss_discard_thres = 0.2
+            loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
+                calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
+                                                self.iter_flags['is_comp_init_fg_from_training_image'],
+                                                self.iter_flags['fg_mask_avail_ratio'],
+                                                filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
+                                                loss_dict, session_prefix,
+                                                # If outfeat uses cosine loss, the subject authenticity will be higher,
+                                                # but the composition will degrade. So we use L2 loss.
+                                                recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
+                                                recon_loss_discard_thres=recon_loss_discard_thres)
+
+            # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
+            # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
+            # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
+
+            # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
+            # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
+            # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
+            # NOTE: loss_feat_delta_align is disabled in most cases. 
+            # It doesn't have spatial correspondance when doing the feature delta calculation.
+            # But if loss_sc_mc_bg_match is too large and discarded, then we still use it.
+
+            # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
+            # to index subj single and subj comp embeddings.
+            # The indices will be shifted along the batch dimension (size doubled) 
+            # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
+            loss_feat_delta_align, loss_subj_attn_norm_distill \
+                = calc_feat_delta_and_attn_norm_loss(ca_layers_activations['outfeat'], 
+                                                        ca_layers_activations['attn'], 
+                                                        all_subj_indices_2b, BLOCK_SIZE)
+
+            # loss_feat_delta_align: 0.02~0.03. 
+            if loss_feat_delta_align > 0:
+                loss_dict.update({f'{session_prefix}/feat_delta_align': \
+                                    loss_feat_delta_align.mean().detach().item() })
+
+            losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
+            losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
+            losses_sc_mc_bg_match.append(loss_sc_mc_bg_match)
+            losses_feat_delta_align.append(loss_feat_delta_align)
+        
+        for loss_name in loss_names:
+            loss_name2 = loss_name.replace('loss_', '')
+            loss_name2 = f'{session_prefix}/{loss_name2}'
+            if loss_name2 in loss_dict:
+                loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
+
+        loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
+        loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
+        loss_sc_mc_bg_match         = torch.stack(losses_sc_mc_bg_match).mean()
+        loss_feat_delta_align       = torch.stack(losses_feat_delta_align).mean()
+
+        if loss_sc_mc_bg_match > 0:
+            self.comp_iters_bg_match_loss_count += 1
+            sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
+            loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
+
+        # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
+        if loss_comp_fg_bg_preserve > 0:
+            loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
+            # Keep track of the number of iterations that use is_comp_init_fg_from_training_image.
+            self.comp_init_fg_from_training_image_count += 1
+            comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.comp_iters_count + 1)
+            loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
+        # loss_subj_attn_norm_distill: 0.08~0.12.
+        if loss_subj_attn_norm_distill > 0:
+            loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
+        
+        # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
+        # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
+        # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 5x to 50x.
+        # loss_sc_mc_bg_match: 0.002~0.01, sc_mc_bg_match_loss_scale: 10~50 => 0.02~5.
+        # rel_scale_range=(0, 4): the absolute range of the scale will be 8~320.
+        sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.001, 8), (0.01, 80), 
+                                                        rel_scale_range=(0, 4))
+        # loss_sc_recon_ss_fg_min is absorbed into loss_comp_fg_bg_preserve.
+        # We didn't absorb loss_sc_mc_bg_match here into loss_comp_fg_bg_preserve, because it requires a dynamic scale.
+        loss_comp_feat_distill_loss += (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
+                * self.comp_fg_bg_preserve_loss_weight
+
+        arcface_loss_calc_count = 0
+        if self.use_arcface_loss and (self.arcface is not None):
+            # Trying to calc arcface_align_loss from difficult to easy steps.
+            # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
+            max_arcface_loss_calc_count = 1
+            for sel_step in range(len(x_recons)):
+                x_recon  = x_recons[sel_step]
+                # If there are faceless input images, then do_comp_feat_distill is always False.
+                # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
+                x_start0    = x_start.chunk(4)[0]
+                subj_recon  = x_recon.chunk(2)[0]
+                loss_arcface_align_comp = self.calc_arcface_align_loss(x_start0, subj_recon)
+                # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
+                if loss_arcface_align_comp > 0:
+                    print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
+                    loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
+                    # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                    # This loss is around 1/150 of recon/distill losses (0.1).
+                    # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
+                    arcface_align_comp_loss_scale = self.comp_distill_iter_gap
+                    loss_comp_feat_distill_loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
+                    arcface_loss_calc_count += 1
+                    if arcface_loss_calc_count >= max_arcface_loss_calc_count:
+                        break
+
+            if arcface_loss_calc_count > 0:
+                self.comp_iters_face_detected_count += 1
+                comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
+                loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+
+        if loss_sc_mc_bg_match == 0 and arcface_loss_calc_count == 0:
+            # loss_feat_delta_align is less accurate, so we only use it when 
+            # loss_sc_mc_bg_match is 0 (large fg matching errors) and no faces have been detected.
+            # And only use a small weight feat_delta_align_loss_weight = 1e-4.
+            loss_comp_feat_distill_loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
+
+        v_loss_comp_feat_distill_loss = loss_comp_feat_distill_loss.mean().detach().item()
+        loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill_loss})
+
+        return loss_comp_feat_distill_loss            
+
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
     # Data type of samples could be uint (0-25), or float (-1, 1) or (0, 1).

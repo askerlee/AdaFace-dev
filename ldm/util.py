@@ -1966,8 +1966,8 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE,
 
 def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations, 
                                   is_comp_init_fg_from_training_image, fg_mask_avail_ratio,
-                                  filtered_fg_mask, instances_have_fg_mask,
-                                  all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix,
+                                  filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
+                                  loss_dict, session_prefix,
                                   recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
                                   recon_loss_discard_thres=0.4):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
@@ -1989,8 +1989,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                             ca_layers_activations['attn_out'],
                                             ca_layers_activations['q'],
                                             ca_layers_activations['attn'], 
-                                            filtered_fg_mask, instances_have_fg_mask,
-                                            all_subj_indices_1b, BLOCK_SIZE,
+                                            filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE,
                                             recon_feat_objectives=recon_feat_objectives,
                                             bg_align_loss_scheme='L2',
                                             recon_loss_discard_thres=recon_loss_discard_thres,
@@ -2044,12 +2043,12 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
 # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
-                                    fg_mask, instances_have_fg_mask, subj_indices, BLOCK_SIZE,
+                                    filtered_fg_mask, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
                                     bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4,
                                     do_feat_attn_pooling=True):
-    # No masks available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
-    if fg_mask is None or instances_have_fg_mask.sum() == 0:
+    # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
+    if filtered_fg_mask is None or filtered_fg_mask.sum() == 0:
         return {}
 
     # Feature map spatial sizes are all 64*64.
@@ -2060,10 +2059,6 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     
     # Normalize the weights above so that each set sum to 1.
     elastic_matching_layer_weights  = normalize_dict_values(elastic_matching_layer_weights)
-    
-    # fg_mask is 4D. So expand instances_have_fg_mask to 4D.
-    # *_4b means it corresponds to a 4-block batch (batch size = 4 * BLOCK_SIZE).
-    fg_mask_4b = fg_mask * instances_have_fg_mask.view(-1, 1, 1, 1)
 
     # K_subj: 4, number of embeddings per subject token.
     K_subj   = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
@@ -2112,8 +2107,8 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
         # fg_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
         fg_mask_4b \
-            = resize_mask_to_target_size(fg_mask_4b, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
-                                            mode="nearest|bilinear", warn_on_all_zero=False)
+            = resize_mask_to_target_size(filtered_fg_mask, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
+                                         mode="nearest|bilinear", warn_on_all_zero=False)
         # ss_fg_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
         ss_fg_mask = fg_mask_4b.chunk(4)[0]
         # ss_fg_mask: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
