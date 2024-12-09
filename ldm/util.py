@@ -2042,6 +2042,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
 # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
 # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress and loss_comp_cls_bg_attn_suppress.
+# Only ss_fg_mask in (resized) filtered_fg_mask is used for calc_elastic_matching_loss().
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                     filtered_fg_mask, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
@@ -2075,7 +2076,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     for unet_layer_idx, ca_outfeat in ca_outfeats.items():
         if unet_layer_idx not in elastic_matching_layer_weights:
             continue
-        elastic_matching_layer_weight = elastic_matching_layer_weights[unet_layer_idx]
+        LAYER_W = elastic_matching_layer_weights[unet_layer_idx]
 
         # ca_outfeat: [4, 1280, 8, 8]
         ca_feat_h, ca_feat_w = ca_outfeat.shape[-2:]
@@ -2121,25 +2122,26 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # to suppress the activations on background areas.
         
         loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
-        loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean \
-            = calc_elastic_matching_loss(unet_layer_idx, flow_model, 
-                                            ca_layer_q, ca_attn_out, ca_outfeat, 
-                                            ss_fg_mask, ca_feat_h, ca_feat_w, 
-                                            recon_feat_objectives=recon_feat_objectives,
-                                            bg_align_loss_scheme=bg_align_loss_scheme,
-                                            recon_loss_discard_thres=recon_loss_discard_thres,
-                                            num_flow_est_iters=12,
-                                            do_feat_attn_pooling=do_feat_attn_pooling)
+        loss_layer_sc_mc_bg_match, sc_map_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean = \
+            calc_elastic_matching_loss(unet_layer_idx, flow_model, 
+                                       ca_layer_q, ca_attn_out, ca_outfeat, 
+                                       ss_fg_mask, ca_feat_h, ca_feat_w, 
+                                       recon_feat_objectives=recon_feat_objectives,
+                                       bg_align_loss_scheme=bg_align_loss_scheme,
+                                       recon_loss_discard_thres=recon_loss_discard_thres,
+                                       num_flow_est_iters=12,
+                                       do_feat_attn_pooling=do_feat_attn_pooling)
 
         loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
 
         add_dict_to_dict(loss_dict, 
-                            { 'loss_subj_comp_map_single_align_with_cls': loss_layer_subj_comp_map_single_align_with_cls * elastic_matching_layer_weight,
-                            'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * elastic_matching_layer_weight,
-                            'loss_sc_recon_ss_fg_flow':       loss_sc_recon_ss_fg_flow * elastic_matching_layer_weight,
-                            'loss_sc_recon_ss_fg_min':        loss_sc_recon_ss_fg_min * elastic_matching_layer_weight,
-                            'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * elastic_matching_layer_weight })
-            
+                         { 'loss_subj_comp_map_single_align_with_cls': loss_layer_subj_comp_map_single_align_with_cls * LAYER_W,
+                           'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * LAYER_W,
+                           'loss_sc_recon_ss_fg_flow':       loss_sc_recon_ss_fg_flow * LAYER_W,
+                           'loss_sc_recon_ss_fg_min':        loss_sc_recon_ss_fg_min * LAYER_W,
+                           'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * LAYER_W 
+                         })
+        
         if sc_map_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
             continue
         
@@ -2187,8 +2189,8 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                                                             mc_map_ss_fg_prob_below_mean)
 
         add_dict_to_dict(loss_dict,
-                            { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * elastic_matching_layer_weight,
-                              'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * elastic_matching_layer_weight })
+                            { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
+                              'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * LAYER_W })
     
     return loss_dict
 

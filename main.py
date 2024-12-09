@@ -228,7 +228,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the cross-attn layers of the Diffusers UNet model")
-    parser.add_argument("--unet_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--unet_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the FFNs of the Diffusers UNet model")    
     parser.add_argument("--unet_lora_scale_down", type=float, default=8,
                         help="Scale down factor for the LoRA in the Diffusers UNet model")

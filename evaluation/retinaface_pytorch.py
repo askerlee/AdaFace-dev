@@ -129,8 +129,9 @@ class RetinaFaceClient(nn.Module):
     # Find facial areas of given image tensors and crop them.
     # Output: [BS, 3, 128, 128]
     def crop_faces(self, images_ts, out_size=(128, 128), T=20, use_whole_image_if_no_face=False):
-        face_crops = []
-        failed_indices = []
+        face_crops      = []
+        failed_indices  = []
+        face_coords     = []
 
         for i, image_ts in enumerate(images_ts):
             # [3, H, W] -> [H, W, 3]
@@ -156,20 +157,24 @@ class RetinaFaceClient(nn.Module):
                 # Extract detected face without alignment
                 # Crop on the input tensor, so that computation graph is preserved.
                 face_crop = image_ts[:, int(y) : int(y + h), int(x) : int(x + w)]
+                face_coords.append((x, y, x+w, y+h))
             elif use_whole_image_if_no_face and not curr_img_found_face:
                 face_crop = image_ts
+                face_coords.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
             else:
                 # No face detected
                 failed_indices.append(i)
+                face_coords.append((0, 0, 0, 0))
                 continue
 
             # resize to (1, 3, 128, 128)
             face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
             face_crops.append(face_crop)
         
+        face_coords = torch.tensor(face_coords, device=images_ts.device)
         if len(face_crops) == 0:
-            return None, failed_indices
+            return None, failed_indices, face_coords
         
         face_crops = torch.cat(face_crops, dim=0)
-        return face_crops, failed_indices
+        return face_crops, failed_indices, face_coords
 

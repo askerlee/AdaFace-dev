@@ -47,10 +47,12 @@ class ArcFaceWrapper(nn.Module):
     # Suppose images_ts has been normalized to [-1, 1].
     # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
     def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False, enable_grad=True):
-        # retina_crop_face() crops on the input tensor, so that computation graph is preserved.
-        # The cropping param computation is wrapped with torch.no_grad().
-        faces, failed_indices = self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, 
-                                                           use_whole_image_if_no_face=use_whole_image_if_no_face)
+        # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
+        # the input tensor is preserved.
+        # But the cropping operation is wrapped with torch.no_grad().
+        faces, failed_indices, face_coords = \
+            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, 
+                                       use_whole_image_if_no_face=use_whole_image_if_no_face)
         
         # No face detected in any instances in the batch.
         if faces is None:
