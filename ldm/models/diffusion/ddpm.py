@@ -37,6 +37,7 @@ from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 from ldm.modules.arcface_wrapper import ArcFaceWrapper
+from evaluation.clip_eval import CLIPEvaluator
 
 import sys
 import asyncio
@@ -83,7 +84,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
-                 comp_distill_denoising_steps_range=[2, 3],
+                 comp_distill_denoising_steps_range=[1, 2],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0.1,
@@ -97,8 +98,8 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
-                 use_arcface_loss=True,
                  arcface_align_loss_weight=0.2,
+                 clip_align_loss_weight=0,
                  use_ldm_unet=True,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
@@ -191,7 +192,7 @@ class DDPM(pl.LightningModule):
                                               use_ffn_lora=self.unet_uses_ffn_lora,
                                               lora_rank=128, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
-                                              ffn_lora_scale_down=self.unet_lora_scale_down * 2 # 16
+                                              ffn_lora_scale_down=self.unet_lora_scale_down     # 8
                                               )
             self.vae = self.model.pipeline.vae
 
@@ -201,8 +202,8 @@ class DDPM(pl.LightningModule):
         self.adam_config = adam_config
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
-        self.use_arcface_loss = use_arcface_loss
         self.arcface_align_loss_weight = arcface_align_loss_weight
+        self.clip_align_loss_weight = clip_align_loss_weight
 
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
@@ -537,13 +538,17 @@ class LatentDiffusion(DDPM):
         else:
             self.flow_model = None
 
-        if self.use_arcface_loss:
+        if self.arcface_align_loss_weight > 0:
             self.arcface = ArcFaceWrapper('cpu')
             # Disable training mode, as this mode 
             # doesn't accept only 1 image as input.
             self.arcface.train = disabled_train
         else:
             self.arcface = None
+
+        if self.clip_align_loss_weight > 0:
+            # Will be moved to GPU automatically.
+            self.clip_evator = CLIPEvaluator('cpu', torch.float16)
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -1174,6 +1179,7 @@ class LatentDiffusion(DDPM):
         self.iter_flags['fg_mask']                  = fg_mask
         self.iter_flags['instances_have_fg_mask']   = instances_have_fg_mask
         self.iter_flags['delta_prompts']            = delta_prompts
+        self.iter_flags['compos_partial_prompts']   = batch['compos_partial_prompt']
         self.iter_flags['image_unnorm']             = batch_images_unnorm
 
         self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
@@ -1222,6 +1228,7 @@ class LatentDiffusion(DDPM):
 
         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
         delta_prompts = self.iter_flags['delta_prompts']
+        compos_partial_prompts = self.iter_flags['compos_partial_prompts']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
 
@@ -1229,9 +1236,10 @@ class LatentDiffusion(DDPM):
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE = 1
             # Only keep the first half of batched prompts to save RAM.
-            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = \
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, compos_partial_prompts = \
                 subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
-                cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE]
+                cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE], \
+                compos_partial_prompts[:BLOCK_SIZE]
         else:
             # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
@@ -1344,6 +1352,7 @@ class LatentDiffusion(DDPM):
         # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
         extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
                                             cls_single_prompts,  cls_comp_prompts)
+        extra_info['compos_partial_prompts'] = compos_partial_prompts
 
         # c_prompt_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts. 
@@ -1701,6 +1710,7 @@ class LatentDiffusion(DDPM):
         elif self.iter_flags['do_comp_feat_distill']:
             loss_comp_feat_distill_loss = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
+                                                 extra_info['compos_partial_prompts'],
                                                  filtered_fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
@@ -1850,7 +1860,7 @@ class LatentDiffusion(DDPM):
         loss_normal_recon += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
                 + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
 
-        if self.use_arcface_loss and (self.arcface is not None):
+        if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
             loss_arcface_align_recon = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
             if loss_arcface_align_recon > 0:
@@ -2241,7 +2251,7 @@ class LatentDiffusion(DDPM):
 
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
-    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, 
+    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompts,
                                     filtered_fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
@@ -2250,7 +2260,7 @@ class LatentDiffusion(DDPM):
         losses_feat_delta_align         = []
         loss_comp_feat_distill_loss     = 0
 
-        if self.use_arcface_loss and (self.arcface is not None):
+        if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # The reconstructed images of the subject-single block, in the last step, 
             # used to detect the face area in the subject-single images.
             ss_x_recon = x_recons[-1].chunk(4)[0]
@@ -2385,7 +2395,7 @@ class LatentDiffusion(DDPM):
              * self.comp_fg_bg_preserve_loss_weight
 
         arcface_loss_calc_count = 0
-        if self.use_arcface_loss and (self.arcface is not None):
+        if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # Trying to calc arcface_align_loss from difficult to easy steps.
             # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
             max_arcface_loss_calc_count = 1
@@ -2419,6 +2429,16 @@ class LatentDiffusion(DDPM):
             # loss_sc_mc_bg_match is 0 (large fg matching errors) and no faces have been detected.
             # And only use a small weight feat_delta_align_loss_weight = 1e-4.
             loss_comp_feat_distill_loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
+
+        # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
+        if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:
+            sc_x_recon = x_recons[-1].chunk(4)[1]
+            sc_x_recon_pixels = self.decode_first_stage_with_grad(sc_x_recon)
+            # Currently the compos_partial_prompts only contains one prompt, i.e., BLOCK_SIZE = 1.
+            loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(compos_partial_prompts[0], sc_x_recon_pixels)
+            loss_dict.update({f'{session_prefix}/clip_align': loss_clip_align.item() })
+            loss_comp_feat_distill_loss += loss_clip_align * self.clip_align_loss_weight
+            print(f"Rank {self.trainer.global_rank} clip_align: {loss_clip_align.item():.3f}")
 
         v_loss_comp_feat_distill_loss = loss_comp_feat_distill_loss.mean().detach().item()
         loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill_loss})
@@ -2681,7 +2701,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, base_model_path, torch_dtype=torch.float16,
                  use_attn_lora=False, attn_lora_layer_names=['q'], 
                  use_ffn_lora=False, lora_rank=128, 
-                 attn_lora_scale_down=8, ffn_lora_scale_down=16):
+                 attn_lora_scale_down=8, ffn_lora_scale_down=8):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         # diffusion_model is actually a UNet. Use this variable name to be 

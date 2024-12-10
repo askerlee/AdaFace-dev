@@ -33,11 +33,7 @@ def set_tf_gpu(gpu_id):
         tf.config.experimental.set_visible_devices(devices=cpus, device_type='CPU')
         tf.config.experimental.set_visible_devices([], 'GPU')
 
-def init_evaluators(gpu_id):
-    if gpu_id == -1:
-        device = 'cpu'
-    else:
-        device = f'cuda:{gpu_id}'
+def init_evaluators(device):
     clip_evator = CLIPImagesEvaluator(device)
     dino_evator = DINOEvaluator(device)
     return clip_evator, dino_evator

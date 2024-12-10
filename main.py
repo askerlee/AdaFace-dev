@@ -585,7 +585,7 @@ if __name__ == "__main__":
     See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
     '''
 
-    #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'expandable_segments:True'
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = 'max_split_size_mb:512'
 
     try:
         # init and save configs

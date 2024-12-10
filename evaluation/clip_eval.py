@@ -1,28 +1,45 @@
 # import clip
 import torch
+import torch.nn as nn
 from torchvision import transforms
 from transformers import CLIPProcessor, CLIPModel
 import torch
 from torchvision import transforms
 
-class CLIPEvaluator(object):
-    def __init__(self, device, clip_model_name='openai/clip-vit-base-patch32') -> None:
+class CLIPEvaluator(nn.Module):
+    def __init__(self, device, torch_dtype=torch.float16, 
+                 clip_model_name='openai/clip-vit-base-patch32') -> None:
+        super().__init__()
         self.device = device
-
         # Load the CLIP model and processor from Hugging Face
-        self.model = CLIPModel.from_pretrained(clip_model_name).to(device)
+        self.model = CLIPModel.from_pretrained(clip_model_name, torch_dtype=torch_dtype).to(device)
         # The CLIPProcessor wraps CLIPImageProcessor and CLIPTokenizer 
         # into a single instance to both encode the text and prepare the images. 
         self.processor = CLIPProcessor.from_pretrained(clip_model_name)
 
         # Define custom preprocessing pipeline to match the given transforms
         self.preprocess = transforms.Compose([
-            transforms.Normalize(mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0]),  # Un-normalize from [-1.0, 1.0] to [0, 1]
+            # Diffusion decoded output images are already with mean 0 and std 1. 
+            # No need to do normalization.
+            # transforms.Normalize(mean=[0, 0, 0], std=[1.0, 1.0, 1.0]), 
             transforms.Resize(224),  # Resize to 224x224
             transforms.CenterCrop(224),  # Center crop to 224x224
             transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073),
                                  std=(0.26862954, 0.26130258, 0.27577711))  # Normalization to match CLIP's input
         ])
+
+    def _apply(self, fn):
+        super()._apply(fn)  # Call the parent _apply to handle parameters and buffers
+        # A dirty hack to get the device of the model, passed from 
+        # parent.model.to(self.root_device) => parent._apply(convert) => module._apply(fn)
+        test_tensor = torch.zeros(1)  # Create a test tensor
+        transformed_tensor = fn(test_tensor)  # Apply `fn()` to test it
+        device = transformed_tensor.device  # Get the device of the transformed tensor
+        # No need to reload face_app on the same device.
+        if device == self.device:
+            return
+        self.device = device
+        self.model = self.model.to(device)
 
     def tokenize(self, strings: list) -> torch.Tensor:
         inputs = self.processor(text=strings, return_tensors="pt", padding=True, truncation=True, is_split_into_words=True).to(self.device)
@@ -49,15 +66,15 @@ class CLIPEvaluator(object):
             text_features = self.encode_text(tokens).detach()
 
         if norm:
-            text_features /= text_features.norm(dim=-1, keepdim=True)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
         return text_features
 
-    def get_image_features(self, img: torch.Tensor, norm: bool = True) -> torch.Tensor:
-        image_features = self.encode_images(img)
+    def get_image_features(self, images: torch.Tensor, norm: bool = True) -> torch.Tensor:
+        image_features = self.encode_images(images)
 
         if norm:
-            image_features /= image_features.norm(dim=-1, keepdim=True)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
 
         return image_features
 
@@ -108,8 +125,9 @@ class CLIPEvaluator(object):
     # So if text-image similarity is used as loss,
     # the text embedding from the compared input text will not be updated. 
     # The generated images and their conditioning text embeddings will be updated.
-    # txt_to_img_similarity() assumes images are tensors with mean=[-1.0, -1.0, -1.0], std=[2.0, 2.0, 2.0].
+    # txt_to_img_similarity() assumes images are tensors with mean=[0, 0, 0], std=[1, 1, 1].
     def txt_to_img_similarity(self, text, images, reduction='mean'):
+        # text: a string. 
         # text_features: [1, 512], gen_img_features: [4, 512]
         text_features   = self.get_text_features(text).to(self.device)
         img_features    = self.get_image_features(images)
