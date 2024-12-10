@@ -98,7 +98,7 @@ class DDPM(pl.LightningModule):
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
                  use_arcface_loss=True,
-                 arcface_align_loss_weight=4e-2,
+                 arcface_align_loss_weight=0.2,
                  use_ldm_unet=True,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
@@ -1856,7 +1856,7 @@ class LatentDiffusion(DDPM):
             if loss_arcface_align_recon > 0:
                 loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
-                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 4e-2 => 0.02-0.032.
+                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.1 => 0.05-0.08.
                 # This loss is around 1/5 of recon/distill losses (0.1).
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
 
@@ -2400,7 +2400,7 @@ class LatentDiffusion(DDPM):
                 if loss_arcface_align_comp > 0:
                     print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
                     loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
-                    # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 1e-3 => 0.0005-0.0008.
+                    # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 0.1 => 0.05-0.08.
                     # This loss is around 1/150 of recon/distill losses (0.1).
                     # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
                     arcface_align_comp_loss_scale = self.comp_distill_iter_gap
