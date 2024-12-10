@@ -23,7 +23,7 @@ model:
     unet_lr:                          0.0
     use_fp_trick:                     True
     comp_distill_iter_gap:            3
-    comp_distill_denoising_steps_range: [1, 2]
+    comp_distill_denoising_steps_range: [2, 2]
     unet_teacher_types:               ['consistentID', 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.5, 2.5]

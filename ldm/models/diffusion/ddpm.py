@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
-                 comp_distill_denoising_steps_range=[1, 2],
+                 comp_distill_denoising_steps_range=[2, 2],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0.1,
@@ -140,6 +140,10 @@ class DDPM(pl.LightningModule):
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
         self.comp_distill_denoising_steps_range     = comp_distill_denoising_steps_range
+        if clip_align_loss_weight > 0:
+            # Some compos iterations will take only 1 step to save RAM for the clip align loss.
+            self.comp_distill_denoising_steps_range[0] = 1
+
         # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
         # never use the compositional prompts as the distillation target of arc2face.
