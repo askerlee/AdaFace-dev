@@ -2587,7 +2587,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # outfeat: output of the transformer layer, i.e., attn_out transformed by a FFN.
             feat_obj = ca_outfeat
             # outfeat on L2 loss scheme incurs large loss values, so we scale it down.
-            loss_scale = 0.25 if loss_scheme == 'L2' else 1
+            loss_scale = 0.5 if loss_scheme == 'L2' else 1
         else:
             breakpoint()
 

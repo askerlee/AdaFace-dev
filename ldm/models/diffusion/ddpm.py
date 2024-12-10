@@ -2299,9 +2299,9 @@ class LatentDiffusion(DDPM):
             loss_dict[loss_name2] = 0
 
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
-            # Since we scale down L2 outfeat recon loss, most recon losses will < 0.1.
-            # So we don't need a step-dependent recon_loss_discard_thres.
-            recon_loss_discard_thres = 0.2
+            # Since we scaled down L2 outfeat recon loss, most recon losses will < 0.2.
+            # But we use a step-dependent recon_loss_discard_thres to keep most of the losses.
+            recon_loss_discard_thres = 0.2 + 0.05 * step_idx
             # Only ss_fg_mask in (resized) filtered_fg_mask is used for calc_elastic_matching_loss().
             loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
                 calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
