@@ -98,8 +98,8 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
-                 arcface_align_loss_weight=0.2,
-                 clip_align_loss_weight=0,
+                 arcface_align_loss_weight=5e-2,
+                 clip_align_loss_weight=0,  # Currently disabled
                  use_ldm_unet=True,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
@@ -2288,6 +2288,9 @@ class LatentDiffusion(DDPM):
                     # Therefore, we need to scale them down by 8.
                     latent_scale = ss_x_recon_pixels.shape[-1] // filtered_fg_mask.shape[-1]
                     x1, y1, x2, y2 = [ int(coord/latent_scale) for coord in face_coords[i] ]
+                    # Make the mask slightly smaller than the detected face area. 
+                    x1, y1 = x1 + 1, y1 + 1
+                    x2, y2 = x2 - 1, y2 - 1
                     filtered_fg_mask[i, :, y1:y2, x1:x2] = 1
                     # Convert to int for nice printing.
                     face_coords_i = [ int(coord) for coord in face_coords[i] ]

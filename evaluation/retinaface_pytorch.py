@@ -65,7 +65,8 @@ class RetinaFaceClient(nn.Module):
         Detect and align face with retinaface
 
         Args:
-            img (np.ndarray): pre-loaded image as numpy array
+            img (np.ndarray): pre-loaded image as numpy array,
+            T: minimum size of the face (the height or the width) to be detected
 
         Returns:
             results (List[FacialAreaRegion]): A list of FacialAreaRegion objects
