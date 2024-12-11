@@ -48,14 +48,12 @@ class DDPM(pl.LightningModule):
     def __init__(self,
                  unet_config,
                  base_model_path,
-                 automatic_optimization=True,
+                 lightning_auto_optimization=True,
                  timesteps=1000,
                  beta_schedule="linear",
                  monitor=None,
                  first_stage_key="image",
-                 image_size=256,
                  channels=3,
-                 log_every_t=100,
                  clip_denoised=True,    # clip the range of denoised variables, not the CLIP model.
                  linear_start=1e-4,
                  linear_end=2e-2,
@@ -106,16 +104,14 @@ class DDPM(pl.LightningModule):
                  ):
         
         super().__init__()
-        self.automatic_optimization = automatic_optimization
+        self.lightning_auto_optimization = lightning_auto_optimization
 
         assert parameterization in ["eps", "x0"], 'currently only supporting "eps" and "x0"'
         self.parameterization = parameterization
         print(f"{self.__class__.__name__}: Running in {self.parameterization}-prediction mode")
         self.cond_stage_model = None
         self.clip_denoised = clip_denoised
-        self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
-        self.image_size = image_size
         self.channels = channels
 
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
@@ -382,7 +378,7 @@ class DDPM(pl.LightningModule):
         lr = optimizer.param_groups[0]['lr']
         self.log('lr_abs', lr, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
-        if not self.automatic_optimization:
+        if not self.lightning_auto_optimization:
             self.manual_backward(loss)
             self.clip_gradients(optimizer, gradient_clip_val=self.grad_clip, gradient_clip_algorithm="norm")
 
