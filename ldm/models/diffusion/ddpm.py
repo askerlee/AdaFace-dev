@@ -733,10 +733,10 @@ class LatentDiffusion(DDPM):
 
         # 'placeholder2indices' and 'prompt_emb_mask' are cached to be used in forward() and p_losses().
         extra_info = { 
-                        'placeholder2indices':          copy.copy(self.embedding_manager.placeholder2indices),
-                        'prompt_emb_mask':              copy.copy(self.embedding_manager.prompt_emb_mask),
+                        'placeholder2indices':      copy.copy(self.embedding_manager.placeholder2indices),
+                        'prompt_emb_mask':          copy.copy(self.embedding_manager.prompt_emb_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
-                        'capture_ca_activations':       False,
+                        'capture_ca_activations':   False,
                         'use_attn_lora':            False,
                         'use_ffn_lora':             False,
                      }
@@ -1469,9 +1469,7 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 x_noisy = self.q_sample(x_start, t, noise)
                 # model_output_uncond: [BS, 4, 64, 64]
-                # During inference, due to the pipeline rigidness, LoRAs are enabled on negative prompts.
-                # Therefore, we also enable LoRAs during the training time.
-                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=use_attn_lora, 
+                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=False, 
                                                        use_ffn_lora=use_ffn_lora)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
@@ -1517,6 +1515,8 @@ class LatentDiffusion(DDPM):
                                     uncond_emb, img_mask, batch_part_has_grad='subject-compos', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
+                                    # Enable the attn lora in subject-compos batches, as long as 
+                                    # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
                                     use_ffn_lora=False)
             
@@ -1825,7 +1825,7 @@ class LatentDiffusion(DDPM):
         # (img_mask is not used in the prompt-guided cross-attention layers).
         # Don't do CFG. So uncond_emb is None.
         # If unet_uses_attn_lora, then enable use_attn_lora with 50% chance during normal recon.
-        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+        randomly_enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
         model_output, x_recon, ca_layers_activations = \
             self.guided_denoise(x_start, noise, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
@@ -1833,7 +1833,7 @@ class LatentDiffusion(DDPM):
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 do_pixel_recon=True,
                                 cfg_scale=cfg_scale, capture_ca_activations=True,
-                                use_attn_lora=enable_unet_attn_lora,
+                                use_attn_lora=randomly_enable_unet_attn_lora,
                                 use_ffn_lora=False)
 
         # If do_normal_recon, then there's only 1 objective:
@@ -2287,10 +2287,12 @@ class LatentDiffusion(DDPM):
                     # However, filtered_fg_mask is on the latents, 64*64. 
                     # Therefore, we need to scale them down by 8.
                     latent_scale = ss_x_recon_pixels.shape[-1] // filtered_fg_mask.shape[-1]
-                    x1, y1, x2, y2 = [ int(coord/latent_scale) for coord in face_coords[i] ]
-                    # Make the mask slightly smaller than the detected face area. 
-                    x1, y1 = x1 + 1, y1 + 1
-                    x2, y2 = x2 - 1, y2 - 1
+                    # Make the mask area slightly smaller (height/width - 8 pixels) 
+                    # than the detected face area.
+                    x1, y1, x2, y2 = face_coords[i]
+                    x1, y1 = x1 + 4, y1 + 4
+                    x2, y2 = x2 - 4, y2 - 4
+                    x1, y1, x2, y2 = [ int(coord/latent_scale) for coord in (x1, y1, x2, y2) ]
                     filtered_fg_mask[i, :, y1:y2, x1:x2] = 1
                     # Convert to int for nice printing.
                     face_coords_i = [ int(coord) for coord in face_coords[i] ]

@@ -1866,6 +1866,7 @@ def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, B
 
     return loss_feat_delta_align, loss_subj_attn_norm_distill
 
+# calc_subj_masked_bg_suppress_loss() is called only during normal recon iterations.
 def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, 
                                       fg_mask, instance_has_fg_mask=None):
     if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
@@ -2028,7 +2029,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
                                     + loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
     else:
-        loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = torch.zeros(0., device=ca_outfeats[23].device)
+        loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = torch.zeros(1, device=ca_outfeats[23].device)
 
     return loss_comp_fg_bg_preserve, loss_sc_mc_bg_match
 
@@ -2298,7 +2299,7 @@ def backward_warp_by_flow(image2, flow1to2):
 @torch.compile
 def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_prob_q, ss_fg_mask):
     # recon_sc_feat: [1, 1280, 961] * [1, 961, 961] => [1, 1280, 961]
-    # ** We only use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
+    # ** We use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
     # Because we rely on ss_fg_mask to determine the fg area, which is only available for the subj single instance. 
     # Then we can compare the values of the recon'ed subj single tokens with the original values at the fg area.
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
@@ -2470,7 +2471,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # bg_align_loss_scheme: 'cosine' or 'L2'.
 @torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
-                               recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'}, 
+                               recon_feat_objectives={ 'attn_out': 'L2', 'outfeat': 'L2' }, 
                                bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64]
@@ -2481,20 +2482,21 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
         # ca_attn_out, ca_outfeat, ca_q: [4, 1280, 64*64] -> [4, 1280, 31*31] = [4, 1280, 961].
         ca_attn_out  = pool_feat_or_attn_mat(ca_attn_out, (H, W))
+        # retain_spatial=True to get the resized spatial dims H2, W2.
         ca_outfeat   = pool_feat_or_attn_mat(ca_outfeat,  (H, W), retain_spatial=True)
-        ca_q         = pool_feat_or_attn_mat(ca_q, (H, W))
+        ca_q         = pool_feat_or_attn_mat(ca_q,        (H, W))
         # ss_fg_mask: [1, 64*64] -> [1, 31*31] = [1, 961]
-        ss_fg_mask   = pool_feat_or_attn_mat(ss_fg_mask, (H, W))
+        ss_fg_mask   = pool_feat_or_attn_mat(ss_fg_mask,  (H, W))
         H2, W2       = ca_outfeat.shape[-2:]
+        # Flatten the spatial dims of ca_outfeat for reconstruction.
         ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
     else:
-        H2, W2      = H, W
+        H2, W2       = H, W
 
     ss_fg_mask_2d = ss_fg_mask.bool().squeeze(1)
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
-    ss_q = ss_q.detach()
 
     # Similar to the scale of the attention scores.
     # Disable matching_score_scale, since when we were caching q, we've scaled it by 1/sqrt(sqrt(dim)).
@@ -2540,7 +2542,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # ** maps to the whole fg area in the single instance.
     # sc_to_ss_fg_prob_q: [1, 961, 961] * [1, 961, 1] => [1, 961, 1] => [1, 1, 961].
     # 961: sc tokens.
-    # matmul() sums up over the ss tokens dim, masked by ss_fg_mask_3d.
+    # matmul() sums up over the ss fg tokens. So each entry in sc_to_ss_fg_prob_q 
+    # is the total prob of each sc token maps to the whole fg area 
+    # in the subj single instance, which could be >> 1.
     sc_to_ss_fg_prob_q = torch.matmul(sc_to_ss_prob_q, ss_fg_mask_3d).permute(0, 2, 1)
     mc_to_ms_fg_prob_q = torch.matmul(mc_to_ms_prob_q, ss_fg_mask_3d).permute(0, 2, 1)
 
