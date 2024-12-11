@@ -2306,6 +2306,11 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_prob_q, ss_fg_mask)
     # sc_to_ss_fg_tokens_prob_q: [1, 961, 961] => [1, 961, N_fg]
     # filter with ss_fg_mask_N, so that we only care about 
     # the recon of the fg areas of the subj single instance.
+    # NOTE: we allow BP to ca_qs, which mainly leads to update of attn loras.
+    # What's interesting is after the initial several thousand iterations,
+    # the composition becomes very bad (the face appears abruptly) due to the update of attn loras.
+    # However, as training goes on, the composition repairs itself.
+    # Maybe (params leading to) good compositions are a stable equilibrium?
     sc_to_ss_fg_tokens_prob_q = sc_to_ss_prob_q[:, :, ss_fg_mask_N]
 
     # Weighted sum of the comp tokens (based on their matching probs) to reconstruct the single tokens.

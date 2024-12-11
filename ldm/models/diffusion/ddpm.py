@@ -99,7 +99,7 @@ class DDPM(pl.LightningModule):
                  extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
-                 clip_align_loss_weight=0,  # Currently disabled
+                 clip_align_loss_weight=0,  # Currently disabled. Cannot afford the extra RAM.
                  use_ldm_unet=True,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
