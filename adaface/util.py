@@ -153,7 +153,7 @@ def pad_image_obj_to_square(image_obj, new_size=-1):
 
 class UNetEnsemble(nn.Module):
     # The first unet is the unet already loaded in a pipeline.
-    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights=None, device='cuda', torch_dtype=torch.float16):
+    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights_in_ensemble=None, device='cuda', torch_dtype=torch.float16):
         super().__init__()
 
         self.unets = nn.ModuleList()
@@ -176,18 +176,18 @@ class UNetEnsemble(nn.Module):
                 unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
                 self.unets.append(unet.to(device=device))
 
-        if unet_weights is None:
-            unet_weights = [1.] * len(self.unets)
-        elif len(self.unets) < len(unet_weights):
-            unet_weights = unet_weights[:len(self.unets)]
-        elif len(self.unets) > len(unet_weights):
+        if unet_weights_in_ensemble is None:
+            unet_weights_in_ensemble = [1.] * len(self.unets)
+        elif len(self.unets) < len(unet_weights_in_ensemble):
+            unet_weights_in_ensemble = unet_weights_in_ensemble[:len(self.unets)]
+        elif len(self.unets) > len(unet_weights_in_ensemble):
             breakpoint()
             
-        unet_weights = torch.tensor(unet_weights, dtype=torch_dtype)
-        unet_weights = unet_weights / unet_weights.sum()
-        self.unet_weights = nn.Parameter(unet_weights, requires_grad=False)
+        unet_weights_in_ensemble = torch.tensor(unet_weights_in_ensemble, dtype=torch_dtype)
+        unet_weights_in_ensemble = unet_weights_in_ensemble / unet_weights_in_ensemble.sum()
+        self.unet_weights_in_ensemble = nn.Parameter(unet_weights_in_ensemble, requires_grad=False)
 
-        print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights.data.cpu().numpy()}")
+        print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights_in_ensemble.data.cpu().numpy()}")
         # Set these fields to be compatible with diffusers.
         self.dtype  = self.unets[0].dtype
         self.device = self.unets[0].device
@@ -215,8 +215,8 @@ class UNetEnsemble(nn.Module):
             samples.append(sample)
 
         samples = torch.stack(samples, dim=0)
-        unet_weights = self.unet_weights.reshape(-1, *([1] * (samples.ndim - 1)))
-        sample = (samples * unet_weights).sum(dim=0)
+        unet_weights_in_ensemble = self.unet_weights_in_ensemble.reshape(-1, *([1] * (samples.ndim - 1)))
+        sample = (samples * unet_weights_in_ensemble).sum(dim=0)
 
         if not return_dict:
             return (sample,)

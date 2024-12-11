@@ -60,7 +60,7 @@ def parse_args():
     parser.add_argument("--extra_unet_dirpaths", type=str, nargs="*", 
                         default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
+    parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")    
     parser.add_argument("--subject", type=str)
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
@@ -95,7 +95,7 @@ if __name__ == "__main__":
 
     if args.pipeline not in ["text2img", "img2img"]:
         args.extra_unet_dirpaths = None
-        args.unet_weights = None
+        args.unet_weights_in_ensemble = None
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
                              args.adaface_encoder_types, args.adaface_ckpt_paths, 
@@ -105,7 +105,7 @@ if __name__ == "__main__":
                              unet_types=None,
                              main_unet_filepath=args.main_unet_filepath,
                              extra_unet_dirpaths=args.extra_unet_dirpaths,
-                             unet_weights=args.unet_weights, device=args.device)
+                             unet_weights_in_ensemble=args.unet_weights_in_ensemble, device=args.device)
 
     if not args.randface:
         image_folder = args.subject

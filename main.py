@@ -218,11 +218,11 @@ def get_parser(**parser_kwargs):
                         help="Range of the scale of the classifier-free guidance")
     parser.add_argument("--num_static_img_suffix_embs", type=int, default=4,
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
-    # --extra_unet_dirpaths and --unet_weights are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
+    # --extra_unet_dirpaths and --unet_weights_in_ensemble are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
     parser.add_argument("--extra_unet_dirpaths", type=str, nargs="*", 
                         default=argparse.SUPPRESS, 
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=argparse.SUPPRESS,
+    parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
     parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use the LDM UNet implementation as the base UNet")
@@ -695,9 +695,9 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'extra_unet_dirpaths'):
             config.model.params.extra_unet_dirpaths             = opt.extra_unet_dirpaths
-        if hasattr(opt, 'unet_weights'):
-            # unet_weights: not the model weights, but the scalar weights for the teacher UNet models.
-            config.model.params.unet_weights                 = opt.unet_weights
+        if hasattr(opt, 'unet_weights_in_ensemble'):
+            # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
+            config.model.params.unet_weights_in_ensemble                 = opt.unet_weights_in_ensemble
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

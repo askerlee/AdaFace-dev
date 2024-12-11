@@ -25,11 +25,11 @@ model:
     use_fp_trick:                     True
     comp_distill_iter_gap:            3
     unet_teacher_types:               ['unet_ensemble']
-    # extra_unet_dirpaths and unet_weights may be overriden in main.py.
+    # extra_unet_dirpaths and unet_weights_in_ensemble may be overriden in main.py.
     extra_unet_dirpaths:                 ['models/ensemble/sd15-unet', 
                                           'models/ensemble/rv4-unet', 
                                           'models/ensemble/ar18-unet']
-    unet_weights:                     [4.0, 2.0, 1.0]
+    unet_weights_in_ensemble:                     [4.0, 2.0, 1.0]
     # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
     # unet_distill_iter_gap = 1 means at 100% of the non-compositional iters, 
     # we use the unet teacher's output as the target (do_unet_distill).

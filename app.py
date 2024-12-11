@@ -36,7 +36,7 @@ parser.add_argument('--model_style_type', type=str, default='realistic',
                     choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
 parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=[], 
                     help="Extra paths to the checkpoints of the UNet models")
-parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
+parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=[1], 
                     help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=6.0,
                     help="The guidance scale for the diffusion model. Default: 6.0")
@@ -66,7 +66,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
                          enabled_encoders=args.enabled_encoders,
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
-                         unet_weights=args.unet_weights, 
+                         unet_weights_in_ensemble=args.unet_weights_in_ensemble, 
                          unet_uses_attn_lora=args.unet_uses_attn_lora,
                          device='cpu')
 

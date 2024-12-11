@@ -89,14 +89,13 @@ class DDPM(pl.LightningModule):
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0.1,
                  extra_unet_dirpaths=None,
-                 unet_weights=None,
+                 unet_weights_in_ensemble=None,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
-                 extend_prompt2token_proj_attention_multiplier=1,
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
                  clip_align_loss_weight=0,  # Currently disabled. Cannot afford the extra RAM.
@@ -156,7 +155,7 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = 0
             
         self.extra_unet_dirpaths                    = extra_unet_dirpaths
-        self.unet_weights                           = unet_weights
+        self.unet_weights_in_ensemble               = unet_weights_in_ensemble
         
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
@@ -165,7 +164,6 @@ class DDPM(pl.LightningModule):
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
 
-        self.extend_prompt2token_proj_attention_multiplier = extend_prompt2token_proj_attention_multiplier
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
         self.normal_recon_iters_count                = 0
@@ -455,13 +453,13 @@ class LatentDiffusion(DDPM):
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
             # When unet_teacher_types == 'unet_ensemble' or unet_teacher_types contains multiple values,
-            # device, unets, extra_unet_dirpaths and unet_weights are needed. 
+            # device, unets, extra_unet_dirpaths and unet_weights_in_ensemble are needed. 
             # Otherwise, they are not needed.
             self.unet_teacher = create_unet_teacher(self.unet_teacher_types, 
                                                     device='cpu',
                                                     unets=None,
                                                     extra_unet_dirpaths=self.extra_unet_dirpaths,
-                                                    unet_weights=self.unet_weights,
+                                                    unet_weights_in_ensemble=self.unet_weights_in_ensemble,
                                                     p_uses_cfg=self.p_unet_teacher_uses_cfg,
                                                     cfg_scale_range=self.unet_teacher_cfg_scale_range)
         else:
@@ -481,11 +479,11 @@ class LatentDiffusion(DDPM):
                                     unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
-                                    # unet_weights: [0.4, 0.6]. The "first unet" uses subject embeddings, 
+                                    # unet_weights_in_ensemble: [0.4, 0.6]. The "first unet" uses subject embeddings, 
                                     # the second uses class embeddings. This means that,
                                     # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
-                                    unet_weights = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
+                                    unet_weights_in_ensemble = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
                                     p_uses_cfg=1, # Always uses CFG for priming denoising.
                                     cfg_scale_range=[2, 4],
                                     torch_dtype=torch.float16)

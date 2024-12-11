@@ -14,7 +14,7 @@ def create_unet_teacher(teacher_type, device='cpu', **kwargs):
     if teacher_type == "arc2face":
         teacher = Arc2FaceTeacher(**kwargs)
     elif teacher_type == "unet_ensemble":
-        # unet, extra_unet_dirpaths and unet_weights are passed in kwargs.
+        # unet, extra_unet_dirpaths and unet_weights_in_ensemble are passed in kwargs.
         # Even if we distill from unet_ensemble, we still need to load arc2face for generating 
         # arc2face embeddings.
         # The first (optional) ctor param of UNetEnsembleTeacher is an instantiated unet, 
@@ -224,11 +224,11 @@ class Arc2FaceTeacher(UNetTeacher):
         self.cfg_scale_range = [1, 1]
 
 class UNetEnsembleTeacher(UNetTeacher):
-    # unet_weights are not model weights, but scalar weights for individual unets.
-    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights=None, device='cuda', **kwargs):
+    # unet_weights_in_ensemble are not model weights, but scalar weights for individual unets.
+    def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights_in_ensemble=None, device='cuda', **kwargs):
         super().__init__(**kwargs)
         self.name = "unet_ensemble"
-        self.unet = UNetEnsemble(unets, unet_types, extra_unet_dirpaths, unet_weights, device)
+        self.unet = UNetEnsemble(unets, unet_types, extra_unet_dirpaths, unet_weights_in_ensemble, device)
 
 class ConsistentIDTeacher(UNetTeacher):
     def __init__(self, base_model_path="models/sd15-dste8-vae.safetensors", **kwargs):

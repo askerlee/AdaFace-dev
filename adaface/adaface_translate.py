@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", 
                         default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
+    parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")    
     parser.add_argument("--in_folder",  type=str, required=True, help="Path to the folder containing input images")
     # If True, the input folder contains images of mixed subjects.
@@ -99,7 +99,7 @@ if __name__ == "__main__":
                              subject_string=args.subject_string, 
                              unet_types=None,
                              extra_unet_dirpaths=args.extra_unet_dirpaths, 
-                             unet_weights=args.unet_weights, 
+                             unet_weights_in_ensemble=args.unet_weights_in_ensemble, 
                              device=args.device)
 
     in_folder = args.in_folder

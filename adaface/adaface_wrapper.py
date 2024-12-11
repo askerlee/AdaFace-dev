@@ -28,7 +28,7 @@ class AdaFaceWrapper(nn.Module):
                  enabled_encoders=None, use_lcm=False, default_scheduler_name='ddim',
                  num_inference_steps=50, subject_string='z', negative_prompt=None,
                  use_840k_vae=False, use_ds_text_encoder=False, 
-                 main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights=None,
+                 main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None,
                  enable_static_img_suffix_embs=None, unet_uses_attn_lora=False,
                  device='cuda', is_training=False):
         '''
@@ -56,7 +56,7 @@ class AdaFaceWrapper(nn.Module):
         self.main_unet_filepath = main_unet_filepath
         self.unet_types = unet_types
         self.extra_unet_dirpaths = extra_unet_dirpaths
-        self.unet_weights = unet_weights
+        self.unet_weights_in_ensemble = unet_weights_in_ensemble
         self.device = device
         self.is_training = is_training
 
@@ -174,7 +174,7 @@ class AdaFaceWrapper(nn.Module):
 
         if (self.unet_types is not None and len(self.unet_types) > 0) \
           or (self.extra_unet_dirpaths is not None and len(self.extra_unet_dirpaths) > 0):
-            unet_ensemble = UNetEnsemble([pipeline.unet], self.unet_types, self.extra_unet_dirpaths, self.unet_weights,
+            unet_ensemble = UNetEnsemble([pipeline.unet], self.unet_types, self.extra_unet_dirpaths, self.unet_weights_in_ensemble,
                                          device=self.device, torch_dtype=torch.float16)
             pipeline.unet = unet_ensemble
 

@@ -227,7 +227,7 @@ def parse_args():
     parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", 
                         default=[], 
                         help="Extra paths to the checkpoints of the UNet models")
-    parser.add_argument('--unet_weights', type=float, nargs="+", default=[1], 
+    parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")
     parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
                         choices=["prepend", "append"],
@@ -405,7 +405,7 @@ def main(opt):
                                       negative_prompt=opt.neg_prompt,
                                       unet_types=None,
                                       main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
-                                      unet_weights=opt.unet_weights, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
+                                      unet_weights_in_ensemble=opt.unet_weights_in_ensemble, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
                                       unet_uses_attn_lora=opt.unet_uses_attn_lora,
                                       device=device)
             # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
