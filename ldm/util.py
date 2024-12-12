@@ -2520,15 +2520,21 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     sc_to_ss_score_q = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
     # sc_to_ss_prob_q:   [1, 961, 961], (batch, sc, ss).
     # Pairwise matching probs (961 subj comp image tokens) -> (961 subj single image tokens).
-    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized among the (single, comp) pairwise tokens dims 
+    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized along the (single, comp) pairwise tokens dims 
     # instead of the *single tokens* or the *comp tokens* dim.
-    # This can address scale changes (e.g. the subject is large in single tokens,
-    # but becomes smaller in comp tokens). If they are normalized among the single tokens dim,
-    # then each comp image token has a fixed total contribution to the reconstruction
-    # of the single tokens, which can hardly handle scale changes.
-    # Now they are normalized among the comp tokens dim, so that all comp tokens have a
-    # total contribution of 1 to the reconstruction of each single token.
-    #sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
+    # This takes into account two factors:
+    # 1) If we only normalize among the comp tokens dim, then some comp tokens have higer overall attentions
+    # to the single instance (sum of attention across all single tokens) than others. This is reasonable.
+    # However, at the same time, some comp tokens, esp. high attention comp tokens have 
+    # quite uniform attention across single tokens, which is not desirable, 
+    # as we want to make the facial comp tokens pay special attention to 
+    # the corresponding facial areas, instead of attending evenly across the single image.
+    # (in that case, the features are evened out, and the high-freq facial features may be averaged out).
+    # 2) If sc_to_ss_prob_q is only normalized among the single tokens dim,
+    # then each comp image token has a total contribution of 1 to all single tokens.
+    # But some comp tokens are backgrounds which don't appear in the single instance, 
+    # therefore this constraint is not reasonable.
+    # sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
     sc_to_ss_score_q2 = sc_to_ss_score_q.reshape(sc_to_ss_score_q.shape[0], -1)
     sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q2, dim=1).reshape(sc_to_ss_score_q.shape)
 
