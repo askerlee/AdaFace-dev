@@ -2520,16 +2520,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     sc_to_ss_score_q = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
     # sc_to_ss_prob_q:   [1, 961, 961], (batch, sc, ss).
     # Pairwise matching probs (961 subj comp image tokens) -> (961 subj single image tokens).
-    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized along the (single, comp) pairwise tokens dims 
-    # instead of the *single tokens* or the *comp tokens* dim.
-    # This takes into account two factors:
+    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized along the joint (single, comp) 
+    # tokens dims instead of the *single tokens* or the *comp tokens* dim.
+    # This is considering two factors:
     # 1) If we only normalize among the comp tokens dim, then some comp tokens have higer overall attentions
     # to the single instance (sum of attention across all single tokens) than others. This is reasonable.
-    # However, at the same time, some comp tokens, esp. high attention comp tokens have 
-    # quite uniform attention across single tokens, which is not desirable, 
-    # as we want to make the facial comp tokens pay special attention to 
-    # the corresponding facial areas, instead of attending evenly across the single image.
-    # (in that case, the features are evened out, and the high-freq facial features may be averaged out).
+    # However, some comp tokens, esp. high attention comp tokens, have 
+    # almost uniform attention across single tokens, i.e., they are equally similar to all single tokens.
+    # Such comp tokens may capture some common, low-freq features across single tokens, 
+    # Eventually, a small fraction of the comp token is used to reconstruct all single tokens.
+    # but such features are not interesting for facial reconstruction, 
+    # as we want to make the facial comp tokens pay more attention to high-freq facial features.
     # 2) If sc_to_ss_prob_q is only normalized among the single tokens dim,
     # then each comp image token has a total contribution of 1 to all single tokens.
     # But some comp tokens are backgrounds which don't appear in the single instance, 
@@ -2568,6 +2569,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # Since we normalize sc_to_ss_prob_q/mc_to_ms_prob_q along the comp tokens dim,
     # their fg probs may not sum to ss_fg_mask_3d.sum(), the fg area. Therefore, 
     # we need to scale them to make them sum to the fg area.
+    # After scaling, sc_to_ss_fg_prob_q.mean() == ss_fg_mask_3d.mean(), 
+    #                mc_to_ms_fg_prob_q.mean() == ss_fg_mask_3d.mean().
     sc_to_ss_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
                         / (sc_to_ss_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
     sc_to_ss_prob_q = sc_to_ss_prob_q * sc_to_ss_prob_scale
@@ -2580,10 +2583,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
     # If sc_to_ss_prob_q is uniform, then each token in the subj comp instance has a prob of ss_fg_mask_3d.mean().
     # Therefore it's used as a cutoff prob to determine whether a token is fg or bg.
-    # * 0.97 to make the threshold slightly more strict (adding a small margin). 
-    # The smaller the cutoff prob, the smaller (the stricter on deciding) the bg area. 
-    # It's OK to discard some bg tokens, but we should try to avoid any fg tokens being considered as bg.
-    fg_bg_cutoff_prob = ss_fg_mask_3d.mean() * 0.97
+    # The bigger the cutoff prob, the larger (the looser on deciding) the bg area. 
+    # We use max(median(), mean()) instead mean(). mean() causes around 2/3 of the tokens to be fg tokens, 
+    # and only 1/3 bg tokens. max(median(), mean()) forces at least 1/2 of the tokens to be bg tokens, 
+    # and at most 1/2 fg tokens.
+    fg_bg_cutoff_prob = max(ss_fg_mask_3d.median(), ss_fg_mask_3d.mean())
     # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
