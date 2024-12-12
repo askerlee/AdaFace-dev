@@ -100,7 +100,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=True,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
-                 unet_lora_scale_down=8,
+                 unet_lora_scale_down=16,
                  ):
         
         super().__init__()
@@ -189,8 +189,8 @@ class DDPM(pl.LightningModule):
                                               attn_lora_layer_names=['q'],
                                               use_ffn_lora=self.unet_uses_ffn_lora,
                                               lora_rank=128, 
-                                              attn_lora_scale_down=self.unet_lora_scale_down,   # 8
-                                              ffn_lora_scale_down=self.unet_lora_scale_down     # 8
+                                              attn_lora_scale_down=self.unet_lora_scale_down,   # 16
+                                              ffn_lora_scale_down=self.unet_lora_scale_down     # 16
                                               )
             self.vae = self.model.pipeline.vae
 

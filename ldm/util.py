@@ -2296,6 +2296,7 @@ def backward_warp_by_flow(image2, flow1to2):
 
     return image1_recovered
 
+#@torch.compiler.disable
 @torch.compile
 def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_prob_q, ss_fg_mask):
     # recon_sc_feat: [1, 1280, 961] * [1, 961, 961] => [1, 1280, 961]
@@ -2475,6 +2476,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
 # bg_align_loss_scheme: 'cosine' or 'L2'.
+#@torch.compiler.disable
 @torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                recon_feat_objectives={ 'attn_out': 'L2', 'outfeat': 'L2' }, 
@@ -2518,21 +2520,25 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     sc_to_ss_score_q = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
     # sc_to_ss_prob_q:   [1, 961, 961], (batch, sc, ss).
     # Pairwise matching probs (961 subj comp image tokens) -> (961 subj single image tokens).
-    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized among the *comp tokens* dim 
-    # instead of the *single tokens* dim.
+    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized among the (single, comp) pairwise tokens dims 
+    # instead of the *single tokens* or the *comp tokens* dim.
     # This can address scale changes (e.g. the subject is large in single tokens,
     # but becomes smaller in comp tokens). If they are normalized among the single tokens dim,
     # then each comp image token has a fixed total contribution to the reconstruction
     # of the single tokens, which can hardly handle scale changes.
     # Now they are normalized among the comp tokens dim, so that all comp tokens have a
     # total contribution of 1 to the reconstruction of each single token.
-    sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
+    #sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
+    sc_to_ss_score_q2 = sc_to_ss_score_q.reshape(sc_to_ss_score_q.shape[0], -1)
+    sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q2, dim=1).reshape(sc_to_ss_score_q.shape)
 
     # matmul() does multiplication on the last two dims.
     mc_to_ms_score_q = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
     # Dims 0, 1, 2: (batch, mc, ms).
     # Normalize among class comp tokens (mc dim).
-    mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q, dim=1)
+    # mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q, dim=1)
+    mc_to_ms_score_q2 = mc_to_ms_score_q.reshape(mc_to_ms_score_q.shape[0], -1)
+    mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q2, dim=1).reshape(mc_to_ms_score_q.shape)
 
     # Span ss_fg_mask_2d to become a mask for the (fg, fg) pairwise matching scores,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
@@ -2553,6 +2559,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # in the subj single instance, which could be >> 1.
     sc_to_ss_fg_prob_q = torch.matmul(sc_to_ss_prob_q, ss_fg_mask_3d).permute(0, 2, 1)
     mc_to_ms_fg_prob_q = torch.matmul(mc_to_ms_prob_q, ss_fg_mask_3d).permute(0, 2, 1)
+    # Since we normalize sc_to_ss_prob_q/mc_to_ms_prob_q along the comp tokens dim,
+    # their fg probs may not sum to ss_fg_mask_3d.sum(), the fg area. Therefore, 
+    # we need to scale them to make them sum to the fg area.
+    sc_to_ss_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
+                        / (sc_to_ss_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
+    sc_to_ss_prob_q = sc_to_ss_prob_q * sc_to_ss_prob_scale
+    sc_to_ss_fg_prob_q = sc_to_ss_fg_prob_q * sc_to_ss_prob_scale
+    mc_to_ms_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
+                        / (mc_to_ms_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
+    mc_to_ms_prob_q = mc_to_ms_prob_q * mc_to_ms_prob_scale
+    mc_to_ms_fg_prob_q = mc_to_ms_fg_prob_q * mc_to_ms_prob_scale
 
     # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
     # If sc_to_ss_prob_q is uniform, then each token in the subj comp instance has a prob of ss_fg_mask_3d.mean().
