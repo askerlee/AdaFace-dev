@@ -2594,7 +2594,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # We use max(median(), mean()) instead mean(). mean() causes around 2/3 of the tokens to be fg tokens, 
     # and only 1/3 bg tokens. max(median(), mean()) forces at least 1/2 of the tokens to be bg tokens, 
     # and at most 1/2 fg tokens.
-    fg_bg_cutoff_prob = max(ss_fg_mask_3d.median(), ss_fg_mask_3d.mean()).detach()
+    sc_fg_bg_cutoff_prob = sc_to_ss_fg_prob_q.median().detach() 
+    mc_fg_bg_cutoff_prob = mc_to_ms_fg_prob_q.median().detach()
     # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
@@ -2602,8 +2603,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # in the subj single instance, then this token is probably background.
     # When sc_to_ss_fg_prob_q/mc_to_ms_fg_prob_q < fg_bg_cutoff_prob (dynamic, around 0.3), this token is likely to be bg.
     # The smaller sc_to_ss_fg_prob_q/mc_to_ms_fg_prob_q is, the more likely this token is bg.
-    sc_to_ss_fg_prob_below_mean = fg_bg_cutoff_prob - sc_to_ss_fg_prob_q
-    mc_to_ms_fg_prob_below_mean = fg_bg_cutoff_prob - mc_to_ms_fg_prob_q
+    sc_to_ss_fg_prob_below_mean = sc_fg_bg_cutoff_prob - sc_to_ss_fg_prob_q
+    mc_to_ms_fg_prob_below_mean = mc_fg_bg_cutoff_prob - mc_to_ms_fg_prob_q
     # Set large negative values to 0, which correspond to large positive probs in 
     # sc_to_ss_fg_prob_q/mc_to_ms_fg_prob_q at fg areas of the corresponding single instances,
     # likely being foreground areas. 
