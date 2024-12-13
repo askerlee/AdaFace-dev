@@ -1998,7 +1998,8 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         
         loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
                         'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
-                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress' ]
+                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 
+                        'sc_bg_percent', 'mc_bg_percent' ]
         
         # loss_sc_recon_ss_fg_attn_agg and loss_sc_recon_ss_fg_flow, loss_comp_cls_bg_attn_suppress 
         # are returned to be monitored, not to be optimized.
@@ -2006,7 +2007,8 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         # are optimized.
         loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
         loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, loss_sc_mc_bg_match, \
-        loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress \
+        loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress, \
+        sc_bg_percent, mc_bg_percent \
             = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
 
         for loss_name in loss_names:
@@ -2123,7 +2125,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # to suppress the activations on background areas.
         
         loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
-        loss_layer_sc_mc_bg_match, sc_to_ss_fg_prob_below_mean, mc_map_ss_fg_prob_below_mean = \
+        loss_layer_sc_mc_bg_match, sc_to_ss_fg_prob_below_mean, mc_to_ms_fg_prob_below_mean = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, 
                                        ss_fg_mask, ca_feat_h, ca_feat_w, 
@@ -2143,7 +2145,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                            'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * LAYER_W 
                          })
         
-        if sc_to_ss_fg_prob_below_mean is None or mc_map_ss_fg_prob_below_mean is None:
+        if sc_to_ss_fg_prob_below_mean is None or mc_to_ms_fg_prob_below_mean is None:
             continue
         
         ##### unet_attn fg preservation loss & bg suppression loss #####
@@ -2187,11 +2189,16 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         loss_layer_comp_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
                                                             sc_to_ss_fg_prob_below_mean)
         loss_layer_comp_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
-                                                            mc_map_ss_fg_prob_below_mean)
+                                                            mc_to_ms_fg_prob_below_mean)
+
+        sc_bg_percent = (sc_to_ss_fg_prob_below_mean > 0.01).float().mean()
+        mc_bg_percent = (mc_to_ms_fg_prob_below_mean > 0.01).float().mean()
 
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
-                              'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * LAYER_W })
+                              'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * LAYER_W,
+                              'sc_bg_percent': sc_bg_percent * LAYER_W,
+                              'mc_bg_percent': mc_bg_percent * LAYER_W })
     
     return loss_dict
 
@@ -2587,7 +2594,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # We use max(median(), mean()) instead mean(). mean() causes around 2/3 of the tokens to be fg tokens, 
     # and only 1/3 bg tokens. max(median(), mean()) forces at least 1/2 of the tokens to be bg tokens, 
     # and at most 1/2 fg tokens.
-    fg_bg_cutoff_prob = max(ss_fg_mask_3d.median(), ss_fg_mask_3d.mean())
+    fg_bg_cutoff_prob = max(ss_fg_mask_3d.median(), ss_fg_mask_3d.mean()).detach()
     # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
@@ -2607,7 +2614,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # sc_to_ss_bg_prob: [1, 1, 961]. Can be viewed as a token-wise weight, used
     # to give CA layer output features different weights at different tokens.
     # sc_to_ss_bg_prob: [1, 1, 961] => [1, 961, 1]. values: 0 ~ fg_bg_cutoff_prob (dynamic, around 0.3).
-    # NOTE: Even if a sc token maps only to bg areas, the corresponding value in 
+    # NOTE: Even if a sc token only attends to bg areas, the corresponding value in 
     # sc_to_ss_fg_prob_below_mean is only fg_bg_cutoff_prob, instead of 1.
     sc_to_ss_bg_prob = sc_to_ss_fg_prob_below_mean.permute(0, 2, 1)
 
