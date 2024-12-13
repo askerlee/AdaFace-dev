@@ -2483,8 +2483,8 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
 # bg_align_loss_scheme: 'cosine' or 'L2'.
-#@torch.compiler.disable
-@torch.compile
+@torch.compiler.disable
+#@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                recon_feat_objectives={ 'attn_out': 'L2', 'outfeat': 'L2' }, 
                                bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4, 
@@ -2594,8 +2594,14 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # We use max(median(), mean()) instead mean(). mean() causes around 2/3 of the tokens to be fg tokens, 
     # and only 1/3 bg tokens. max(median(), mean()) forces at least 1/2 of the tokens to be bg tokens, 
     # and at most 1/2 fg tokens.
+    # ss_fg_mask_3d.mean() == mc_to_ms_fg_prob_q.mean() == sc_to_ss_fg_prob_q.mean().
+    # For sc_to_ss_fg_prob_q, there are always a small number of large activations at fg areas,
+    # thus the median is usually smaller than the mean, like 0.2783 vs. 0.3496.
+    # For mc_to_ms_fg_prob_q, the activations are more uniform,
+    # thus the median is usually larger than the mean,  like 0.3506 vs. 0.3496.
     sc_fg_bg_cutoff_prob = max(sc_to_ss_fg_prob_q.median(), sc_to_ss_fg_prob_q.mean()).detach()
-    mc_fg_bg_cutoff_prob = max(mc_to_ms_fg_prob_q.median(), mc_to_ms_fg_prob_q.mean()).detach()
+    # We use the same cutoff prob for mc_to_ms_fg_prob_q.
+    mc_fg_bg_cutoff_prob = sc_fg_bg_cutoff_prob
     # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
