@@ -2486,6 +2486,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 @torch.compiler.disable
 #@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
+                               sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives={ 'attn_out': 'L2', 'outfeat': 'L2' }, 
                                bg_align_loss_scheme='L2', recon_loss_discard_thres=0.4, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True):
@@ -2512,6 +2513,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
+    sc_q_grad_scaler = gen_gradient_scaler(sc_q_grad_scale)
+    # Slowly update attn loras that influence sc_q.
+    sc_q = sc_q_grad_scaler(sc_q)
 
     # Similar to the scale of the attention scores.
     # Disable matching_score_scale, since when we were caching q, we've scaled it by 1/sqrt(sqrt(dim)).
@@ -2519,40 +2523,40 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # and disabling matching_score_scale can make sc_to_ss_prob_q more polarized.
     # num_heads = 8
     matching_score_scale = 1 #(ca_outfeat.shape[1] / num_heads) ** -0.5
-    # sc_to_ss_score_q:        [1, 961, 961]. 
     # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single image tokens).
-    # We use ca_outfeat instead of ca_q to compute the correlation scores, so we scale it.
-    # Moreover, sometimes sc_to_ss_score_q before scaling is 200~300, which is too large.
-    # [961, 1280] * [1280, 961] => [961, 961].
+    # matmul() does multiplication on the last two dims.
+    # sc_to_ss_prob_q: [1, 961, 1280] * [1, 1280, 961] => [1, 961, 961], (batch, sc, ss).
     sc_to_ss_score_q = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
-    # sc_to_ss_prob_q:   [1, 961, 961], (batch, sc, ss).
+    mc_to_ms_score_q = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
     # Pairwise matching probs (961 subj comp image tokens) -> (961 subj single image tokens).
-    # NOTE: sc_to_ss_prob_q and mc_to_ms_prob_q are normalized along the joint (single, comp) 
-    # tokens dims instead of the *single tokens* or the *comp tokens* dim.
-    # This is considering two factors:
-    # 1) If we only normalize among the comp tokens dim, then some comp tokens have higer overall attentions
-    # to the single instance (sum of attention across all single tokens) than others. This is reasonable.
-    # However, some comp tokens, esp. high attention comp tokens, have 
-    # almost uniform attention across single tokens, i.e., they are equally similar to all single tokens.
-    # Such comp tokens may capture some common, low-freq features across single tokens, 
-    # Eventually, a small fraction of the comp token is used to reconstruct all single tokens.
-    # but such features are not interesting for facial reconstruction, 
-    # as we want to make the facial comp tokens pay more attention to high-freq facial features.
-    # 2) If sc_to_ss_prob_q is only normalized among the single tokens dim,
+    # NOTE: If sc_to_ss_prob_q is only normalized among the single tokens dim,
     # then each comp image token has a total contribution of 1 to all single tokens.
     # But some comp tokens are backgrounds which don't appear in the single instance, 
     # therefore this constraint is not reasonable.
-    # sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
-    sc_to_ss_score_q2 = sc_to_ss_score_q.reshape(sc_to_ss_score_q.shape[0], -1)
-    sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q2, dim=1).reshape(sc_to_ss_score_q.shape)
-
-    # matmul() does multiplication on the last two dims.
-    mc_to_ms_score_q = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
-    # Dims 0, 1, 2: (batch, mc, ms).
-    # Normalize among class comp tokens (mc dim).
-    # mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q, dim=1)
-    mc_to_ms_score_q2 = mc_to_ms_score_q.reshape(mc_to_ms_score_q.shape[0], -1)
-    mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q2, dim=1).reshape(mc_to_ms_score_q.shape)
+    if c_to_s_attn_norm_dims == (1, 2):
+        # Dims 0, 1, 2: (batch, sc, ss) -> (batch, sc * ss)
+        # sc_to_ss_prob_q and mc_to_ms_prob_q are normalized along the joint (single, comp) 
+        # tokens dims instead of the *single tokens* or the *comp tokens* dim.
+        sc_to_ss_score_q2 = sc_to_ss_score_q.reshape(sc_to_ss_score_q.shape[0], -1)
+        mc_to_ms_score_q2 = mc_to_ms_score_q.reshape(mc_to_ms_score_q.shape[0], -1)
+        # Normalize among joint (single, comp) tokens dims.
+        sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q2, dim=1).reshape(sc_to_ss_score_q.shape)
+        mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q2, dim=1).reshape(mc_to_ms_score_q.shape)
+    elif c_to_s_attn_norm_dims == (1,):
+        # Normalize among class comp tokens (sc dim or mc dim).
+        # Major Concern:
+        # If we only normalize among the comp tokens dim, then some comp tokens have higer overall attentions
+        # to the single instance (sum of attention across all single tokens) than others. This is reasonable.
+        # However, some comp tokens, esp. high attention comp tokens, have 
+        # almost uniform attention across single tokens, i.e., they are equally similar to all single tokens.
+        # Such comp tokens may capture some common, low-freq features across single tokens, 
+        # Eventually, a small fraction of the comp token is used to reconstruct all single tokens.
+        # but such features are not interesting for facial reconstruction, 
+        # as we want to make the facial comp tokens pay more attention to high-freq facial features.
+        sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
+        mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q, dim=1)
+    else:
+        breakpoint()
 
     # Span ss_fg_mask_2d to become a mask for the (fg, fg) pairwise matching scores,
     # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
@@ -2579,13 +2583,14 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # After scaling, sc_to_ss_fg_prob_q.mean() == ss_fg_mask_3d.mean(), 
     #                mc_to_ms_fg_prob_q.mean() == ss_fg_mask_3d.mean().
     sc_to_ss_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
-                        / (sc_to_ss_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
-    sc_to_ss_prob_q = sc_to_ss_prob_q * sc_to_ss_prob_scale
-    sc_to_ss_fg_prob_q = sc_to_ss_fg_prob_q * sc_to_ss_prob_scale
+                          / (sc_to_ss_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
     mc_to_ms_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
-                        / (mc_to_ms_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
-    mc_to_ms_prob_q = mc_to_ms_prob_q * mc_to_ms_prob_scale
-    mc_to_ms_fg_prob_q = mc_to_ms_fg_prob_q * mc_to_ms_prob_scale
+                          / (mc_to_ms_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
+    
+    sc_to_ss_prob_q     = sc_to_ss_prob_q * sc_to_ss_prob_scale
+    sc_to_ss_fg_prob_q  = sc_to_ss_fg_prob_q * sc_to_ss_prob_scale
+    mc_to_ms_prob_q     = mc_to_ms_prob_q * mc_to_ms_prob_scale
+    mc_to_ms_fg_prob_q  = mc_to_ms_fg_prob_q * mc_to_ms_prob_scale
 
     # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
     # If sc_to_ss_prob_q is uniform, then each token in the subj comp instance has a prob of ss_fg_mask_3d.mean().

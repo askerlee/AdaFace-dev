@@ -32,7 +32,7 @@ from adaface.unet_teachers import create_unet_teacher
 from gma.network import GMA
 from gma.utils.utils import load_checkpoint as gma_load_checkpoint
 
-import copy
+import copy, math
 from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
@@ -2127,18 +2127,14 @@ class LatentDiffusion(DDPM):
         # num_primed_denoising_steps iterates from 1 to 4, with equal probs.
         num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 1
 
-        # We hard-coded MAX_N_SHARED = 1, and num_shared_denoising_steps >= 1. So taking
-        # num_shared_denoising_steps = max(num_primed_denoising_steps - MIN_N_SEP, MAX_N_SHARED) is always valid.
-        MAX_N_SHARED = 2
-        MAX_N_SHARED = min(num_primed_denoising_steps, MAX_N_SHARED)
-        # the separate denoising steps are at least num_primed_denoising_steps // 2,
-        # and at most num_primed_denoising_steps - 2.
-        MIN_N_SEP    = max(1, num_primed_denoising_steps // 2)
-        
-        # If num_primed_denoising_steps > MIN_N_SEP, then we split the denoising steps into
+        # If num_primed_denoising_steps > 1, then we split the denoising steps into
         # shared denoising steps and separate denoising steps.
         # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
-        num_sep_denoising_steps    = max(num_primed_denoising_steps - MAX_N_SHARED, MIN_N_SEP)
+        # num_primed_denoising_steps: 1 -> (0, 1). 2 -> (1, 1). 3 -> (1, 2). 4 -> (2, 2).
+        # MAX_N_SHARED is at most num_primed_denoising_steps / 3 + 1.
+        MAX_N_SHARED = math.ceil(num_primed_denoising_steps // 3)
+        # The number of separate denoising steps is around 2/3 of num_primed_denoising_steps, and at least 1.
+        num_sep_denoising_steps = max(num_primed_denoising_steps - MAX_N_SHARED, 1)
         num_shared_denoising_steps = num_primed_denoising_steps - num_sep_denoising_steps
         all_t_list = []
 
