@@ -2599,9 +2599,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # thus the median is usually smaller than the mean, like 0.2783 vs. 0.3496.
     # For mc_to_ms_fg_prob_q, the activations are more uniform,
     # thus the median is usually larger than the mean,  like 0.3506 vs. 0.3496.
-    sc_fg_bg_cutoff_prob = max(sc_to_ss_fg_prob_q.median(), sc_to_ss_fg_prob_q.mean()).detach()
-    # We use the same cutoff prob for mc_to_ms_fg_prob_q.
-    mc_fg_bg_cutoff_prob = sc_fg_bg_cutoff_prob
+    sc_fg_bg_cutoff_prob = sc_to_ss_fg_prob_q.median().detach()
+    mc_fg_bg_cutoff_prob = mc_to_ms_fg_prob_q.median().detach()
     # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 961].
     # The total prob of each image token in the subj comp instance maps to fg areas 
     # in the subj single instance. 
