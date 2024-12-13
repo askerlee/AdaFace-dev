@@ -2124,21 +2124,22 @@ class LatentDiffusion(DDPM):
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
 
-        # num_primed_denoising_steps iterates from 2 to 5.
-        # num_primed_denoising_steps will always follow a uniform distribution of [1, 2, 3, 4].
+        # num_primed_denoising_steps iterates from 1 to 4, with equal probs.
         num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 1
 
-        # We hard-coded MIN_N_SHARED = 1, and num_shared_denoising_steps >= 1. So taking
-        # num_shared_denoising_steps = max(num_primed_denoising_steps - MAX_N_SEP, MIN_N_SHARED) is always valid.
-        MIN_N_SHARED = 1
-        MAX_N_SEP = 2
+        # We hard-coded MAX_N_SHARED = 1, and num_shared_denoising_steps >= 1. So taking
+        # num_shared_denoising_steps = max(num_primed_denoising_steps - MIN_N_SEP, MAX_N_SHARED) is always valid.
+        MAX_N_SHARED = 2
+        MAX_N_SHARED = min(num_primed_denoising_steps, MAX_N_SHARED)
+        # the separate denoising steps are at least num_primed_denoising_steps // 2,
+        # and at most num_primed_denoising_steps - 2.
+        MIN_N_SEP    = max(1, num_primed_denoising_steps // 2)
         
-        # If num_primed_denoising_steps > MAX_N_SEP, then we split the denoising steps into
+        # If num_primed_denoising_steps > MIN_N_SEP, then we split the denoising steps into
         # shared denoising steps and separate denoising steps.
         # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
-        MIN_N_SHARED               = min(num_primed_denoising_steps, MIN_N_SHARED)
-        num_shared_denoising_steps = max(num_primed_denoising_steps - MAX_N_SEP, MIN_N_SHARED)
-        num_sep_denoising_steps    = num_primed_denoising_steps - num_shared_denoising_steps
+        num_sep_denoising_steps    = max(num_primed_denoising_steps - MAX_N_SHARED, MIN_N_SEP)
+        num_shared_denoising_steps = num_primed_denoising_steps - num_sep_denoising_steps
         all_t_list = []
 
         # In priming denoising steps, t is randomly drawn from the terminal 25% segment of the timesteps (very noisy).
