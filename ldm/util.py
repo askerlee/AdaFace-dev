@@ -2191,6 +2191,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         loss_layer_comp_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
                                                             mc_to_ms_fg_prob_below_mean)
 
+        # ANCHOR[id=sc_bg_percent]
         sc_bg_percent = (sc_to_ss_fg_prob_below_mean > 0.01).float().mean()
         mc_bg_percent = (mc_to_ms_fg_prob_below_mean > 0.01).float().mean()
 
@@ -2597,17 +2598,21 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     mc_to_ms_prob_q     = mc_to_ms_prob_q * mc_to_ms_prob_scale
     mc_to_ms_fg_prob_q  = mc_to_ms_fg_prob_q * mc_to_ms_prob_scale
 
+    # Use the contrast between fg and bg probs to determine the fg/bg areas.
+    # If we only use sc_to_ss_fg_prob_q, then sometimes the probs (1/3 of the time) are too uniform,
+    # and although 50% tokens are regarded as bg tokens, the sc_to_ss_fg_prob_below_mean scores are too small
+    # (0.001-0.003) to be regularizing. 
+    # Contrasting with bg probs will make the probs (weights for loss_sc_mc_bg_match) more polarized, 
+    # and the 50% bg tokens will almost always have weights > 0.01 (sc_bg_percent is around 0.46).
+    #LINK #sc_bg_percent
     sc_to_ss_fb_contrast_prob = sc_to_ss_fg_prob_q - sc_to_ss_bg_prob_q
     mc_to_ms_fb_contrast_prob = mc_to_ms_fg_prob_q - mc_to_ms_bg_prob_q
 
-    # fg_bg_cutoff_prob: the percentage of the fg area in the subj single instance.
-    # If sc_to_ss_prob_q is uniform, then each token in the subj comp instance has a prob of ss_fg_mask_3d.mean().
-    # Therefore it's used as a cutoff prob to determine whether a token is fg or bg.
-    # The bigger the cutoff prob, the larger (the looser on deciding) the bg area. 
-    # We use max(median(), mean()) instead mean(). mean() causes around 2/3 of the tokens to be fg tokens, 
-    # and only 1/3 bg tokens. max(median(), mean()) forces at least 1/2 of the tokens to be bg tokens, 
-    # and at most 1/2 fg tokens.
-    # ss_fg_mask_3d.mean() == mc_to_ms_fg_prob_q.mean() == sc_to_ss_fg_prob_q.mean().
+    # fg_bg_cutoff_prob: the threshold of probs of a comp token mapping to the fg/bg areas.
+    # The bigger the fg_bg_cutoff_prob, the larger (the looser on deciding) the bg area. 
+    # We use median instead mean(). Since sc_to_ss_fb_contrast_prob is not uniform, 
+    # mean() as cutoff prob will put around 2/3 of the tokens to be fg tokens, 
+    # and only 1/3 bg tokens. median() guarantees 1/2 of the tokens to be bg tokens.
     # For sc_to_ss_fg_prob_q, there are always a small number of large activations at fg areas,
     # thus the median is usually smaller than the mean, like 0.2783 vs. 0.3496.
     # For mc_to_ms_fg_prob_q, the activations are more uniform,
