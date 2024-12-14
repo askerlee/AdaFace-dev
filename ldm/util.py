@@ -2598,15 +2598,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     mc_to_ms_prob_q     = mc_to_ms_prob_q * mc_to_ms_prob_scale
     mc_to_ms_fg_prob_q  = mc_to_ms_fg_prob_q * mc_to_ms_prob_scale
 
-    # Use the contrast between fg and bg probs to determine the fg/bg areas.
+    # Use the contrast between fg and bg probs to determine the fg/bg areas. 
+    # We downweight the bg probs to more rely on the contribution of fg probs.
     # If we only use sc_to_ss_fg_prob_q, then sometimes the probs (1/3 of the time) are too uniform,
     # and although 50% tokens are regarded as bg tokens, the sc_to_ss_fg_prob_below_mean scores are too small
     # (0.001-0.003) to be regularizing. 
     # Contrasting with bg probs will make the probs (weights for loss_sc_mc_bg_match) more polarized, 
     # and the 50% bg tokens will almost always have weights > 0.01 (sc_bg_percent is around 0.46).
     #LINK #sc_bg_percent
-    sc_to_ss_fb_contrast_prob = sc_to_ss_fg_prob_q - sc_to_ss_bg_prob_q
-    mc_to_ms_fb_contrast_prob = mc_to_ms_fg_prob_q - mc_to_ms_bg_prob_q
+    sc_to_ss_fb_contrast_prob = sc_to_ss_fg_prob_q - sc_to_ss_bg_prob_q * 0.5
+    mc_to_ms_fb_contrast_prob = mc_to_ms_fg_prob_q - mc_to_ms_bg_prob_q * 0.5
 
     # fg_bg_cutoff_prob: the threshold of probs of a comp token mapping to the fg/bg areas.
     # The bigger the fg_bg_cutoff_prob, the larger (the looser on deciding) the bg area. 
