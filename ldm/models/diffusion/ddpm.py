@@ -851,7 +851,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # Use the fp trick 50% of the time on compositional distillation iterations.
                 # If we always enable the fp trick, the subj-comp instance may become very similar to subj-single
-                # instance, which leads to smaller loss_sc_recon_ss_fg_min. However, this implies worse composition 
+                # instance, which leads to smaller loss_sc_recon_ssfg_min. However, this implies worse composition 
                 # and is not desirable.
                 p_use_fp_trick = 0.5
             # recon_on_comp_prompt. So we add "portrait" to the prompts.
@@ -2299,7 +2299,7 @@ class LatentDiffusion(DDPM):
         
         # Otherwise, we still use the input filtered_fg_mask. 
 
-        loss_names = [ 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+        loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc', 
                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 'sc_bg_percent' ]
         
         for loss_name in loss_names:
@@ -2312,7 +2312,7 @@ class LatentDiffusion(DDPM):
             # But we use a step-dependent recon_loss_discard_thres to keep most of the losses.
             recon_loss_discard_thres = 0.2 + 0.05 * step_idx
             # Only ss_fg_mask in (resized) filtered_fg_mask is used for calc_elastic_matching_loss().
-            loss_comp_fg_bg_preserve, loss_sc_mc_bg_match = \
+            loss_comp_fg_bg_preserve, loss_sc_recon_mc = \
                 calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
                                               self.iter_flags['is_comp_init_fg_from_training_image'],
                                               self.iter_flags['fg_mask_avail_ratio'],
@@ -2327,12 +2327,12 @@ class LatentDiffusion(DDPM):
             # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
             # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
 
-            # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_mc_bg_match,
+            # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_recon_mc,
             # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
             # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
             # NOTE: loss_feat_delta_align is disabled in most cases. 
             # It doesn't have spatial correspondance when doing the feature delta calculation.
-            # But if loss_sc_mc_bg_match is too large and discarded, then we still use it.
+            # But if loss_sc_recon_mc is too large and discarded, then we still use it.
 
             # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
             # to index subj single and subj comp embeddings.
@@ -2350,7 +2350,7 @@ class LatentDiffusion(DDPM):
 
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
-            losses_sc_mc_bg_match.append(loss_sc_mc_bg_match)
+            losses_sc_mc_bg_match.append(loss_sc_recon_mc)
             losses_feat_delta_align.append(loss_feat_delta_align)
         
         for loss_name in loss_names:
@@ -2361,36 +2361,29 @@ class LatentDiffusion(DDPM):
 
         loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
         loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
-        loss_sc_mc_bg_match         = torch.stack(losses_sc_mc_bg_match).mean()
+        loss_sc_recon_mc            = torch.stack(losses_sc_mc_bg_match).mean()
         loss_feat_delta_align       = torch.stack(losses_feat_delta_align).mean()
-
-        if loss_sc_mc_bg_match > 0:
-            self.comp_iters_bg_match_loss_count += 1
-            sc_mc_bg_match_loss_frac = self.comp_iters_bg_match_loss_count / (self.comp_iters_count + 1)
-            loss_dict.update({f'{session_prefix}/sc_mc_bg_match_loss_frac': sc_mc_bg_match_loss_frac})
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
             loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
-            # Keep track of the number of iterations that use is_comp_init_fg_from_training_image.
-            self.comp_init_fg_from_training_image_count += 1
-            comp_init_fg_from_training_image_frac = self.comp_init_fg_from_training_image_count / (self.comp_iters_count + 1)
-            loss_dict.update({f'{session_prefix}/comp_init_fg_from_training_image_frac': comp_init_fg_from_training_image_frac})
         # loss_subj_attn_norm_distill: 0.08~0.12.
         if loss_subj_attn_norm_distill > 0:
-            loss_dict.update({f'{session_prefix}/subj_attn_norm_distill':  loss_subj_attn_norm_distill.mean().detach().item() })
+            loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
         
         # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
         # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
-        # loss_sc_mc_bg_match is L2 loss, which are very small. So we scale them up by 5x to 50x.
-        # loss_sc_mc_bg_match: 0.002~0.01, sc_mc_bg_match_loss_scale: 10~50 => 0.02~5.
+        # loss_sc_recon_mc is L2 loss, which is very small. So we scale it up by 5x to 50x.
+        # loss_sc_recon_mc: 0.002~0.01, sc_recon_mc_loss_scale: 10~50 => 0.02~5.
         # rel_scale_range=(0, 4): the absolute range of the scale will be 8~320.
-        sc_mc_bg_match_loss_scale = calc_dyn_loss_scale(loss_sc_mc_bg_match, (0.001, 8), (0.01, 80), 
-                                                        rel_scale_range=(0, 4))
-        # loss_sc_recon_ss_fg_min is absorbed into loss_comp_fg_bg_preserve.
-        # We didn't absorb loss_sc_mc_bg_match here into loss_comp_fg_bg_preserve, because it requires a dynamic scale.
+        sc_recon_mc_loss_scale = calc_dyn_loss_scale(loss_sc_recon_mc, (0.001, 8), (0.01, 80), 
+                                                     rel_scale_range=(0, 4))
+        loss_dict.update({f'{session_prefix}/sc_recon_mc_loss_scale': sc_recon_mc_loss_scale})
+
+        # loss_sc_recon_ssfg_min is absorbed into loss_comp_fg_bg_preserve.
+        # We didn't absorb loss_sc_recon_mc here into loss_comp_fg_bg_preserve, because it requires a dynamic scale.
         loss_comp_feat_distill_loss += \
-            (loss_comp_fg_bg_preserve + loss_sc_mc_bg_match * sc_mc_bg_match_loss_scale) \
+            (loss_comp_fg_bg_preserve + loss_sc_recon_mc * sc_recon_mc_loss_scale) \
              * self.comp_fg_bg_preserve_loss_weight
 
         arcface_loss_calc_count = 0
@@ -2423,9 +2416,9 @@ class LatentDiffusion(DDPM):
                 comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                 loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
-        if loss_sc_mc_bg_match == 0 and arcface_loss_calc_count == 0:
+        if loss_sc_recon_mc == 0 and arcface_loss_calc_count == 0:
             # loss_feat_delta_align is less accurate, so we only use it when 
-            # loss_sc_mc_bg_match is 0 (large fg matching errors) and no faces have been detected.
+            # loss_sc_recon_mc is 0 (large fg matching errors) and no faces have been detected.
             # And only use a small weight feat_delta_align_loss_weight = 1e-4.
             loss_comp_feat_distill_loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
 
