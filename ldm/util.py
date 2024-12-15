@@ -2112,13 +2112,13 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # ss_fg_mask: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
         ss_fg_mask = ss_fg_mask.reshape(*ss_fg_mask.shape[:2], -1)
 
-        # sc_to_fg_ss_prob, mc_to_ms_fg_prob: [1, 1, 64]
+        # sc_to_ss_fg_prob, mc_to_ms_fg_prob: [1, 1, 64]
         # removed loss_layer_ms_mc_fg_match to save computation.
         # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_to_ss_prob and mc_to_ms_prob.
-        # sc_to_fg_ss_prob_below_mean is used as fg/bg soft masks of comp instances
+        # sc_to_ss_fg_prob_below_mean is used as fg/bg soft masks of comp instances
         # to suppress the activations on background areas.
         
-        losses_sc_recon_ss_fg, loss_layer_sc_mc_bg_match, sc_to_fg_ss_prob, sc_to_whole_mc_prob = \
+        losses_sc_recon_ss_fg, loss_layer_sc_mc_bg_match, sc_to_ss_fg_prob, sc_to_whole_mc_prob = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, 
                                        ss_fg_mask, ca_feat_h, ca_feat_w, 
@@ -2137,7 +2137,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                            'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * LAYER_W 
                          })
         
-        if sc_to_fg_ss_prob is None:
+        if sc_to_ss_fg_prob is None:
             continue
         
         ##### unet_attn fg preservation loss & bg suppression loss #####
@@ -2179,7 +2179,9 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         loss_layer_comp_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
                                                             sc_to_whole_mc_prob.permute(0, 2, 1))
 
-        sc_bg_percent = (sc_to_whole_mc_prob > sc_to_fg_ss_prob + 0.01).float().mean()
+        # sc_to_whole_mc_prob.mean() = 1, but sc_to_ss_fg_prob.mean() = N_fg / 961 = 210 / 961 = 0.2185.
+        # So we normalize sc_to_ss_fg_prob first, before comparing it with sc_to_whole_mc_prob.
+        sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.01).float().mean()
 
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
@@ -2546,32 +2548,22 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         breakpoint()
 
     # sc_to_ss_prob, sc_to_mc_prob: [1, 961, N_fg + 961] -> [1, 961, N_fg] and [1, 961, 961].
+    # sc_to_ss_mc_prob.sum(dim=1) == [1, 1, ..., 1] (N_fg + 961 ones).
+    # So after slicing, sc_to_ss_fg_tokens_prob, sc_to_mc_prob are also normalized along the subj comp tokens dim.
     sc_to_ss_fg_tokens_prob, sc_to_mc_prob = sc_to_ss_mc_prob[:, :, :fg_ss_q.shape[2]], sc_to_ss_mc_prob[:, :, fg_ss_q.shape[2]:]
-    # ss_fg_mask_3d: [1, 961] => [1, 961, 1].
-    ss_fg_mask_3d = ss_fg_mask_2d.float().unsqueeze(2)
     # View the whole fg area in the single instance as a single token.
     # Sum up the mapping probs from comp instances to the fg area of the single instances, so that 
     # ** each entry is the total prob of each image token in the comp instance
     # ** maps to the whole fg area in the single instance.
-    # sc_to_fg_ss_prob: [1, 961, 961] * [1, 961, 1] => [1, 961, 1] => [1, 1, 961].
-    # sums up over all ss fg tokens. So each entry in sc_to_fg_ss_prob 
+    # sc_to_ss_fg_prob: [1, 961, 961] * [1, 961, 1] => [1, 961, 1] => [1, 1, 961].
+    # sums up over all ss fg tokens. So each entry in sc_to_ss_fg_prob 
     # is the total prob of each sc token maps to the whole fg area 
     # in the subj single instance, which could be >> 1.
-    sc_to_fg_ss_prob = sc_to_ss_fg_tokens_prob.sum(dim=2, keepdim=True)
-
-    # Since we normalize sc_to_ss_prob/mc_to_ms_prob along the comp tokens dim,
-    # their fg probs may not sum to ss_fg_mask_3d.sum(), the fg area. Therefore, 
-    # we need to scale them to make them sum to the fg area.
-    # After scaling, sc_to_fg_ss_prob.mean() == ss_fg_mask_3d.mean(), 
-    #                mc_to_ms_fg_prob.mean() == ss_fg_mask_3d.mean().
-    sc_to_ss_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
-                          / (sc_to_fg_ss_prob.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
-    sc_to_fg_ss_prob    = sc_to_fg_ss_prob * sc_to_ss_prob_scale
+    # sc_to_ss_fg_prob.max() == 2.3826, min() == 0.0007, sum() == 210 == N_fg.
+    sc_to_ss_fg_prob = sc_to_ss_fg_tokens_prob.sum(dim=2, keepdim=True)
     # sc_to_whole_mc_prob: [1, 961, 961] => [1, 961, 1] => [1, 1, 961].
+    # sc_to_whole_mc_prob.max() == 1.5185, min() == 0.5266, sum() == 961.
     sc_to_whole_mc_prob = sc_to_mc_prob.sum(dim=2, keepdim=True)
-    # Normalize sc_to_whole_mc_prob to sum to the whole comp area.
-    sc_to_mc_prob_scale = mc_q.shape[2] / (sc_to_whole_mc_prob.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
-    sc_to_whole_mc_prob = sc_to_whole_mc_prob * sc_to_mc_prob_scale
 
     s2c_flow = None
     losses_sc_recon_ss_fg   = []
@@ -2664,5 +2656,5 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     else:
         loss_sc_mc_bg_match = loss_sc_mc_bg_match / num_bg_matching_losses
     
-    return losses_sc_recon_ss_fg, loss_sc_mc_bg_match, sc_to_fg_ss_prob, sc_to_whole_mc_prob
+    return losses_sc_recon_ss_fg, loss_sc_mc_bg_match, sc_to_ss_fg_prob, sc_to_whole_mc_prob
 
