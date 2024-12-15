@@ -1996,19 +1996,16 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                             recon_loss_discard_thres=recon_loss_discard_thres,
                                             do_feat_attn_pooling=True)
         
-        loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
-                        'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
-                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 
-                        'sc_bg_percent', 'mc_bg_percent' ]
+        loss_names = [ 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+                       'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 
+                       'sc_bg_percent' ]
         
         # loss_sc_recon_ss_fg_attn_agg and loss_sc_recon_ss_fg_flow, loss_comp_cls_bg_attn_suppress 
         # are returned to be monitored, not to be optimized.
         # Only their counterparts -- loss_sc_recon_ss_fg_min, loss_comp_subj_bg_attn_suppress 
         # are optimized.
-        loss_subj_comp_map_single_align_with_cls, loss_sc_recon_ss_fg_attn_agg, \
-        loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, loss_sc_mc_bg_match, \
-        loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress, \
-        sc_bg_percent, mc_bg_percent \
+        loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min, loss_sc_mc_bg_match, \
+        loss_comp_subj_bg_attn_suppress, loss_comp_cls_bg_attn_suppress, sc_bg_percent \
             = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
 
         for loss_name in loss_names:
@@ -2017,8 +2014,6 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                 # Accumulate the loss values to loss_dict when there are multiple denoising steps.
                 add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
-        # loss_subj_comp_map_single_align_with_cls is L1 loss on attn maps, so it's is small: 0.5~2e-5.
-        subj_comp_map_single_align_with_cls_loss_scale = 1
         comp_subj_bg_attn_suppress_loss_scale = 0.02
         sc_recon_ss_fg_min_loss_scale = 10
 
@@ -2028,8 +2023,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         # loss_comp_subj_bg_attn_suppress: 0.1~0.2     -> 0.002~0.004.
         # loss_sc_mc_bg_match has similar effects to suppress the subject attn values in the background tokens.
         # Therefore, loss_comp_subj_bg_attn_suppress is given a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
-        loss_comp_fg_bg_preserve = loss_subj_comp_map_single_align_with_cls * subj_comp_map_single_align_with_cls_loss_scale \
-                                    + loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
+        loss_comp_fg_bg_preserve = loss_sc_ss_fg_recon + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale
     else:
         loss_comp_fg_bg_preserve = loss_sc_mc_bg_match = torch.zeros(1, device=ca_outfeats[23].device)
 
@@ -2118,14 +2112,13 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # ss_fg_mask: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
         ss_fg_mask = ss_fg_mask.reshape(*ss_fg_mask.shape[:2], -1)
 
-        # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 64]
+        # sc_to_fg_ss_prob, mc_to_ms_fg_prob: [1, 1, 64]
         # removed loss_layer_ms_mc_fg_match to save computation.
-        # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_to_ss_prob_q and mc_to_ms_prob_q.
-        # sc_to_ss_fg_prob_below_mean and mc_to_ms_fg_prob_below_mean are used as fg/bg soft masks of comp instances
+        # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_to_ss_prob and mc_to_ms_prob.
+        # sc_to_fg_ss_prob_below_mean is used as fg/bg soft masks of comp instances
         # to suppress the activations on background areas.
         
-        loss_layer_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
-        loss_layer_sc_mc_bg_match, sc_to_ss_fg_prob_below_mean, mc_to_ms_fg_prob_below_mean = \
+        losses_sc_recon_ss_fg, loss_layer_sc_mc_bg_match, sc_to_fg_ss_prob, sc_to_whole_mc_prob = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, 
                                        ss_fg_mask, ca_feat_h, ca_feat_w, 
@@ -2138,14 +2131,13 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         loss_sc_recon_ss_fg_attn_agg, loss_sc_recon_ss_fg_flow, loss_sc_recon_ss_fg_min = losses_sc_recon_ss_fg
 
         add_dict_to_dict(loss_dict, 
-                         { 'loss_subj_comp_map_single_align_with_cls': loss_layer_subj_comp_map_single_align_with_cls * LAYER_W,
-                           'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * LAYER_W,
+                         { 'loss_sc_recon_ss_fg_attn_agg':   loss_sc_recon_ss_fg_attn_agg * LAYER_W,
                            'loss_sc_recon_ss_fg_flow':       loss_sc_recon_ss_fg_flow * LAYER_W,
                            'loss_sc_recon_ss_fg_min':        loss_sc_recon_ss_fg_min * LAYER_W,
                            'loss_sc_mc_bg_match':            loss_layer_sc_mc_bg_match * LAYER_W 
                          })
         
-        if sc_to_ss_fg_prob_below_mean is None or mc_to_ms_fg_prob_below_mean is None:
+        if sc_to_fg_ss_prob is None:
             continue
         
         ##### unet_attn fg preservation loss & bg suppression loss #####
@@ -2183,23 +2175,15 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
             cls_comp_subj_attn_gs_pos = pool_feat_or_attn_mat(cls_comp_subj_attn_gs_pos, (ca_feat_h, ca_feat_w))
 
         # Suppress the subj attention probs on background areas in comp instances.
-        # subj_comp_subj_attn: [1, 8, 64]. ss_bg_mask_map_to_sc: [1, 1, 64].
-        # sc_to_ss_fg_prob_below_mean: bg token should have fg attn probs below mean. Therefore
-        # these token are regarded as bg tokens.
+        # subj_comp_subj_attn: [1, 8, 64]. sc_to_whole_mc_prob: [1, 1, 64].
         loss_layer_comp_subj_bg_attn_suppress = masked_mean(subj_comp_subj_attn_pos, 
-                                                            sc_to_ss_fg_prob_below_mean)
-        loss_layer_comp_cls_bg_attn_suppress  = masked_mean(cls_comp_subj_attn_gs_pos,  
-                                                            mc_to_ms_fg_prob_below_mean)
+                                                            sc_to_whole_mc_prob.permute(0, 2, 1))
 
-        # ANCHOR[id=sc_bg_percent]
-        sc_bg_percent = (sc_to_ss_fg_prob_below_mean > 0.01).float().mean()
-        mc_bg_percent = (mc_to_ms_fg_prob_below_mean > 0.01).float().mean()
+        sc_bg_percent = (sc_to_whole_mc_prob > sc_to_fg_ss_prob + 0.01).float().mean()
 
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
-                              'loss_comp_cls_bg_attn_suppress':  loss_layer_comp_cls_bg_attn_suppress * LAYER_W,
-                              'sc_bg_percent': sc_bg_percent * LAYER_W,
-                              'mc_bg_percent': mc_bg_percent * LAYER_W })
+                              'sc_bg_percent': sc_bg_percent * LAYER_W })
     
     return loss_dict
 
@@ -2270,6 +2254,7 @@ def resize_flow(flow, H, W):
         breakpoint()
     return flow
 
+'''
 def backward_warp_by_flow_np(image2, flow1to2):
     H, W, _ = image2.shape
     flow1to2 = flow1to2.copy()
@@ -2277,6 +2262,7 @@ def backward_warp_by_flow_np(image2, flow1to2):
     flow1to2[:, :, 1] += np.arange(H)[:, None]  # Adjust y-coordinates
     image1_recovered = cv2.remap(image2, flow1to2, None, cv2.INTER_LINEAR)
     return image1_recovered
+'''
 
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
@@ -2306,29 +2292,20 @@ def backward_warp_by_flow(image2, flow1to2):
 
 #@torch.compiler.disable
 @torch.compile
-def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_prob_q, ss_fg_mask):
+def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_fg_tokens_prob, ss_fg_mask):
     # recon_sc_feat: [1, 1280, 961] * [1, 961, 961] => [1, 1280, 961]
     # ** We use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
     # Because we rely on ss_fg_mask to determine the fg area, which is only available for the subj single instance. 
     # Then we can compare the values of the recon'ed subj single tokens with the original values at the fg area.
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask.nonzero(as_tuple=True)
-    # sc_to_ss_fg_tokens_prob_q: [1, 961, 961] => [1, 961, N_fg]
-    # filter with ss_fg_mask_N, so that we only care about 
-    # the recon of the fg areas of the subj single instance.
-    # NOTE: we allow BP to ca_qs, which mainly leads to update of attn loras.
-    # What's interesting is after the initial several thousand iterations,
-    # the composition becomes very bad (the face appears abruptly, incoherent with the surroundings),
-    # probably due to the update of attn loras.
-    # However, as training goes on, the composition seems to repair itself.
-    # Maybe good compositions are a stable equilibrium for model params?
-    sc_to_ss_fg_tokens_prob_q = sc_to_ss_prob_q[:, :, ss_fg_mask_N]
 
+    # sc_to_ss_fg_tokens_prob: [1, 961, N_fg].
     # Weighted sum of the comp tokens (based on their matching probs) to reconstruct the single tokens.
     # sc_recon_ss_fg_feat: [1, 1280, 961] * [1, 961, N_fg] => [1, 1280, N_fg]
-    sc_recon_ss_fg_feat = torch.matmul(sc_feat, sc_to_ss_fg_tokens_prob_q)
+    sc_recon_ss_fg_feat = torch.matmul(sc_feat, sc_to_ss_fg_tokens_prob)
     # sc_recon_ss_fg_feat: [1, 1280, N_fg] => [1, N_fg, 1280]
     sc_recon_ss_fg_feat = sc_recon_ss_fg_feat.permute(0, 2, 1)
-    # mc_recon_ms_feat = torch.matmul(mc_feat, mc_to_ms_prob_q)
+    # mc_recon_ms_feat = torch.matmul(mc_feat, mc_to_ms_prob)
 
     return sc_recon_ss_fg_feat
 
@@ -2377,10 +2354,10 @@ def reconstruct_feat_with_matching_flow(flow_model, s2c_flow, ss_q, sc_q, sc_fea
 
     return sc_recon_ss_fg_feat, s2c_flow
 
-# We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_to_ss_prob_q to ss_map_sc_prob, 
+# We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_to_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
 @torch.compile
-def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_to_ss_prob_q, 
+def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, sc_to_ss_fg_tokens_prob, 
                                ss_fg_mask, ss_q, sc_q, H, W, num_flow_est_iters, objective_name, 
                                loss_scheme='L2'):
 
@@ -2388,7 +2365,7 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 
     # sc_recon_ss_fg_feat*: [1, 1280, N_fg] => [1, N_fg, 1280]
     sc_recon_ss_fg_feat_attn_agg = \
-        reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_prob_q, ss_fg_mask)
+        reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_fg_tokens_prob, ss_fg_mask)
     if flow_model is not None or s2c_flow is not None:
         # If s2c_flow is not provided, estimate it using the flow model.
         # Otherwise s2c_flow is passed to reconstruct_feat_with_matching_flow() to be used,
@@ -2484,8 +2461,8 @@ def calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
 # bg_align_loss_scheme: 'cosine' or 'L2'.
-@torch.compiler.disable
-#@torch.compile
+#@torch.compiler.disable
+@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives={ 'attn_out': 'L2', 'outfeat': 'L2' }, 
@@ -2493,7 +2470,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask: [1, 1, 64*64]
     if ss_fg_mask.sum() == 0:
-        return 0, [0, 0, 0], 0, None, None
+        return [0, 0, 0], 0, None, None
 
     if do_feat_attn_pooling:
         # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
@@ -2511,6 +2488,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         H2, W2       = H, W
 
     ss_fg_mask_2d = ss_fg_mask.bool().squeeze(1)
+    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
@@ -2518,33 +2496,42 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # Slowly update attn loras that influence sc_q.
     sc_q = sc_q_grad_scaler(sc_q)
 
+    # fg_ss_q: [1, 961, 961] => [1, 961, N_fg]
+    # filter with ss_fg_mask_N, so that we only care about 
+    # the recon of the fg areas of the subj single instance.
+    # NOTE: we allow BP to ca_qs, which mainly leads to update of attn loras.
+    # What's interesting is after the initial several thousand iterations,
+    # the composition becomes very bad (the face appears abruptly, incoherent with the surroundings),
+    # probably due to the update of attn loras.
+    # However, as training goes on, the composition seems to repair itself.
+    # Maybe good compositions are a stable equilibrium for model params?
+    fg_ss_q = ss_q[:, :, ss_fg_mask_N]
+    # ss_mc_q: [1, 1280, N_fg + 961] = [1, 1280, N_fg + 961].
+    ss_mc_q = torch.cat([fg_ss_q, mc_q], dim=2)
+
     # Similar to the scale of the attention scores.
     # Disable matching_score_scale, since when we were caching q, we've scaled it by 1/sqrt(sqrt(dim)).
-    # Two q's multiplied together will be scaled by 1/sqrt(dim). Moreover, currently sc_to_ss_prob_q is quite uniform,
-    # and disabling matching_score_scale can make sc_to_ss_prob_q more polarized.
+    # Two q's multiplied together will be scaled by 1/sqrt(dim). Moreover, currently sc_to_ss_prob is quite uniform,
+    # and disabling matching_score_scale can make sc_to_ss_prob more polarized.
     # num_heads = 8
     matching_score_scale = 1 #(ca_outfeat.shape[1] / num_heads) ** -0.5
-    # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single image tokens).
+    # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single tokens + 961 cls comp tokens).
     # matmul() does multiplication on the last two dims.
-    # sc_to_ss_prob_q: [1, 961, 1280] * [1, 1280, 961] => [1, 961, 961], (batch, sc, ss).
-    sc_to_ss_score_q = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
-    mc_to_ms_score_q = torch.matmul(mc_q.transpose(1, 2).contiguous(), ms_q) * matching_score_scale
-    # Pairwise matching probs (961 subj comp image tokens) -> (961 subj single image tokens).
-    # NOTE: If sc_to_ss_prob_q is only normalized among the single tokens dim,
+    # sc_to_ss_prob: [1, 961, 1280] * [1, 1280, 1922] => [1, 961, 1922], (batch, sc, ss_mc).
+    sc_to_ss_mc_score = torch.matmul(sc_q.transpose(1, 2).contiguous(), ss_mc_q) * matching_score_scale
+    # NOTE: If sc_to_ss_prob is only normalized among the single tokens dim,
     # then each comp image token has a total contribution of 1 to all single tokens.
     # But some comp tokens are backgrounds which don't appear in the single instance, 
     # therefore this constraint is not reasonable.
     if c_to_s_attn_norm_dims == (1, 2):
         # Dims 0, 1, 2: (batch, sc, ss) -> (batch, sc * ss)
-        # sc_to_ss_prob_q and mc_to_ms_prob_q are normalized along the joint (single, comp) 
+        # sc_to_ss_prob and mc_to_ms_prob are normalized along the joint (single, comp) 
         # tokens dims instead of the *single tokens* or the *comp tokens* dim.
-        sc_to_ss_score_q2 = sc_to_ss_score_q.reshape(sc_to_ss_score_q.shape[0], -1)
-        mc_to_ms_score_q2 = mc_to_ms_score_q.reshape(mc_to_ms_score_q.shape[0], -1)
+        sc_to_ss_mc_score2 = sc_to_ss_mc_score.reshape(sc_to_ss_mc_score.shape[0], -1)
         # Normalize among joint (single, comp) tokens dims.
-        sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q2, dim=1).reshape(sc_to_ss_score_q.shape)
-        mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q2, dim=1).reshape(mc_to_ms_score_q.shape)
+        sc_to_ss_mc_prob   = F.softmax(sc_to_ss_mc_score2, dim=1).reshape(sc_to_ss_mc_score.shape)
     elif c_to_s_attn_norm_dims == (1,):
-        # Normalize among class comp tokens (sc dim or mc dim).
+        # Normalize among class comp tokens (sc dim).
         # Major Concern:
         # If we only normalize among the comp tokens dim, then some comp tokens have higer overall attentions
         # to the single instance (sum of attention across all single tokens) than others. This is reasonable.
@@ -2554,94 +2541,37 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Eventually, a small fraction of the comp token is used to reconstruct all single tokens.
         # but such features are not interesting for facial reconstruction, 
         # as we want to make the facial comp tokens pay more attention to high-freq facial features.
-        sc_to_ss_prob_q  = F.softmax(sc_to_ss_score_q, dim=1)
-        mc_to_ms_prob_q  = F.softmax(mc_to_ms_score_q, dim=1)
+        sc_to_ss_mc_prob  = F.softmax(sc_to_ss_mc_score, dim=1)
     else:
         breakpoint()
 
-    # Span ss_fg_mask_2d to become a mask for the (fg, fg) pairwise matching scores,
-    # i.e., only be 1 (considered in the masked_mean()) if both tokens are fg tokens.
-    ss_fg_mask_pairwise = ss_fg_mask_2d.unsqueeze(1) * ss_fg_mask_2d.unsqueeze(2)
-    
-    loss_subj_comp_map_single_align_with_cls = masked_mean((sc_to_ss_prob_q - mc_to_ms_prob_q).abs(), ss_fg_mask_pairwise)
-
+    # sc_to_ss_prob, sc_to_mc_prob: [1, 961, N_fg + 961] -> [1, 961, N_fg] and [1, 961, 961].
+    sc_to_ss_fg_tokens_prob, sc_to_mc_prob = sc_to_ss_mc_prob[:, :, :fg_ss_q.shape[2]], sc_to_ss_mc_prob[:, :, fg_ss_q.shape[2]:]
     # ss_fg_mask_3d: [1, 961] => [1, 961, 1].
     ss_fg_mask_3d = ss_fg_mask_2d.float().unsqueeze(2)
     # View the whole fg area in the single instance as a single token.
     # Sum up the mapping probs from comp instances to the fg area of the single instances, so that 
     # ** each entry is the total prob of each image token in the comp instance
     # ** maps to the whole fg area in the single instance.
-    # sc_to_ss_fg_prob_q: [1, 961, 961] * [1, 961, 1] => [1, 961, 1] => [1, 1, 961].
-    # 961: sc tokens.
-    # matmul() sums up over the ss fg tokens. So each entry in sc_to_ss_fg_prob_q 
+    # sc_to_fg_ss_prob: [1, 961, 961] * [1, 961, 1] => [1, 961, 1] => [1, 1, 961].
+    # sums up over all ss fg tokens. So each entry in sc_to_fg_ss_prob 
     # is the total prob of each sc token maps to the whole fg area 
     # in the subj single instance, which could be >> 1.
-    sc_to_ss_fg_prob_q = torch.matmul(sc_to_ss_prob_q, ss_fg_mask_3d).permute(0, 2, 1)
-    mc_to_ms_fg_prob_q = torch.matmul(mc_to_ms_prob_q, ss_fg_mask_3d).permute(0, 2, 1)
-    # If sc_to_ss_prob_q is normalized along ss tokens, then sc_to_ss_bg_prob_q = 1 - sc_to_ss_fg_prob_q.
-    # But since sc_to_ss_prob_q is normalized along the sc tokens, this equality doesn't hold.
-    sc_to_ss_bg_prob_q = torch.matmul(sc_to_ss_prob_q, 1 - ss_fg_mask_3d).permute(0, 2, 1)
-    mc_to_ms_bg_prob_q = torch.matmul(mc_to_ms_prob_q, 1 - ss_fg_mask_3d).permute(0, 2, 1)
+    sc_to_fg_ss_prob = sc_to_ss_fg_tokens_prob.sum(dim=2, keepdim=True)
 
-    # Since we normalize sc_to_ss_prob_q/mc_to_ms_prob_q along the comp tokens dim,
+    # Since we normalize sc_to_ss_prob/mc_to_ms_prob along the comp tokens dim,
     # their fg probs may not sum to ss_fg_mask_3d.sum(), the fg area. Therefore, 
     # we need to scale them to make them sum to the fg area.
-    # After scaling, sc_to_ss_fg_prob_q.mean() == ss_fg_mask_3d.mean(), 
-    #                mc_to_ms_fg_prob_q.mean() == ss_fg_mask_3d.mean().
+    # After scaling, sc_to_fg_ss_prob.mean() == ss_fg_mask_3d.mean(), 
+    #                mc_to_ms_fg_prob.mean() == ss_fg_mask_3d.mean().
     sc_to_ss_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
-                          / (sc_to_ss_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
-    mc_to_ms_prob_scale = ss_fg_mask_3d.sum(dim=(1,2), keepdim=True) \
-                          / (mc_to_ms_fg_prob_q.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
-    
-    sc_to_ss_prob_q     = sc_to_ss_prob_q * sc_to_ss_prob_scale
-    sc_to_ss_fg_prob_q  = sc_to_ss_fg_prob_q * sc_to_ss_prob_scale
-    mc_to_ms_prob_q     = mc_to_ms_prob_q * mc_to_ms_prob_scale
-    mc_to_ms_fg_prob_q  = mc_to_ms_fg_prob_q * mc_to_ms_prob_scale
-
-    # Use the contrast between fg and bg probs to determine the fg/bg areas. 
-    # We downweight the bg probs to more rely on the contribution of fg probs.
-    # If we only use sc_to_ss_fg_prob_q, then sometimes the probs (1/3 of the time) are too uniform,
-    # and although 50% tokens are regarded as bg tokens, the sc_to_ss_fg_prob_below_mean scores are too small
-    # (0.001-0.003) to be regularizing. 
-    # Contrasting with bg probs will make the probs (weights for loss_sc_mc_bg_match) more polarized, 
-    # and the 50% bg tokens will almost always have weights > 0.01 (sc_bg_percent is around 0.46).
-    #LINK #sc_bg_percent
-    sc_to_ss_fb_contrast_prob = sc_to_ss_fg_prob_q - sc_to_ss_bg_prob_q * 0.5
-    mc_to_ms_fb_contrast_prob = mc_to_ms_fg_prob_q - mc_to_ms_bg_prob_q * 0.5
-
-    # fg_bg_cutoff_prob: the threshold of probs of a comp token mapping to the fg/bg areas.
-    # The bigger the fg_bg_cutoff_prob, the larger (the looser on deciding) the bg area. 
-    # We use median instead mean(). Since sc_to_ss_fb_contrast_prob is not uniform, 
-    # mean() as cutoff prob will put around 2/3 of the tokens to be fg tokens, 
-    # and only 1/3 bg tokens. median() guarantees 1/2 of the tokens to be bg tokens.
-    # For sc_to_ss_fg_prob_q, there are always a small number of large activations at fg areas,
-    # thus the median is usually smaller than the mean, like 0.2783 vs. 0.3496.
-    # For mc_to_ms_fg_prob_q, the activations are more uniform,
-    # thus the median is usually larger than the mean,  like 0.3506 vs. 0.3496.
-    sc_fg_bg_cutoff_prob = sc_to_ss_fb_contrast_prob.median().detach() + ss_fg_mask_3d.mean() / 40
-    mc_fg_bg_cutoff_prob = mc_to_ms_fb_contrast_prob.median().detach() + ss_fg_mask_3d.mean() / 40
-    # sc_to_ss_fg_prob_q, mc_to_ms_fg_prob_q: [1, 1, 961].
-    # The total prob of each image token in the subj comp instance maps to fg areas 
-    # in the subj single instance. 
-    # If this prob is low, i.e., the image token doesn't match to any tokens in the fg areas 
-    # in the subj single instance, then this token is probably background.
-    # When sc_to_ss_fg_prob_q/mc_to_ms_fg_prob_q < fg_bg_cutoff_prob (dynamic, around 0.3), this token is likely to be bg.
-    # The smaller sc_to_ss_fg_prob_q/mc_to_ms_fg_prob_q is, the more likely this token is bg.
-    sc_to_ss_fg_prob_below_mean = sc_fg_bg_cutoff_prob - sc_to_ss_fb_contrast_prob
-    mc_to_ms_fg_prob_below_mean = mc_fg_bg_cutoff_prob - mc_to_ms_fb_contrast_prob
-    # Set large negative values to 0, which correspond to large positive probs in 
-    # sc_to_ss_fg_prob_q/mc_to_ms_fg_prob_q at fg areas of the corresponding single instances,
-    # likely being foreground areas. 
-    sc_to_ss_fg_prob_below_mean = torch.clamp(sc_to_ss_fg_prob_below_mean, min=0)
-    mc_to_ms_fg_prob_below_mean = torch.clamp(mc_to_ms_fg_prob_below_mean, min=0)
-
-    # sc_to_ss_bg_prob is a soft mask, not a hard mask. 
-    # sc_to_ss_bg_prob: [1, 1, 961]. Can be viewed as a token-wise weight, used
-    # to give CA layer output features different weights at different tokens.
-    # sc_to_ss_bg_prob: [1, 1, 961] => [1, 961, 1]. values: 0 ~ fg_bg_cutoff_prob (dynamic, around 0.3).
-    # NOTE: Even if a sc token only attends to bg areas, the corresponding value in 
-    # sc_to_ss_fg_prob_below_mean is only fg_bg_cutoff_prob, instead of 1.
-    sc_to_ss_bg_prob = sc_to_ss_fg_prob_below_mean.permute(0, 2, 1)
+                          / (sc_to_fg_ss_prob.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
+    sc_to_fg_ss_prob    = sc_to_fg_ss_prob * sc_to_ss_prob_scale
+    # sc_to_whole_mc_prob: [1, 961, 961] => [1, 961, 1] => [1, 1, 961].
+    sc_to_whole_mc_prob = sc_to_mc_prob.sum(dim=2, keepdim=True)
+    # Normalize sc_to_whole_mc_prob to sum to the whole comp area.
+    sc_to_mc_prob_scale = mc_q.shape[2] / (sc_to_whole_mc_prob.sum(dim=(1, 2), keepdim=True).detach() + 1e-5)
+    sc_to_whole_mc_prob = sc_to_whole_mc_prob * sc_to_mc_prob_scale
 
     s2c_flow = None
     losses_sc_recon_ss_fg   = []
@@ -2680,12 +2610,12 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # On outfeat, the input s2c_flow is the s2c_flow estimated on attn_out.
         losses_sc_recon_ss_fg_obj, s2c_flow = \
             calc_sc_recon_ss_fg_losses(layer_idx, flow_model, s2c_flow, ss_feat, sc_feat, 
-                                       sc_to_ss_prob_q, ss_fg_mask_2d, 
+                                       sc_to_ss_fg_tokens_prob, ss_fg_mask_2d, 
                                        ss_q, sc_q, H2, W2, num_flow_est_iters, 
                                        objective_name=objective_name,
                                        loss_scheme=loss_scheme)
         
-        losses_sc_recon_ss_fg_obj = [loss * loss_scale for loss in losses_sc_recon_ss_fg_obj]
+        losses_sc_recon_ss_fg_obj = [ loss * loss_scale for loss in losses_sc_recon_ss_fg_obj ]
         # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
         # Optimizing w.r.t. this loss may lead to degenerate results.
         to_discard = losses_sc_recon_ss_fg_obj[-1] > recon_loss_discard_thres
@@ -2707,16 +2637,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # subj embeddings, and without grad, even if ref_grad_scale > 0, no gradients 
             # will be backpropagated to subj embeddings).
             loss_sc_mc_bg_match_obj = calc_ref_cosine_loss(sc_feat, mc_feat, 
-                                                           emb_mask=sc_to_ss_bg_prob,
+                                                           emb_mask=sc_to_whole_mc_prob,
                                                            exponent=2, do_demeans=[False, False],
                                                            first_n_dims_into_instances=2, 
                                                            aim_to_align=True, 
                                                            ref_grad_scale=0)
         elif bg_align_loss_scheme == 'L2':
-            # sc_feat, mc_feat: [1, 961, 1280]. sc_to_ss_bg_prob: [1, 961, 1].
-            loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_ss_bg_prob)
+            # sc_feat, mc_feat: [1, 961, 1280]. sc_to_whole_mc_prob: [1, 961, 1].
+            loss_sc_mc_bg_match_obj = masked_l2_loss(sc_feat, mc_feat, mask=sc_to_whole_mc_prob)
         elif bg_align_loss_scheme == 'L1':
-            loss_sc_mc_bg_match_obj = masked_mean((sc_feat - mc_feat).abs(), sc_to_ss_bg_prob)
+            loss_sc_mc_bg_match_obj = masked_mean((sc_feat - mc_feat).abs(), sc_to_whole_mc_prob)
         else:
             breakpoint()
 
@@ -2734,6 +2664,5 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     else:
         loss_sc_mc_bg_match = loss_sc_mc_bg_match / num_bg_matching_losses
     
-    return loss_subj_comp_map_single_align_with_cls, losses_sc_recon_ss_fg, \
-           loss_sc_mc_bg_match, sc_to_ss_fg_prob_below_mean, mc_to_ms_fg_prob_below_mean
+    return losses_sc_recon_ss_fg, loss_sc_mc_bg_match, sc_to_fg_ss_prob, sc_to_whole_mc_prob
 

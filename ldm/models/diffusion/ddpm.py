@@ -2299,10 +2299,8 @@ class LatentDiffusion(DDPM):
         
         # Otherwise, we still use the input filtered_fg_mask. 
 
-        loss_names = [ 'loss_subj_comp_map_single_align_with_cls', 'loss_sc_recon_ss_fg_attn_agg', 
-                       'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
-                       'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 
-                       'sc_bg_percent', 'mc_bg_percent' ]
+        loss_names = [ 'loss_sc_recon_ss_fg_attn_agg', 'loss_sc_recon_ss_fg_flow', 'loss_sc_recon_ss_fg_min', 'loss_sc_mc_bg_match', 
+                       'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 'sc_bg_percent' ]
         
         for loss_name in loss_names:
             loss_name2 = loss_name.replace('loss_', '')
