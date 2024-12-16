@@ -1779,28 +1779,30 @@ class LatentDiffusion(DDPM):
             adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
             self.adaface_adv_iters_count += 1
             if adv_grad is not None:
-                # adv_grad_max: 1~1.5e-3
+                # adv_grad_max: 1e-3
                 adv_grad_max = adv_grad.abs().max().item()
                 loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
                 # adv_grad_mean is always 4~5e-6.
                 # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
                 faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
-                # adv_grad_fg_mean: ~1e-5.
+                # adv_grad_fg_mean: 8~9e-6.
                 adv_grad_fg_mean = adv_grad[faceloss_fg_mask].abs().mean().item()
                 loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                 # adv_grad_mag: ~1e-4.
                 adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
                 recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
-                # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: 10~200.
+                # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: ~100.
                 adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
                 loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                # Cap the adv_grad_scale to 500.
+                # Cap the adv_grad_scale to 500, just in case.
+                # adv_grad mean at fg area after scaling: 1e-3.
                 adv_grad = adv_grad * min(adv_grad_scale, 500)
                 #calc_stats('adv_grad', adv_grad, norm_dim=(2, 3))
                 noise[:FACELOSS_BS] -= adv_grad
                 self.adaface_adv_success_iters_count += 1
-                adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
-                loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
+                # adaface_adv_success_rate is always close to 1, so we don't monitor it.
+                # adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
+                #loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
 
         if self.iter_flags['recon_on_comp_prompt']:
             # Use class comp prompts as the negative prompts.
