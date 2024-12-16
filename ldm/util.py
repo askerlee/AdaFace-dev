@@ -2272,6 +2272,8 @@ def backward_warp_by_flow_np(image2, flow1to2):
     return image1_recovered
 '''
 
+#@torch.compiler.disable
+@torch.compile
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
     B, C, H, W = image2.shape
@@ -2366,7 +2368,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_to_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
-#@torch.compile
+@torch.compile
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat, 
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
                                  ss_fg_mask, ss_q, sc_q, mc_q, H, W, 
@@ -2458,7 +2460,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
 #@torch.compiler.disable
-#@torch.compile
+@torch.compile
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask, H, W, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
