@@ -2301,7 +2301,8 @@ class LatentDiffusion(DDPM):
         
         # Otherwise, we still use the input filtered_fg_mask. 
 
-        loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc', 
+        loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
+                       'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_min',
                        'loss_comp_subj_bg_attn_suppress', 'loss_comp_cls_bg_attn_suppress', 'sc_bg_percent' ]
         
         for loss_name in loss_names:
@@ -2314,7 +2315,7 @@ class LatentDiffusion(DDPM):
             # But we use a step-dependent recon_loss_discard_thres to keep most of the losses.
             recon_loss_discard_thres = 0.2 + 0.05 * step_idx
             # Only ss_fg_mask in (resized) filtered_fg_mask is used for calc_elastic_matching_loss().
-            loss_comp_fg_bg_preserve, loss_sc_recon_mc = \
+            loss_comp_fg_bg_preserve = \
                 calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
                                               self.iter_flags['is_comp_init_fg_from_training_image'],
                                               self.iter_flags['fg_mask_avail_ratio'],
@@ -2322,7 +2323,7 @@ class LatentDiffusion(DDPM):
                                               loss_dict, session_prefix,
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
-                                              recon_feat_objectives={'attn_out': 'L2', 'outfeat': 'L2'},
+                                              recon_feat_objectives=['attn_out', 'outfeat'],
                                               recon_loss_discard_thres=recon_loss_discard_thres)
 
             # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
@@ -2352,7 +2353,6 @@ class LatentDiffusion(DDPM):
 
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
-            losses_sc_mc_bg_match.append(loss_sc_recon_mc)
             losses_feat_delta_align.append(loss_feat_delta_align)
         
         for loss_name in loss_names:
@@ -2363,7 +2363,6 @@ class LatentDiffusion(DDPM):
 
         loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
         loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
-        loss_sc_recon_mc            = torch.stack(losses_sc_mc_bg_match).mean()
         loss_feat_delta_align       = torch.stack(losses_feat_delta_align).mean()
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
@@ -2375,18 +2374,8 @@ class LatentDiffusion(DDPM):
         
         # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
         # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
-        # loss_sc_recon_mc is L2 loss, which is very small. So we scale it up by 5x to 50x.
-        # loss_sc_recon_mc: 0.002~0.01, sc_recon_mc_loss_scale: 10~50 => 0.02~5.
-        # rel_scale_range=(0, 4): the absolute range of the scale will be 8~320.
-        sc_recon_mc_loss_scale = calc_dyn_loss_scale(loss_sc_recon_mc, (0.001, 8), (0.01, 80), 
-                                                     rel_scale_range=(0, 4))
-        loss_dict.update({f'{session_prefix}/sc_recon_mc_loss_scale': sc_recon_mc_loss_scale})
-
-        # loss_sc_recon_ssfg_min is absorbed into loss_comp_fg_bg_preserve.
-        # We didn't absorb loss_sc_recon_mc here into loss_comp_fg_bg_preserve, because it requires a dynamic scale.
-        loss_comp_feat_distill_loss += \
-            (loss_comp_fg_bg_preserve + loss_sc_recon_mc * sc_recon_mc_loss_scale) \
-             * self.comp_fg_bg_preserve_loss_weight
+        # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
+        loss_comp_feat_distill_loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
 
         arcface_loss_calc_count = 0
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
@@ -2417,12 +2406,6 @@ class LatentDiffusion(DDPM):
                 self.comp_iters_face_detected_count += 1
                 comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                 loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
-
-        if loss_sc_recon_mc == 0 and arcface_loss_calc_count == 0:
-            # loss_feat_delta_align is less accurate, so we only use it when 
-            # loss_sc_recon_mc is 0 (large fg matching errors) and no faces have been detected.
-            # And only use a small weight feat_delta_align_loss_weight = 1e-4.
-            loss_comp_feat_distill_loss += loss_feat_delta_align * self.feat_delta_align_loss_weight
 
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:
