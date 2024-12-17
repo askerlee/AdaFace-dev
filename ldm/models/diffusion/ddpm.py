@@ -1431,9 +1431,9 @@ class LatentDiffusion(DDPM):
             model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
                                                                      enable_grad=True,  use_attn_lora=use_attn_lora,
                                                                      use_ffn_lora=use_ffn_lora)
-            # Always disable LoRAs on class instances.
+            # Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             model_output_c2, extra_info_c2 = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(2, 4),
-                                                                     enable_grad=False, use_attn_lora=False, 
+                                                                     enable_grad=False, use_attn_lora=use_attn_lora, 
                                                                      use_ffn_lora=False)
             
             model_output = torch.cat([model_output_ss, model_output_sc, model_output_c2], dim=0)
