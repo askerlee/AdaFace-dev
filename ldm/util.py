@@ -2302,10 +2302,13 @@ def backward_warp_by_flow(image2, flow1to2):
     # flow: [B, H, W, 2]
     flow = torch.stack((flow_x, flow_y), dim=-1)
     # Perform backward warping using grid_sample
+    # align_corners: If set to True, the extrema (-1 and 1) are considered as referring 
+    # to the center points of the input's corner pixels
     image1_recovered = F.grid_sample(image2, flow, mode='bilinear', padding_mode='zeros', align_corners=True)
 
     return image1_recovered
 
+@torch.compiler.disable
 def flow2attn(s2c_flow, H, W, mask_N=None):
     # Generate a diagonal attention matrix from comp tokens (feature dim) to comp tokens (spatial dims).
     c_diag_attn = torch.eye(H*W, device=s2c_flow.device, dtype=s2c_flow.dtype).reshape(1, H*W, H, W).repeat(s2c_flow.shape[0], 1, 1, 1)
@@ -2318,6 +2321,7 @@ def flow2attn(s2c_flow, H, W, mask_N=None):
     if mask_N is not None:
         # mask_N is applied at the single tokens dim.
         c_flow_attn = c_flow_attn[:, :, mask_N]
+        breakpoint()
     return c_flow_attn
 
 #@torch.compiler.disable
@@ -2387,6 +2391,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_to_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
+#@torch.compiler.disable
 @torch.compile
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat, 
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
@@ -2406,8 +2411,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
         sc_recon_ssfg_mc_feat_attn_agg[:, :N_fg], sc_recon_ssfg_mc_feat_attn_agg[:, N_fg:]
     # sc_to_ss_mc_prob: [1, 961, N_fg + 961] -> sc_attns['ssfg']: [1, 961, N_fg], sc_attns['mc']: [1, 961, 961].
     sc_attns['ssfg'], sc_attns['mc'] = sc_to_ss_mc_prob[:, :, :N_fg], sc_to_ss_mc_prob[:, :, N_fg:]
-    # ss_fg_mask_2d: [1, 961]. ss_fg_mask_N: [1, N_fg].
-    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)    
+    # ss_fg_mask_2d: [1, 961]. ss_fg_mask_N: [N_fg].
+    ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
 
     if flow_model is not None or ss2sc_flow is not None:
         # ss2sc_flow: [1, 2, H, W]
@@ -2631,7 +2636,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Cut off the gradients into the subj single instance.
         # We don't need to cut off ms_feat, mc_feat, because they were generated with no_grad().
         ss_feat = ss_feat.detach()
-        # ss_fg_mask_N:  [1, N_fg] indices on the flattened spatial dim.
+        # ss_fg_mask_N:  [N_fg] indices on the flattened spatial dim.
         # Apply mask, permute features to the last dim. [1, 1280, 961] => [1, 961, 1280] => [1, N_fg, 1280]
         # TODO: this is buggy if block size > 1.
         ssfg_feat = ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
