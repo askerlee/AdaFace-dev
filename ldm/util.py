@@ -2321,7 +2321,6 @@ def flow2attn(s2c_flow, H, W, mask_N=None):
     if mask_N is not None:
         # mask_N is applied at the single tokens dim.
         c_flow_attn = c_flow_attn[:, :, mask_N]
-        breakpoint()
     return c_flow_attn
 
 #@torch.compiler.disable
