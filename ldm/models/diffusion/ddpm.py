@@ -2373,7 +2373,7 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
         
-        # comp_fg_bg_preserve_loss_weight: 1e-2. loss_comp_fg_bg_preserve: 0.5-0.6.
+        # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
         # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
         # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
         loss_comp_feat_distill_loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
