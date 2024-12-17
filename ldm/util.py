@@ -2387,7 +2387,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_to_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
-#@torch.compile
+@torch.compile
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat, 
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
                                  ss_fg_mask_2d, ss_q, sc_q, mc_q, H, W, 
