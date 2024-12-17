@@ -2476,7 +2476,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             all_token_losses_sc_recon_2types = all_token_losses_sc_recon_2types.mean(dim=3)
             # Take the smaller loss tokenwise between attn and flow.
             min_token_losses_sc_recon = all_token_losses_sc_recon_2types.min(dim=0).values
-            flow_is_better = all_token_losses_sc_recon_2types[1] < all_token_losses_sc_recon_2types[0] - 0.001
+            # flow at a token aligns better if the flow loss < attn loss with a margin of 0.0002.
+            flow_is_better = all_token_losses_sc_recon_2types[1] < all_token_losses_sc_recon_2types[0] - 0.0002
             if flow_is_better.any():
                 # flow_is_better: [1, 140] -> [1, 961, 140]. Added a dim to be broadcasted to the sc tokens dim.
                 flow_is_better = flow_is_better.unsqueeze(1).expand(-1, sc_recon_feats_flow_attn[feat_name].shape[1], -1)
