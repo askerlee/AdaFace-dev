@@ -2516,11 +2516,11 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             else:
                 loss_flow_attn_distill = torch.tensor(0., device=sc_feat.device)
 
-            flow_distill_percent = flow_is_better.float().mean().item()
+            flow_distill_percent = flow_is_better.float().mean()
         else:
             loss_sc_recon_min = [ loss for loss in losses_sc_recons[feat_name] if loss != 0 ][0]
             loss_flow_attn_distill = torch.tensor(0., device=sc_feat.device)
-            flow_distill_percent = 0
+            flow_distill_percent   = torch.tensor(0., device=sc_feat.device)
 
         losses_sc_recons[feat_name].append(loss_sc_recon_min)
         loss_flow_attns_distill[feat_name] = loss_flow_attn_distill
@@ -2726,9 +2726,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # If all losses are discarded, return 4 x 0s.
             losses_sc_recons[feat_name] = torch.zeros(4, device=ss_feat.device)
 
-        loss_flow_attns_distill[feat_name] = torch.stack(losses_flow_attns_distill[feat_name], dim=0).mean()
-
-        flow_distill_percents[feat_name] = sum(all_flow_distill_percents[feat_name]) / len(all_flow_distill_percents[feat_name])
+        loss_flow_attns_distill[feat_name] = torch.stack(losses_flow_attns_distill[feat_name]).mean()
+        flow_distill_percents[feat_name]   = torch.stack(all_flow_distill_percents[feat_name]).mean()
 
     return losses_sc_recons, loss_flow_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob, flow_distill_percents
 
