@@ -1995,19 +1995,19 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                             recon_loss_discard_thres=recon_loss_discard_thres,
                                             do_feat_attn_pooling=True)
         
-        loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
-                       'loss_sc_recon_mc_attn_agg', 'loss_sc_recon_mc_flow', 'loss_sc_recon_mc_min',
+        loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_avg', 'loss_sc_recon_ssfg_min', 
+                       'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_avg',   'loss_sc_recon_mc_min',
                        'loss_sc_to_ssfg_flow_attns_distill', 'loss_sc_to_mc_flow_attns_distill',
-                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent' ]
+                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 'ssfg_flow_distill_percent', 'mc_flow_distill_percent' ]
         
         # loss_sc_recon_ssfg_attn_agg and loss_sc_recon_ssfg_flow, 
         # are returned to be monitored, not to be optimized.
         # Only their counterparts -- loss_sc_recon_ssfg_min, loss_comp_subj_bg_attn_suppress 
         # are optimized.
-        loss_sc_recon_ssfg_attn_agg, loss_sc_recon_ssfg_flow, loss_sc_recon_ssfg_min, \
-        loss_sc_recon_mc_attn_agg, loss_sc_recon_mc_flow, loss_sc_recon_mc_min, \
+        loss_sc_recon_ssfg_attn_agg, loss_sc_recon_ssfg_flow, loss_sc_recon_ssfg_avg, loss_sc_recon_ssfg_min, \
+        loss_sc_recon_mc_attn_agg,   loss_sc_recon_mc_flow,   loss_sc_recon_mc_avg,   loss_sc_recon_mc_min, \
         loss_sc_to_ssfg_flow_attns_distill, loss_sc_to_mc_flow_attns_distill, \
-        loss_comp_subj_bg_attn_suppress, sc_bg_percent \
+        loss_comp_subj_bg_attn_suppress, sc_bg_percent, ssfg_flow_distill_percent, mc_flow_distill_percent \
             = [ comp_subj_bg_preserve_loss_dict.get(loss_name, 0) for loss_name in loss_names ] 
 
         for loss_name in loss_names:
@@ -2124,7 +2124,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # sc_to_ss_fg_prob_below_mean is used as fg/bg soft masks of comp instances
         # to suppress the activations on background areas.
         
-        losses_sc_recons, loss_flow_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob = \
+        losses_sc_recons, loss_flow_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob, flow_distill_percents = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, 
                                        ss_fg_mask_3d, ca_feat_h, ca_feat_w, 
@@ -2136,17 +2136,19 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         if losses_sc_recons is None:
             continue
 
-        loss_sc_recon_ssfg_attn_agg, loss_sc_recon_ssfg_flow, loss_sc_recon_ssfg_min = losses_sc_recons['ssfg']
-        loss_sc_recon_mc_attn_agg, loss_sc_recon_mc_flow, loss_sc_recon_mc_min = losses_sc_recons['mc']
+        loss_sc_recon_ssfg_attn_agg, loss_sc_recon_ssfg_flow, loss_sc_recon_ssfg_avg, loss_sc_recon_ssfg_min = losses_sc_recons['ssfg']
+        loss_sc_recon_mc_attn_agg, loss_sc_recon_mc_flow, loss_sc_recon_mc_avg, loss_sc_recon_mc_min = losses_sc_recons['mc']
         loss_sc_to_ssfg_flow_attns_distill, loss_sc_to_mc_flow_attns_distill = \
             loss_flow_attns_distill['ssfg'], loss_flow_attns_distill['mc']
         
         add_dict_to_dict(loss_dict, 
                          { 'loss_sc_recon_ssfg_attn_agg':   loss_sc_recon_ssfg_attn_agg * LAYER_W,
                            'loss_sc_recon_ssfg_flow':       loss_sc_recon_ssfg_flow * LAYER_W,
+                           'loss_sc_recon_ssfg_avg':        loss_sc_recon_ssfg_avg * LAYER_W,
                            'loss_sc_recon_ssfg_min':        loss_sc_recon_ssfg_min * LAYER_W,
                            'loss_sc_recon_mc_attn_agg':     loss_sc_recon_mc_attn_agg * LAYER_W,
                            'loss_sc_recon_mc_flow':         loss_sc_recon_mc_flow * LAYER_W,
+                           'loss_sc_recon_mc_avg':          loss_sc_recon_mc_avg * LAYER_W,
                            'loss_sc_recon_mc_min':          loss_sc_recon_mc_min * LAYER_W,
                            'loss_sc_to_ssfg_flow_attns_distill': loss_sc_to_ssfg_flow_attns_distill * LAYER_W,
                            'loss_sc_to_mc_flow_attns_distill':   loss_sc_to_mc_flow_attns_distill * LAYER_W
@@ -2195,9 +2197,13 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # So we normalize sc_to_ss_fg_prob first, before comparing it with sc_to_whole_mc_prob.
         sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.01).float().mean()
 
+        ssfg_flow_distill_percent, mc_flow_distill_percent = flow_distill_percents['ssfg'], flow_distill_percents['mc']
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
-                              'sc_bg_percent': sc_bg_percent * LAYER_W })
+                              'sc_bg_percent':                  sc_bg_percent * LAYER_W,
+                              'ssfg_flow_distill_percent':      ssfg_flow_distill_percent * LAYER_W,
+                              'mc_flow_distill_percent':        mc_flow_distill_percent * LAYER_W
+                            })
     
     return loss_dict
 
@@ -2299,16 +2305,17 @@ def backward_warp_by_flow(image2, flow1to2):
     flow_y = 2.0 * flow_y / (H - 1) - 1.0
 
     # Stack and reshape the flow to form the sampling grid for grid_sample
-    # flow: [B, H, W, 2]
-    flow = torch.stack((flow_x, flow_y), dim=-1)
+    # flow_grid: [B, H, W, 2]
+    flow_grid = torch.stack((flow_x, flow_y), dim=-1)
     # Perform backward warping using grid_sample
     # align_corners: If set to True, the extrema (-1 and 1) are considered as referring 
     # to the center points of the input's corner pixels
-    image1_recovered = F.grid_sample(image2, flow, mode='bilinear', padding_mode='zeros', align_corners=True)
+    image1_recovered = F.grid_sample(image2, flow_grid, mode='bilinear', padding_mode='zeros', align_corners=True)
 
     return image1_recovered
 
-@torch.compiler.disable
+#@torch.compiler.disable
+@torch.compile
 def flow2attn(s2c_flow, H, W, mask_N=None):
     # Generate a diagonal attention matrix from comp tokens (feature dim) to comp tokens (spatial dims).
     c_diag_attn = torch.eye(H*W, device=s2c_flow.device, dtype=s2c_flow.dtype).reshape(1, H*W, H, W).repeat(s2c_flow.shape[0], 1, 1, 1)
@@ -2398,20 +2405,21 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
                                  num_flow_est_iters, objective_name):
     sc_recon_feats_attn_agg     = {}
     sc_recon_feats_flow         = {}
+    sc_recon_feats_avg          = {}
     sc_recon_feats_flow_attn    = {}
     sc_attns = {}
-    # sc_recon_ssfg_mc_feat_attn_agg: [1, 1280, N_fg + 961] 
-    sc_recon_ssfg_mc_feat_attn_agg = \
-        reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ss_mc_prob)
+
     N_fg = target_feats['ssfg'].shape[1]
-    # Split sc_recon_ssfg_mc_feat_attn_agg into ssfg and mc parts.
-    # sc_recon_feat*['ssfg']: [1, 1280, N_fg] => [1, N_fg, 1280]
-    sc_recon_feats_attn_agg['ssfg'], sc_recon_feats_attn_agg['mc'] = \
-        sc_recon_ssfg_mc_feat_attn_agg[:, :N_fg], sc_recon_ssfg_mc_feat_attn_agg[:, N_fg:]
     # sc_to_ss_mc_prob: [1, 961, N_fg + 961] -> sc_attns['ssfg']: [1, 961, N_fg], sc_attns['mc']: [1, 961, 961].
     sc_attns['ssfg'], sc_attns['mc'] = sc_to_ss_mc_prob[:, :, :N_fg], sc_to_ss_mc_prob[:, :, N_fg:]
+    # sc_recon_ssfg_mc_feat_attn_agg: [1, 1280, N_fg + 961] 
+    # sc_recon_feat*['ssfg']: [1, 1280, N_fg] => [1, N_fg, 1280]
+    sc_recon_feats_attn_agg['ssfg'] = reconstruct_feat_with_attn_aggregation(sc_feat, sc_attns['ssfg'])
+    sc_recon_feats_attn_agg['mc']   = reconstruct_feat_with_attn_aggregation(sc_feat, sc_attns['mc'])
+    # Split sc_recon_ssfg_mc_feat_attn_agg into ssfg and mc parts.
     # ss_fg_mask_2d: [1, 961]. ss_fg_mask_N: [N_fg].
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
+    debug_flow_attn = False
 
     if flow_model is not None or ss2sc_flow is not None:
         # ss2sc_flow: [1, 2, H, W]
@@ -2422,9 +2430,16 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_feat, 
                                                 ss_fg_mask_2d, H, W, num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W, mask_N=ss_fg_mask_N)
+        '''
+        if debug_flow_attn:
+            sc_recon_ssfg_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(sc_feat, sc_recon_feats_flow_attn['ssfg'])
+            diff1 = (sc_recon_ssfg_feat_attn_agg2 - sc_recon_feats_flow['ssfg']).abs().mean()
+            if diff1 > 2e-4:
+                breakpoint()
+        '''
     else:
-        ss2sc_flow                      = None
-        sc_recon_feats_flow['ssfg']     = None
+        ss2sc_flow                       = None
+        sc_recon_feats_flow['ssfg']      = None
         sc_recon_feats_flow_attn['ssfg'] = None
         
     if flow_model is not None or mc2sc_flow is not None:
@@ -2436,6 +2451,13 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q, sc_feat, 
                                                 None, H, W, num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
+        '''        
+        if debug_flow_attn:
+            sc_recon_mc_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(sc_feat, sc_recon_feats_flow_attn['mc'])
+            diff2 = (sc_recon_mc_feat_attn_agg2 - sc_recon_feats_flow['mc']).abs().mean()
+            if diff2 > 2e-4:
+                breakpoint()
+        '''
     else:
         mc2sc_flow                      = None
         sc_recon_feats_flow['mc']       = None
@@ -2444,15 +2466,19 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
     losses_sc_recons          = {}
     all_token_losses_sc_recon = {}
     loss_flow_attns_distill   = {}
-    matching_type_names       = ['attn', 'flow']
+    flow_distill_percents     = {}
+    matching_type_names       = ['attn', 'flow', 'avg']
 
+    # feat_name: 'ssfg', 'mc'.
     for feat_name in sc_recon_feats_attn_agg:
         print(f"{objective_name} sc->{feat_name}:", end=' ')
         target_feat = target_feats[feat_name]
         losses_sc_recons[feat_name] = [] 
         all_token_losses_sc_recon[feat_name] = []
 
-        for i, sc_recon_feat in enumerate((sc_recon_feats_attn_agg[feat_name], sc_recon_feats_flow[feat_name])):
+        sc_recon_feats_avg[feat_name] = (sc_recon_feats_attn_agg[feat_name] + sc_recon_feats_flow[feat_name]) / 2
+
+        for i, sc_recon_feat in enumerate((sc_recon_feats_attn_agg[feat_name], sc_recon_feats_flow[feat_name], sc_recon_feats_avg[feat_name])):
             if sc_recon_feat is None:
                 loss_sc_recon = torch.tensor(0., device=sc_feat.device)
             else:
@@ -2476,8 +2502,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             all_token_losses_sc_recon_2types = all_token_losses_sc_recon_2types.mean(dim=3)
             # Take the smaller loss tokenwise between attn and flow.
             min_token_losses_sc_recon = all_token_losses_sc_recon_2types.min(dim=0).values
-            # flow at a token aligns better if the flow loss < attn loss with a margin of 0.0002.
-            flow_is_better = all_token_losses_sc_recon_2types[1] < all_token_losses_sc_recon_2types[0] - 0.0002
+            loss_sc_recon_min = min_token_losses_sc_recon.mean()
+            # *** Compute flow distillation loss. ***
+            # flow at a token aligns better if the flow loss < attn loss with a margin of 0.0005.
+            flow_is_better = all_token_losses_sc_recon_2types[1] < all_token_losses_sc_recon_2types[0] - 0.0005
             if flow_is_better.any():
                 # flow_is_better: [1, 140] -> [1, 961, 140]. Added a dim to be broadcasted to the sc tokens dim.
                 flow_is_better = flow_is_better.unsqueeze(1).expand(-1, sc_recon_feats_flow_attn[feat_name].shape[1], -1)
@@ -2487,16 +2515,19 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
                 loss_flow_attn_distill = (sc_recon_feats_flow_attn[feat_name] - sc_attns[feat_name])[flow_is_better].abs().mean()
             else:
                 loss_flow_attn_distill = torch.tensor(0., device=sc_feat.device)
-            loss_sc_recon_min = min_token_losses_sc_recon.mean()
+
+            flow_distill_percent = flow_is_better.float().mean().item()
         else:
             loss_sc_recon_min = [ loss for loss in losses_sc_recons[feat_name] if loss != 0 ][0]
             loss_flow_attn_distill = torch.tensor(0., device=sc_feat.device)
+            flow_distill_percent = 0
 
         losses_sc_recons[feat_name].append(loss_sc_recon_min)
         loss_flow_attns_distill[feat_name] = loss_flow_attn_distill
+        flow_distill_percents[feat_name]   = flow_distill_percent
         print(f"min {loss_sc_recon_min}, flow dist {loss_flow_attn_distill}")
 
-    return losses_sc_recons, loss_flow_attns_distill, ss2sc_flow, mc2sc_flow
+    return losses_sc_recons, loss_flow_attns_distill, flow_distill_percents, ss2sc_flow, mc2sc_flow
 
 # recon_feat_objectives: ['attn_out', 'outfeat'], a list of feature names to be reconstructed,
 # and the loss schemes for them.
@@ -2521,7 +2552,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
-        return None, None, None, None
+        return None, None, None, None, None
 
     if do_feat_attn_pooling:
         # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
@@ -2619,7 +2650,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     mc2sc_flow = None
     losses_sc_recons = {}
     losses_flow_attns_distill = {}
-    loss_flow_attns_distill = {}
+    loss_flow_attns_distill   = {}
+    all_flow_distill_percents = {}
+    flow_distill_percents     = {}
 
     for feat_type in recon_feat_objectives:
         if feat_type == 'attn_out':
@@ -2654,7 +2687,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # The estimated ss2sc_flow is returned and used in the next iteration.
         # On outfeat, the input ss2sc_flow is the ss2sc_flow estimated on attn_out.
         target_feats = { 'ssfg': ssfg_feat, 'mc': mc_feat }
-        losses_sc_recons_obj, loss_flow_attns_distill_obj, ss2sc_flow, mc2sc_flow = \
+        losses_sc_recons_obj, loss_flow_attns_distill_obj, flow_distill_percents_obj, ss2sc_flow, mc2sc_flow = \
             calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, 
                                          target_feats, sc_feat, 
                                          ss2sc_flow, mc2sc_flow, 
@@ -2682,14 +2715,20 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
             losses_flow_attns_distill[feat_name].append(loss_flow_attns_distill_obj[feat_name])
 
+            if feat_name not in all_flow_distill_percents:
+                all_flow_distill_percents[feat_name] = []
+            all_flow_distill_percents[feat_name].append(flow_distill_percents_obj)
+
     for feat_name, losses in losses_sc_recons.items():
         if len(losses) > 0:
             losses_sc_recons[feat_name] = torch.stack(losses, dim=0).mean(dim=0)
         else:
-            # If all losses are discarded, return 3 x 0s.
-            losses_sc_recons[feat_name] = torch.zeros(3, device=ss_feat.device)
+            # If all losses are discarded, return 4 x 0s.
+            losses_sc_recons[feat_name] = torch.zeros(4, device=ss_feat.device)
 
         loss_flow_attns_distill[feat_name] = torch.stack(losses_flow_attns_distill[feat_name], dim=0).mean()
 
-    return losses_sc_recons, loss_flow_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob
+        flow_distill_percents[feat_name] = sum(all_flow_distill_percents[feat_name]) / len(all_flow_distill_percents[feat_name])
+
+    return losses_sc_recons, loss_flow_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob, flow_distill_percents
 
