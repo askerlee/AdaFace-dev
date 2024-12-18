@@ -2717,7 +2717,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
             if feat_name not in all_flow_distill_percents:
                 all_flow_distill_percents[feat_name] = []
-            all_flow_distill_percents[feat_name].append(flow_distill_percents_obj)
+            all_flow_distill_percents[feat_name].append(flow_distill_percents_obj[feat_name])
 
     for feat_name, losses in losses_sc_recons.items():
         if len(losses) > 0:
