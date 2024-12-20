@@ -2014,7 +2014,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
                        'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
                        'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 'ssfg_sparse_better_percent', 'mc_sparse_better_percent',
-                       'ssfg_avg_flow_weight', 'mc_avg_flow_weight' ]
+                       'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight' ]
         
         effective_loss_names = [ 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc_min', 'loss_sc_to_ssfg_sparse_attns_distill',
                                  'loss_sc_to_mc_sparse_attns_distill', 'loss_comp_subj_bg_attn_suppress' ]
@@ -2215,14 +2215,14 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.01).float().mean()
 
         ssfg_sparse_better_percent, mc_sparse_better_percent = flow_distill_stats['ssfg_sparse_better_percent'], flow_distill_stats['mc_sparse_better_percent']
-        ssfg_avg_flow_weight,      mc_avg_flow_weight      = flow_distill_stats['ssfg_avg_flow_weight'],      flow_distill_stats['mc_avg_flow_weight']
+        ssfg_avg_sparse_distill_weight,      mc_avg_sparse_distill_weight      = flow_distill_stats['ssfg_avg_sparse_distill_weight'],      flow_distill_stats['mc_avg_sparse_distill_weight']
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
                               'sc_bg_percent':                  sc_bg_percent * LAYER_W,
                               'ssfg_sparse_better_percent':      ssfg_sparse_better_percent * LAYER_W,
                               'mc_sparse_better_percent':        mc_sparse_better_percent * LAYER_W,
-                              'ssfg_avg_flow_weight':           ssfg_avg_flow_weight * LAYER_W,
-                              'mc_avg_flow_weight':             mc_avg_flow_weight * LAYER_W
+                              'ssfg_avg_sparse_distill_weight':           ssfg_avg_sparse_distill_weight * LAYER_W,
+                              'mc_avg_sparse_distill_weight':             mc_avg_sparse_distill_weight * LAYER_W
                             })
     
     return loss_dict
@@ -2304,7 +2304,7 @@ def backward_warp_by_flow_np(image2, flow1to2):
     return image1_recovered
 '''
 
-EnableCompile = False
+EnableCompile = True
 @conditional_compile(enable_compile=EnableCompile)
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
@@ -2532,12 +2532,12 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             loss_sc_recon_min = min_token_losses_sc_recon.mean()
 
             # *** Compute flow distillation loss. ***
-            # ss_tokens_sparse_attn_advantage: [1, 210=N_fg]. How much the flow loss is smaller 
+            # ss_tokens_sparse_attn_advantages: [1, 210=N_fg] or [2, 961]. How much the flow loss is smaller 
             # than the attn loss at each token. The larger the advantage, the better.
             ss_tokens_sparse_attn_advantages = all_token_losses_sc_recon_3types[:1] - all_token_losses_sc_recon_3types[1:]
             ss_tokens_sparse_attn_advantage, max_sparse_attn_type_indices  = \
                 ss_tokens_sparse_attn_advantages.max(dim=0)
-            ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1)
+            ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1).detach()
             ss_tokens_sparse_attn_adv_normed = F.layer_norm(ss_tokens_sparse_attn_advantage, (ss_tokens_sparse_attn_advantage.shape[2],), weight=None, bias=None, eps=1e-5)
             # TEMP: temperature for the sigmoid function.
             TEMP = 5
@@ -2562,9 +2562,12 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
                 max_sparse_attn_type_indices_exp = max_sparse_attn_type_indices.view(sc_feat.shape[0], 1, -1).expand(-1, N, -1)
                 # For each i, select sc_recon_feats_sparse_attns[m[i], :, i], where m = max_sparse_attn_type_indices.
                 # Therefore, sc_recon_feats_sparse_attn is still normalized across the sc tokens dim.
+                # NOTE: if selecting sc_recon_feats_sparse_attns[m[i], i, :], it will be not normalized, nor sparse, which is wrong.
                 sc_recon_feats_sparse_attn = sc_recon_feats_sparse_attns.gather(0, max_sparse_attn_type_indices_exp)
-            else:
+            elif feat_name == 'ssfg':
                 sc_recon_feats_sparse_attn = sc_recon_feats_flow_attn[feat_name]
+            else:
+                breakpoint()
 
             # sc_tokens_sparse_attn_weights: [1, 961, 1], i.e., it gives different sc tokens different weights.
             # sc_recon_feats_sparse_attn: [1, 961, 210].
@@ -2573,19 +2576,19 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             # sc_recon_feats_sparse_attn is selected between the two tokenwise.
             # There's no computation graph associated with sc_recon_feats_sparse_attn, so we don't need to detach it.
             loss_sparse_attn_distill = ((sc_recon_feats_sparse_attn - sc_attns[feat_name]).abs() * sc_tokens_sparse_attn_weights).mean()
-            sparse_better_percent = (ss_tokens_sparse_attn_advantage > 0).float().mean()
-            avg_flow_weight = sc_tokens_sparse_attn_weights.mean()
+            sparse_better_percents = (ss_tokens_sparse_attn_advantages > 0).float().mean(dim=1)
+            avg_sparse_distill_weight = sc_tokens_sparse_attn_weights.mean()
 
         else:
             loss_sc_recon_min = [ loss for loss in losses_sc_recons[feat_name] if loss != 0 ][0]
             loss_sparse_attn_distill = torch.tensor(0., device=sc_feat.device)
-            sparse_better_percent   = torch.tensor(0., device=sc_feat.device)
-            avg_flow_weight = torch.tensor(0., device=sc_feat.device)
+            sparse_better_percents   = torch.zeros(len(sc_recon_feats_candidates) - 1, device=sc_feat.device)
+            avg_sparse_distill_weight = torch.tensor(0., device=sc_feat.device)
 
         losses_sc_recons[feat_name].append(loss_sc_recon_min)
-        loss_sparse_attns_distill[feat_name]                    = loss_sparse_attn_distill
-        flow_distill_stats[f'{feat_name}_sparse_better_percent'] = sparse_better_percent
-        flow_distill_stats[f'{feat_name}_avg_flow_weight']      = avg_flow_weight
+        loss_sparse_attns_distill[feat_name]                            = loss_sparse_attn_distill
+        flow_distill_stats[f'{feat_name}_sparse_better_percent']        = sparse_better_percents.mean()
+        flow_distill_stats[f'{feat_name}_avg_sparse_distill_weight']    = avg_sparse_distill_weight
         print(f"min {loss_sc_recon_min}, flow dist {loss_sparse_attn_distill}")
 
     return losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats, ss2sc_flow, mc2sc_flow
