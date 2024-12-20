@@ -176,13 +176,15 @@ class AttnProcessor_LoRA_Capture(nn.Module):
 
         if attn.norm_q is not None:
             query = attn.norm_q(query)
+            query2 = attn.norm_q(query2)
         if attn.norm_k is not None:
             key = attn.norm_k(key)
         
         inner_dim = key.shape[-1]
         head_dim = inner_dim // attn.heads
 
-        query = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        query  = query.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+        query2 = query2.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         key = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
