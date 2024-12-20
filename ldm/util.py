@@ -2559,10 +2559,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
                 N = sc_recon_feats_sparse_attns.shape[2]
                 # max_sparse_attn_type_indices: [1, 961] -> [1, 1, 961] -> [1, 961, 961].
                 # expand: enlarge to the specified size. If don't want to change a certain dim, set it to -1.
-                max_sparse_attn_type_indices_exp = max_sparse_attn_type_indices.view(1, 1, -1).expand(-1, N, -1)
+                max_sparse_attn_type_indices_exp = max_sparse_attn_type_indices.view(sc_feat.shape[0], 1, -1).expand(-1, N, -1)
                 # For each i, select sc_recon_feats_sparse_attns[m[i], :, i], where m = max_sparse_attn_type_indices.
                 # Therefore, sc_recon_feats_sparse_attn is still normalized across the sc tokens dim.
-                sc_recon_feats_sparse_attn   = sc_recon_feats_sparse_attns.gather(0, max_sparse_attn_type_indices_exp)
+                sc_recon_feats_sparse_attn = sc_recon_feats_sparse_attns.gather(0, max_sparse_attn_type_indices_exp)
             else:
                 sc_recon_feats_sparse_attn = sc_recon_feats_flow_attn[feat_name]
 
