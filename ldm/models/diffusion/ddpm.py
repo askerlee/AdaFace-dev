@@ -2304,8 +2304,8 @@ class LatentDiffusion(DDPM):
 
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
-                       'loss_sc_to_ssfg_flow_attns_distill', 'loss_sc_to_mc_flow_attns_distill',
-                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 'ssfg_flow_distill_percent', 'mc_flow_distill_percent',
+                       'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
+                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 'ssfg_sparse_better_percent', 'mc_sparse_better_percent',
                        'ssfg_avg_flow_weight', 'mc_avg_flow_weight' ]
         
         for loss_name in loss_names:
