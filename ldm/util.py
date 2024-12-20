@@ -25,6 +25,21 @@ def disabled_train(self, mode=True):
     does not change anymore."""
     return self
 
+def conditional_compile(enable_compile: bool):
+    """
+    A decorator to conditionally enable or disable torch compilation.
+    
+    Args:
+        enable_compile (bool): If True, applies `torch.compile`.
+                               If False, applies `torch.compiler.disable`.
+    """
+    def decorator(func):
+        if enable_compile:
+            return torch.compile(func)
+        else:
+            return torch.compiler.disable(func)
+    return decorator
+
 def log_txt_as_img(wh, xc, size=10):
     # wh a tuple of (width, height)
     # xc a list of captions to plot
@@ -1988,7 +2003,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         comp_subj_bg_preserve_loss_dict = \
             calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats,
                                             ca_layers_activations['attn_out'],
-                                            ca_layers_activations['q'],
+                                            ca_layers_activations['q2'],
                                             ca_layers_activations['attn'], 
                                             filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE,
                                             recon_feat_objectives=recon_feat_objectives,
@@ -2284,8 +2299,8 @@ def backward_warp_by_flow_np(image2, flow1to2):
     return image1_recovered
 '''
 
-#@torch.compiler.disable
-@torch.compile
+EnableCompile = True
+@conditional_compile(enable_compile=EnableCompile)
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
     B, C, H, W = image2.shape
@@ -2314,8 +2329,7 @@ def backward_warp_by_flow(image2, flow1to2):
 
     return image1_recovered
 
-#@torch.compiler.disable
-@torch.compile
+@conditional_compile(enable_compile=EnableCompile)
 def flow2attn(s2c_flow, H, W, mask_N=None):
     # Generate a diagonal attention matrix from comp tokens (feature dim) to comp tokens (spatial dims).
     c_diag_attn = torch.eye(H*W, device=s2c_flow.device, dtype=s2c_flow.dtype).reshape(1, H*W, H, W).repeat(s2c_flow.shape[0], 1, 1, 1)
@@ -2330,8 +2344,7 @@ def flow2attn(s2c_flow, H, W, mask_N=None):
         c_flow_attn = c_flow_attn[:, :, mask_N]
     return c_flow_attn
 
-#@torch.compiler.disable
-@torch.compile
+@conditional_compile(enable_compile=EnableCompile)
 def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ssfg_mc_prob):
     # recon_sc_feat: [1, 1280, 961] * [1, 961, 961] => [1, 1280, 961]
     # ** We use the subj comp tokens to reconstruct the subj single tokens, not vice versa. **
@@ -2397,8 +2410,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 
 # We can not simply switch ss_feat/ss_q with sc_feat/sc_q, and also change sc_to_ss_prob to ss_map_sc_prob, 
 # to get ss-recon-sc losses.
-#@torch.compiler.disable
-@torch.compile
+@conditional_compile(enable_compile=EnableCompile)
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat, 
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
                                  ss_fg_mask_2d, ss_q, sc_q, mc_q, H, W, 
@@ -2411,6 +2423,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 
     N_fg = target_feats['ssfg'].shape[1]
     # sc_to_ss_mc_prob: [1, 961, N_fg + 961] -> sc_attns['ssfg']: [1, 961, N_fg], sc_attns['mc']: [1, 961, 961].
+    # sc_attns['ssfg'], sc_attns['mc'] are normalized across the sc-token dim, i.e., dim 1.
+    # sc_attns['ssfg'].sum(dim=1) == [[1, 1, ..., 1]].
     sc_attns['ssfg'], sc_attns['mc'] = sc_to_ss_mc_prob[:, :, :N_fg], sc_to_ss_mc_prob[:, :, N_fg:]
     # sc_recon_ssfg_mc_feat_attn_agg: [1, 1280, N_fg + 961] 
     # sc_recon_feat*['ssfg']: [1, 1280, N_fg] => [1, N_fg, 1280]
@@ -2504,7 +2518,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             min_token_losses_sc_recon = all_token_losses_sc_recon_2types.min(dim=0).values
             loss_sc_recon_min = min_token_losses_sc_recon.mean()
             # *** Compute flow distillation loss. ***
-            # ss_tokens_flow_advantage: [1, 210=N_fg]. How much the flow loss is smaller than the attn loss at each token.
+            # ss_tokens_flow_advantage: [1, 210=N_fg]. How much the flow loss is smaller 
+            # than the attn loss at each token. The larger the better.
             ss_tokens_flow_advantage = all_token_losses_sc_recon_2types[0] - all_token_losses_sc_recon_2types[1]
             # Map advantages of ss tokens to sc tokens.
             # sc_tokens_flow_advantage: [1, 1, N_fg] * [1, N_fg, 961] => [1, 1, 961].
@@ -2513,7 +2528,9 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             # sc_tokens_flow_adv_normed: [1, 1, 961] -> [1, 961, 1].
             # TEMP: temperature for the sigmoid function.
             TEMP = 5
+            # The larger the advantage, the larger the distillation weight.
             sc_tokens_flow_weights = (TEMP * sc_tokens_flow_adv_normed).sigmoid().permute(0, 2, 1)
+            breakpoint()
 
             # sc_recon_feats_flow_attn[feat_name]: [1, 961, 210].
             # sc_recon_feats_flow_attn[feat_name] is generated by warping an identicay matrix, 
@@ -2546,8 +2563,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 # Cosine loss can limit the loss to [-1, 1], and is more robust to scale changes.
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
-#@torch.compiler.disable
-@torch.compile
+@conditional_compile(enable_compile=EnableCompile)
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask_3d, H, W, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
@@ -2633,7 +2649,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
     # sc_to_ss_prob, sc_to_mc_prob: [1, 961, N_fg + 961] -> [1, 961, N_fg] and [1, 961, 961].
     # sc_to_ss_mc_prob.sum(dim=1) == [1, 1, ..., 1] (N_fg + 961 ones).
-    # So after slicing, sc_to_ss_fg_tokens_prob, sc_to_mc_prob are also normalized along the subj comp tokens dim.
+    # So after slicing, sc_to_ss_fg_tokens_prob, sc_to_mc_prob are also normalized along the subj-comp tokens dim.
     sc_to_ss_fg_tokens_prob, sc_to_mc_prob = sc_to_ss_mc_prob[:, :, :fg_ss_q.shape[2]], sc_to_ss_mc_prob[:, :, fg_ss_q.shape[2]:]
     # View the whole fg area in the single instance as a single token.
     # Sum up the mapping probs from comp instances to the fg area of the single instances, so that 

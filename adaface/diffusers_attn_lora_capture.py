@@ -5,7 +5,7 @@ from typing import Callable, List, Optional, Tuple, Union, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
 from peft import LoraConfig, get_peft_model
-from peft.tuners.lora import LoraLayer, Linear
+import peft.tuners.lora as peft_lora
 from peft.tuners.lora.dora import DoraLinearLayer
 
 from einops import rearrange
@@ -73,16 +73,16 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if self.global_enable_lora:
             for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
                 if lora_layer_name == 'q':
-                    self.to_q_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, 
+                    self.to_q_lora   = peft_lora.Linear(lora_proj_layer,   'default', r=lora_rank, 
                                               lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'k':
-                    self.to_k_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, 
+                    self.to_k_lora   = peft_lora.Linear(lora_proj_layer,   'default', r=lora_rank, 
                                               lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'v':
-                    self.to_v_lora   = Linear(lora_proj_layer,   'default', r=lora_rank, 
+                    self.to_v_lora   = peft_lora.Linear(lora_proj_layer,   'default', r=lora_rank, 
                                               lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'out':
-                    self.to_out_lora = Linear(lora_proj_layer, 'default', r=lora_rank, 
+                    self.to_out_lora = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, 
                                               lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
 
     # LoRA layers can be enabled/disabled dynamically.
@@ -130,10 +130,11 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
+        query = attn.to_q(hidden_states)
         if self.enable_lora and self.to_q_lora is not None:
-            query = self.to_q_lora(hidden_states)
+            query2 = self.to_q_lora(hidden_states)
         else:
-            query = attn.to_q(hidden_states)
+            query2 = query
 
         scale = 1 / math.sqrt(query.size(-1))
 
@@ -223,6 +224,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             # query: [2, 8, 4096, 40] -> [2, 320, 4096]
             self.cached_activations['q'] = \
                 rearrange(query, 'b h n d -> b (h d) n').contiguous() * math.sqrt(scale)
+            self.cached_activations['q2'] = \
+                rearrange(query2, 'b h n d -> b (h d) n').contiguous() * math.sqrt(scale)
             # attn_prob, attn_score: [2, 8, 4096, 77]
             self.cached_activations['attn'] = attn_prob
             self.cached_activations['attnscore'] = attn_score
@@ -406,7 +409,7 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     ffn_lora_layers = {}
     lora_modules = {}
     for name, module in unet.named_modules():
-        if isinstance(module, LoraLayer):
+        if isinstance(module, peft_lora.LoraLayer):
             # We don't want to include cross-attn layers in ffn_lora_layers.
             if target_modules_pat is not None and re.search(target_modules_pat, name):
                 ffn_lora_layers[name] = module
