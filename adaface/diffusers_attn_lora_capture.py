@@ -131,6 +131,9 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
 
         query = attn.to_q(hidden_states)
+        # NOTE: there's a inconsistency between q lora and k, v loras. 
+        # k, v loras are applied to key and value (currently k, v loras are never enabled), 
+        # while q lora is applied to query2, and we keep query unchanged. 
         if self.enable_lora and self.to_q_lora is not None:
             query2 = self.to_q_lora(hidden_states)
         else:
