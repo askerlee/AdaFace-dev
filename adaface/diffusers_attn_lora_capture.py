@@ -449,7 +449,7 @@ def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_l
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[23, 24], out_dtype=torch.float32):
-    captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'attn_out') }
+    captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'q2', 'attn_out') }
 
     if not capture_ca_activations:
         return captured_activations
