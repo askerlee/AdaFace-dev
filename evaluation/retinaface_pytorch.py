@@ -129,7 +129,8 @@ class RetinaFaceClient(nn.Module):
 
     # Find facial areas of given image tensors and crop them.
     # Output: [BS, 3, 128, 128]
-    def crop_faces(self, images_ts, out_size=(128, 128), T=20, use_whole_image_if_no_face=False):
+    def crop_faces(self, images_ts, out_size=(128, 128), T=20, bleed=0, 
+                   use_whole_image_if_no_face=False):
         face_crops      = []
         failed_indices  = []
         face_coords     = []
@@ -155,9 +156,15 @@ class RetinaFaceClient(nn.Module):
                 w = facial_area.w
                 h = facial_area.h
 
+                if int(y) + bleed + T >= int(y + h) - bleed or int(x) + bleed + T >= int(x + w) - bleed:
+                    # After trimming bleed pixels, the face becomes too small.
+                    failed_indices.append(i)
+                    face_coords.append((0, 0, 0, 0))
+                    continue
+
                 # Extract detected face without alignment
                 # Crop on the input tensor, so that computation graph is preserved.
-                face_crop = image_ts[:, int(y) : int(y + h), int(x) : int(x + w)]
+                face_crop = image_ts[:, int(y) + bleed : int(y + h) - bleed, int(x) + bleed : int(x + w) - bleed]
                 face_coords.append((x, y, x+w, y+h))
             elif use_whole_image_if_no_face and not curr_img_found_face:
                 face_crop = image_ts

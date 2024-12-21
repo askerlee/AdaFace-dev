@@ -46,12 +46,12 @@ class ArcFaceWrapper(nn.Module):
 
     # Suppose images_ts has been normalized to [-1, 1].
     # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
-    def embed_image_tensor(self, images_ts, T=20, use_whole_image_if_no_face=False, enable_grad=True):
+    def embed_image_tensor(self, images_ts, T=20, bleed=0, use_whole_image_if_no_face=False, enable_grad=True):
         # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
         # the input tensor is preserved.
         # But the cropping operation is wrapped with torch.no_grad().
         faces, failed_indices, face_coords = \
-            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, 
+            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, bleed=bleed,
                                        use_whole_image_if_no_face=use_whole_image_if_no_face)
         
         # No face detected in any instances in the batch.
@@ -61,7 +61,7 @@ class ArcFaceWrapper(nn.Module):
         rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
         # Convert RGB to grayscale
         faces_gray = (faces * rgb_to_gray_weights).sum(dim=1, keepdim=True)
-        # Resize to (128, 128)
+        # Resize to (128, 128); arcface takes 128x128 images as input.
         faces_gray = F.interpolate(faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
         with torch.set_grad_enabled(enable_grad):
             faces_emb = self.arcface(faces_gray.to(self.dtype))
@@ -70,11 +70,11 @@ class ArcFaceWrapper(nn.Module):
     # T: minimal face height/width to be detected.
     # ref_images: the groundtruth images.
     # aligned_images: the generated   images.
-    def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, use_whole_image_if_no_face=False):
+    def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=4, use_whole_image_if_no_face=False):
         embs1, failed_indices1 = \
-            self.embed_image_tensor(ref_images, T, use_whole_image_if_no_face=False, enable_grad=False)
+            self.embed_image_tensor(ref_images, T, bleed, use_whole_image_if_no_face=False, enable_grad=False)
         embs2, failed_indices2 = \
-            self.embed_image_tensor(aligned_images, T, use_whole_image_if_no_face=use_whole_image_if_no_face, 
+            self.embed_image_tensor(aligned_images, T, bleed, use_whole_image_if_no_face=use_whole_image_if_no_face, 
                                     enable_grad=True)
         
         if len(failed_indices1) > 0:

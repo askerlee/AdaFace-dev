@@ -1726,21 +1726,22 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    def calc_arcface_align_loss(self, x_start, x_recon):
+    def calc_arcface_align_loss(self, x_start, x_recon, bleed=4):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
         x_start_pixels    = self.decode_first_stage(x_start)
         # subj-comp instance. 
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon)
-        loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels)
+        loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, bleed=bleed)
         loss_arcface_align = loss_arcface_align.to(x_start.dtype)
         return loss_arcface_align
 
-    def calc_arcface_adv_grad(self, x_start):
+    def calc_arcface_adv_grad(self, x_start, bleed=4):
         x_start.requires_grad = True
         orig_image = self.decode_first_stage_with_grad(x_start)
-        embs, failed_indices = self.arcface.embed_image_tensor(orig_image, T=20, use_whole_image_if_no_face=False, enable_grad=True)
+        embs, failed_indices = self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, 
+                                                               use_whole_image_if_no_face=False, enable_grad=True)
         if len(failed_indices) > 0:
             print(f"Failed to detect faces in image-{failed_indices}")
             return None
@@ -1777,7 +1778,7 @@ class LatentDiffusion(DDPM):
         # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
         # otherwise the face embeddings will be inaccurate.
         if do_adv_attack:
-            adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS])
+            adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=4)
             self.adaface_adv_iters_count += 1
             if adv_grad is not None:
                 # adv_grad_max: 1e-3
@@ -2266,8 +2267,9 @@ class LatentDiffusion(DDPM):
             # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
             # the input tensor is preserved.
             # But the cropping operation is wrapped with torch.no_grad().
+            # bleed=4: remove 4 pixels from each side of the detected face area.
             faces, failed_indices, face_coords = \
-                self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, 
+                self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, bleed=4,
                                                    use_whole_image_if_no_face=False)
             if len(failed_indices) == 0:
                 # If there are no failed indices, then we replace filtered_fg_mask 
@@ -2284,8 +2286,6 @@ class LatentDiffusion(DDPM):
                     # Make the mask area slightly smaller (height/width - 8 pixels) 
                     # than the detected face area.
                     x1, y1, x2, y2 = face_coords[i]
-                    x1, y1 = x1 + 4, y1 + 4
-                    x2, y2 = x2 - 4, y2 - 4
                     x1, y1, x2, y2 = [ int(coord/latent_scale) for coord in (x1, y1, x2, y2) ]
                     filtered_fg_mask[i, :, y1:y2, x1:x2] = 1
                     # Convert to int for nice printing.
