@@ -2541,6 +2541,14 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             ss_tokens_sparse_attn_advantages = all_token_losses_sc_recon_3types[:1] - all_token_losses_sc_recon_3types[1:]
             ss_tokens_sparse_attn_advantage, max_sparse_attn_type_indices  = \
                 ss_tokens_sparse_attn_advantages.max(dim=0)
+            # NOTE: The effect of detach(): if not doing detach(), since ss_tokens_sparse_attn_advantage are positively correlated 
+            # with sc_tokens_sparse_attn_weights (ignoring the normalization by the layer_norm), the coeffs of 
+            # loss_sparse_attn_distill, then minimizing loss_sparse_attn_distill will also minimize ss_tokens_sparse_attn_advantage,
+            # i.e., minimizing all_token_losses_sc_recon_3types[:1] == token losses of sc_recon_feats_attn_agg.
+            # This means, even if some image tokens are not well aligned using attn aggregation, they will be forced to align with the "wrong" tokens.
+            # This is undesirable. So we detach ss_tokens_sparse_attn_advantage to avoid this.
+            # Our purpose is to only minimize token losses of sc_recon_feats_attn_agg when the attn aggregation aligns better than flow/sameloc,
+            # to reduce the noise introduced by misaligned tokens.
             ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1).detach()
             ss_tokens_sparse_attn_adv_normed = F.layer_norm(ss_tokens_sparse_attn_advantage, (ss_tokens_sparse_attn_advantage.shape[2],), weight=None, bias=None, eps=1e-5)
             # TEMP: temperature for the sigmoid function.
