@@ -2787,7 +2787,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             get_captured_activations(capture_ca_activations, self.attn_capture_procs, 
                                      self.outfeat_capture_blocks,
                                      # Only capture the activations of the last 3 CA layers.
-                                     captured_layer_indices = [23, 24],
+                                     captured_layer_indices = [22, 23, 24],
                                      out_dtype=out_dtype)
 
         # Restore capture_ca_activations to False, and disable all loras.

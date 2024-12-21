@@ -2493,6 +2493,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 
     # feat_name: 'ssfg', 'mc'.
     for feat_name in sc_recon_feats_attn_agg:
+        # `int(layer_idx)` is necessary, otherwise it'll output "s4" due to torch.compile.
         print(f"Layer {int(layer_idx)} {objective_name} sc->{feat_name}:", end=' ')
         target_feat = target_feats[feat_name]
         losses_sc_recons[feat_name] = [] 
