@@ -2390,9 +2390,10 @@ class LatentDiffusion(DDPM):
                 x_recon  = x_recons[sel_step]
                 # Since do_comp_feat_distill is True, there are no faceless input images.
                 # Thus, x_start[0] is always a valid face image.
-                x_start0    = x_start.chunk(4)[0]
-                subj_recon  = x_recon.chunk(2)[0]
-                loss_arcface_align_comp = self.calc_arcface_align_loss(x_start0, subj_recon)
+                x_start0         = x_start.chunk(4)[0]
+                # Only compute arcface_align_loss on the subj comp block, as the subj single block has no gradient.
+                subj_comp_recon  = x_recon.chunk(4)[1]
+                loss_arcface_align_comp = self.calc_arcface_align_loss(x_start0, subj_comp_recon)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                 if loss_arcface_align_comp > 0:
                     print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
