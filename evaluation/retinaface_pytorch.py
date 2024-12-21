@@ -134,7 +134,7 @@ class RetinaFaceClient(nn.Module):
         face_crops      = []
         failed_indices  = []
         face_coords     = []
-
+    
         for i, image_ts in enumerate(images_ts):
             # [3, H, W] -> [H, W, 3]
             image_np = image_ts.detach().cpu().numpy().transpose(1, 2, 0)
@@ -156,16 +156,21 @@ class RetinaFaceClient(nn.Module):
                 w = facial_area.w
                 h = facial_area.h
 
-                if int(y) + bleed + T >= int(y + h) - bleed or int(x) + bleed + T >= int(x + w) - bleed:
-                    # After trimming bleed pixels, the face becomes too small.
+                y_start = max(0, int(y + bleed))
+                y_end   = min(image_ts.shape[1], int(y + h - bleed))
+                x_start = max(0, int(x + bleed))
+                x_end   = min(image_ts.shape[2], int(x + w - bleed))
+
+                if y_start + T >= y_end or x_start + T >= x_end:
+                    # After trimming bleed pixels, the face is < T, too small.
                     failed_indices.append(i)
                     face_coords.append((0, 0, 0, 0))
                     continue
 
                 # Extract detected face without alignment
                 # Crop on the input tensor, so that computation graph is preserved.
-                face_crop = image_ts[:, int(y) + bleed : int(y + h) - bleed, int(x) + bleed : int(x + w) - bleed]
-                face_coords.append((x, y, x+w, y+h))
+                face_crop = image_ts[:, y_start:y_end, x_start:x_end]
+                face_coords.append((x_start, y_start, x_end, y_end))
             elif use_whole_image_if_no_face and not curr_img_found_face:
                 face_crop = image_ts
                 face_coords.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
