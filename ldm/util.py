@@ -1985,7 +1985,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                   filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
-                                  recon_loss_discard_thres=0.4):
+                                  recon_loss_discard_thres=0.3):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -2013,7 +2013,8 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
                        'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
-                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 'ssfg_sparse_better_percent', 'mc_sparse_better_percent',
+                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 
+                       'ssfg_flow_better_percent', 'mc_flow_better_percent', 'mc_sameloc_better_percent',
                        'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight' ]
         
         effective_loss_names = [ 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc_min', 'loss_sc_to_ssfg_sparse_attns_distill',
@@ -2068,7 +2069,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                     filtered_fg_mask, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_loss_discard_thres=0.4, do_feat_attn_pooling=True):
+                                    recon_loss_discard_thres=0.3, do_feat_attn_pooling=True):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
     if filtered_fg_mask is None or filtered_fg_mask.sum() == 0:
         return {}
@@ -2076,7 +2077,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     # Feature map spatial sizes are all 64*64.
     # Remove layer 22, as the losses at this layer are often too large 
     # and are discarded at a high percentage.
-    elastic_matching_layer_weights = { 23: 1, 24: 1, 
+    elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                      }
     
     # Normalize the weights above so that each set sum to 1.
@@ -2213,16 +2214,18 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # sc_to_whole_mc_prob.mean() = 1, but sc_to_ss_fg_prob.mean() = N_fg / 961 = 210 / 961 = 0.2185.
         # So we normalize sc_to_ss_fg_prob first, before comparing it with sc_to_whole_mc_prob.
         sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.01).float().mean()
-
-        ssfg_sparse_better_percent, mc_sparse_better_percent = flow_distill_stats['ssfg_sparse_better_percent'], flow_distill_stats['mc_sparse_better_percent']
-        ssfg_avg_sparse_distill_weight,      mc_avg_sparse_distill_weight      = flow_distill_stats['ssfg_avg_sparse_distill_weight'],      flow_distill_stats['mc_avg_sparse_distill_weight']
+        ssfg_flow_better_percent, mc_flow_better_percent, mc_sameloc_better_percent = \
+            flow_distill_stats['ssfg_flow_better_percent'], flow_distill_stats['mc_flow_better_percent'], flow_distill_stats['mc_sameloc_better_percent']
+        ssfg_avg_sparse_distill_weight, mc_avg_sparse_distill_weight = \
+            flow_distill_stats['ssfg_avg_sparse_distill_weight'], flow_distill_stats['mc_avg_sparse_distill_weight']
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
-                              'sc_bg_percent':                  sc_bg_percent * LAYER_W,
-                              'ssfg_sparse_better_percent':      ssfg_sparse_better_percent * LAYER_W,
-                              'mc_sparse_better_percent':        mc_sparse_better_percent * LAYER_W,
-                              'ssfg_avg_sparse_distill_weight':           ssfg_avg_sparse_distill_weight * LAYER_W,
-                              'mc_avg_sparse_distill_weight':             mc_avg_sparse_distill_weight * LAYER_W
+                              'sc_bg_percent':                   sc_bg_percent * LAYER_W,
+                              'ssfg_flow_better_percent':        ssfg_flow_better_percent * LAYER_W,
+                              'mc_flow_better_percent':          mc_flow_better_percent * LAYER_W,
+                              'mc_sameloc_better_percent':       mc_sameloc_better_percent * LAYER_W,
+                              'ssfg_avg_sparse_distill_weight':  ssfg_avg_sparse_distill_weight * LAYER_W,
+                              'mc_avg_sparse_distill_weight':    mc_avg_sparse_distill_weight * LAYER_W
                             })
     
     return loss_dict
@@ -2490,7 +2493,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 
     # feat_name: 'ssfg', 'mc'.
     for feat_name in sc_recon_feats_attn_agg:
-        print(f"{objective_name} sc->{feat_name}:", end=' ')
+        print(f"Layer {int(layer_idx)} {objective_name} sc->{feat_name}:", end=' ')
         target_feat = target_feats[feat_name]
         losses_sc_recons[feat_name] = [] 
         all_token_losses_sc_recon[feat_name] = []
@@ -2587,7 +2590,9 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 
         losses_sc_recons[feat_name].append(loss_sc_recon_min)
         loss_sparse_attns_distill[feat_name]                            = loss_sparse_attn_distill
-        flow_distill_stats[f'{feat_name}_sparse_better_percent']        = sparse_better_percents.mean()
+        for i, sparse_better_percent in enumerate(sparse_better_percents):
+            # ssfg_flow_better_percent, mc_flow_better_percent, mc_sameloc_better_percent.
+            flow_distill_stats[f'{feat_name}_{matching_type_names[i+1]}_better_percent'] = sparse_better_percent
         flow_distill_stats[f'{feat_name}_avg_sparse_distill_weight']    = avg_sparse_distill_weight
         print(f"min {loss_sc_recon_min}, flow dist {loss_sparse_attn_distill}")
 
@@ -2611,7 +2616,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask_3d, H, W, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_loss_discard_thres=0.4, 
+                               recon_loss_discard_thres=0.3, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
@@ -2750,7 +2755,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # The estimated ss2sc_flow is returned and used in the next iteration.
         # On outfeat, the input ss2sc_flow is the ss2sc_flow estimated on attn_out.
         target_feats = { 'ssfg': ssfg_feat, 'mc': mc_feat }
-        losses_sc_recons_obj, loss_sparse_attns_distill_obj, sparse_better_percents_obj, ss2sc_flow, mc2sc_flow = \
+        losses_sc_recons_obj, loss_sparse_attns_distill_obj, flow_distill_stats, ss2sc_flow, mc2sc_flow = \
             calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, 
                                          target_feats, sc_feat, 
                                          ss2sc_flow, mc2sc_flow, 
@@ -2778,10 +2783,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
             losses_flow_attns_distill[feat_name].append(loss_sparse_attns_distill_obj[feat_name])
 
-        for stat_name in sparse_better_percents_obj:
+        for stat_name in flow_distill_stats:
             if stat_name not in all_flow_distill_stats:
                 all_flow_distill_stats[stat_name] = []
-            all_flow_distill_stats[stat_name].append(sparse_better_percents_obj[stat_name])
+            all_flow_distill_stats[stat_name].append(flow_distill_stats[stat_name])
 
     for feat_name, losses in losses_sc_recons.items():
         if len(losses) > 0:
