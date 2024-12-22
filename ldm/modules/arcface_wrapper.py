@@ -70,7 +70,7 @@ class ArcFaceWrapper(nn.Module):
     # T: minimal face height/width to be detected.
     # ref_images: the groundtruth images.
     # aligned_images: the generated   images.
-    def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=4, use_whole_image_if_no_face=False):
+    def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=2, use_whole_image_if_no_face=False):
         embs1, failed_indices1 = \
             self.embed_image_tensor(ref_images, T, bleed, use_whole_image_if_no_face=False, enable_grad=False)
         embs2, failed_indices2 = \

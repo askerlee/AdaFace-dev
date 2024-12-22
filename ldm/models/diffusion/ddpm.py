@@ -1726,7 +1726,7 @@ class LatentDiffusion(DDPM):
 
         return loss, loss_dict
 
-    def calc_arcface_align_loss(self, x_start, x_recon, bleed=4):
+    def calc_arcface_align_loss(self, x_start, x_recon, bleed=2):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
         x_start_pixels    = self.decode_first_stage(x_start)
@@ -1737,7 +1737,7 @@ class LatentDiffusion(DDPM):
         loss_arcface_align = loss_arcface_align.to(x_start.dtype)
         return loss_arcface_align
 
-    def calc_arcface_adv_grad(self, x_start, bleed=4):
+    def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
         orig_image = self.decode_first_stage_with_grad(x_start)
         embs, failed_indices = self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, 
@@ -1778,7 +1778,7 @@ class LatentDiffusion(DDPM):
         # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
         # otherwise the face embeddings will be inaccurate.
         if do_adv_attack:
-            adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=4)
+            adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=2)
             self.adaface_adv_iters_count += 1
             if adv_grad is not None:
                 # adv_grad_max: 1e-3
