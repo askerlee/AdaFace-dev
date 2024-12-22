@@ -2370,7 +2370,7 @@ class LatentDiffusion(DDPM):
                 # Only compute arcface_align_loss on the subj comp block, as the subj single block has no gradient.
                 subj_comp_recon  = x_recon.chunk(4)[1]
                 loss_arcface_align_comp, sc_face_coords = \
-                    self.calc_arcface_align_loss(x_start0, subj_comp_recon)
+                    self.calc_arcface_align_loss(x_start0, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                 if loss_arcface_align_comp > 0:
                     print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
@@ -2385,8 +2385,13 @@ class LatentDiffusion(DDPM):
                     sc_fg_mask = torch.zeros_like(fg_mask.chunk(4)[0])
                     # When loss_arcface_align_comp > 0, sc_face_coords is always not None.
                     # sc_face_coords: [[22, 15, 36, 33]].
+                    PAD = 4
                     for i in range(len(sc_face_coords)):
                         x1, y1, x2, y2 = sc_face_coords[i]
+                        H, W = x_start0.shape[-2:]
+                        x1, y1, x2, y2 = max(x1-PAD, 0), max(y1-PAD, 0), min(x2+PAD, W), min(y2+PAD, H)
+                        # Add 4 pixels (2*bleed that undoes the bleed and adds 2 extra pixels) to each side of 
+                        # the detected face area, to protect it from being suppressed.
                         sc_fg_mask[i, :, y1:y2, x1:x2] = 1
                     # ca_layers_activations['attnscore']: { 22 -> [4, 8, 4096, 77], 23 -> [4, 8, 4096, 77], 24 -> [4, 8, 4096, 77] }.
                     # sc_attn_scores: { 22 -> [1, 8, 64, 64], 23 -> [1, 8, 64, 64], 24 -> [1, 8, 64, 64] }.
