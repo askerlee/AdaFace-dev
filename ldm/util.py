@@ -1418,6 +1418,9 @@ def mix_cls_subj_embeddings(prompt_emb, subj_indices_1b_N, cls_subj_mix_scale=0.
 
     return prompt_emb_mixed 
 
+# masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
+# Don't call like:
+# masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, (img_mask, fg_mask))
 def select_and_repeat_instances(sel_indices, REPEAT, *args):
     rep_args = []
     for arg in args:
@@ -1638,13 +1641,23 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
                                        keep_norm, std_dim, norm_dim, verbose=verbose)
     return noised_embeddings
 
+# pixel_bboxes: long tensor of [BS, 4].
+def pixel_bboxes_to_latent(pixel_bboxes, W, latent_W):
+    if pixel_bboxes is None:
+        return None
+    # pixel_bboxes are coords on ss_x_recon_pixels, 512*512.
+    # However, fg_mask is on the latents, 64*64. 
+    # Therefore, we need to scale them down by 8.
+    pixel_bboxes = pixel_bboxes * latent_W // W
+    return pixel_bboxes
+
 # At scaled background, fill new x_start with random values (100% noise). 
 # At scaled foreground, fill new x_start with noised scaled x_start. 
-def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
+def init_x_with_fg_from_training_image(x_start, fg_mask, 
                                        base_scale_range=(0.8, 1.0),
                                        fg_noise_amount=0.2):
-    x_start_maskfilled = torch.where(filtered_fg_mask.bool(), x_start, torch.randn_like(x_start))
-    fg_mask_percent = filtered_fg_mask.float().sum() / filtered_fg_mask.numel()
+    x_start_maskfilled = torch.where(fg_mask.bool(), x_start, torch.randn_like(x_start))
+    fg_mask_percent = fg_mask.float().sum() / fg_mask.numel()
     # print(fg_mask_percent)
     base_scale_range_lb, base_scale_range_ub = base_scale_range
 
@@ -1666,12 +1679,12 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
         # fg areas are small. Scale the fg area to 80%-100% of the original size.
         fg_rand_scale = torch.rand(1).item() * (base_scale_range_ub - base_scale_range_lb) + base_scale_range_lb
 
-    # Resize x_start_maskfilled and filtered_fg_mask by rand_scale. They have different numbers of channels,
+    # Resize x_start_maskfilled and fg_mask by rand_scale. They have different numbers of channels,
     # so we need to concatenate them at dim 1 before resizing.
-    x_mask = torch.cat([x_start_maskfilled, fg_mask, filtered_fg_mask], dim=1)
+    x_mask = torch.cat([x_start_maskfilled, fg_mask], dim=1)
     x_mask_scaled = F.interpolate(x_mask, scale_factor=fg_rand_scale, mode='bilinear', align_corners=False)
 
-    # Pad filtered_fg_mask_scaled to the original size, with left/right padding roughly equal
+    # Pad fg_mask_scaled to the original size, with left/right padding roughly equal
     pad_w1 = int((x_start.shape[3] - x_mask_scaled.shape[3]) / 2)
     pad_h1 = int((x_start.shape[2] - x_mask_scaled.shape[2]) / 2)
     pad_w2 =      x_start.shape[3] - x_mask_scaled.shape[3] - pad_w1
@@ -1698,22 +1711,22 @@ def init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask,
     x_mask_scaled_padded = F.pad(x_mask_scaled, (pad_w1, pad_w2, pad_h1, pad_h2),
                                  mode='constant', value=0)
 
-    C1, C2, C3 = x_start_maskfilled.shape[1], fg_mask.shape[1], filtered_fg_mask.shape[1]
-    # Unpack x_mask_scaled_padded into x_start, fg_mask and filtered_fg_mask.
-    # x_start_scaled_padded: [2, 4, 64, 64]. fg_mask/filtered_fg_mask: [2, 1, 64, 64].
-    x_start_scaled_padded, fg_mask, filtered_fg_mask \
-        = x_mask_scaled_padded.split([C1, C2, C3], dim=1)
+    C1, C2 = x_start_maskfilled.shape[1], fg_mask.shape[1]
+    # Unpack x_mask_scaled_padded into x_start, fg_mask.
+    # x_start_scaled_padded: [2, 4, 64, 64]. fg_mask: [2, 1, 64, 64].
+    x_start_scaled_padded, fg_mask \
+        = x_mask_scaled_padded.split([C1, C2], dim=1)
 
-    # In filtered_fg_mask, the padded areas are filled with 0. 
+    # In fg_mask, the padded areas are filled with 0. 
     # So these pixels always take values from the random tensor.
     # In fg area, x_start takes values from x_start_scaled_padded 
     # (the fg of x_start_scaled_padded is a scaled-down version of the fg of the original x_start).
-    x_start = torch.where(filtered_fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
+    x_start = torch.where(fg_mask.bool(), x_start_scaled_padded, torch.randn_like(x_start))
     # Add noise to the fg area. Noise amount is fixed at 0.2.
     # At the fg area, keep 80% of the original x_start values and add 20% of noise. 
     # x_start: [2, 4, 64, 64]
     x_start = torch.randn_like(x_start) * fg_noise_amount + x_start * (1 - fg_noise_amount)
-    return x_start, fg_mask, filtered_fg_mask
+    return x_start, fg_mask
 
 # pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
 # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
@@ -1748,12 +1761,11 @@ def calc_recon_loss(loss_func, model_output, target, img_mask, fg_mask,
 # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
 # (But there are still other losses used after calling this function.)
 def calc_recon_and_complem_losses(model_output, target, ca_layers_activations,
-                                  all_subj_indices, img_mask, fg_mask, instances_have_fg_mask, 
+                                  all_subj_indices, img_mask, fg_mask, 
                                   bg_pixel_weight, BLOCK_SIZE):
 
     loss_subj_mb_suppress = calc_subj_masked_bg_suppress_loss(ca_layers_activations['attnscore'],
-                                                                all_subj_indices, BLOCK_SIZE, fg_mask, 
-                                                                instances_have_fg_mask)
+                                                              all_subj_indices, BLOCK_SIZE, fg_mask)
 
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
     loss_recon, _ = calc_recon_loss(F.mse_loss, model_output, target, img_mask, fg_mask, 
@@ -1882,10 +1894,11 @@ def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, B
     return loss_feat_delta_align, loss_subj_attn_norm_distill
 
 # calc_subj_masked_bg_suppress_loss() is called only during normal recon iterations.
-def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, 
-                                      fg_mask, instance_has_fg_mask=None):
+def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg_mask):
+    # fg_mask.float().mean() >= 0.99: almost no background to suppress.
+    # This happens when x_start is randomly initialized, and fg_mask is not available (no face detected).
     if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
-        or (instance_has_fg_mask is not None and instance_has_fg_mask.sum() == 0):
+      or fg_mask.float().mean() >= 0.99:
         return 0
 
     # Discard the first few bottom layers from alignment.
@@ -1966,8 +1979,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE,
         # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
         # activations conform to the margin restrictions.
         loss_layer_subj_mb_suppress   = masked_mean(layer_subj_mb_excess, 
-                                                    layer_subj_mb_excess > 0, 
-                                                    instance_weights=instance_has_fg_mask)
+                                                    layer_subj_mb_excess > 0)
 
         # loss_layer_subj_bg_contrast_at_mf is usually 0, 
         # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
@@ -1980,9 +1992,8 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE,
     return loss_subj_mb_suppress
 
 
-def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations, 
-                                  is_comp_init_fg_from_training_image, fg_mask_avail_ratio,
-                                  filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
+def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
+                                  fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
                                   recon_loss_discard_thres=0.3):
@@ -1991,21 +2002,21 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
     ca_outfeats  = ca_layers_activations['outfeat']
 
-    # NOTE: loss_comp_fg_bg_preserve is applied only when comp_init_fg_from_training_image, 
-    # i.e., when the fg_mask is available.
-    if is_comp_init_fg_from_training_image and fg_mask_avail_ratio > 0:
-        # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-        # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
-        # the background in the training images, which is not desirable.
-        # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0, 
-        # excluding the instance from the fg_bg_preserve_loss.
-
+    # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
+    # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
+    # the background in the training images, which is not desirable.
+    # In fg_mask, if an instance has no mask, then its fg_mask is all 0, 
+    # excluding the instance from the fg_bg_preserve_loss.
+    # fg_mask.float().mean() < 0.99: the fg is masked out in the fg_mask.
+    # Otherwise, all the fg_mask is 1, which happens when x_start is randomly initialized,
+    # and fg_mask is not available (no face detected).
+    if (fg_mask is not None) and (fg_mask.float().mean() < 0.99):
         comp_subj_bg_preserve_loss_dict = \
             calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats,
                                             ca_layers_activations['attn_out'],
                                             ca_layers_activations['q2'],
                                             ca_layers_activations['attn'], 
-                                            filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE,
+                                            fg_mask, all_subj_indices_1b, BLOCK_SIZE,
                                             recon_feat_objectives=recon_feat_objectives,
                                             recon_loss_discard_thres=recon_loss_discard_thres,
                                             do_feat_attn_pooling=True)
@@ -2065,13 +2076,13 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 # So features under comp prompts should be close to features under single prompts, at fg_mask areas.
 # (The features at background areas under comp prompts are the compositional contents, which shouldn't be regularized.) 
 # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress.
-# Only ss_fg_mask in (resized) filtered_fg_mask is used for calc_elastic_matching_loss().
+# Only ss_fg_mask in (resized) fg_mask is used for calc_elastic_matching_loss().
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
-                                    filtered_fg_mask, subj_indices, BLOCK_SIZE,
+                                    fg_mask, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
                                     recon_loss_discard_thres=0.3, do_feat_attn_pooling=True):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
-    if filtered_fg_mask is None or filtered_fg_mask.sum() == 0:
+    if fg_mask is None or fg_mask.sum() == 0:
         return {}
 
     # Feature map spatial sizes are all 64*64.
@@ -2130,7 +2141,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
         # fg_mask_4b: [4, 1, 64, 64] => [4, 1, 8, 8]
         fg_mask_4b \
-            = resize_mask_to_target_size(filtered_fg_mask, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
+            = resize_mask_to_target_size(fg_mask, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
                                          mode="nearest|bilinear", warn_on_all_zero=False)
         # ss_fg_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
         ss_fg_mask = fg_mask_4b.chunk(4)[0]

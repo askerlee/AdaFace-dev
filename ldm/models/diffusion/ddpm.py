@@ -15,11 +15,11 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
                         calc_recon_and_complem_losses, calc_feat_delta_and_attn_norm_loss, \
-                        save_grid, init_x_with_fg_from_training_image, \
+                        calc_subj_masked_bg_suppress_loss, save_grid, init_x_with_fg_from_training_image, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, \
-                        count_optimized_params, count_params, calc_dyn_loss_scale, calc_stats, torch_uniform
+                        count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -70,7 +70,8 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_scale=0.6,
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
-                 recon_subj_bg_suppress_loss_weight=0.,
+                 recon_subj_mb_suppress_loss_weight=0.,
+                 comp_sc_subj_mb_suppress_loss_weight=0.,
                  pred_l2_loss_weight=0, #1e-4,
                  subj_attn_norm_distill_loss_weight=0,
                  feat_delta_align_loss_weight=0,
@@ -117,7 +118,8 @@ class DDPM(pl.LightningModule):
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
-        self.recon_subj_bg_suppress_loss_weight     = recon_subj_bg_suppress_loss_weight
+        self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
+        self.comp_sc_subj_mb_suppress_loss_weight        = comp_sc_subj_mb_suppress_loss_weight
         self.pred_l2_loss_weight                    = pred_l2_loss_weight
         self.subj_attn_norm_distill_loss_weight     = subj_attn_norm_distill_loss_weight
         self.feat_delta_align_loss_weight           = feat_delta_align_loss_weight
@@ -825,14 +827,6 @@ class LatentDiffusion(DDPM):
         # first_stage_key="image"
         x_start = self.get_input(batch, self.first_stage_key)
 
-        instances_have_fg_mask  = batch['has_fg_mask']
-        # Temporarily disable fg_mask for debugging.
-        disable_fg_mask = False #True
-        if disable_fg_mask:
-            instances_have_fg_mask[:] = False
-
-        self.iter_flags['fg_mask_avail_ratio']  = instances_have_fg_mask.sum() / instances_have_fg_mask.shape[0]
-
         # If it's a compositional distillation iteration, only the first instance in the batch is used.
         # Therefore, self.batch_1st_subject_name is the only subject name in the batch.
         self.batch_1st_subject_name  = batch['subject_name'][0]
@@ -877,13 +871,13 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
-        if self.iter_flags['do_comp_feat_distill'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # If do_comp_feat_distill, is_comp_init_fg_from_training_image is always enabled.
-            # It's OK, since when do_zero_shot, we have a large diverse set of training images,
-            # and always initializing from training images won't lead to overfitting.
-            self.iter_flags['is_comp_init_fg_from_training_image'] = True
+        if self.iter_flags['do_comp_feat_distill']:
+            # If do_comp_feat_distill, is_comp_init_fg_from_training_image is enabled at 80% of the time.
+            p_init_comp_fg_from_training_image = 0.8
         else:
-            self.iter_flags['is_comp_init_fg_from_training_image'] = False
+            p_init_comp_fg_from_training_image = 0
+
+        self.iter_flags['is_comp_init_fg_from_training_image'] = (torch.rand(1) < p_init_comp_fg_from_training_image).item()
 
         if self.iter_flags['use_fp_trick']:
             if self.iter_flags['do_comp_feat_distill']:
@@ -957,8 +951,7 @@ class LatentDiffusion(DDPM):
             fg_mask = fg_mask.unsqueeze(1).to(x_start.device)
             fg_mask = F.interpolate(fg_mask, size=x_start.shape[-2:], mode='nearest')
         else:
-            assert self.iter_flags['fg_mask_avail_ratio'] == 0
-            fg_mask = None
+            breakpoint()
 
         print(f"Rank {self.trainer.global_rank}: {batch['subject_name']}")
 
@@ -970,9 +963,9 @@ class LatentDiffusion(DDPM):
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
             # will be repeated automatically. Therefore, we don't need to manually repeat them later.
-            batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask, instances_have_fg_mask = \
+            batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask = \
                 select_and_repeat_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
-                                            x_start, img_mask, fg_mask, instances_have_fg_mask)
+                                            x_start, img_mask, fg_mask)
             self.iter_flags['same_subject_in_batch'] = True
         else:
             self.iter_flags['same_subject_in_batch'] = False
@@ -1012,7 +1005,6 @@ class LatentDiffusion(DDPM):
             # On random IDs, we don't need to consider img_mask and fg_mask.
             img_mask = None
             fg_mask  = None
-            instances_have_fg_mask[:] = False
             # In a gen_rand_id_for_id2img iteration, simply denoise a totally random x_start.
             x_start = torch.randn_like(x_start)
             self.iter_flags['faceless_img_count'] = 0
@@ -1088,12 +1080,10 @@ class LatentDiffusion(DDPM):
                 # clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
                 # We don't repeat id2img_neg_prompt_embs, as it's constant and identical for different instances.
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
-                instances_have_fg_mask, self.batch_subject_names, \
-                id2img_prompt_embs, zs_clip_fgbg_features = \
+                self.batch_subject_names, id2img_prompt_embs, zs_clip_fgbg_features = \
                     select_and_repeat_instances(slice(0, 1), BS, 
                                                 x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                                instances_have_fg_mask, self.batch_subject_names, 
-                                                id2img_prompt_embs, zs_clip_fgbg_features)
+                                                self.batch_subject_names, id2img_prompt_embs, zs_clip_fgbg_features)
                 
             # ** Perturb the zero-shot ID image prompt embeddings with probability 0.6. **
             # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
@@ -1156,15 +1146,13 @@ class LatentDiffusion(DDPM):
                 # clip_bg_features is used by ConsistentID adaface encoder, 
                 # so we repeat zs_clip_fgbg_features as well.
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
-                instances_have_fg_mask, self.batch_subject_names, \
-                zs_clip_fgbg_features, \
+                self.batch_subject_names, zs_clip_fgbg_features, \
                 id2img_prompt_embs, id2img_neg_prompt_embs, \
                 captions, subj_single_prompts, subj_comp_prompts, \
                 cls_single_prompts, cls_comp_prompts \
                     = select_and_repeat_instances(slice(0, HALF_BS), 1, 
                                                   x_start, batch_images_unnorm, img_mask, fg_mask, 
-                                                  instances_have_fg_mask, self.batch_subject_names, 
-                                                  zs_clip_fgbg_features,
+                                                  self.batch_subject_names, zs_clip_fgbg_features,
                                                   id2img_prompt_embs, id2img_neg_prompt_embs,
                                                   captions, subj_single_prompts, subj_comp_prompts,
                                                   cls_single_prompts, cls_comp_prompts)
@@ -1175,7 +1163,6 @@ class LatentDiffusion(DDPM):
         # aug_mask is renamed as img_mask.
         self.iter_flags['img_mask']                 = img_mask
         self.iter_flags['fg_mask']                  = fg_mask
-        self.iter_flags['instances_have_fg_mask']   = instances_have_fg_mask
         self.iter_flags['delta_prompts']            = delta_prompts
         self.iter_flags['compos_partial_prompts']   = batch['compos_partial_prompt']
         self.iter_flags['image_unnorm']             = batch_images_unnorm
@@ -1557,7 +1544,6 @@ class LatentDiffusion(DDPM):
         cond_context = (c_prompt_emb, c_in, extra_info)
         img_mask            = self.iter_flags['img_mask']
         fg_mask             = self.iter_flags['fg_mask']
-        instances_have_fg_mask  = self.iter_flags['instances_have_fg_mask']
 
         # all_subj_indices are used to extract the attention weights
         # of the subject tokens for the attention loss computation.
@@ -1582,7 +1568,6 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            masks = (img_mask, fg_mask, None, instances_have_fg_mask)
             # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
             # and the bg mask area filled with noise. Returned only for logging.
             # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
@@ -1593,11 +1578,10 @@ class LatentDiffusion(DDPM):
             # masks will still be used in the loss computation. So we update them as well.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
                 self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
-                                                    masks, fg_noise_amount=0.2,
+                                                    (img_mask, fg_mask), fg_noise_amount=0.2,
                                                     BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
-            img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask = masks
-            self.iter_flags['fg_mask_avail_ratio'] = instances_have_fg_mask.float().mean()
+            img_mask, fg_mask = masks
 
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
@@ -1688,8 +1672,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_normal_recon']:  
             loss_normal_recon = \
                 self.calc_normal_recon_loss(x_start, noise, cond_context, img_mask, fg_mask, 
-                                            instances_have_fg_mask, all_subj_indices, 
-                                            loss_dict, session_prefix)
+                                            all_subj_indices, loss_dict, session_prefix)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
@@ -1710,7 +1693,7 @@ class LatentDiffusion(DDPM):
             loss_comp_feat_distill_loss = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
                                                  extra_info['compos_partial_prompts'],
-                                                 filtered_fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                                 fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
         ##### end of do_comp_feat_distill #####
@@ -1733,15 +1716,21 @@ class LatentDiffusion(DDPM):
         # subj-comp instance. 
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon)
-        loss_arcface_align = self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, bleed=bleed)
+        # face_coords: long tensor of [BS, 4], where BS is the batch size.
+        loss_arcface_align, face_coords = \
+            self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, bleed=bleed)
         loss_arcface_align = loss_arcface_align.to(x_start.dtype)
-        return loss_arcface_align
+        # Map the face_coords from the pixel space to latent space (scale down by 8x).
+        # face_coords is None if there are no faces detected in x_recon.
+        face_coords = pixel_bboxes_to_latent(face_coords, x_start_pixels.shape[-1], x_start.shape[-1])
+        return loss_arcface_align, face_coords
 
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
         orig_image = self.decode_first_stage_with_grad(x_start)
-        embs, failed_indices = self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, 
-                                                               use_whole_image_if_no_face=False, enable_grad=True)
+        embs, failed_indices, face_coords = \
+            self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, 
+                                            use_whole_image_if_no_face=False, enable_grad=True)
         if len(failed_indices) > 0:
             print(f"Failed to detect faces in image-{failed_indices}")
             return None
@@ -1758,8 +1747,7 @@ class LatentDiffusion(DDPM):
         return adv_grad
 
     def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
-                                instances_have_fg_mask, all_subj_indices, 
-                                loss_dict, session_prefix):
+                               all_subj_indices, loss_dict, session_prefix):
         loss_normal_recon = 0
         BLOCK_SIZE = x_start.shape[0]
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
@@ -1841,8 +1829,8 @@ class LatentDiffusion(DDPM):
 
         loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
             calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
-                                            all_subj_indices, img_mask, fg_mask, instances_have_fg_mask,
-                                            bg_pixel_weight, x_start.shape[0])
+                                          all_subj_indices, img_mask, fg_mask,
+                                          bg_pixel_weight, x_start.shape[0])
         v_loss_recon = loss_recon.mean().detach().item()
     
         # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
@@ -1859,12 +1847,14 @@ class LatentDiffusion(DDPM):
         # loss_recon: 0.02~0.03.
         # loss_pred_l2: 0.92~0.99. pred_l2_loss_weight: 0, DISABLED.
         # If pred_l2_loss_weight == 1e-3 -> 1e-3, 1/20~1/30 of recon loss.
+        #　loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
         loss_normal_recon += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
-                + loss_subj_mb_suppress * self.recon_subj_bg_suppress_loss_weight
+                             + loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
-            loss_arcface_align_recon = self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
+            loss_arcface_align_recon, face_coords = \
+                self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
             if loss_arcface_align_recon > 0:
                 loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
@@ -2084,7 +2074,7 @@ class LatentDiffusion(DDPM):
         return loss_unet_distill
 
     # Do denoising, collect the attention activations for computing the losses later.
-    # masks: (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask). 
+    # masks: (img_mask, fg_mask). 
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
@@ -2094,28 +2084,22 @@ class LatentDiffusion(DDPM):
 
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
-        # filtered_fg_mask is always passed in as None, so we don't assign it here.
-        img_mask, fg_mask, _, instances_have_fg_mask = masks
+        img_mask, fg_mask = masks
 
-        if self.iter_flags['is_comp_init_fg_from_training_image'] and self.iter_flags['fg_mask_avail_ratio'] > 0:
-            # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-            # Therefore, using fg_mask for init_x_with_fg_from_training_image() will force the model remember 
-            # the background in the training images, which is not desirable.
-            # In filtered_fg_mask, if an instance has no mask, then its fg_mask is all 0.
-            # fg_mask is 4D (added 1D in shared_step()). So expand instances_have_fg_mask to 4D.
-            filtered_fg_mask = fg_mask.to(x_start.dtype) * instances_have_fg_mask.view(-1, 1, 1, 1)
-            # x_start, fg_mask, filtered_fg_mask are scaled in init_x_with_fg_from_training_image()
-            # by the same scale, to make the fg_mask and filtered_fg_mask consistent with x_start.
+        if self.iter_flags['is_comp_init_fg_from_training_image']:
+            # x_start, fg_mask are scaled in init_x_with_fg_from_training_image()
+            # by the same scale, to make the fg_mask consistent with x_start.
             # fg_noise_amount = 0.2
-            x_start, fg_mask, filtered_fg_mask = \
-                init_x_with_fg_from_training_image(x_start, fg_mask, filtered_fg_mask, 
+            x_start, fg_mask = \
+                init_x_with_fg_from_training_image(x_start, fg_mask, 
                                                    base_scale_range=(0.8, 1.0),
                                                    fg_noise_amount=fg_noise_amount)
 
         else:
-            # We have to use random noise for x_start, as the training images 
-            # are not used for initialization.
+            # 20% of the time, we use random noise for x_start, and 80% of the time, we use the training images.
             x_start.normal_()
+            # Set fg_mask to be the whole image.
+            fg_mask = torch.ones_like(fg_mask)
 
         # Make the 4 instances in x_start, noise and t the same.
         x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
@@ -2124,9 +2108,8 @@ class LatentDiffusion(DDPM):
         x_start_maskfilled = x_start
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
-        masks = (img_mask, fg_mask, filtered_fg_mask, instances_have_fg_mask)
         # Update masks to be a 1-repeat-4 structure.
-        masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks)
+        masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
 
         # num_primed_denoising_steps iterates from 1 to 4, with equal probs.
         num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 1
@@ -2251,7 +2234,7 @@ class LatentDiffusion(DDPM):
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
     def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompts,
-                                    filtered_fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                    fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
         losses_sc_mc_bg_match           = []
@@ -2264,43 +2247,37 @@ class LatentDiffusion(DDPM):
             # used to detect the face area in the subject-single images.
             ss_x_recon = x_recons[-1].chunk(4)[0]
             ss_x_recon_pixels = self.decode_first_stage(ss_x_recon)
-            # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
-            # the input tensor is preserved.
-            # But the cropping operation is wrapped with torch.no_grad().
+            # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
+            # So we don't need to wrap it here.
             # bleed=4: remove 4 pixels from each side of the detected face area.
-            faces, failed_indices, face_coords = \
+            faces, failed_indices, ss_face_coords = \
                 self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, bleed=4,
                                                    use_whole_image_if_no_face=False)
             if len(failed_indices) == 0:
-                # If there are no failed indices, then we replace filtered_fg_mask 
+                # If there are no failed indices, then we replace fg_mask 
                 # with the detected face mask.
-                orig_mask = filtered_fg_mask
-                filtered_fg_mask = torch.zeros_like(filtered_fg_mask)
-                # filtered_fg_mask is for the whole batch, and face_coords is for the first block.
-                # Therefore, len(face_coords) == len(filtered_fg_mask) // 4.
-                for i in range(len(face_coords)):
-                    # face_coords are coords on ss_x_recon_pixels, 512*512.
-                    # However, filtered_fg_mask is on the latents, 64*64. 
-                    # Therefore, we need to scale them down by 8.
-                    latent_scale = ss_x_recon_pixels.shape[-1] // filtered_fg_mask.shape[-1]
-                    # Make the mask area slightly smaller (height/width - 8 pixels) 
-                    # than the detected face area.
-                    x1, y1, x2, y2 = face_coords[i]
-                    x1, y1, x2, y2 = [ int(coord/latent_scale) for coord in (x1, y1, x2, y2) ]
-                    filtered_fg_mask[i, :, y1:y2, x1:x2] = 1
-                    # Convert to int for nice printing.
-                    face_coords_i = [ int(coord) for coord in face_coords[i] ]
-                    print(f"Rank {self.trainer.global_rank} SS face coords {i}: {face_coords_i}.", end=' ')
+                orig_mask = fg_mask
+                fg_mask = torch.zeros_like(fg_mask)
+                # ss_face_coords are coords on ss_x_recon_pixels, 512*512.
+                # However, fg_mask is on the latents, 64*64. 
+                # Therefore, we need to scale them down by 8.
+                ss_face_coords = pixel_bboxes_to_latent(ss_face_coords, ss_x_recon_pixels.shape[-1], fg_mask.shape[-1])
+                # fg_mask is for the whole batch, and ss_face_coords is for the first block.
+                # Therefore, len(ss_face_coords) == len(fg_mask) // 4.
+                for i in range(len(ss_face_coords)):
+                    x1, y1, x2, y2 = ss_face_coords[i]
+                    fg_mask[i, :, y1:y2, x1:x2] = 1
+                    print(f"Rank {self.trainer.global_rank} SS face coords {i}: {ss_face_coords[i]}.", end=' ')
 
-                overlap_mask = torch.logical_and(orig_mask, filtered_fg_mask).chunk(4)[0]
+                overlap_mask = torch.logical_and(orig_mask, fg_mask).chunk(4)[0]
                 mask_overlap_ratio = overlap_mask.sum() / orig_mask.chunk(4)[0].sum()
                 print(f"Overlap ratio: {mask_overlap_ratio.item():.2f}")
                 loss_dict.update({f'{session_prefix}/mask_overlap_ratio': mask_overlap_ratio.item()})
 
-            # Otherwise, we still use the input filtered_fg_mask. This is sometimes inaccurate,
+            # Otherwise, we still use the input fg_mask. This is sometimes inaccurate,
             # but maybe at 80% of the time, this corresponds to the face mask in the output images.
         
-        # Otherwise, we still use the input filtered_fg_mask. 
+        # Otherwise, we still use the input fg_mask. 
 
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
@@ -2318,12 +2295,10 @@ class LatentDiffusion(DDPM):
             # Since we scaled down L2 outfeat recon loss, most recon losses will < 0.2.
             # But we use a step-dependent recon_loss_discard_thres to keep most of the losses.
             recon_loss_discard_thres = 0.2 + 0.05 * step_idx
-            # Only ss_fg_mask in (resized) filtered_fg_mask is used for calc_elastic_matching_loss().
+            # Only ss_fg_mask in (resized) fg_mask is used for calc_elastic_matching_loss().
             loss_comp_fg_bg_preserve = \
                 calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
-                                              self.iter_flags['is_comp_init_fg_from_training_image'],
-                                              self.iter_flags['fg_mask_avail_ratio'],
-                                              filtered_fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
+                                              fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
                                               loss_dict, session_prefix,
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
@@ -2371,7 +2346,7 @@ class LatentDiffusion(DDPM):
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
-            loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
+            loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve':    loss_comp_fg_bg_preserve.mean().detach().item() })
         # loss_subj_attn_norm_distill: 0.08~0.12.
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
@@ -2386,6 +2361,7 @@ class LatentDiffusion(DDPM):
             # Trying to calc arcface_align_loss from difficult to easy steps.
             # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
             max_arcface_loss_calc_count = 1
+            loss_comp_sc_subj_mb_suppress = torch.tensor(0, device=x_start.device, dtype=x_start.dtype)
             for sel_step in range(len(x_recons)):
                 x_recon  = x_recons[sel_step]
                 # Since do_comp_feat_distill is True, there are no faceless input images.
@@ -2393,7 +2369,8 @@ class LatentDiffusion(DDPM):
                 x_start0         = x_start.chunk(4)[0]
                 # Only compute arcface_align_loss on the subj comp block, as the subj single block has no gradient.
                 subj_comp_recon  = x_recon.chunk(4)[1]
-                loss_arcface_align_comp = self.calc_arcface_align_loss(x_start0, subj_comp_recon)
+                loss_arcface_align_comp, sc_face_coords = \
+                    self.calc_arcface_align_loss(x_start0, subj_comp_recon)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                 if loss_arcface_align_comp > 0:
                     print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
@@ -2404,6 +2381,21 @@ class LatentDiffusion(DDPM):
                     arcface_align_comp_loss_scale = self.comp_distill_iter_gap
                     loss_comp_feat_distill_loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
                     arcface_loss_calc_count += 1
+
+                    sc_fg_mask = torch.zeros_like(fg_mask.chunk(4)[0])
+                    # When loss_arcface_align_comp > 0, sc_face_coords is always not None.
+                    # sc_face_coords: [[22, 15, 36, 33]].
+                    for i in range(len(sc_face_coords)):
+                        x1, y1, x2, y2 = sc_face_coords[i]
+                        sc_fg_mask[i, :, y1:y2, x1:x2] = 1
+                    # ca_layers_activations['attnscore']: { 22 -> [4, 8, 4096, 77], 23 -> [4, 8, 4096, 77], 24 -> [4, 8, 4096, 77] }.
+                    # sc_attn_scores: { 22 -> [1, 8, 64, 64], 23 -> [1, 8, 64, 64], 24 -> [1, 8, 64, 64] }.
+                    sc_attn_scores_dict = { layer_idx: attnscore.chunk(4)[1] for layer_idx, attnscore in ca_layers_activations['attnscore'].items() }
+                    loss_comp_sc_subj_mb_suppress_step = \
+                        calc_subj_masked_bg_suppress_loss(sc_attn_scores_dict, all_subj_indices_1b, 
+                                                          BLOCK_SIZE, sc_fg_mask)
+                    loss_comp_sc_subj_mb_suppress += loss_comp_sc_subj_mb_suppress_step
+                    # loss_comp_sc_subj_mb_suppress: 0.5, comp_sc_subj_mb_suppress_loss_weight: 2e-3 -> 1e-3, ? of comp distillation loss.
                     if arcface_loss_calc_count >= max_arcface_loss_calc_count:
                         break
 
@@ -2411,6 +2403,10 @@ class LatentDiffusion(DDPM):
                 self.comp_iters_face_detected_count += 1
                 comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                 loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+
+                loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / arcface_loss_calc_count
+                loss_dict.update({f'{session_prefix}/sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
+                loss_comp_feat_distill_loss += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
 
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:

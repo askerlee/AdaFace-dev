@@ -50,13 +50,14 @@ class ArcFaceWrapper(nn.Module):
         # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
         # the input tensor is preserved.
         # But the cropping operation is wrapped with torch.no_grad().
+        # face_coords: long tensor of [BS, 4], where BS is the batch size.
         faces, failed_indices, face_coords = \
             self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, bleed=bleed,
                                        use_whole_image_if_no_face=use_whole_image_if_no_face)
         
-        # No face detected in any instances in the batch.
+        # No face detected in any instances in the batch. face_coords is an empty tensor.
         if faces is None:
-            return None, failed_indices
+            return None, failed_indices, None
         # Arcface takes grayscale images as input
         rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
         # Convert RGB to grayscale
@@ -65,24 +66,25 @@ class ArcFaceWrapper(nn.Module):
         faces_gray = F.interpolate(faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
         with torch.set_grad_enabled(enable_grad):
             faces_emb = self.arcface(faces_gray.to(self.dtype))
-        return faces_emb, failed_indices
+        return faces_emb, failed_indices, face_coords
 
     # T: minimal face height/width to be detected.
     # ref_images: the groundtruth images.
     # aligned_images: the generated   images.
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=2, use_whole_image_if_no_face=False):
-        embs1, failed_indices1 = \
+        # face_coords: long tensor of [BS, 4], where BS is the batch size.
+        embs1, failed_indices1, face_coords = \
             self.embed_image_tensor(ref_images, T, bleed, use_whole_image_if_no_face=False, enable_grad=False)
-        embs2, failed_indices2 = \
+        embs2, failed_indices2, face_coords = \
             self.embed_image_tensor(aligned_images, T, bleed, use_whole_image_if_no_face=use_whole_image_if_no_face, 
                                     enable_grad=True)
         
         if len(failed_indices1) > 0:
             print(f"Failed to detect faces in ref_images-{failed_indices1}")
-            return torch.tensor(0.0, device=ref_images.device)
+            return torch.tensor(0.0, device=ref_images.device), None
         if len(failed_indices2) > 0:
             print(f"Failed to detect faces in aligned_images-{failed_indices2}")
-            return torch.tensor(0.0, device=ref_images.device)
+            return torch.tensor(0.0, device=ref_images.device), None
 
         # Repeat groundtruth embeddings to match the number of generated embeddings.
         if len(embs1) < len(embs2):
@@ -90,4 +92,4 @@ class ArcFaceWrapper(nn.Module):
             
         arcface_align_loss = F.cosine_embedding_loss(embs1, embs2, torch.ones(embs1.shape[0]).to(embs1.device))
         print(f"Arcface align loss: {arcface_align_loss.item():.2f}")
-        return arcface_align_loss
+        return arcface_align_loss, face_coords
