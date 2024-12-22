@@ -2395,7 +2395,6 @@ class LatentDiffusion(DDPM):
                         calc_subj_masked_bg_suppress_loss(sc_attn_scores_dict, all_subj_indices_1b, 
                                                           BLOCK_SIZE, sc_fg_mask)
                     loss_comp_sc_subj_mb_suppress += loss_comp_sc_subj_mb_suppress_step
-                    # loss_comp_sc_subj_mb_suppress: 0.5, comp_sc_subj_mb_suppress_loss_weight: 2e-3 -> 1e-3, ? of comp distillation loss.
                     if arcface_loss_calc_count >= max_arcface_loss_calc_count:
                         break
 
@@ -2405,7 +2404,9 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
                 loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / arcface_loss_calc_count
-                loss_dict.update({f'{session_prefix}/sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
+                loss_dict.update({f'{session_prefix}/comp_sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
+                # loss_comp_sc_subj_mb_suppress: ~0.6, comp_sc_subj_mb_suppress_loss_weight: 2e-3 -> 0.0012,
+                # loss_comp_feat_distill_loss: 0.16, 0.75% of comp distillation loss.
                 loss_comp_feat_distill_loss += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
 
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
