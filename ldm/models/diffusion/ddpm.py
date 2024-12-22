@@ -2217,7 +2217,7 @@ class LatentDiffusion(DDPM):
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
                                                 # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                                # with subj_single_prompt_emb, subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
+                                                # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
                                                 # It's similar to do averaging on the prompt embeddings, but yields sharper results.
                                                 # From the outside, the unet ensemble is transparent, like a single unet.
                                                 teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb], 

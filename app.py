@@ -143,12 +143,12 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     # Extract the checkpoint signature as 112813-2000
     ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
 
-    prompt_keywords = ['armor', 'beach', 'chef', 'dance', 'ironman', 'jedi', 
+    prompt_keywords = ['armor', 'beach', 'chef', 'dance', 'ironman', 'iron man', 'jedi', 
                        'street', 'guitar', 'reading', 'running', 'superman']
     prompt_sig = ""
     for keyword in prompt_keywords:
         if keyword in prompt.lower():
-            prompt_sig = keyword
+            prompt_sig = keyword.replace(" ", "")
             break
 
     if len(prompt_sig) > 0:

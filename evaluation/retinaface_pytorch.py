@@ -128,7 +128,8 @@ class RetinaFaceClient(nn.Module):
         return resp
 
     # Find facial areas of given image tensors and crop them.
-    # Output: [BS, 3, 128, 128]
+    # images_ts: typically [BS, 3, 512, 512] from diffusion (could be any sizes).
+    # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), failed_indices, face_coords
     def crop_faces(self, images_ts, out_size=(128, 128), T=20, bleed=0, 
                    use_whole_image_if_no_face=False):
         face_crops      = []
