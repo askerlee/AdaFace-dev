@@ -1893,12 +1893,18 @@ def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, B
 
     return loss_feat_delta_align, loss_subj_attn_norm_distill
 
-# calc_subj_masked_bg_suppress_loss() is called only during normal recon iterations.
+# calc_subj_masked_bg_suppress_loss() is called during normal recon,
+# as well as comp distillation iterations.
 def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg_mask):
-    # fg_mask.float().mean() >= 0.99: almost no background to suppress.
-    # This happens when x_start is randomly initialized, and fg_mask is not available (no face detected).
+    # fg_mask.chunk(4)[0].float().mean() >= 0.998: 
+    # During comp distillation iterations, almost no background in the 
+    # subject-single instance to suppress.
+    # This happens when x_start is randomly initialized, 
+    # and no face is detected in the subject-single instance.
+    # During recon iterations, this calculates on the first instance only, 
+    # which would be the same as calculating on the whole batch.
     if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
-      or fg_mask.float().mean() >= 0.99:
+      or fg_mask.chunk(4)[0].float().mean() >= 0.998:
         return 0
 
     # Discard the first few bottom layers from alignment.
@@ -1961,6 +1967,9 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
         # fg_mask3: [BLOCK_SIZE, 8, 64]
         # avg_subj_attn_at_mf: [BLOCK_SIZE, 1, 1]
         # keepdim=True, since attn probs at all locations will use them as references (subtract them).
+        # NOTE: avg_subj_attn_at_mf is not detached from the computation graph, therefore, 
+        # minimizing loss_layer_subj_mb_suppress (layer_subj_mb_excess) means to minimize subj_attn_at_mb
+        # and maximize avg_subj_attn_at_mf, which is the desired behavior.
         avg_subj_attn_at_mf = masked_mean(subj_attn_at_mf, fg_mask3, dim=(1,2), keepdim=True)
 
         '''
@@ -1993,10 +2002,10 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
 
 
 def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
-                                  fg_mask, all_subj_indices_1b, BLOCK_SIZE, 
+                                  fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
-                                  recon_loss_discard_thres=0.3):
+                                  recon_loss_discard_thres=0.3, do_feat_attn_pooling=True):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -2007,19 +2016,21 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
     # the background in the training images, which is not desirable.
     # In fg_mask, if an instance has no mask, then its fg_mask is all 0, 
     # excluding the instance from the fg_bg_preserve_loss.
-    # fg_mask.float().mean() < 0.99: the fg is masked out in the fg_mask.
-    # Otherwise, all the fg_mask is 1, which happens when x_start is randomly initialized,
-    # and fg_mask is not available (no face detected).
-    if (fg_mask is not None) and (fg_mask.float().mean() < 0.99):
+    # fg_mask.chunk(4)[0].float().mean() < 0.998: in the subject-single instance, 
+    # the fg is masked out in the fg_mask.
+    # Otherwise, all the fg_mask in the subject-single instance is 1, 
+    # which happens when x_start is randomly initialized, and fg_mask is not available (no face detected).
+    if (fg_mask is not None) and (fg_mask.chunk(4)[0].float().mean() < 0.998):
         comp_subj_bg_preserve_loss_dict = \
             calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats,
                                             ca_layers_activations['attn_out'],
                                             ca_layers_activations['q2'],
                                             ca_layers_activations['attn'], 
-                                            fg_mask, all_subj_indices_1b, BLOCK_SIZE,
+                                            fg_mask, is_sc_fg_mask_available, 
+                                            all_subj_indices_1b, BLOCK_SIZE,
                                             recon_feat_objectives=recon_feat_objectives,
                                             recon_loss_discard_thres=recon_loss_discard_thres,
-                                            do_feat_attn_pooling=True)
+                                            do_feat_attn_pooling=do_feat_attn_pooling)
         
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
@@ -2078,7 +2089,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 # NOTE: subj_indices are used to compute loss_comp_subj_bg_attn_suppress.
 # Only ss_fg_mask in (resized) fg_mask is used for calc_elastic_matching_loss().
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
-                                    fg_mask, subj_indices, BLOCK_SIZE,
+                                    fg_mask, is_sc_fg_mask_available, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
                                     recon_loss_discard_thres=0.3, do_feat_attn_pooling=True):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
@@ -2088,7 +2099,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     # Feature map spatial sizes are all 64*64.
     # Remove layer 22, as the losses at this layer are often too large 
     # and are discarded at a high percentage.
-    elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
+    elastic_matching_layer_weights = { 23: 1, 24: 1, 
                                      }
     
     # Normalize the weights above so that each set sum to 1.
@@ -2143,10 +2154,16 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         fg_mask_4b \
             = resize_mask_to_target_size(fg_mask, "fg_mask_4b", (ca_feat_h, ca_feat_w), 
                                          mode="nearest|bilinear", warn_on_all_zero=False)
-        # ss_fg_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
-        ss_fg_mask = fg_mask_4b.chunk(4)[0]
+        # ss_fg_mask, sc_fg_mask: [4, 1, 8, 8] -> [1, 1, 8, 8] 
+        ss_fg_mask, sc_fg_mask = fg_mask_4b.chunk(4)[:2]
         # ss_fg_mask_3d: [1, 1, 8, 8] -> [1, 1, 64]. Spatial dims are collapsed.
         ss_fg_mask_3d = ss_fg_mask.reshape(*ss_fg_mask.shape[:2], -1)
+        # If not is_sc_fg_mask_available, sc_fg_mask is the same as ss_fg_mask, which is not the correct mask,
+        # so we don't pass sc_fg_mask to calc_elastic_matching_loss().
+        if is_sc_fg_mask_available:
+            sc_fg_mask_3d = sc_fg_mask.reshape(*sc_fg_mask.shape[:2], -1)
+        else:
+            sc_fg_mask_3d = None
 
         # sc_to_ss_fg_prob, mc_to_ms_fg_prob: [1, 1, 64]
         # removed loss_layer_ms_mc_fg_match to save computation.
@@ -2156,8 +2173,8 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         
         losses_sc_recons, loss_sparse_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob, flow_distill_stats = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
-                                       ca_layer_q, ca_attn_out, ca_outfeat, 
-                                       ss_fg_mask_3d, ca_feat_h, ca_feat_w, 
+                                       ca_layer_q, ca_attn_out, ca_outfeat, ca_feat_h, ca_feat_w, 
+                                       ss_fg_mask_3d, sc_fg_mask_3d, 
                                        recon_feat_objectives=recon_feat_objectives,
                                        recon_loss_discard_thres=recon_loss_discard_thres,
                                        num_flow_est_iters=12,
@@ -2380,12 +2397,14 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ssfg_mc_prob):
     return sc_recon_ssfg_mc_feat
 
 @torch.compiler.disable
-def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_feat, ss_fg_mask_2d, 
-                                        H, W, num_flow_est_iters=12):
-    # Set background features to 0 tensors reduce noisy matching.
-    # ss_q: [1, 1280, 961]. ss_fg_mask_2d: [1, 961] -> [1, 1, 961]
+def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_feat, H, W, 
+                                        ss_fg_mask_2d, sc_fg_mask_2d, num_flow_est_iters=12):
+    # Set background features to 0s to reduce noisy matching.
+    # ss_q, sc_q: [1, 1280, 961]. ss_fg_mask_2d, sc_fg_mask_2d: [1, 961] -> [1, 1, 961]
     if ss_fg_mask_2d is not None:
         ss_q = ss_q * ss_fg_mask_2d.unsqueeze(1)
+    if sc_fg_mask_2d is not None:
+        sc_q = sc_q * sc_fg_mask_2d.unsqueeze(1)
 
     # If ss2sc_flow is not provided, estimate it using the flow model.
     # Otherwise use the provided flow.
@@ -2432,7 +2451,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 @conditional_compile(enable_compile=EnableCompile)
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat, 
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
-                                 ss_fg_mask_2d, ss_q, sc_q, mc_q, H, W, 
+                                 ss_q, sc_q, mc_q, H, W, ss_fg_mask_2d, sc_fg_mask_2d, 
                                  num_flow_est_iters, objective_name):
     sc_attns                    = {}
     sc_recon_feats_attn_agg     = {}
@@ -2461,7 +2480,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
         # and return the newly estimated ss2sc_flow.     
         sc_recon_feats_flow['ssfg'], ss2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_feat, 
-                                                ss_fg_mask_2d, H, W, num_flow_est_iters=num_flow_est_iters)
+                                                H, W, ss_fg_mask_2d, sc_fg_mask_2d, 
+                                                num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W, mask_N=ss_fg_mask_N)
         '''
         if debug_flow_attn:
@@ -2482,7 +2502,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q, sc_feat, 
-                                                None, H, W, num_flow_est_iters=num_flow_est_iters)
+                                                H, W, None, None, num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
         '''        
         if debug_flow_attn:
@@ -2633,7 +2653,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
 # Although in theory L2 and cosine losses may have different scales, for simplicity, 
 # we still average them to get the total loss.
 @conditional_compile(enable_compile=EnableCompile)
-def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, ss_fg_mask_3d, H, W, 
+def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
+                               ss_fg_mask_3d, sc_fg_mask_3d, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_loss_discard_thres=0.3, 
@@ -2651,6 +2672,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         ca_q         = pool_feat_or_attn_mat(ca_q,        (H, W))
         # ss_fg_mask_3d: [1, 1, 64*64] -> [1, 1, 31*31] = [1, 1, 961]
         ss_fg_mask_3d   = pool_feat_or_attn_mat(ss_fg_mask_3d,  (H, W))
+        if sc_fg_mask_3d is not None:
+            sc_fg_mask_3d = pool_feat_or_attn_mat(sc_fg_mask_3d, (H, W))
         H2, W2       = ca_outfeat.shape[-2:]
         # Flatten the spatial dims of ca_outfeat for reconstruction.
         ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
@@ -2659,6 +2682,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
     # ss_fg_mask_2d: [1, 961]
     ss_fg_mask_2d = ss_fg_mask_3d.bool().squeeze(1)
+    if sc_fg_mask_3d is not None:
+        sc_fg_mask_2d = sc_fg_mask_3d.bool().squeeze(1)
+    else:
+        sc_fg_mask_2d = None
+        
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
@@ -2779,8 +2807,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, 
                                          target_feats, sc_feat, 
                                          ss2sc_flow, mc2sc_flow, 
-                                         sc_to_ss_mc_prob, ss_fg_mask_2d, 
-                                         ss_q, sc_q, mc_q, H2, W2, num_flow_est_iters, 
+                                         sc_to_ss_mc_prob, ss_q, sc_q, mc_q, H2, W2, 
+                                         ss_fg_mask_2d, sc_fg_mask_2d, 
+                                         num_flow_est_iters, 
                                          objective_name=objective_name)
         
         for feat_name, losses in losses_sc_recons_obj.items():
