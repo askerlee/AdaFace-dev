@@ -2036,7 +2036,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
                        'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
                        'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 
-                       'ssfg_flow_better_percent', 'mc_flow_better_percent', 'mc_sameloc_better_percent',
+                       'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
                        'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight' ]
         
         effective_loss_names = [ 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc_min', 'loss_sc_to_ssfg_sparse_attns_distill',
@@ -2242,16 +2242,16 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # sc_to_whole_mc_prob.mean() = 1, but sc_to_ss_fg_prob.mean() = N_fg / 961 = 210 / 961 = 0.2185.
         # So we normalize sc_to_ss_fg_prob first, before comparing it with sc_to_whole_mc_prob.
         sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.01).float().mean()
-        ssfg_flow_better_percent, mc_flow_better_percent, mc_sameloc_better_percent = \
-            flow_distill_stats['ssfg_flow_better_percent'], flow_distill_stats['mc_flow_better_percent'], flow_distill_stats['mc_sameloc_better_percent']
+        ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate = \
+            flow_distill_stats['ssfg_flow_win_rate'], flow_distill_stats['mc_flow_win_rate'], flow_distill_stats['mc_sameloc_win_rate']
         ssfg_avg_sparse_distill_weight, mc_avg_sparse_distill_weight = \
             flow_distill_stats['ssfg_avg_sparse_distill_weight'], flow_distill_stats['mc_avg_sparse_distill_weight']
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
                               'sc_bg_percent':                   sc_bg_percent * LAYER_W,
-                              'ssfg_flow_better_percent':        ssfg_flow_better_percent * LAYER_W,
-                              'mc_flow_better_percent':          mc_flow_better_percent * LAYER_W,
-                              'mc_sameloc_better_percent':       mc_sameloc_better_percent * LAYER_W,
+                              'ssfg_flow_win_rate':        ssfg_flow_win_rate * LAYER_W,
+                              'mc_flow_win_rate':          mc_flow_win_rate * LAYER_W,
+                              'mc_sameloc_win_rate':       mc_sameloc_win_rate * LAYER_W,
                               'ssfg_avg_sparse_distill_weight':  ssfg_avg_sparse_distill_weight * LAYER_W,
                               'mc_avg_sparse_distill_weight':    mc_avg_sparse_distill_weight * LAYER_W
                             })
@@ -2472,7 +2472,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
     # ss_fg_mask_2d: [1, 961]. ss_fg_mask_N: [N_fg].
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
     debug_flow_attn = False
-
+    
     if flow_model is not None or ss2sc_flow is not None:
         # ss2sc_flow: [1, 2, H, W]
         # If ss2sc_flow is not provided, estimate it using the flow model.
@@ -2619,20 +2619,24 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             # sc_recon_feats_sparse_attn is selected between the two tokenwise.
             # There's no computation graph associated with sc_recon_feats_sparse_attn, so we don't need to detach it.
             loss_sparse_attn_distill = ((sc_recon_feats_sparse_attn - sc_attns[feat_name]).abs() * sc_tokens_sparse_attn_weights).mean()
-            sparse_better_percents = (ss_tokens_sparse_attn_advantages > 0).float().mean(dim=1)
             avg_sparse_distill_weight = sc_tokens_sparse_attn_weights.mean()
-
+            # sparse_win_rates = (ss_tokens_sparse_attn_advantages > 0).float().mean(dim=1)
+            sparse_win_rates   = [ torch.logical_and((ss_tokens_sparse_attn_advantages[i] > 0), 
+                                                         (max_sparse_attn_type_indices == i)).float().mean(dim=1) \
+                                        for i in range(len(ss_tokens_sparse_attn_advantages)) ]
+            sparse_win_rates   = torch.stack(sparse_win_rates, dim=0)
+                                                       
         else:
             loss_sc_recon_min = [ loss for loss in losses_sc_recons[feat_name] if loss != 0 ][0]
             loss_sparse_attn_distill = torch.tensor(0., device=sc_feat.device)
-            sparse_better_percents   = torch.zeros(len(sc_recon_feats_candidates) - 1, device=sc_feat.device)
+            sparse_win_rates   = torch.zeros(len(sc_recon_feats_candidates) - 1, device=sc_feat.device)
             avg_sparse_distill_weight = torch.tensor(0., device=sc_feat.device)
 
         losses_sc_recons[feat_name].append(loss_sc_recon_min)
         loss_sparse_attns_distill[feat_name]                            = loss_sparse_attn_distill
-        for i, sparse_better_percent in enumerate(sparse_better_percents):
-            # ssfg_flow_better_percent, mc_flow_better_percent, mc_sameloc_better_percent.
-            flow_distill_stats[f'{feat_name}_{matching_type_names[i+1]}_better_percent'] = sparse_better_percent
+        for i, sparse_win_rate in enumerate(sparse_win_rates):
+            # ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
+            flow_distill_stats[f'{feat_name}_{matching_type_names[i+1]}_win_rate'] = sparse_win_rate
         flow_distill_stats[f'{feat_name}_avg_sparse_distill_weight']    = avg_sparse_distill_weight
         print(f"min {loss_sc_recon_min}, flow dist {loss_sparse_attn_distill}")
 
@@ -2658,7 +2662,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_loss_discard_thres=0.3, 
-                               num_flow_est_iters=12, do_feat_attn_pooling=True):
+                               num_flow_est_iters=12, do_feat_attn_pooling=True, do_q_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
         return None, None, None, None, None
@@ -2671,7 +2675,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         ca_outfeat   = pool_feat_or_attn_mat(ca_outfeat,  (H, W), retain_spatial=True)
         ca_q         = pool_feat_or_attn_mat(ca_q,        (H, W))
         # ss_fg_mask_3d: [1, 1, 64*64] -> [1, 1, 31*31] = [1, 1, 961]
-        ss_fg_mask_3d   = pool_feat_or_attn_mat(ss_fg_mask_3d,  (H, W))
+        ss_fg_mask_3d = pool_feat_or_attn_mat(ss_fg_mask_3d,  (H, W))
         if sc_fg_mask_3d is not None:
             sc_fg_mask_3d = pool_feat_or_attn_mat(sc_fg_mask_3d, (H, W))
         H2, W2       = ca_outfeat.shape[-2:]
@@ -2688,6 +2692,12 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         sc_fg_mask_2d = None
         
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
+
+    if do_q_demean:
+        # Demean the queries. Otherwise the similarities between any two token qs will always be huge (65~90),
+        # preventing the optical flow model from estimating the flow.
+        ca_q = ca_q - ca_q.mean(dim=2, keepdim=True).detach()
+
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
     ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
