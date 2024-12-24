@@ -2413,7 +2413,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
         # Enabling grad seems to lead to quite bad results. Maybe updating q through flow is not a good idea.
         with torch.no_grad():
             #LINK gma/network.py#est_flow_from_feats
-            # ss2sc_flow: [1, 2, H, W]
+            # ss2sc_flow: [1, 2, H=31, W=31]
             ss2sc_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, num_iters=num_flow_est_iters, 
                                                         corr_normalized_by_sqrt_dim=False)
 
@@ -2609,7 +2609,6 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
                 sc_recon_feats_sparse_attn = sc_recon_feats_sparse_attns.gather(0, max_sparse_attn_type_indices_exp)
             elif feat_name == 'ssfg':
                 sc_recon_feats_sparse_attn = sc_recon_feats_flow_attn[feat_name]
-                breakpoint()
             else:
                 breakpoint()
 
