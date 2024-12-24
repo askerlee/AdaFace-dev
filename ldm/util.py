@@ -2335,7 +2335,7 @@ def backward_warp_by_flow_np(image2, flow1to2):
     return image1_recovered
 '''
 
-EnableCompile = True
+EnableCompile = False #True
 @conditional_compile(enable_compile=EnableCompile)
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
@@ -2609,6 +2609,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
                 sc_recon_feats_sparse_attn = sc_recon_feats_sparse_attns.gather(0, max_sparse_attn_type_indices_exp)
             elif feat_name == 'ssfg':
                 sc_recon_feats_sparse_attn = sc_recon_feats_flow_attn[feat_name]
+                breakpoint()
             else:
                 breakpoint()
 
@@ -2622,7 +2623,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             avg_sparse_distill_weight = sc_tokens_sparse_attn_weights.mean()
             # sparse_win_rates = (ss_tokens_sparse_attn_advantages > 0).float().mean(dim=1)
             sparse_win_rates   = [ torch.logical_and((ss_tokens_sparse_attn_advantages[i] > 0), 
-                                                         (max_sparse_attn_type_indices == i)).float().mean(dim=1) \
+                                                     (max_sparse_attn_type_indices == i)).float().mean(dim=1) \
                                         for i in range(len(ss_tokens_sparse_attn_advantages)) ]
             sparse_win_rates   = torch.stack(sparse_win_rates, dim=0)
                                                        
@@ -2696,7 +2697,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     if do_q_demean:
         # Demean the queries. Otherwise the similarities between any two token qs will always be huge (65~90),
         # preventing the optical flow model from estimating the flow.
-        ca_q = ca_q - ca_q.mean(dim=2, keepdim=True).detach()
+        # NOTE: when do_q_demean, take mean across the instances, otherwise ss_q (mainly consisting of subject features) 
+        # will remove too much subject-specific features.
+        ca_q = ca_q - ca_q.mean(dim=(0,2), keepdim=True).detach()
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
