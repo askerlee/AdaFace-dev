@@ -1775,8 +1775,8 @@ def calc_recon_and_complem_losses(model_output, target, ca_layers_activations,
     loss_pred_l2 = (model_output ** 2).mean()
     return loss_subj_mb_suppress, loss_recon, loss_pred_l2
 
-# calc_feat_delta_and_attn_norm_loss() is used by calc_comp_prompt_distill_loss().
-def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
+# calc_attn_norm_loss() is used by LatentDiffusion::calc_comp_feat_distill_loss().
+def calc_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
     # do_comp_feat_distill iterations. No ordinary image reconstruction loss.
     # Only regularize on intermediate features, i.e., intermediate features generated 
     # under subj_comp_prompts should satisfy the delta loss constraint:
@@ -1789,32 +1789,22 @@ def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, B
     # Most important conditioning layers are 7, 8, 12, 16, 17. All the 5 layers have 1280 channels.
     # But intermediate layers also contribute to distillation. They have small weights.
 
-    # feature map distillation only uses delta loss on the features to reduce the 
-    # class polluting the subject features.
-    # Feature map spatial sizes are all 64*64.
-    feat_distill_layer_weights = { 23: 1, 24: 1, 
-                                 }
-
     # attn norm distillation is applied to almost all conditioning layers.
     attn_norm_distill_layer_weights = { 
                                         23: 1., 24: 1.,                                   
                                       }
 
     # Normalize the weights above so that each set sum to 1.
-    feat_distill_layer_weights          = normalize_dict_values(feat_distill_layer_weights)
     attn_norm_distill_layer_weights     = normalize_dict_values(attn_norm_distill_layer_weights)
 
     # K_subj: 4, number of embeddings per subject token.
     K_subj = len(subj_indices_2b[0]) // len(torch.unique(subj_indices_2b[0]))
     subj_indices_4b = double_token_indices(subj_indices_2b, BLOCK_SIZE * 2)
 
-    loss_layers_feat_delta_align        = []
     loss_layers_subj_attn_norm_distill  = []
 
-    subj_single_feat_grad_scaler = gen_gradient_scaler(0.1)
-
     for unet_layer_idx, ca_outfeat in ca_outfeats.items():
-        if (unet_layer_idx not in feat_distill_layer_weights) and (unet_layer_idx not in attn_norm_distill_layer_weights):
+        if unet_layer_idx not in attn_norm_distill_layer_weights:
             continue
 
         # attn_mat: [4, 8, 256, 77] => [4, 77, 8, 256].
@@ -1846,52 +1836,9 @@ def calc_feat_delta_and_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, B
             loss_layers_subj_attn_norm_distill.append(( loss_layer_subj_comp_attn_norm + loss_layer_subj_single_attn_norm ) \
                                                         * attn_norm_distill_layer_weight)
 
-        if unet_layer_idx not in feat_distill_layer_weights:
-            continue
-
-        feat_distill_layer_weight = feat_distill_layer_weights[unet_layer_idx]
-
-        # [4, 320, 64, 64] -> [4, 320, 31, 31]
-        ca_outfeat = pool_feat_or_attn_mat(ca_outfeat)
-        # ca_outfeat_3d: [4, 320, 31, 31] -> [4, 320, 961] -> [4, 961, 320]
-        ca_outfeat_3d = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1).permute(0, 2, 1)
-        # subj_single_feat_3d, ...: [1, 961, 320]
-        subj_single_feat_3d, subj_comp_feat_3d, cls_single_feat_3d, cls_comp_feat_3d \
-            = ca_outfeat_3d.chunk(4)
-
-        cls_single_feat_3d_gs  = cls_single_feat_3d.detach()
-        cls_comp_feat_3d_gs    = cls_comp_feat_3d.detach()
-        # subj_single_feat_grad_scaler reduces grad by 10x.
-        subj_single_feat_3d_gs = subj_single_feat_grad_scaler(subj_single_feat_3d)
-
-        # ortho_subtract() is done on each image token individually, potentially with different scales.
-        comp_feat_delta   = ortho_subtract(subj_comp_feat_3d,      cls_comp_feat_3d_gs)
-        # subj_single_feat is gs'ed by 10x to avoid it from degeneration.
-        single_feat_delta = ortho_subtract(subj_single_feat_3d_gs, cls_single_feat_3d_gs)
-            
-        # single_feat_delta, comp_feat_delta: [1, 320], ...
-        # Pool the spatial dimensions H, W to remove spatial information.
-        # The gradient goes back to single_feat_delta -> subj_comp_feat,
-        # as well as comp_feat_delta -> cls_comp_feat.
-        # If stop_single_grad, the gradients to subj_single_feat and cls_single_feat are stopped, 
-        # as these two images should look good by themselves (since they only contain the subject).
-        # Note the learning strategy to the single image features should be different from 
-        # the single embeddings, as the former should be optimized to look good by itself,
-        # while the latter should be optimized to cater for two objectives: 1) the conditioned images look good,
-        # and 2) the embeddings are amendable to composition.
-        loss_layer_feat_delta_align = \
-            calc_ref_cosine_loss(comp_feat_delta, single_feat_delta, 
-                                 emb_mask=None,
-                                 exponent=2, do_demeans=[False, False],
-                                 first_n_dims_into_instances=2, 
-                                 aim_to_align=True, 
-                                 ref_grad_scale=1)
-        loss_layers_feat_delta_align.append(loss_layer_feat_delta_align * feat_distill_layer_weight)
-
-    loss_feat_delta_align       = sum(loss_layers_feat_delta_align)
     loss_subj_attn_norm_distill = sum(loss_layers_subj_attn_norm_distill)
 
-    return loss_feat_delta_align, loss_subj_attn_norm_distill
+    return loss_subj_attn_norm_distill
 
 # calc_subj_masked_bg_suppress_loss() is called during normal recon,
 # as well as comp distillation iterations.
@@ -2572,25 +2519,13 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             ss_tokens_sparse_attn_advantages = all_token_losses_sc_recon_3types[:1] - all_token_losses_sc_recon_3types[1:]
             ss_tokens_sparse_attn_advantage, max_sparse_attn_type_indices  = \
                 ss_tokens_sparse_attn_advantages.max(dim=0)
-            # NOTE: The effect of detach(): if not doing detach(), since ss_tokens_sparse_attn_advantage are positively correlated 
-            # with sc_tokens_sparse_attn_weights (ignoring the normalization by the layer_norm), the coeffs of 
-            # loss_sparse_attn_distill, then minimizing loss_sparse_attn_distill will also minimize ss_tokens_sparse_attn_advantage,
-            # i.e., minimizing all_token_losses_sc_recon_3types[:1] == token losses of sc_recon_feats_attn_agg.
-            # This means, even if some image tokens are not well aligned using attn aggregation, they will be forced to align with the "wrong" tokens.
-            # This is undesirable. So we detach ss_tokens_sparse_attn_advantage to avoid this.
-            # Our purpose is to only minimize token losses of sc_recon_feats_attn_agg when the attn aggregation aligns better than flow/sameloc,
-            # to reduce the noise introduced by misaligned tokens.
-            ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1).detach()
+            ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1)
             ss_tokens_sparse_attn_adv_normed = F.layer_norm(ss_tokens_sparse_attn_advantage, (ss_tokens_sparse_attn_advantage.shape[2],), weight=None, bias=None, eps=1e-5)
             # TEMP: temperature for the sigmoid function.
             TEMP = 5
             # The larger the advantage, the larger the distillation weight.
             # ss_tokens_sparse_attn_weights: [1, 1, 961] -> [1, 961, 1].
             ss_tokens_sparse_attn_weights = (TEMP * ss_tokens_sparse_attn_adv_normed).sigmoid()
-            # Aggregate advantages of ss tokens to get advantages of sc tokens, by applying the attention.
-            # sc_tokens_sparse_attn_weights: [1, 1, N_fg] * [1, N_fg, 961] => [1, 1, 961] -> [1, 961, 1].
-            # It gives different sc tokens different weights. Therefore, the 961-dim is at dim 1.
-            sc_tokens_sparse_attn_weights = torch.matmul(ss_tokens_sparse_attn_weights, sc_attns[feat_name].permute(0, 2, 1)).permute(0, 2, 1)
 
             if feat_name == 'mc':
                 # sc_sameloc_attn: [1, 961, 961], a diagonal matrix.
@@ -2612,7 +2547,23 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             else:
                 breakpoint()
 
-            # sc_tokens_sparse_attn_weights: [1, 961, 1], i.e., it gives different sc tokens different weights.
+            sc_recon_feats_attn_ensemble = sc_recon_feats_sparse_attn + sc_attns[feat_name]
+            # 'Back-propagate' distillation weights of ss tokens to get distillation weights of sc tokens, 
+            # by applying the ensembled sc-to-ss attention.
+            # sc_tokens_sparse_attn_weights: [1, 1, N_fg] * [1, N_fg, 961] => [1, 1, 961] -> [1, 961, 1].
+            # It gives different sc tokens different weights. Therefore, the 961-dim is at dim 1.
+            sc_tokens_sparse_attn_weights = torch.matmul(ss_tokens_sparse_attn_weights, 
+                                                         sc_recon_feats_attn_ensemble.permute(0, 2, 1)).permute(0, 2, 1)
+            # NOTE: The effect of detach(): if not doing detach(), since ss_tokens_sparse_attn_advantage are positively correlated 
+            # with sc_tokens_sparse_attn_weights (ignoring the normalization by the layer_norm), the coeffs of 
+            # loss_sparse_attn_distill, then minimizing loss_sparse_attn_distill will also minimize ss_tokens_sparse_attn_advantage,
+            # i.e., minimizing all_token_losses_sc_recon_3types[:1] == token losses of sc_recon_feats_attn_agg.
+            # This means, even if some image tokens are not well aligned using attn aggregation, they will be forced to align with the "wrong" tokens.
+            # This is undesirable. So we detach ss_tokens_sparse_attn_advantage to avoid this.
+            # Our purpose is to only minimize token losses of sc_recon_feats_attn_agg when the attn aggregation aligns better than flow/sameloc,
+            # to reduce the noise introduced by misaligned tokens.
+            sc_tokens_sparse_attn_weights = sc_tokens_sparse_attn_weights.detach()
+
             # sc_recon_feats_sparse_attn: [1, 961, 210].
             # sc_recon_feats_flow_attn[feat_name] is generated by warping an identicay matrix, 
             # sc_sameloc_attn is an identity matrix. 

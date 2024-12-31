@@ -14,7 +14,7 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
-                        calc_recon_and_complem_losses, calc_feat_delta_and_attn_norm_loss, \
+                        calc_recon_and_complem_losses, calc_attn_norm_loss, \
                         calc_subj_masked_bg_suppress_loss, save_grid, init_x_with_fg_from_training_image, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
@@ -73,8 +73,6 @@ class DDPM(pl.LightningModule):
                  recon_subj_mb_suppress_loss_weight=0.,
                  comp_sc_subj_mb_suppress_loss_weight=0.,
                  pred_l2_loss_weight=0, #1e-4,
-                 subj_attn_norm_distill_loss_weight=0,
-                 feat_delta_align_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -92,6 +90,8 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
+                 p_comp_feat_distill_on_subj_comp_rep_prompts=0.2,
+                 subj_comp_rep_distill_loss_weight=0.1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -119,10 +119,8 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
-        self.comp_sc_subj_mb_suppress_loss_weight        = comp_sc_subj_mb_suppress_loss_weight
+        self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
         self.pred_l2_loss_weight                    = pred_l2_loss_weight
-        self.subj_attn_norm_distill_loss_weight     = subj_attn_norm_distill_loss_weight
-        self.feat_delta_align_loss_weight           = feat_delta_align_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -159,6 +157,8 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
+        self.p_comp_feat_distill_on_subj_comp_rep_prompts = p_comp_feat_distill_on_subj_comp_rep_prompts
+        self.subj_comp_rep_distill_loss_weight      = subj_comp_rep_distill_loss_weight
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
 
@@ -349,7 +349,7 @@ class DDPM(pl.LightningModule):
         # If we use global_step to decide the iter type, then
         # ** due to grad accumulation (global_step increases 1 after 2 iterations), 
         # ** each type of iter is actually executed twice in a row,
-        # which is not ideal for optimization (iter types are not diversified).
+        # which is not ideal for optimization (iter types are not fully diversified across iterations).
         if self.comp_distill_iter_gap > 0 and batch_idx % self.comp_distill_iter_gap == 0:
             self.iter_flags['do_comp_feat_distill']     = True
             self.iter_flags['do_normal_recon']          = False
@@ -889,7 +889,7 @@ class LatentDiffusion(DDPM):
                 SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
                 CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
             else:
-                # If normal recon, then use the subj single prompts without styles, lighting, etc.
+                # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
                 CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
                 # recon_on_comp_prompt uses the subj comp prompts without styles, lighting, etc.
@@ -914,7 +914,7 @@ class LatentDiffusion(DDPM):
                 SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt'
                 CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
             else:
-                # If normal recon, then use the subj single prompts without styles, lighting, etc.
+                # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
                 CLS_SINGLE_PROMPT  = 'cls_single_prompt'
                 # If recon_on_comp_prompt, we still uses the subj comp prompts without styles, lighting, etc.
@@ -1161,14 +1161,14 @@ class LatentDiffusion(DDPM):
                 delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         # aug_mask is renamed as img_mask.
-        self.iter_flags['img_mask']                 = img_mask
-        self.iter_flags['fg_mask']                  = fg_mask
-        self.iter_flags['delta_prompts']            = delta_prompts
-        self.iter_flags['compos_partial_prompts']   = batch['compos_partial_prompt']
-        self.iter_flags['image_unnorm']             = batch_images_unnorm
+        self.iter_flags['img_mask']                     = img_mask
+        self.iter_flags['fg_mask']                      = fg_mask
+        self.iter_flags['delta_prompts']                = delta_prompts
+        self.iter_flags['mod_compos_partial_prompt']    = batch['compos_partial_prompt']
+        self.iter_flags['image_unnorm']                 = batch_images_unnorm
 
-        self.iter_flags['id2img_prompt_embs']       = id2img_prompt_embs
-        self.iter_flags['id2img_neg_prompt_embs']   = id2img_neg_prompt_embs
+        self.iter_flags['id2img_prompt_embs']           = id2img_prompt_embs
+        self.iter_flags['id2img_neg_prompt_embs']       = id2img_neg_prompt_embs
         if self.embedding_manager.id2ada_prompt_encoder.name == 'jointIDs':
             self.iter_flags['encoders_num_id_vecs']     = self.embedding_manager.id2ada_prompt_encoder.encoders_num_id_vecs
         else:
@@ -1213,7 +1213,7 @@ class LatentDiffusion(DDPM):
 
         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
         delta_prompts = self.iter_flags['delta_prompts']
-        compos_partial_prompts = self.iter_flags['compos_partial_prompts']
+        mod_compos_partial_prompt = self.iter_flags['mod_compos_partial_prompt']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
 
@@ -1221,17 +1221,19 @@ class LatentDiffusion(DDPM):
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE = 1
             # Only keep the first half of batched prompts to save RAM.
-            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, compos_partial_prompts = \
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, mod_compos_partial_prompt = \
                 subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                 cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE], \
-                compos_partial_prompts[:BLOCK_SIZE]
+                mod_compos_partial_prompt[:BLOCK_SIZE]
         else:
             # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
-                                    
-        # We still compute the prompt embeddings of the 4 types of prompts, 
+
+        subj_comp_rep_prompts = [ subj_comp_prompts[i] + mod_compos_partial_prompt[i] for i in range(BLOCK_SIZE) ]
+
+        # We still compute the prompt embeddings of the first 4 types of prompts, 
         # to compute prompt delta loss. 
         # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
         delta_prompts = subj_single_prompts + subj_comp_prompts \
@@ -1251,6 +1253,14 @@ class LatentDiffusion(DDPM):
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
             c_prompt_emb.chunk(4)
 
+        subj_comp_rep_emb, _, _ = \
+            self.get_text_conditioning(subj_comp_rep_prompts,
+                                       self.iter_flags['id2img_prompt_embs'],
+                                       self.iter_flags['clip_bg_features'],
+                                       randomize_clip_weights=True,
+                                       text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
+                                       real_batch_size=ORIG_BS)
+        
         # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
         # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
         # Only keep the first half (for single prompts), as the second half is the same 
@@ -1284,20 +1294,31 @@ class LatentDiffusion(DDPM):
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
         # These embeddings are patched. So combine them back into c_prompt_emb.
-        # [64, 77, 768].
-        c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, 
-                                  cls_single_emb,  cls_comp_emb], dim=0)
-        extra_info['c_prompt_emb_4b'] = c_prompt_emb
+        # c_prompt_emb_4b is the 4 sets of embeddings of subj_single_prompts, subj_comp_prompts, 
+        # cls_single_prompts, cls_comp_prompts used for prompt delta loss.             
+        # c_prompt_emb_4b: [64, 77, 768].
+        c_prompt_emb_4b = torch.cat([subj_single_emb, subj_comp_emb, 
+                                     cls_single_emb,  cls_comp_emb], dim=0)
+        extra_info['c_prompt_emb_4b'] = c_prompt_emb_4b
 
         if self.iter_flags['do_comp_feat_distill']:
-            # c_in = delta_prompts is used to generate ada embeddings.
             # c_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
             # The cls_single_prompts/cls_comp_prompts within c_in will only be used to 
             # generate ordinary prompt embeddings, i.e., 
             # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
             # are manually mixed into their embeddings.
-            c_in = delta_prompts
+            if torch.rand(1) < self.p_comp_feat_distill_on_subj_comp_rep_prompts:
+                self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] = True
+                # 20% of the time, we use subj_comp_rep_prompts instead of cls_single_prompts.
+                # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
+                c_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
+                c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+            else:
+                self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] = False
+                # 80% of the time, we use cls_single_prompts.
+                c_in         = delta_prompts
+                c_prompt_emb = c_prompt_emb_4b
             # The prompts are either (subj single, subj comp, cls single, cls comp).
             # So the first 2 sub-blocks always contain the subject tokens, and we use *_2b.    
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
@@ -1317,30 +1338,26 @@ class LatentDiffusion(DDPM):
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
             extra_info['placeholder2indices']   = extra_info['placeholder2indices_1b']
-            extra_info['c_prompt_emb_1b']       = c_prompt_emb
+            extra_info['c_prompt_emb_1b']       = subj_single_emb
 
             # extra_info['c_prompt_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
             # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
             # to do the replacement.
             # extra_info['c_prompt_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
                                 
-            ##### End of normal_recon with prompt delta loss iters. #####
+            ##### End of normal_recon/do_unet_distill with prompt delta loss iters. #####
+                            
 
+        # extra_info['cls_single_emb'] and extra_info['cls_comp_emb'] are used 
+        # during unet distillation.
         extra_info['cls_single_prompts'] = cls_single_prompts
         extra_info['cls_single_emb']     = cls_single_emb
         extra_info['cls_comp_prompts']   = cls_comp_prompts
         extra_info['cls_comp_emb']       = cls_comp_emb
-                            
-        # Keep extra_info['delta_prompts'] and iter_flags['delta_prompts'] the same structure.
-        # (Both are tuples of 4 lists. But iter_flags['delta_prompts'] may contain more prompts
-        # than those actually used in this iter.)
+                                                      
         # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
-        extra_info['delta_prompts']      = (subj_single_prompts, subj_comp_prompts, \
-                                            cls_single_prompts,  cls_comp_prompts)
-        extra_info['compos_partial_prompts'] = compos_partial_prompts
+        extra_info['mod_compos_partial_prompt'] = mod_compos_partial_prompt
 
-        # c_prompt_emb is the full set of embeddings of subj_single_prompts, subj_comp_prompts, 
-        # cls_single_prompts, cls_comp_prompts. 
         # c_prompt_emb: [64, 77, 768]                    
         cond_context = (c_prompt_emb, c_in, extra_info)
 
@@ -1542,8 +1559,8 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, c_prompt_emb, c_in, extra_info):
         #print(c_in)
         cond_context = (c_prompt_emb, c_in, extra_info)
-        img_mask            = self.iter_flags['img_mask']
-        fg_mask             = self.iter_flags['fg_mask']
+        img_mask     = self.iter_flags['img_mask']
+        fg_mask      = self.iter_flags['fg_mask']
 
         # all_subj_indices are used to extract the attention weights
         # of the subject tokens for the attention loss computation.
@@ -1551,7 +1568,7 @@ class LatentDiffusion(DDPM):
         all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
                                                                    self.embedding_manager.subject_string_dict)
         if self.iter_flags['do_comp_feat_distill']:
-            # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss() in calc_comp_prompt_distill_loss().
+            # all_subj_indices_2b is used in calc_attn_norm_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                      self.embedding_manager.subject_string_dict)
@@ -1692,7 +1709,7 @@ class LatentDiffusion(DDPM):
         elif self.iter_flags['do_comp_feat_distill']:
             loss_comp_feat_distill_loss = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
-                                                 extra_info['compos_partial_prompts'],
+                                                 extra_info['mod_compos_partial_prompt'],
                                                  fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
@@ -2235,13 +2252,13 @@ class LatentDiffusion(DDPM):
 
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
-    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompts,
+    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, mod_compos_partial_prompt,
                                     fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
         losses_subj_attn_norm_distill   = []
-        losses_feat_delta_align         = []
         loss_comp_feat_distill_loss     = 0
+        sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
@@ -2267,6 +2284,7 @@ class LatentDiffusion(DDPM):
                 ss_face_coords = pixel_bboxes_to_latent(ss_face_coords, ss_x_recon_pixels.shape[-1], fg_mask.shape[-1])
                 # fg_mask is for the whole batch, and ss_face_coords is for the first block.
                 # Therefore, len(ss_face_coords) == len(fg_mask) // 4.
+                # len(ss_face_coords): BLOCK_SIZE, usually 1.
                 for i in range(len(ss_face_coords)):
                     x1, y1, x2, y2 = ss_face_coords[i]
                     fg_mask[i, :, y1:y2, x1:x2] = 1
@@ -2287,18 +2305,20 @@ class LatentDiffusion(DDPM):
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
                 arcface_align_comp_loss_scale = self.comp_distill_iter_gap
                 loss_comp_feat_distill_loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
-                # loss_comp_sc_subj_mb_suppress: ~0.6, comp_sc_subj_mb_suppress_loss_weight: 2e-3 -> 0.0012,
+                # loss_comp_sc_subj_mb_suppress: ~0.6, comp_sc_subj_mb_suppress_loss_weight: 0, DISABLED.
                 # loss_comp_feat_distill_loss: 0.16, 0.75% of comp distillation loss.
                 loss_comp_feat_distill_loss += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
                 if sc_fg_mask is not None:
                     # chunk() returns 4 views of fg_mask, so we can copy_ to update the original fg_mask.
                     fg_mask.chunk(4)[1].copy_(sc_fg_mask)
                     is_sc_fg_mask_available = True
-                # if sc_fg_mask is None, fg_mask[1] is all 0s (initialized above before assigning the sc fg mask),
-                # and apparently we cannot use it as the face mask.
+                # Otherwise, sc_fg_mask is None, fg_mask[1] is all 0s (initialized above before assigning the sc fg mask),
+                # and apparently we cannot use it as the face mask, so is_sc_fg_mask_available is False.
+                # NOTE: we have assigned the face mask of the subject-single instance to be the detected face area.
+                # So fg_mask[0] is still meaningful.
 
-        # Otherwise, we still use the input fg_mask. This is sometimes inaccurate,
-        # but maybe at 80% of the time, this corresponds to the face mask in the output images.
+        # Otherwise, the input fg_mask only contains the subject face area of the subject-single instance.
+        # We can still calc_comp_prompt_distill_loss(), but loss_comp_fg_bg_preserve is less accurate.
     
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
@@ -2334,27 +2354,18 @@ class LatentDiffusion(DDPM):
             # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_recon_mc,
             # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
             # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
-            # NOTE: loss_feat_delta_align is disabled in most cases. 
-            # It doesn't have spatial correspondance when doing the feature delta calculation.
-            # But if loss_sc_recon_mc is too large and discarded, then we still use it.
 
-            # all_subj_indices_2b is used in calc_feat_delta_and_attn_norm_loss(), as it's used 
+            # all_subj_indices_2b is used in calc_attn_norm_loss(), as it's used 
             # to index subj single and subj comp embeddings.
             # The indices will be shifted along the batch dimension (size doubled) 
-            # within calc_feat_delta_and_attn_norm_loss() to index all the 4 blocks.
-            loss_feat_delta_align, loss_subj_attn_norm_distill = \
-                calc_feat_delta_and_attn_norm_loss(ca_layers_activations['outfeat'], 
-                                                   ca_layers_activations['attn'], 
-                                                   all_subj_indices_2b, BLOCK_SIZE)
-
-            # loss_feat_delta_align: 0.02~0.03. 
-            if loss_feat_delta_align > 0:
-                loss_dict.update({f'{session_prefix}/feat_delta_align': \
-                                    loss_feat_delta_align.mean().detach().item() })
+            # within calc_attn_norm_loss() to index all the 4 blocks.
+            loss_subj_attn_norm_distill = \
+                calc_attn_norm_loss(ca_layers_activations['outfeat'], 
+                                    ca_layers_activations['attn'], 
+                                    all_subj_indices_2b, BLOCK_SIZE)
 
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
-            losses_feat_delta_align.append(loss_feat_delta_align)
         
         for loss_name in loss_names:
             loss_name2 = loss_name.replace('loss_', '')
@@ -2364,7 +2375,6 @@ class LatentDiffusion(DDPM):
 
         loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
         loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
-        loss_feat_delta_align       = torch.stack(losses_feat_delta_align).mean()
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
@@ -2373,6 +2383,23 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
         
+        if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] and sc_fg_mask is not None:
+            # If we have detected the face area in the subject-comp instance, 
+            # and we are distilling on the subject-comp rep prompts,
+            # then the subject-comp rep instance guides the subject-comp instance at the non-face area.
+            loss_subj_comp_rep_distill = 0
+            for x_recon in x_recons:
+                # mc_recon: reconstructed image of the class comp instance. 
+                # Name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
+                ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
+                loss_subj_comp_rep_distill_step = \
+                    F.mse_loss(sc_recon * (1 - sc_fg_mask), sc_rep_recon.detach() * (1 - sc_fg_mask))
+                
+                loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_step
+            loss_subj_comp_rep_distill /= len(x_recons)
+            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill': loss_subj_comp_rep_distill.item() })
+            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill * self.subj_comp_rep_distill_loss_weight
+
         # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
         # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
         # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
@@ -2382,8 +2409,8 @@ class LatentDiffusion(DDPM):
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:
             sc_x_recon = x_recons[-1].chunk(4)[1]
             sc_x_recon_pixels = self.decode_first_stage_with_grad(sc_x_recon)
-            # Currently the compos_partial_prompts only contains one prompt, i.e., BLOCK_SIZE = 1.
-            loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(compos_partial_prompts[0], sc_x_recon_pixels)
+            # Currently the mod_compos_partial_prompt only contains one prompt, i.e., BLOCK_SIZE = 1.
+            loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(mod_compos_partial_prompt[0], sc_x_recon_pixels)
             loss_dict.update({f'{session_prefix}/clip_align': loss_clip_align.item() })
             loss_comp_feat_distill_loss += loss_clip_align * self.clip_align_loss_weight
             print(f"Rank {self.trainer.global_rank} clip_align: {loss_clip_align.item():.3f}")

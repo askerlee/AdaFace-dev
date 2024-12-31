@@ -53,8 +53,8 @@ model:
     comp_fg_bg_preserve_loss_weight:  3e-3
     # subj_bg_suppress loss used in recon iters.
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 3e-3
-    recon_subj_mb_suppress_loss_weight:  2e-3
-    comp_sc_subj_mb_suppress_loss_weight:     2e-3
+    recon_subj_mb_suppress_loss_weight:   2e-3
+    comp_sc_subj_mb_suppress_loss_weight: 0
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     optimizer_type:           CAdamW 
