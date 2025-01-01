@@ -1164,7 +1164,7 @@ class LatentDiffusion(DDPM):
         self.iter_flags['img_mask']                     = img_mask
         self.iter_flags['fg_mask']                      = fg_mask
         self.iter_flags['delta_prompts']                = delta_prompts
-        self.iter_flags['mod_compos_partial_prompt']    = batch['compos_partial_prompt']
+        self.iter_flags['compos_partial_prompt']    = batch['compos_partial_prompt']
         self.iter_flags['image_unnorm']                 = batch_images_unnorm
 
         self.iter_flags['id2img_prompt_embs']           = id2img_prompt_embs
@@ -1213,7 +1213,7 @@ class LatentDiffusion(DDPM):
 
         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
         delta_prompts = self.iter_flags['delta_prompts']
-        mod_compos_partial_prompt = self.iter_flags['mod_compos_partial_prompt']
+        compos_partial_prompt = self.iter_flags['compos_partial_prompt']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
 
@@ -1221,17 +1221,20 @@ class LatentDiffusion(DDPM):
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE = 1
             # Only keep the first half of batched prompts to save RAM.
-            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, mod_compos_partial_prompt = \
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, compos_partial_prompt = \
                 subj_single_prompts[:BLOCK_SIZE], subj_comp_prompts[:BLOCK_SIZE], \
                 cls_single_prompts[:BLOCK_SIZE],  cls_comp_prompts[:BLOCK_SIZE], \
-                mod_compos_partial_prompt[:BLOCK_SIZE]
+                compos_partial_prompt[:BLOCK_SIZE]
         else:
             # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
 
-        subj_comp_rep_prompts = [ subj_comp_prompts[i] + mod_compos_partial_prompt[i] for i in range(BLOCK_SIZE) ]
+        # Use compos_partial_prompt instead of mod_compos_partial_prompt, since modifiers (style, lighting, etc.)
+        # are easier to be applied, and we don't have to force them to be expressed in the generated images,
+        # otherwise they may over-express and make the images unrealistic.
+        subj_comp_rep_prompts = [ subj_comp_prompts[i] + compos_partial_prompt[i] for i in range(BLOCK_SIZE) ]
 
         # We still compute the prompt embeddings of the first 4 types of prompts, 
         # to compute prompt delta loss. 
@@ -1356,7 +1359,7 @@ class LatentDiffusion(DDPM):
         extra_info['cls_comp_emb']       = cls_comp_emb
                                                       
         # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
-        extra_info['mod_compos_partial_prompt'] = mod_compos_partial_prompt
+        extra_info['compos_partial_prompt'] = compos_partial_prompt
 
         # c_prompt_emb: [64, 77, 768]                    
         cond_context = (c_prompt_emb, c_in, extra_info)
@@ -1707,9 +1710,10 @@ class LatentDiffusion(DDPM):
 
         ###### begin of do_comp_feat_distill ######
         elif self.iter_flags['do_comp_feat_distill']:
+            # compos_partial_prompt is used only if clip_align_loss_weight > 0.
             loss_comp_feat_distill_loss = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
-                                                 extra_info['mod_compos_partial_prompt'],
+                                                 extra_info['compos_partial_prompt'],
                                                  fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
@@ -2252,7 +2256,7 @@ class LatentDiffusion(DDPM):
 
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
-    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, mod_compos_partial_prompt,
+    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompt,
                                     fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
@@ -2409,8 +2413,8 @@ class LatentDiffusion(DDPM):
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:
             sc_x_recon = x_recons[-1].chunk(4)[1]
             sc_x_recon_pixels = self.decode_first_stage_with_grad(sc_x_recon)
-            # Currently the mod_compos_partial_prompt only contains one prompt, i.e., BLOCK_SIZE = 1.
-            loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(mod_compos_partial_prompt[0], sc_x_recon_pixels)
+            # Currently the compos_partial_prompt only contains one prompt, i.e., BLOCK_SIZE = 1.
+            loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(compos_partial_prompt[0], sc_x_recon_pixels)
             loss_dict.update({f'{session_prefix}/clip_align': loss_clip_align.item() })
             loss_comp_feat_distill_loss += loss_clip_align * self.clip_align_loss_weight
             print(f"Rank {self.trainer.global_rank} clip_align: {loss_clip_align.item():.3f}")
