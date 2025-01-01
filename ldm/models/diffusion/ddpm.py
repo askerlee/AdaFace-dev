@@ -2388,7 +2388,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
         
         if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] and sc_fg_mask is not None:
-            # If we have detected the face area in the subject-comp instance, 
+            # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
             # and we are distilling on the subject-comp rep prompts,
             # then the subject-comp rep instance guides the subject-comp instance at the non-face area.
             loss_subj_comp_rep_distill = 0
