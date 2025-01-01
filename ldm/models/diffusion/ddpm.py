@@ -90,7 +90,7 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
-                 p_comp_feat_distill_on_subj_comp_rep_prompts=0.4,
+                 p_comp_feat_distill_on_subj_comp_rep_prompts=1,
                  subj_comp_rep_distill_loss_weight=0.1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
@@ -1231,10 +1231,10 @@ class LatentDiffusion(DDPM):
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
 
-        # Use mod_compos_partial_prompt instead of mod_mod_compos_partial_prompt, since modifiers (style, lighting, etc.)
-        # are easier to be applied, and we don't have to force them to be expressed in the generated images,
-        # otherwise they may over-express and make the images unrealistic.
-        subj_comp_rep_prompts = [ subj_comp_prompts[i] + mod_compos_partial_prompt[i] for i in range(BLOCK_SIZE) ]
+        # Repeat the compositional prompts twice, to further highlight the compositional features.
+        COMP_REPEATS = 2
+        subj_comp_rep_prompts = [ subj_comp_prompts[i] + mod_compos_partial_prompt[i] * COMP_REPEATS \
+                                     for i in range(BLOCK_SIZE) ]
 
         # We still compute the prompt embeddings of the first 4 types of prompts, 
         # to compute prompt delta loss. 
@@ -2394,7 +2394,7 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_rep_distill = 0
             for x_recon in x_recons:
                 # mc_recon: reconstructed image of the class comp instance. 
-                # Name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
+                # The name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
                 ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
                 loss_subj_comp_rep_distill_step = \
                     F.mse_loss(sc_recon * (1 - sc_fg_mask), sc_rep_recon.detach() * (1 - sc_fg_mask))

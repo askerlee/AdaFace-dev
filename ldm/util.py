@@ -2003,13 +2003,13 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                 add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
         comp_subj_bg_attn_suppress_loss_scale = 0.02
-        sc_recon_ssfg_loss_scale = 10
+        sc_recon_ssfg_loss_scale = 5
         # loss_sc_recon_mc is L2 loss, which is very small. So we scale it up by 300x.
-        # loss_sc_recon_mc: 0.004, sc_recon_mc_loss_scale: 300 => 1.2
+        # loss_sc_recon_mc: 0.04, sc_recon_mc_loss_scale: 300 => 12.
         sc_recon_mc_loss_scale   = 300
         sc_to_mc_flow_attns_distill_loss_scale = 5
         
-        # loss_sc_recon_ssfg_min: 0.1~0.12. -> 1~1.2.
+        # loss_sc_recon_ssfg_min: 0.04~0.05 -> 0.2~0.25.
         loss_sc_recon_ssfg = loss_sc_recon_ssfg_min * sc_recon_ssfg_loss_scale
         loss_sc_recon_mc   = loss_sc_recon_mc_min   * sc_recon_mc_loss_scale
         # loss_sc_recon_mc_min:             0.005~0.008 -> 0.25~0.4.
