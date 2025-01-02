@@ -2196,9 +2196,9 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         add_dict_to_dict(loss_dict,
                             { 'loss_comp_subj_bg_attn_suppress': loss_layer_comp_subj_bg_attn_suppress * LAYER_W,
                               'sc_bg_percent':                   sc_bg_percent * LAYER_W,
-                              'ssfg_flow_win_rate':        ssfg_flow_win_rate * LAYER_W,
-                              'mc_flow_win_rate':          mc_flow_win_rate * LAYER_W,
-                              'mc_sameloc_win_rate':       mc_sameloc_win_rate * LAYER_W,
+                              'ssfg_flow_win_rate':              ssfg_flow_win_rate * LAYER_W,
+                              'mc_flow_win_rate':                mc_flow_win_rate * LAYER_W,
+                              'mc_sameloc_win_rate':             mc_sameloc_win_rate * LAYER_W,
                               'ssfg_avg_sparse_distill_weight':  ssfg_avg_sparse_distill_weight * LAYER_W,
                               'mc_avg_sparse_distill_weight':    mc_avg_sparse_distill_weight * LAYER_W
                             })

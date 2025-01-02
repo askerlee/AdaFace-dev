@@ -224,7 +224,7 @@ def get_parser(**parser_kwargs):
                         help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
     parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=argparse.SUPPRESS,
                         help="Weights for the teacher UNet models")
-    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the cross-attn layers of the Diffusers UNet model")
