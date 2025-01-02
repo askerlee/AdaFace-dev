@@ -64,7 +64,6 @@ class AdamW(Optimizer):
         self.init_lr = lr
 
     @torch.no_grad()
-    @torch.compile(fullgraph=False)
     def step(self, closure: Callable = None):
         """
         Performs a single optimization step.

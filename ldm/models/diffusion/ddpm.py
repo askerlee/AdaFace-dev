@@ -1770,7 +1770,8 @@ class LatentDiffusion(DDPM):
         # face embedding magnitude along the original direction, we boost the noisy face embedding 
         # along the other directions more effectively.
         self_align_loss = (embs * embs).mean()
-        self_align_loss.backward()
+        with torch._dynamo.utils.maybe_enable_compiled_autograd(True, fullgraph=True, dynamic=False):
+            self_align_loss.backward()
         adv_grad = x_start.grad
         x_start.requires_grad = False
         return adv_grad
