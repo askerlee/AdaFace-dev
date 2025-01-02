@@ -1234,7 +1234,7 @@ class LatentDiffusion(DDPM):
         # Repeat the compositional prompts twice, to further highlight the compositional features.
         COMP_REPEATS = 2
         subj_comp_rep_prompts = [ subj_comp_prompts[i] + mod_compos_partial_prompt[i] * COMP_REPEATS \
-                                     for i in range(BLOCK_SIZE) ]
+                                  for i in range(BLOCK_SIZE) ]
 
         # We still compute the prompt embeddings of the first 4 types of prompts, 
         # to compute prompt delta loss. 
@@ -2394,7 +2394,7 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
         
-        if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] and sc_fg_mask is not None:
+        if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts']:
             # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
             # and we are distilling on the subject-comp rep prompts,
             # then the subject-comp rep instance guides the subject-comp instance at the non-face area.
@@ -2403,10 +2403,9 @@ class LatentDiffusion(DDPM):
                 # mc_recon: reconstructed image of the class comp instance. 
                 # The name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
                 ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
-                loss_subj_comp_rep_distill_step = \
-                    F.mse_loss(sc_recon * (1 - sc_fg_mask), sc_rep_recon.detach() * (1 - sc_fg_mask))
-                
+                loss_subj_comp_rep_distill_step = F.mse_loss(sc_recon, sc_rep_recon.detach())
                 loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_step
+
             loss_subj_comp_rep_distill /= len(x_recons)
             loss_dict.update({f'{session_prefix}/subj_comp_rep_distill': loss_subj_comp_rep_distill.item() })
             loss_comp_feat_distill_loss += loss_subj_comp_rep_distill * self.subj_comp_rep_distill_loss_weight
