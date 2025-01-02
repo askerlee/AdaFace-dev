@@ -186,7 +186,9 @@ class RetinaFaceClient(nn.Module):
             face_crops.append(face_crop)
         
         # face_coords: long tensor of [BS, 4]
-        face_coords = torch.tensor(face_coords, device=images_ts.device)
+        face_coords    = torch.tensor(face_coords,    device=images_ts.device)
+        failed_indices = torch.tensor(failed_indices, device=images_ts.device)
+        
         if len(face_crops) == 0:
             return None, failed_indices, face_coords
         
