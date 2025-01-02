@@ -91,7 +91,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  p_comp_feat_distill_on_subj_comp_rep_prompts=1,
-                 subj_comp_rep_distill_loss_weight=0.1,
+                 subj_comp_rep_distill_loss_weight=1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -1588,6 +1588,7 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
+            cond_context_old = (extra_info['c_prompt_emb_4b'], cond_context[1], cond_context[2])
             # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
             # and the bg mask area filled with noise. Returned only for logging.
             # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
@@ -1597,11 +1598,17 @@ class LatentDiffusion(DDPM):
             # since the current iteration is do_comp_feat_distill. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
-                self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
+                self.prime_x_start_for_comp_prompts(cond_context_old, x_start, noise,
                                                     (img_mask, fg_mask), fg_noise_amount=0.2,
                                                     BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
+            if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts']:
+                x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
+                # Block 2 is the subject comp repeat (sc-repeat) instance.
+                # Make the sc-repeat and sc blocks use the same x_start, so that their output features
+                # are more aligned, and more effective for distillation.
+                x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
 
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 

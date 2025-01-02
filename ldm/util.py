@@ -2004,10 +2004,10 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 
         comp_subj_bg_attn_suppress_loss_scale = 0.02
         sc_recon_ssfg_loss_scale = 5
-        # loss_sc_recon_mc is L2 loss, which is very small. So we scale it up by 300x.
-        # loss_sc_recon_mc: 0.04, sc_recon_mc_loss_scale: 300 => 12.
-        sc_recon_mc_loss_scale   = 300
-        sc_to_mc_flow_attns_distill_loss_scale = 5
+        # loss_sc_recon_mc is L2 loss, which is very small. So we scale it up by 100x.
+        # loss_sc_recon_mc: 0.04, sc_recon_mc_loss_scale: 100 => 4.
+        sc_recon_mc_loss_scale   = 100
+        sc_to_mc_flow_attns_distill_loss_scale = 10
         
         # loss_sc_recon_ssfg_min: 0.04~0.05 -> 0.2~0.25.
         loss_sc_recon_ssfg = loss_sc_recon_ssfg_min * sc_recon_ssfg_loss_scale
