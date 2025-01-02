@@ -2282,7 +2282,7 @@ def backward_warp_by_flow_np(image2, flow1to2):
     return image1_recovered
 '''
 
-EnableCompile = False #True
+EnableCompile = True
 @conditional_compile(enable_compile=EnableCompile)
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
@@ -2468,6 +2468,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
     loss_sparse_attns_distill = {}
     flow_distill_stats        = {}
     matching_type_names       = ['attn', 'flow', 'sameloc']
+    # sc_sameloc_attn: [1, 961, 961], a diagonal matrix, i.e., attending to the same location.
+    sc_sameloc_attn = torch.eye(H*W, device=sc_feat.device, dtype=sc_feat.dtype).repeat(sc_feat.shape[0], 1, 1)
 
     # feat_name: 'ssfg', 'mc'.
     for feat_name in sc_recon_feats_attn_agg:
@@ -2509,6 +2511,15 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             all_token_losses_sc_recon_3types = torch.stack(all_token_losses_sc_recon[feat_name], dim=0)
             # Calculate the mean loss at each token by averaging across the feature dim.
             all_token_losses_sc_recon_3types = all_token_losses_sc_recon_3types.mean(dim=3)
+
+            # *** Compute sc recon feat-obj min loss. ***
+            # Add a small margin to the losses of the attn scheme in all_token_losses_sc_recon_3types,
+            # so that other schemes are preferred over the attn scheme when they 
+            # are not worse beyond the margin.
+            # sc_recon_mc_min: 0.03~0.04. sc_recon_ssfg_min: 0.04~0.05. 
+            # So a margin of 30% is ~0.01.
+            # NOTE: adding this margin increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
+            all_token_losses_sc_recon_3types[0] = all_token_losses_sc_recon_3types[0] * 1.3
             # Take the smaller loss tokenwise between attn and flow.
             min_token_losses_sc_recon = all_token_losses_sc_recon_3types.min(dim=0).values
             loss_sc_recon_min = min_token_losses_sc_recon.mean()
@@ -2528,8 +2539,6 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             ss_tokens_sparse_attn_weights = (TEMP * ss_tokens_sparse_attn_adv_normed).sigmoid()
 
             if feat_name == 'mc':
-                # sc_sameloc_attn: [1, 961, 961], a diagonal matrix.
-                sc_sameloc_attn = torch.eye(H*W, device=sc_feat.device, dtype=sc_feat.dtype).repeat(sc_feat.shape[0], 1, 1)
                 # sc_recon_feats_sparse_attns: [2, 961, 961], (BS, sc tokens, ss/mc tokens).
                 # sc_recon_feats_sparse_attns.sum(dim=1) results in an all-1 tensor, i.e., 
                 # probs are normalized across the sc tokens.
