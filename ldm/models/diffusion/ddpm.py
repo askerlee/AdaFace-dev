@@ -2408,7 +2408,9 @@ class LatentDiffusion(DDPM):
 
             loss_subj_comp_rep_distill /= len(x_recons)
             loss_dict.update({f'{session_prefix}/subj_comp_rep_distill': loss_subj_comp_rep_distill.item() })
-            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill * self.subj_comp_rep_distill_loss_weight
+            loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap
+            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill * self.subj_comp_rep_distill_loss_weight \
+                                             * loss_subj_comp_rep_distill_scale
 
         # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
         # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
