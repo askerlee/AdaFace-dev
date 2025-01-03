@@ -145,12 +145,13 @@ def generate_image(image_paths, guidance_scale, perturb_std,
 
     prompt_keywords = ['armor', 'beach', 'chef', 'dancing', 'iron man', 'jedi', 
                        'street', 'guitar', 'reading', 'running', 'superman']
-    keyword_morph   = { 'iron man': 'ironman', 'dancing': 'dance' }
+    keyword_morphs  = { 'iron man': 'ironman', 'dancing': 'dance', 
+                        'running': 'run',      'reading': 'read' }
 
     prompt_sig = ""
     for keyword in prompt_keywords:
         if keyword in prompt.lower():
-            prompt_sig = keyword_morph.get(keyword, keyword)
+            prompt_sig = keyword_morphs.get(keyword, keyword)
             break
 
     if len(prompt_sig) > 0:
