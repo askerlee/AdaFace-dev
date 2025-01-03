@@ -2004,10 +2004,10 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 
         comp_subj_bg_attn_suppress_loss_scale = 0.02
         sc_recon_ssfg_loss_scale = 5
-        # loss_sc_recon_mc is L2 loss, which is very small. So we scale it up by 100x.
-        # loss_sc_recon_mc: 0.04, sc_recon_mc_loss_scale: 100 => 4.
-        sc_recon_mc_loss_scale   = 100
-        sc_to_mc_flow_attns_distill_loss_scale = 10
+        # loss_sc_recon_mc is a small L2 loss, so we scale it up by 20x.
+        # loss_sc_recon_mc: 0.02, sc_recon_mc_loss_scale: 20 => 0.4.
+        sc_recon_mc_loss_scale                  = 20
+        sc_to_mc_flow_attns_distill_loss_scale  = 10
         
         # loss_sc_recon_ssfg_min: 0.04~0.05 -> 0.2~0.25.
         loss_sc_recon_ssfg = loss_sc_recon_ssfg_min * sc_recon_ssfg_loss_scale
@@ -2188,7 +2188,8 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
 
         # sc_to_whole_mc_prob.mean() = 1, but sc_to_ss_fg_prob.mean() = N_fg / 961 = 210 / 961 = 0.2185.
         # So we normalize sc_to_ss_fg_prob first, before comparing it with sc_to_whole_mc_prob.
-        sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.01).float().mean()
+        # 0.001 is a small margin to classify fg/bg.
+        sc_bg_percent = (sc_to_whole_mc_prob > sc_to_ss_fg_prob / sc_to_ss_fg_prob.mean() + 0.001).float().mean()
         ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate = \
             flow_distill_stats['ssfg_flow_win_rate'], flow_distill_stats['mc_flow_win_rate'], flow_distill_stats['mc_sameloc_win_rate']
         ssfg_avg_sparse_distill_weight, mc_avg_sparse_distill_weight = \

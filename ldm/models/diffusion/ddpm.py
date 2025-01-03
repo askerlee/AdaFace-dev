@@ -2403,7 +2403,15 @@ class LatentDiffusion(DDPM):
                 # mc_recon: reconstructed image of the class comp instance. 
                 # The name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
                 ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
-                loss_subj_comp_rep_distill_step = F.mse_loss(sc_recon, sc_rep_recon.detach())
+                # If sc_fg_mask only occupies < 30% of the image, then we only distill on the non-face area.
+                # Otherwise, we distill on the whole image.
+                if sc_fg_mask is not None and sc_fg_mask.mean() < 0.3:
+                    loss_subj_comp_rep_distill_step = \
+                        F.mse_loss(sc_recon * (1 - sc_fg_mask), sc_rep_recon.detach() * (1 - sc_fg_mask))
+                else:
+                    loss_subj_comp_rep_distill_step = \
+                        F.mse_loss(sc_recon, sc_rep_recon.detach())
+                                
                 loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_step
 
             loss_subj_comp_rep_distill /= len(x_recons)
@@ -2447,12 +2455,16 @@ class LatentDiffusion(DDPM):
 
             for sel_step in range(len(x_recons)):
                 x_recon  = x_recons[sel_step]
-                # Since do_comp_feat_distill is True, there are no faceless input images.
-                # Thus, x_start[0] is always a valid face image.
+                # iter_flags['do_comp_feat_distill'] is True, which guarantees that 
+                # there are no faceless input images. Thus, x_start[0] is always a valid face image.
                 x_start0         = x_start.chunk(4)[0]
-                # Only compute arcface_align_loss on the subj comp block, as the subj single block has no gradient.
+                # Only compute arcface_align_loss on the subj comp block, as 
+                # the subj single block was generated without gradient.
                 subj_comp_recon  = x_recon.chunk(4)[1]
-                # If no faces are detected in x_recon, loss_arcface_align is 0, and face_coords is None.
+                # x_start0 and subj_comp_recon are latent images, [1, 4, 64, 64]. 
+                # They need to be decoded first.
+                # If no faces are detected in x_recon, loss_arcface_align_comp_step is 0, 
+                # and sc_face_coords is None.
                 loss_arcface_align_comp_step, sc_face_coords = \
                     self.calc_arcface_align_loss(x_start0, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
