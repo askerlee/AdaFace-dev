@@ -2394,6 +2394,9 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
         
+        if sc_fg_mask is not None:
+            loss_dict.update({f'{session_prefix}/sc_fg_mask_percent': sc_fg_mask.mean().item() })
+
         if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts']:
             # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
             # and we are distilling on the subject-comp rep prompts,
@@ -2405,6 +2408,7 @@ class LatentDiffusion(DDPM):
                 ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
                 # If sc_fg_mask only occupies < 30% of the image, then we only distill on the non-face area.
                 # Otherwise, we distill on the whole image.
+                # sc_rep_recon.detach() is not needed, since sc_rep_recon was generated without gradient.
                 if sc_fg_mask is not None and sc_fg_mask.mean() < 0.3:
                     loss_subj_comp_rep_distill_step = \
                         F.mse_loss(sc_recon * (1 - sc_fg_mask), sc_rep_recon.detach() * (1 - sc_fg_mask))
