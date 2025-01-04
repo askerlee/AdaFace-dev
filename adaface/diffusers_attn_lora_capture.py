@@ -53,7 +53,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  lora_uses_dora=True, lora_proj_layers=None, 
                  hidden_size: int = -1, cross_attention_dim: int = 768, 
-                 lora_rank: int = 128, lora_alpha: float = 16):
+                 lora_rank: int = 192, lora_alpha: float = 16):
         super().__init__()
 
         self.global_enable_lora = enable_lora
@@ -73,17 +73,17 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if self.global_enable_lora:
             for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
                 if lora_layer_name == 'q':
-                    self.to_q_lora   = peft_lora.Linear(lora_proj_layer,   'default', r=lora_rank, 
-                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
+                    self.to_q_lora   = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, 
+                                                        use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'k':
-                    self.to_k_lora   = peft_lora.Linear(lora_proj_layer,   'default', r=lora_rank, 
-                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
+                    self.to_k_lora   = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, 
+                                                        use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'v':
-                    self.to_v_lora   = peft_lora.Linear(lora_proj_layer,   'default', r=lora_rank, 
-                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
+                    self.to_v_lora   = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, 
+                                                        use_dora=lora_uses_dora, lora_dropout=0.1)
                 elif lora_layer_name == 'out':
-                    self.to_out_lora = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, 
-                                              lora_alpha=lora_alpha, use_dora=lora_uses_dora, lora_dropout=0.1)
+                    self.to_out_lora = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, 
+                                                        use_dora=lora_uses_dora, lora_dropout=0.1)
 
     # LoRA layers can be enabled/disabled dynamically.
     def reset_attn_cache_and_flags(self, capture_ca_activations, enable_lora):
@@ -342,7 +342,7 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
-def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'], lora_rank=128, lora_scale_down=8):
+def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'], lora_rank=192, lora_scale_down=8):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
@@ -350,8 +350,9 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'], lor
     for name, attn_proc in unet.attn_processors.items():
         # Only capture the activations of the last 3 CA layers.
         if not name.startswith("up_blocks.3"):
-            # Not the last 3 CA layers. Don't enable LoRA or capture activations.
-            # The difference with the default attn_proc is that AttnProcessor_LoRA_Capture handles img_mask.
+            # Not the last 3 CA layers. Don't enable LoRA or capture activations. 
+            # Then the layer falls back to the original attention mechanism.
+            # We still use AttnProcessor_LoRA_Capture, as it can handle img_mask.
             attn_procs[name] = AttnProcessor_LoRA_Capture(
                 capture_ca_activations=False, enable_lora=False)
             continue
@@ -400,7 +401,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'], lor
     return attn_capture_procs
 
 # NOTE: cross-attn layers are included in the returned lora_modules.
-def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=128, lora_alpha=16):
+def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=192, lora_alpha=16):
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
     if target_modules_pat is not None:
         peft_config = LoraConfig(use_dora=lora_uses_dora, inference_mode=False, r=lora_rank, 
