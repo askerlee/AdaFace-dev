@@ -658,6 +658,7 @@ class EmbeddingManager(nn.Module):
                     # Filter out the FFN LoRA modules.
                     unet_lora_modules = { k: v for k, v in unet_lora_modules.items() if 'resnets' not in k }
 
+                # NOTE: if ddpm.unet_lora_rank is different from the rank in the ckpt, these lora modules won't be loaded.
                 ret = self.unet_lora_modules.load_state_dict(unet_lora_modules, strict=False)
                 print(f"Loaded {len(unet_lora_modules)} LoRA weights")
 

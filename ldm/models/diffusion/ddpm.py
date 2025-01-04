@@ -103,6 +103,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=True,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
+                 unet_lora_rank=192,
                  unet_lora_scale_down=16,
                  ):
         
@@ -184,6 +185,7 @@ class DDPM(pl.LightningModule):
         self.use_ldm_unet           = use_ldm_unet
         self.unet_uses_attn_lora    = unet_uses_attn_lora
         self.unet_uses_ffn_lora     = unet_uses_ffn_lora
+        self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
 
         if self.use_ldm_unet:
@@ -194,10 +196,11 @@ class DDPM(pl.LightningModule):
                                               use_attn_lora=self.unet_uses_attn_lora,
                                               attn_lora_layer_names=['q'],
                                               use_ffn_lora=self.unet_uses_ffn_lora,
-                                              lora_rank=128, 
+                                              # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
+                                              lora_rank=self.unet_lora_rank, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 16
                                               ffn_lora_scale_down=self.unet_lora_scale_down     # 16
-                                              )
+                                             )
             self.vae = self.model.pipeline.vae
 
         count_params(self.model, verbose=True)
