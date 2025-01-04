@@ -239,8 +239,8 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
                         help="Prompt delta regularization weight")
 
-    parser.add_argument("--rand_scale_range", type=float, nargs=2, default=[0.5, 1.0],
-                        help="Range of random scaling on training images (set to 1 1 to disable)")
+    parser.add_argument("--rand_scale_range", type=float, nargs=2, default=[0.4, 1.0],
+                        help="Range of random scaling on training images (set to `1 1` to disable)")
 
     parser.add_argument("--comp_distill_iter_gap",
                         type=int, default=argparse.SUPPRESS,
