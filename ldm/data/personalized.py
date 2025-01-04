@@ -664,6 +664,7 @@ class PersonalizedBase(Dataset):
         example["cls_comp_mod_prompt_fp"]    = cls_comp_fp_mod_prompt_tmpl.format( cls_delta_string)
         example["mod_compos_partial_prompt"] = mod_compos_partial
         example["compos_partial_prompt"]     = compos_partial
+        example["prompt_modifier"]           = modifier
 
 # SubjectSampler randomly samples a subject/mix-subject-folder index.
 # This subject index will be used by an PersonalizedBase instance to draw random images.
