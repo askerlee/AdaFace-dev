@@ -1226,7 +1226,7 @@ class LatentDiffusion(DDPM):
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE = 1
             # Only keep the first half of batched prompts to save RAM.
-            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, 
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, \
             compos_partial_prompt, prompt_modifier = \
                 subj_single_prompts[:BLOCK_SIZE],   subj_comp_prompts[:BLOCK_SIZE], \
                 cls_single_prompts[:BLOCK_SIZE],    cls_comp_prompts[:BLOCK_SIZE], \
