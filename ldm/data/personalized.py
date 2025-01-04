@@ -126,7 +126,7 @@ class PersonalizedBase(Dataset):
                  flip_p=0.5,
                  # rand_scale_range: None (disabled) or a tuple of floats
                  # that specifies the (minimum, maximum) scaling factors.
-                 rand_scale_range=[0.5, 1.0],
+                 rand_scale_range=[0.4, 1.0],
                  set_name="train",
                  subject_string="z",
                  # cls string used to compute the delta loss.

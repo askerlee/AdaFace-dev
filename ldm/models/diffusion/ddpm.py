@@ -87,7 +87,9 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0.1,
                  extra_unet_dirpaths=None,
                  unet_weights_in_ensemble=None,
+                 input_noise_perturb_std=0.05,
                  p_gen_rand_id_for_id2img=0,
+                 p_perturb_input_noise=0.5,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  p_comp_feat_distill_on_subj_comp_rep_prompts=1,
@@ -154,6 +156,8 @@ class DDPM(pl.LightningModule):
         self.unet_weights_in_ensemble               = unet_weights_in_ensemble
         
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
+        self.p_perturb_input_noise                  = p_perturb_input_noise
+        self.input_noise_perturb_std                = input_noise_perturb_std
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
@@ -331,6 +335,7 @@ class DDPM(pl.LightningModule):
                             'id2img_prompt_embs':               None,
                             'id2img_neg_prompt_embs':           None,
                             'perturb_face_id_embs':             False,
+                            'perturb_input_noise':              False,
                             'faceless_img_count':               0,
                             'do_comp_feat_distill':             False,
                             'do_prompt_emb_delta_reg':          False,
@@ -1787,6 +1792,15 @@ class LatentDiffusion(DDPM):
             # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
             FACELOSS_BS = x_start.shape[0]
 
+        self.iter_flags['perturb_input_noise'] = (torch.rand(1) < self.p_perturb_input_noise)
+        if self.iter_flags['perturb_input_noise']:
+            #　input_noise_perturb_std: 0.05.
+            # In https://github.com/bghira/SimpleTuner/pull/723, the std is 0.1.
+            # We are slightly more conservative.
+            noise2 = noise + torch.randn_like(noise) * self.input_noise_perturb_std
+        else:
+            noise2 = noise
+
         # recon_with_adv_attack_iter_gap = 2, i.e., in half of the iterations, 
         # we do adversarial attack on the input images.
         do_adv_attack = (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
@@ -1821,7 +1835,10 @@ class LatentDiffusion(DDPM):
                 # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
                 # We predict the updated noise to remain consistent with the training paradigm.
-                noise[:FACELOSS_BS] -= adv_grad
+                noise2[:FACELOSS_BS] -= adv_grad
+                if self.iter_flags['perturb_input_noise']:
+                    noise[:FACELOSS_BS] -= adv_grad
+
                 self.adaface_adv_success_iters_count += 1
                 # adaface_adv_success_rate is always close to 1, so we don't monitor it.
                 # adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
@@ -1846,7 +1863,7 @@ class LatentDiffusion(DDPM):
         # If unet_uses_attn_lora, then enable use_attn_lora with 50% chance during normal recon.
         randomly_enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
         model_output, x_recon, ca_layers_activations = \
-            self.guided_denoise(x_start, noise, t, cond_context, 
+            self.guided_denoise(x_start, noise2, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
                                 batch_part_has_grad='all', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
@@ -1860,6 +1877,9 @@ class LatentDiffusion(DDPM):
         # bg loss is completely ignored. 
         bg_pixel_weight = 0 
 
+        # NOTE: guided_denoise() uses the perturbed noise2 as input, 
+        # but the recon objective is the original noise instead of the perturbed noise2.
+        # https://github.com/huggingface/diffusers/issues/3293
         loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
             calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
                                           all_subj_indices, img_mask, fg_mask,
