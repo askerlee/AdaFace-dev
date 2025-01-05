@@ -1589,6 +1589,10 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
+            # Since we do comp_feat_distill_on_subj_comp_rep_prompts, cond_context contains 
+            # (subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb).
+            # But in order to do priming, we need cond_context_old which contains
+            # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
             cond_context_old = (extra_info['c_prompt_emb_4b'], cond_context[1], cond_context[2])
             # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
             # and the bg mask area filled with noise. Returned only for logging.
@@ -2156,6 +2160,7 @@ class LatentDiffusion(DDPM):
 
         x_start_maskfilled = x_start
         subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
+        breakpoint()
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         # Update masks to be a 1-repeat-4 structure.

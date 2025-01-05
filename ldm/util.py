@@ -677,6 +677,8 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     elif divide_scheme == 'none' or divide_scheme is None:
         D = 1
 
+    # Use only the first embedding of the multi-embedding token, and distribute it to the rest M-1 embeddings.
+    # The first embedding should be the sum of a multi-token cls embeddings.
     repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / D
 
     # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
@@ -694,7 +696,7 @@ def distribute_embedding_to_M_tokens_by_dict(text_embedding, placeholder_indices
 
         ph_indices_N  = placeholder_indices_dict[k][1]
         if len(ph_indices_N) > 1:
-            text_embedding = distribute_embedding_to_M_tokens(text_embedding, ph_indices_N)
+            text_embedding = distribute_embedding_to_M_tokens(text_embedding, ph_indices_N, divide_scheme=divide_scheme)
 
     return text_embedding
 
@@ -778,19 +780,20 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices):
     cls_delta_string_indices = sorted(cls_delta_string_indices, key=lambda x: (x[0], x[1]))
     # batch_i2offset is used for multiple cls delta tokens in the same instance.
     # It records the offset of the embeddings of the next cls delta token in the current instance.
-    batch_i2offset = {}
+    # batch_i2offset = {}
 
     prompt_embedding2 = prompt_embedding.clone()
     occurred_subj_names = {}
 
     # Scan prompt_embedding to find the cls delta tokens, and combine them to 1 token.
     for batch_i, start_index_N, M, subj_name in cls_delta_string_indices:
-        i_off = batch_i2offset.get(batch_i, 0)
+        #i_off = batch_i2offset.get(batch_i, 0)
         # cls_delta_embeddings: [M, 768].
         cls_delta_embeddings = prompt_embedding[batch_i, start_index_N:start_index_N+M]
         # avg_cls_delta_embedding: [768].
         cls_delta_embedding_sum = cls_delta_embeddings.sum(dim=0)
-        prompt_embedding2[batch_i, start_index_N-i_off] = cls_delta_embedding_sum
+        # Set the M cls delta embeddings to the mean cls delta embedding.
+        prompt_embedding2[batch_i, start_index_N:start_index_N+M] = cls_delta_embedding_sum
         # We combine all the cls delta tokens to 1 token cls_delta_embedding_sum, so that
         # their positions align with the subject tokens in the first half of the batch.
         # To do so, we move the embeddings (except the EOS) after the last cls delta token to the left,
@@ -800,8 +803,8 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices):
         # The rest 27 tokens are aligned with the embeddings of ", ".
         # This misalignment will be patched by calling 
         # distribute_embedding_to_M_tokens_by_dict(cls_single_emb, placeholder2indices_1b) in LatentDiffusion::forward().
-        prompt_embedding2[batch_i, start_index_N+1-i_off:-(M+i_off)] = prompt_embedding[batch_i, start_index_N+M:-1]
-        batch_i2offset[batch_i] = i_off + M - 1
+        # prompt_embedding2[batch_i, start_index_N+1-i_off:-(M+i_off)] = prompt_embedding[batch_i, start_index_N+M:-1]
+        #batch_i2offset[batch_i] = i_off + M - 1
         occurred_subj_names[subj_name] = \
             occurred_subj_names.get(subj_name, 0) + 1
 
