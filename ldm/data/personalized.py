@@ -620,13 +620,13 @@ class PersonalizedBase(Dataset):
 
         base_template = random.choice(base_templates)
         single_prompt_tmpl      = base_template
-        comp_prompt_tmpl        = base_template + " " + compos_partial
+        comp_prompt_tmpl        = base_template + ", " + compos_partial
         # modifier starts with a ",", so no need to add ", " before it.
-        single_mod_prompt_tmpl  = base_template + " " + modifier
+        single_mod_prompt_tmpl  = base_template + ", " + modifier
         # mod_compos_partial = modifier + ", " + compos_partial,
         # so comp_mod_prompt_tmpl   = base_template + " " + modifier + ", " + compos_partial
         #    single_mod_prompt_tmpl = base_template + " " + modifier.
-        comp_mod_prompt_tmpl    = base_template + " " + mod_compos_partial
+        comp_mod_prompt_tmpl    = base_template + ", " + mod_compos_partial
 
         # "face portrait" trick for humans/animals.
         # Note in subj_comp_fp_prompt_tmpl, "face portrait" is replaced by "a portrait",
@@ -634,12 +634,12 @@ class PersonalizedBase(Dataset):
         # In cls_comp_fp_prompt_tmpl, "face portrait" is kept, 
         # since the face tends to be small in class images without it.
         single_fp_prompt_tmpl        = "face portrait of {}"
-        subj_comp_fp_prompt_tmpl     =    "a portrait of {}" + " " + compos_partial
-        cls_comp_fp_prompt_tmpl      = "face portrait of {}" + " " + compos_partial
+        subj_comp_fp_prompt_tmpl     =    "a portrait of {}" + ", " + compos_partial
+        cls_comp_fp_prompt_tmpl      = "face portrait of {}" + ", " + compos_partial
 
-        single_fp_mod_prompt_tmpl    = "face portrait of {}" + " " + modifier
-        subj_comp_fp_mod_prompt_tmpl =    "a portrait of {}" + " " + mod_compos_partial
-        cls_comp_fp_mod_prompt_tmpl  = "face portrait of {}" + " " + mod_compos_partial
+        single_fp_mod_prompt_tmpl    = "face portrait of {}" + ", " + modifier
+        subj_comp_fp_mod_prompt_tmpl =    "a portrait of {}" + ", " + mod_compos_partial
+        cls_comp_fp_mod_prompt_tmpl  = "face portrait of {}" + ", " + mod_compos_partial
 
         example["subj_single_prompt"]     = single_prompt_tmpl.format(subject_string)
         example["cls_single_prompt"]      = single_prompt_tmpl.format(cls_delta_string)

@@ -162,7 +162,7 @@ def sample_compositions(N, subj_type):
         if has_another_obj:
             object2   = np.random.choice(coexist_objects)
             location2 = np.random.choice(all_locations)
-            obj_loc2  = ", a " + object2 + " " + location2
+            obj_loc2  = "a " + object2 + " " + location2
         else:
             obj_loc2  = ""
 
@@ -172,9 +172,9 @@ def sample_compositions(N, subj_type):
             num_styles = np.random.choice([1, 2])
             styles = np.random.choice(all_styles, size=num_styles, replace=False)
             # style = np.random.choice(all_styles) + ' '
-            style = ", in " + " and ".join(styles) + " style"
+            style = "in " + " and ".join(styles) + " style"
         elif has_styles == 1:   # 20% with photorealistic as the style
-            style = ", photorealistic"
+            style = "photorealistic"
         elif has_styles == 0:   # 30% without style
             style = ""
 
@@ -183,21 +183,20 @@ def sample_compositions(N, subj_type):
         if has_art_by:
             num_art_by = np.random.choice([1, 2, 3])
             art_bys = np.random.choice(all_art_by, size=num_art_by, replace=False)
-            art_by = ", art by " + " and ".join(art_bys)
+            art_by = "art by " + " and ".join(art_bys)
         else:
             art_by = ""
 
         has_background = np.random.choice([0, 1], p=background_probs)
         if has_background:
             background = np.random.choice(all_backgrounds)
-            background = ", with " + background + " as background"
+            background = "with " + background + " as background"
         else:
             background = ""
 
         has_time_theme = np.random.choice([0, 1], p=option_probs)
         if has_time_theme:
             time = np.random.choice(all_time) 
-            time = ", " + time
         else:
             time = ""
         
@@ -205,12 +204,13 @@ def sample_compositions(N, subj_type):
         has_light =1
         if has_light:
             light = np.random.choice(all_light)
-            light = ", with " + light 
+            light = "with " + light 
         else:
             light = ""
 
-        modifier = f"{time}{style}{art_by}{light}"
-        compos_prompt = f"{composition}{obj_loc2}{background}"
+        modifier = ", ".join(filter(lambda s: len(s) > 0, [time, style, light, art_by]))
+        #compos_prompt = f"{composition}{obj_loc2}{background}"
+        compos_prompt = ", ".join(filter(lambda s: len(s) > 0, [composition, obj_loc2, background]))
         modifiers.append(modifier)
         compos_prompts.append(compos_prompt)
     return compos_prompts, modifiers

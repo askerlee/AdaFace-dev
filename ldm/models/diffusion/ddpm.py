@@ -832,11 +832,9 @@ class LatentDiffusion(DDPM):
         # They highlight the face features compared to the normal prompts.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
             if self.iter_flags['do_comp_feat_distill']:
-                # Use the fp trick 50% of the time on compositional distillation iterations.
-                # If we always enable the fp trick, the subj-comp instance may become very similar to subj-single
-                # instance, which leads to smaller loss_sc_recon_ssfg_min. However, this implies worse composition 
-                # and is not desirable.
-                p_use_fp_trick = 0.5
+                # Use the fp trick all the time on compositional distillation iterations,
+                # so that class comp prompts will generate clear face areas.
+                p_use_fp_trick = 1
             # recon_on_comp_prompt. So we add "portrait" to the prompts.
             # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
             # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
@@ -1230,8 +1228,8 @@ class LatentDiffusion(DDPM):
         # This is to avoid the subj comp instance receives too much style guidance from the subj_comp_rep instances,
         # and becomes overly stylized.
         COMP_REPEATS = 2
-        subj_comp_rep_prompts = [ subj_comp_prompts[i] + " " + prompt_modifier[i] \
-                                   + ", " + compos_partial_prompt[i] * COMP_REPEATS \
+        subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                   + ", " + ", ".join([ compos_partial_prompt[i] ] * COMP_REPEATS) \
                                     for i in range(BLOCK_SIZE) ]
 
         # We still compute the prompt embeddings of the first 4 types of prompts, 
@@ -2128,7 +2126,6 @@ class LatentDiffusion(DDPM):
     def prime_x_start_for_comp_prompts(self, cond_context, x_start, noise,
                                        masks, fg_noise_amount=0.2, BLOCK_SIZE=1):
         c_prompt_emb, c_in, extra_info = cond_context
-
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
         img_mask, fg_mask = masks
@@ -2190,8 +2187,9 @@ class LatentDiffusion(DDPM):
             subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
                 [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
-            mix_comp_prompt_emb = subj_comp_prompt_emb * (1 - self.cls_subj_mix_scale) \
-                                  + cls_comp_prompt_emb * self.cls_subj_mix_scale
+            mix_comp_prompt_emb = cls_comp_prompt_emb 
+                                  #subj_comp_prompt_emb * (1 - self.cls_subj_mix_scale) \
+                                  #+ cls_comp_prompt_emb * self.cls_subj_mix_scale
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
             # cfg_scale_range of comp_distill_priming_unet is [2, 4].
@@ -2235,8 +2233,9 @@ class LatentDiffusion(DDPM):
         noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
         subj_double_prompt_emb, cls_double_prompt_emb = c_prompt_emb.chunk(2)
         subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
-        mix_double_prompt_emb = subj_double_prompt_emb * (1 - self.cls_subj_mix_scale) \
-                                + cls_double_prompt_emb * self.cls_subj_mix_scale
+        mix_double_prompt_emb = cls_double_prompt_emb 
+                                #subj_double_prompt_emb * (1 - self.cls_subj_mix_scale) \
+                                #+ cls_double_prompt_emb * self.cls_subj_mix_scale
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         #     x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
         # and x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
