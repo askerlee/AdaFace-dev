@@ -666,6 +666,11 @@ class LatentDiffusion(DDPM):
             # distillation iteration, and placeholder_indices only contains the indices of the subject 
             # instances. Whereas cls_delta_string_indices only contains the indices of the
             # class instances. Therefore, cls_delta_string_indices is used here.
+            # NOTE: after merging, if there are multiple cls tokens, their embeddings become one (averaged),
+            # and the consequent token embeddings are moved towards the beginning of prompt_embeddings.
+            # Example: cls_delta_string_indices = [(2, 4, 2, 'lisa'), (3, 4, 2, 'lisa')]
+            # Then in the 2nd and 3rd instances, the 4th and 5th tokens are cls tokens and are averaged.
+            # The 6th~76th token embeddings are moved towards the beginning of prompt_embeddings.
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                            self.embedding_manager.cls_delta_string_indices)
 
@@ -2150,6 +2155,7 @@ class LatentDiffusion(DDPM):
         noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
 
         x_start_maskfilled = x_start
+        subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         # Update masks to be a 1-repeat-4 structure.
@@ -2183,7 +2189,6 @@ class LatentDiffusion(DDPM):
             noise_1     = noise.chunk(4)[0]
             t_1         = t.chunk(4)[0]
             
-            subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
             subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
                 [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
@@ -2394,7 +2399,11 @@ class LatentDiffusion(DDPM):
             loss_name2 = loss_name.replace('loss_', '')
             loss_name2 = f'{session_prefix}/{loss_name2}'
             if loss_name2 in loss_dict:
-                loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
+                if loss_dict[loss_name2] > 0:
+                    loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
+                else:
+                    # Remove 0 losses from the loss_dict.
+                    del loss_dict[loss_name2]
 
         loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
         loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
