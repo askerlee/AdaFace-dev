@@ -67,7 +67,7 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
-                 cls_subj_mix_scale=0.6,
+                 cls_subj_mix_scale=0.8,
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
@@ -474,11 +474,20 @@ class LatentDiffusion(DDPM):
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
             self.comp_distill_priming_unet = \
-                create_unet_teacher('simple_unet',
-                                    torch_dtype=torch.float16, 
-                                    unet_dirpath = 'models/ensemble/rv4-unet',
+                create_unet_teacher('unet_ensemble', 
+                                    # A trick to avoid creating multiple UNet instances.
+                                    # Same underlying unet, applied with different prompts, then mixed.
+                                    unets = [unet, unet],
+                                    unet_types=None,
+                                    extra_unet_dirpaths=None,
+                                    # unet_weights_in_ensemble: [0.4, 0.6]. The "first unet" uses subject embeddings, 
+                                    # the second uses class embeddings. This means that,
+                                    # when aggregating the results of using subject embeddings vs. class embeddings,
+                                    # we give more weights to the class embeddings for better compositionality.
+                                    unet_weights_in_ensemble = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
                                     p_uses_cfg=1, # Always uses CFG for priming denoising.
-                                    cfg_scale_range=[2, 4])
+                                    cfg_scale_range=[2, 4],
+                                    torch_dtype=torch.float16)
             self.comp_distill_priming_unet.train = disabled_train
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
@@ -2196,7 +2205,7 @@ class LatentDiffusion(DDPM):
             subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
                 [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
-            mix_comp_prompt_emb = cls_comp_prompt_emb 
+            #mix_comp_prompt_emb = cls_comp_prompt_emb 
                                   #subj_comp_prompt_emb * (1 - self.cls_subj_mix_scale) \
                                   #+ cls_comp_prompt_emb * self.cls_subj_mix_scale
             # Since we always use CFG for class priming denoising,
@@ -2206,7 +2215,11 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                     self.comp_distill_priming_unet(self, x_start_1, noise_1, t_1, 
-                                                   teacher_context=mix_comp_prompt_emb, 
+                                                   # In each timestep, the unet ensemble will do denoising on the same x_start_1 
+                                                   # with subj_single_prompt_emb, subj_comp_prompt_emb and cls_comp_prompt_emb, then average the results.
+                                                   # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                                   # From the outside, the unet ensemble is transparent, like a single unet.
+                                                   teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb], 
                                                    negative_context=uncond_emb,
                                                    num_denoising_steps=num_shared_denoising_steps,
                                                    # Same t and noise across instances.
@@ -2242,7 +2255,7 @@ class LatentDiffusion(DDPM):
         noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
         subj_double_prompt_emb, cls_double_prompt_emb = c_prompt_emb.chunk(2)
         subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
-        mix_double_prompt_emb = cls_double_prompt_emb 
+        #mix_double_prompt_emb = cls_double_prompt_emb 
                                 #subj_double_prompt_emb * (1 - self.cls_subj_mix_scale) \
                                 #+ cls_double_prompt_emb * self.cls_subj_mix_scale
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
@@ -2253,12 +2266,15 @@ class LatentDiffusion(DDPM):
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
-                                                # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                                teacher_context=mix_double_prompt_emb, 
-                                                negative_context=uncond_emb,
-                                                num_denoising_steps=num_sep_denoising_steps,
-                                                # Same t and noise across instances.
-                                                same_t_noise_across_instances=True)
+                                               # In each timestep, the unet ensemble will do denoising on the same x_start_2 
+                                               # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
+                                               # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                               # From the outside, the unet ensemble is transparent, like a single unet.
+                                               teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb], 
+                                               negative_context=uncond_emb,
+                                               num_denoising_steps=num_sep_denoising_steps,
+                                               # Same t and noise across instances.
+                                               same_t_noise_across_instances=True)
         
         all_t_list += [ ti[0].item() for ti in all_t ]
         print(f"Rank {self.trainer.global_rank} step {self.global_step}: "

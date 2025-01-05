@@ -48,8 +48,8 @@ model:
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
-    # 0.6: 0.4 * subj embeddings + 0.6 * class embeddings
-    cls_subj_mix_scale:               0.6
+    # 0.8: 0.2 * subj embeddings + 0.8 * class embeddings
+    cls_subj_mix_scale:               0.8
     comp_fg_bg_preserve_loss_weight:  3e-3
     # subj_bg_suppress loss used in recon iters.
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 3e-3
