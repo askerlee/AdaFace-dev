@@ -2160,7 +2160,6 @@ class LatentDiffusion(DDPM):
 
         x_start_maskfilled = x_start
         subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
-        breakpoint()
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         # Update masks to be a 1-repeat-4 structure.
