@@ -85,8 +85,6 @@ class DDPM(pl.LightningModule):
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0.1,
-                 extra_unet_dirpaths=None,
-                 unet_weights_in_ensemble=None,
                  input_noise_perturb_std=0.05,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_input_noise=0.5,
@@ -152,10 +150,7 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = p_unet_distill_uses_comp_prompt
         else:
             self.p_unet_distill_uses_comp_prompt = 0
-            
-        self.extra_unet_dirpaths                    = extra_unet_dirpaths
-        self.unet_weights_in_ensemble               = unet_weights_in_ensemble
-        
+
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_input_noise                  = p_perturb_input_noise
         self.input_noise_perturb_std                = input_noise_perturb_std
@@ -458,14 +453,14 @@ class LatentDiffusion(DDPM):
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
-            # When unet_teacher_types == 'unet_ensemble' or unet_teacher_types contains multiple values,
+            # ** OBSOLETE ** When unet_teacher_types == 'unet_ensemble' or unet_teacher_types contains multiple values,
             # device, unets, extra_unet_dirpaths and unet_weights_in_ensemble are needed. 
             # Otherwise, they are not needed.
             self.unet_teacher = create_unet_teacher(self.unet_teacher_types, 
                                                     device='cpu',
                                                     unets=None,
-                                                    extra_unet_dirpaths=self.extra_unet_dirpaths,
-                                                    unet_weights_in_ensemble=self.unet_weights_in_ensemble,
+                                                    extra_unet_dirpaths=None,
+                                                    unet_weights_in_ensemble=None,
                                                     p_uses_cfg=self.p_unet_teacher_uses_cfg,
                                                     cfg_scale_range=self.unet_teacher_cfg_scale_range)
         else:
@@ -479,20 +474,11 @@ class LatentDiffusion(DDPM):
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
             self.comp_distill_priming_unet = \
-                create_unet_teacher('unet_ensemble', 
-                                    # A trick to avoid creating multiple UNet instances.
-                                    # Same underlying unet, applied with different prompts, then mixed.
-                                    unets = [unet, unet],
-                                    unet_types=None,
-                                    extra_unet_dirpaths=None,
-                                    # unet_weights_in_ensemble: [0.4, 0.6]. The "first unet" uses subject embeddings, 
-                                    # the second uses class embeddings. This means that,
-                                    # when aggregating the results of using subject embeddings vs. class embeddings,
-                                    # we give more weights to the class embeddings for better compositionality.
-                                    unet_weights_in_ensemble = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
+                create_unet_teacher('simple_unet',
+                                    torch_dtype=torch.float16, 
+                                    unet_dirpath = 'models/ensemble/rv4-unet',
                                     p_uses_cfg=1, # Always uses CFG for priming denoising.
-                                    cfg_scale_range=[2, 4],
-                                    torch_dtype=torch.float16)
+                                    cfg_scale_range=[2, 4])
             self.comp_distill_priming_unet.train = disabled_train
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
@@ -1852,7 +1838,7 @@ class LatentDiffusion(DDPM):
                 #loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
 
         if self.iter_flags['recon_on_comp_prompt']:
-            # Use class comp prompts as the negative prompts.
+            # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
             # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
@@ -1945,7 +1931,7 @@ class LatentDiffusion(DDPM):
         num_unet_denoising_steps = self.iter_flags['num_unet_denoising_steps']
         # student_prompt_embs is the prompt embedding of the student model.
         student_prompt_embs = cond_context[0]
-        # NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
+        # ** OBSOLETE ** NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
         # extra_unet_dirpaths (finetuned unets on the original SD unet); 
         # in this case they are surely not 'arc2face' or 'consistentID'.
         # The same student_prompt_embs is used by all unet_teachers.
@@ -2204,6 +2190,8 @@ class LatentDiffusion(DDPM):
             subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
                 [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
+            mix_comp_prompt_emb = subj_comp_prompt_emb * (1 - self.cls_subj_mix_scale) \
+                                  + cls_comp_prompt_emb * self.cls_subj_mix_scale
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
             # cfg_scale_range of comp_distill_priming_unet is [2, 4].
@@ -2211,11 +2199,7 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                     self.comp_distill_priming_unet(self, x_start_1, noise_1, t_1, 
-                                                   # In each timestep, the unet ensemble will do denoising on the same x_start_1 
-                                                   # with subj_single_prompt_emb, subj_comp_prompt_emb and cls_comp_prompt_emb, then average the results.
-                                                   # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                   # From the outside, the unet ensemble is transparent, like a single unet.
-                                                   teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb], 
+                                                   teacher_context=mix_comp_prompt_emb, 
                                                    negative_context=uncond_emb,
                                                    num_denoising_steps=num_shared_denoising_steps,
                                                    # Same t and noise across instances.
@@ -2251,7 +2235,8 @@ class LatentDiffusion(DDPM):
         noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
         subj_double_prompt_emb, cls_double_prompt_emb = c_prompt_emb.chunk(2)
         subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
-
+        mix_double_prompt_emb = subj_double_prompt_emb * (1 - self.cls_subj_mix_scale) \
+                                + cls_double_prompt_emb * self.cls_subj_mix_scale
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         #     x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
         # and x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
@@ -2261,10 +2246,7 @@ class LatentDiffusion(DDPM):
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
                                                 # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                                # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
-                                                # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                # From the outside, the unet ensemble is transparent, like a single unet.
-                                                teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb], 
+                                                teacher_context=mix_double_prompt_emb, 
                                                 negative_context=uncond_emb,
                                                 num_denoising_steps=num_sep_denoising_steps,
                                                 # Same t and noise across instances.

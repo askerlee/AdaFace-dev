@@ -2002,8 +2002,8 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                 # Accumulate the loss values to loss_dict when there are multiple denoising steps.
                 add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
-        comp_subj_bg_attn_suppress_loss_scale = 0.02
-        sc_recon_ssfg_loss_scale = 5
+        comp_subj_bg_attn_suppress_loss_scale   = 0.02
+        sc_recon_ssfg_loss_scale                = 5
         # loss_sc_recon_mc is a small L2 loss, so we scale it up by 20x.
         # loss_sc_recon_mc: 0.02, sc_recon_mc_loss_scale: 60 => 1.2.
         sc_recon_mc_loss_scale                  = 60

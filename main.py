@@ -208,28 +208,22 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--unet_distill_iter_gap", type=int, default=argparse.SUPPRESS,
                         help="Do unet distillation every N steps in non-compositional iterations")
     parser.add_argument("--unet_teacher_types", type=str, nargs="*", default=argparse.SUPPRESS,
-                        choices=["arc2face","consistentID", "unet_ensemble"], 
-                        help="Type(s) of the UNet teacher. Multiple values imply unet_ensemble. "
-                             "If 'unet_ensemble' is specified, this should be the only value, and "
-                             "the types of unets are specified with --extra_unet_dirpaths.")
+                        choices=["arc2face","consistentID"], 
+                        help="Type of the UNet teacher. Multiple values imply unet_ensemble. ")
     parser.add_argument("--p_unet_teacher_uses_cfg", type=float, default=argparse.SUPPRESS,
                         help="The probability that the UNet teacher (as well as the student) uses the classifier-free guidance")    
     parser.add_argument("--unet_teacher_cfg_scale_range", type=float, nargs=2, default=argparse.SUPPRESS,
                         help="Range of the scale of the classifier-free guidance")
     parser.add_argument("--num_static_img_suffix_embs", type=int, default=4,
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
-    # --extra_unet_dirpaths and --unet_weights_in_ensemble are only used when unet_teacher_types contains multiple values or is 'unet_ensemble'.
-    parser.add_argument("--extra_unet_dirpaths", type=str, nargs="*", 
-                        default=argparse.SUPPRESS, 
-                        help="Extra paths to the checkpoints of the teacher UNet models (other than the default one)")
-    parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=argparse.SUPPRESS,
-                        help="Weights for the teacher UNet models")
     parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the cross-attn layers of the Diffusers UNet model")
     parser.add_argument("--unet_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use LoRA in the FFNs of the Diffusers UNet model")    
+                        help="Whether to use LoRA in the FFNs of the Diffusers UNet model")
+    parser.add_argument("--unet_lora_rank", type=int, default=argparse.SUPPRESS,
+                        help="Rank of the LoRA in the Diffusers UNet model")    
     parser.add_argument("--unet_lora_scale_down", type=float, default=8,
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
     parser.add_argument("--load_unet_attn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
@@ -728,7 +722,9 @@ if __name__ == "__main__":
         config.model.params.unet_uses_attn_lora     = opt.unet_uses_attn_lora
         config.model.params.unet_uses_ffn_lora      = opt.unet_uses_ffn_lora
         config.model.params.unet_lora_scale_down    = opt.unet_lora_scale_down
-        
+        if hasattr(opt, 'unet_lora_rank'):
+            config.model.params.unet_lora_rank = opt.unet_lora_rank
+
         # Setting prompt_emb_delta_reg_weight to 0 will disable prompt delta regularization.
         if hasattr(opt, 'prompt_emb_delta_reg_weight'):
             config.model.params.prompt_emb_delta_reg_weight     = opt.prompt_emb_delta_reg_weight
