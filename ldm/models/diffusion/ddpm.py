@@ -14,11 +14,11 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
-                        calc_recon_and_complem_losses, calc_attn_norm_loss, \
+                        calc_recon_and_complem_losses, calc_attn_norm_loss, masked_l2_loss, \
                         calc_subj_masked_bg_suppress_loss, save_grid, init_x_with_fg_from_training_image, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
-                        merge_cls_token_embeddings, anneal_perturb_embedding, \
+                        merge_cls_token_embeddings, anneal_perturb_embedding, rand_dropout, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
@@ -1410,7 +1410,8 @@ class LatentDiffusion(DDPM):
     # This is not used for the iter_type 'do_normal_recon'.
     # batch_part_has_grad: 'all', 'none', 'subject-compos'.
     def guided_denoise(self, x_start, noise, t, cond_context,
-                       uncond_emb=None, img_mask=None, batch_part_has_grad='all', 
+                       uncond_emb=None, img_mask=None, subj_indices=None, 
+                       batch_part_has_grad='all', 
                        do_pixel_recon=False, cfg_scale=-1, 
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
@@ -1419,7 +1420,8 @@ class LatentDiffusion(DDPM):
 
         extra_info = cond_context[2]
         extra_info['capture_ca_activations'] = capture_ca_activations
-        extra_info['img_mask'] = img_mask
+        extra_info['img_mask']               = img_mask
+        extra_info['subj_indices']           = subj_indices
 
         # model_output is the predicted noise.
         # if not batch_part_has_grad, we save RAM by not storing the computation graph.
@@ -1499,10 +1501,13 @@ class LatentDiffusion(DDPM):
 
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
+                                       subj_indices=None,
                                        cfg_scale=-1, capture_ca_activations=False,
                                        num_denoising_steps=1, 
                                        same_t_noise_across_instances=True):
         assert num_denoising_steps <= 10
+        if subj_indices is not None:
+            breakpoint()
 
         if same_t_noise_across_instances:
             # If same_t_noise_across_instances, we use the same t and noise for all instances.
@@ -1523,9 +1528,19 @@ class LatentDiffusion(DDPM):
             noise   = noises[i]
 
             # batch_part_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
+            # subj_indices are only applicable to subj single and subj comp instances, 
+            # i.e., the first 2 instances, as they contain subject prompts.
+            '''
+            (tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 
+            tensor([ 4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+            22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+            20, 21, 22, 23]))
+            '''
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
-                                    uncond_emb, img_mask, batch_part_has_grad='subject-compos', 
+                                    uncond_emb, img_mask, subj_indices, 
+                                    batch_part_has_grad='subject-compos', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
@@ -1579,8 +1594,10 @@ class LatentDiffusion(DDPM):
         # all_subj_indices are used to extract the attention weights
         # of the subject tokens for the attention loss computation.
         # Then combine all subject indices into all_subj_indices.
-        all_subj_indices    = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
-                                                                   self.embedding_manager.subject_string_dict)
+        # self.embedding_manager.subject_string_dict: the key filter list. Only contains 'z' 
+        # when each image contains a single subject.
+        all_subj_indices = join_dict_of_indices_with_key_filter(extra_info['placeholder2indices'],
+                                                                self.embedding_manager.subject_string_dict)
         if self.iter_flags['do_comp_feat_distill']:
             # all_subj_indices_2b is used in calc_attn_norm_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_2b = \
@@ -1654,6 +1671,7 @@ class LatentDiffusion(DDPM):
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, img_mask=None, 
+                                                    subj_indices=all_subj_indices,
                                                     cfg_scale=5, capture_ca_activations=True,
                                                     num_denoising_steps=num_comp_denoising_steps,
                                                     same_t_noise_across_instances=True)
@@ -1723,7 +1741,8 @@ class LatentDiffusion(DDPM):
             # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, cond_context, extra_info, 
-                                            img_mask, fg_mask, loss_dict, session_prefix)
+                                            img_mask, fg_mask, all_subj_indices,
+                                            loss_dict, session_prefix)
             # loss_unet_distill: < 0.01, so we use a very large unet_distill_weight==8 to
             # make it comparable to the recon loss. Otherwise, loss_unet_distill will 
             # be dominated by the recon loss.
@@ -1866,6 +1885,9 @@ class LatentDiffusion(DDPM):
             uncond_emb = None
             cfg_scale  = -1
 
+        # Randomly drop out subj_indices at 50% of the time, to increase robustness.
+        # all_subj_indices should index all instances, as all of them contain subject prompts.
+        subj_indices_dropped = rand_dropout(all_subj_indices, 0.5)
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -1875,6 +1897,7 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ca_layers_activations = \
             self.guided_denoise(x_start, noise2, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
+                                subj_indices=subj_indices_dropped,
                                 batch_part_has_grad='all', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 do_pixel_recon=True,
@@ -1938,7 +1961,7 @@ class LatentDiffusion(DDPM):
         return loss_normal_recon
 
     def calc_unet_distill_loss(self, x_start, noise, cond_context, extra_info, 
-                               img_mask, fg_mask, loss_dict, session_prefix):
+                               img_mask, fg_mask, subj_indices, loss_dict, session_prefix):
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), 
                           device=self.device).long()
         c_prompt_emb, c_in, extra_info = cond_context
@@ -2061,6 +2084,9 @@ class LatentDiffusion(DDPM):
             noise_t   = unet_teacher_noises[s].to(x_start.dtype)
             t_s       = all_t[s]
 
+            # Randomly drop out subj_indices at 50% of the time, to increase robustness.
+            # all_subj_indices should index all instances, as all of them contain subject prompts.
+            subj_indices_dropped = rand_dropout(subj_indices, 0.5)
             # x_start_s, noise_t, t_s, unet_teacher.cfg_scale
             # are all randomly sampled from unet_teacher_cfg_scale_range in unet_teacher().
             # So, make sure unet_teacher() was called before guided_denoise() below.
@@ -2073,6 +2099,7 @@ class LatentDiffusion(DDPM):
             model_output_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
+                                    subj_indices=subj_indices_dropped,
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
@@ -2444,19 +2471,22 @@ class LatentDiffusion(DDPM):
             # and we are distilling on the subject-comp rep prompts,
             # then the subject-comp rep instance guides the subject-comp instance at the non-face area.
             loss_subj_comp_rep_distill = 0
+            FG_THRES = 0.22
             for x_recon in x_recons:
                 # mc_recon: reconstructed image of the class comp instance. 
                 # The name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
                 ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
-                # If sc_fg_mask only occupies < 22% of the image, then we only distill on the non-face area.
-                # Otherwise, we distill on the whole image.
-                # sc_rep_recon.detach() is not needed, since sc_rep_recon was generated without gradient.
-                if sc_fg_mask is not None and sc_fg_mask.float().mean() < 0.22:
+                # If sc_fg_mask only occupies < FG_THRES=22% of the image, then we only 
+                # distill on the non-face area. Otherwise, we distill on the whole image.
+                # sc_rep_recon.detach() is not really needed, since sc_rep_recon 
+                # was generated without gradient. We added .detach() just in case.
+                if sc_fg_mask is not None and sc_fg_mask.float().mean() < FG_THRES:
                     loss_subj_comp_rep_distill_step = \
-                        F.mse_loss(sc_recon * (1 - sc_fg_mask.float()), sc_rep_recon.detach() * (1 - sc_fg_mask.float()))
+                        masked_l2_loss(sc_rep_recon.detach(), sc_recon, 1 - sc_fg_mask.float())
+                        # F.mse_loss(sc_recon * (1 - sc_fg_mask.float()), sc_rep_recon.detach() * (1 - sc_fg_mask.float()))
                 else:
                     loss_subj_comp_rep_distill_step = \
-                        F.mse_loss(sc_recon, sc_rep_recon.detach())
+                        F.mse_loss(sc_rep_recon.detach(), sc_recon)
                                 
                 loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_step
 
@@ -2884,7 +2914,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
         # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.
-        img_mask = extra_info.get('img_mask', None) if extra_info is not None else None
+        img_mask     = extra_info.get('img_mask', None) if extra_info is not None else None
+        subj_indices = extra_info.get('subj_indices', None) if extra_info is not None else None
+        #print(subj_indices)
 
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
         # self.use_attn_lora and self.use_ffn_lora are the global flag. 
@@ -2907,7 +2939,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                        for ts in (x, c_prompt_emb, img_mask) ]
         
         out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
-                                   cross_attention_kwargs={'img_mask': img_mask},
+                                   cross_attention_kwargs={'img_mask': img_mask, 
+                                                           'subj_indices': subj_indices},
                                    return_dict=False)[0]
 
         # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.

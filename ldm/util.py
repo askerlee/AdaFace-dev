@@ -63,47 +63,23 @@ def log_txt_as_img(wh, xc, size=10):
     txts = torch.tensor(txts)
     return txts
 
-
 def ismap(x):
     if not isinstance(x, torch.Tensor):
         return False
     return (len(x.shape) == 4) and (x.shape[1] > 3)
-
 
 def isimage(x):
     if not isinstance(x, torch.Tensor):
         return False
     return (len(x.shape) == 4) and (x.shape[1] == 3 or x.shape[1] == 1)
 
-
 def exists(x):
     return x is not None
-
 
 def default(val, d):
     if exists(val):
         return val
     return d() if isfunction(d) else d
-
-def pack_uint128s_to_tensor(device, *args):
-    int64s = []
-
-    for i in range(len(args)):
-        # NOTE: LOSS of information. But NCCL doesn't support transfer of uint64 :(
-        low_64  = args[i]         & 0x7FFFFFFFFFFFFFFF  # Lower 64 bits
-        high_64 = (args[i] >> 64) & 0x7FFFFFFFFFFFFFFF  # Upper 64 bits
-        int64s.append(torch.tensor([low_64, high_64], dtype=torch.int64, device=device))
-
-    # int64s: [N, 2]
-    int64s = torch.stack(int64s)
-    return int64s
-
-def unpack_tensor_to_uint128s(int64s):
-    uint128s = []
-    for i in range(int64s.shape[0]):
-        int128 = int64s[i, 0].item() + (int64s[i, 1].item() << 64)
-        uint128s.append(int128)
-    return uint128s
 
 # Count the number of trainable parameters per parameter group
 def count_optimized_params(param_groups):
@@ -117,20 +93,11 @@ def count_optimized_params(param_groups):
         print(f"Param group {i}: {num_group_params} trainable parameters")
     print(f"Total trainable parameters: {num_total_params}")
 
-def mean_flat(tensor):
-    """
-    https://github.com/openai/guided-diffusion/blob/27c20a8fab9cb472df5d6bdd6c8d11c8f430b924/guided_diffusion/nn.py#L86
-    Take the mean over all non-batch dimensions.
-    """
-    return tensor.mean(dim=list(range(1, len(tensor.shape))))
-
-
 def count_params(model, verbose=False):
     total_params = sum(p.numel() for p in model.parameters())
     if verbose:
         print(f"{model.__class__.__name__} has {total_params * 1.e-6:.2f} M params.")
     return total_params
-
 
 def instantiate_from_config(config, **kwargs):
     if not "target" in config:
@@ -174,7 +141,6 @@ def get_obj_from_str(string, reload=False):
         importlib.reload(module_imp)
     return getattr(importlib.import_module(module, package=None), cls)
 
-
 def _do_parallel_data_prefetch(func, Q, data, idx, idx_to_fn=False):
     # create dummy dataset instance
 
@@ -185,7 +151,6 @@ def _do_parallel_data_prefetch(func, Q, data, idx, idx_to_fn=False):
         res = func(data)
     Q.put([idx, res])
     Q.put("Done")
-
 
 def parallel_data_prefetch(
         func: callable, data, n_proc, target_data_type="ndarray", cpu_intensive=True, use_worker_id=False
@@ -300,7 +265,6 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     norms = torch.norm(embeddings, dim=norm_dim).detach().cpu().numpy()
     print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
     print(f"Norms: min: {norms.min():.4f}, max: {norms.max():.4f}, mean: {norms.mean():.4f}, std: {norms.std():.4f}")
-
 
 def split_string(input_string):
     pattern = r'"[^"]*"|\S+'
@@ -571,6 +535,7 @@ def calc_and_print_stats(ts, ts_name=None):
         print(f"{ts_name}: ", end='')
     print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.abs().mean(), ts.std()))
 
+# Generate random tensors with the same mean and std as the input tensor.
 def rand_like(x):
     # Collapse all dimensions except the last one (channel dimension).
     x_2d = x.reshape(-1, x.shape[-1])
@@ -580,70 +545,12 @@ def rand_like(x):
     rand_2d = rand_2d * std + mean
     return rand_2d.view(x.shape)
 
-def calc_chan_locality(feat):
-    feat_mean = feat.mean(dim=(0, 2, 3))
-    feat_absmean = feat.abs().mean(dim=(0, 2, 3))
-    # Max weight is capped at 5.
-    # The closer feat_absmean are with feat_mean.abs(), 
-    # the more spatially uniform (spanned across H, W) the feature values are.
-    # Bigger  weights are given to locally  distributed channels. 
-    # Smaller weights are given to globally distributed channels.
-    # feat_absmean >= feat_mean.abs(). So always chan_weights >=1, and no need to clip from below.
-    chan_weights = torch.clip(feat_absmean / (feat_mean.abs() + 0.001), max=5)
-    chan_weights = chan_weights.detach() / chan_weights.mean()
-    return chan_weights.detach()
-
-# flat_attn: [2, 8, 256] => [1, 2, 8, 256] => max/mean => [1, 256] => spatial_attn: [1, 16, 16].
-# spatial_attn [1, 16, 16] => spatial_weight [1, 16, 16].
-# BS: usually 1 (actually HALF_BS).
-def convert_attn_to_spatial_weight(flat_attn, BS, out_spatial_shape, reversed=True):
-    # flat_attn: [2, 8, 256] => [1, 2, 8, 256].
-    # The 1 in dim 0 is BS, the batch size of each group of prompts.
-    # The 2 in dim 1 is the two occurrences of the subject tokens in the comp mix prompts 
-    # (or repeated single prompts).
-    # The 8 in dim 2 is the 8 transformer heads.
-    # The 256 in dim 3 is the number of image tokens in the current layer.
-    # We cannot simply unsqueeze(0) since BS=1 is just a special case for this function.
-    flat_attn = flat_attn.detach().reshape(BS, -1, *flat_attn.shape[1:])
-    # [1, 2, 8, 256] => L2 => [1, 256] => [1, 16, 16].
-    # Un-flatten the attention map to the spatial dimensions, so as to
-    # apply them as weights.
-    # Mean among the 8 heads, then sum across the 2 occurrences of the subject tokens.
-
-    spatial_scale = np.sqrt(flat_attn.shape[-1] / out_spatial_shape.numel())
-    spatial_shape = (int(out_spatial_shape[0] * spatial_scale), int(out_spatial_shape[1] * spatial_scale))
-    spatial_attn = flat_attn.mean(dim=2).sum(dim=1).reshape(BS, 1, *spatial_shape)
-    spatial_attn = F.interpolate(spatial_attn, size=out_spatial_shape, mode='bilinear', align_corners=False)
-
-    attn_mean, attn_std = spatial_attn.mean(dim=(2,3), keepdim=True), \
-                           spatial_attn.std(dim=(2,3), keepdim=True)
-    # Lower bound of denom is attn_mean / 2, in case attentions are too uniform and attn_std is too small.
-    denom = torch.clamp(attn_std + 0.001, min = attn_mean / 2)
-    M = -1 if reversed else 1
-    # Normalize spatial_attn with mean and std, so that mean attn values are 0.
-    # If reversed, then mean + x*std = exp(-x), i.e., the higher the attention value, the lower the weight.
-    # The lower the attention value, the higher the weight, but no more than 1.
-    spatial_weight = torch.exp(M * (spatial_attn - attn_mean) / denom).clamp(max=1)
-    # Normalize spatial_weight so that the average weight across spatial dims of each instance is 1.
-    spatial_weight = spatial_weight / spatial_weight.mean(dim=(2,3), keepdim=True)
-
-    # spatial_attn is the subject attention on pixels. 
-    # spatial_weight is for the background objects (other elements in the prompt), 
-    # flat_attn has been detached before passing to this function. So no need to detach spatial_weight.
-    return spatial_weight, spatial_attn
-
-def gen_spatial_weight_using_loss_std(pixelwise_loss, out_spatial_shape=(64, 64)):
-    #loss_inst_std = loss_recon.mean(dim=1, keepdim=True).std(dim=(0,1), keepdim=True).detach()
-    # Don't take mean across dim 1 (4 channels), as the latent pixels may have different 
-    # scales acorss the 4 channels.
-    loss_inst_std = pixelwise_loss.std(dim=(0,1), keepdim=True).detach()
-    # Smooth the loss_inst_std by average pooling. loss_inst_std: [1, 1, 64, 64] -> [1, 1, 31, 31].
-    loss_inst_std = F.avg_pool2d(loss_inst_std, 4, 2)
-    spatial_weight = loss_inst_std / (loss_inst_std.mean(dim=(2,3), keepdim=True) + 1e-8)
-    # Resize spatial_weight to the original size. spatial_weight: [1, 1, 31, 31] -> [1, 1, 64, 64].
-    spatial_weight = F.interpolate(spatial_weight, size=out_spatial_shape, mode='bilinear', align_corners=False)
-    return spatial_weight
-
+def rand_dropout(x, p=0.5):
+    if torch.rand(1) < p:
+        return None
+    else:
+        return x
+    
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
 # text_embedding: [B, N, D]
 def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
@@ -967,18 +874,6 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
 
     return extended_token_embeddings
 
-def list_np_images_to_4d_tensor(list_np, dtype=np.uint8):
-    tensors = []
-    for ar in list_np:
-        ts = torch.tensor(ar, dtype=dtype)
-        if ts.ndim == 3:
-            ts = ts.unsqueeze(0)
-        tensors.append(ts)
-    # We have made sure that each tensor has a batch dimension. 
-    # So we use cat instead of stack.
-    ts = torch.cat(tensors, dim=0)
-    return ts
-
 # samples:   a (B, C, H, W) tensor.
 # img_flags: a tensor of (B,) ints.
 # samples should be between [0, 255] (uint8).
@@ -1165,6 +1060,8 @@ def masked_l2_loss(predictions, targets, mask):
 
     # Calculate L2 loss without reduction (element-wise squared difference)
     l2_loss = (predictions - targets) ** 2
+    if mask is None:
+        return l2_loss.mean()
     
     # Apply mask: broadcast mask across the channel dimension
     masked_loss = l2_loss * mask
@@ -1303,123 +1200,6 @@ def resize_mask_to_target_size(mask, mask_name, target_spatial_area, mode="neare
         print(f"WARNING: {mask_name} has all-zero masks.")
     
     return mask2
-
-# c1, c2: [32, 77, 768]. mix_indices: 1D index tensor.
-# mix_scheme: 'add', 'concat', 'sdeltaconcat', 'adeltaconcat'.
-# The masked tokens will have the same embeddings after mixing.
-def mix_embeddings(mix_scheme, c1, c2, mix_indices=None, 
-                   c1_mix_scale=1., c2_mix_weight=None,
-                   use_ortho_subtract=True):
-
-    assert c1 is not None
-    if c2 is None:
-        return c1
-    assert c1.shape == c2.shape
-
-    if c2_mix_weight is None:
-        c2_mix_weight = 1.
-        
-    if mix_scheme == 'add':
-        # c1_mix_scale is an all-one tensor. No need to mix.
-        # c1_mix_scale = 1. No need to mix. 
-        if isinstance(c1_mix_scale, torch.Tensor)       and (c1_mix_scale == 1).all() \
-          or not isinstance(c1_mix_scale, torch.Tensor) and c1_mix_scale == 1:
-            return c1
-
-        if mix_indices is not None:
-            scale_mask = torch.ones_like(c1)
-
-            if type(c1_mix_scale) == torch.Tensor:
-                # c1_mix_scale is only for the first one/few instances. 
-                # Repeat it to cover all instances in the batch.
-                if len(c1_mix_scale) < len(scale_mask):
-                    assert len(scale_mask) % len(c1_mix_scale) == 0
-                    BS = len(scale_mask) // len(c1_mix_scale)
-                    c1_mix_scale = c1_mix_scale.repeat(BS)
-                # c1_mix_scale should be a 1D or 2D tensor. Extend it to 3D.
-                for _ in range(3 - c1_mix_scale.ndim):
-                    c1_mix_scale = c1_mix_scale.unsqueeze(-1)
-
-            scale_mask[:, mix_indices] = c1_mix_scale
-
-            # 1 - scale_mask: almost 0 everywhere, except those corresponding to the placeholder tokens 
-            # being 1 - c1_mix_scale.
-            # c1, c2: [16, 77, 768].
-            # Each is of a single instance. So only provides subj_indices_N 
-            # (multiple token indices of the same instance).
-            c_mix = c1 * scale_mask + c2 * (1 - scale_mask)
-            #print("cls/subj/mix:", c1[:, mix_indices].norm().detach().item(), c2[:, mix_indices].norm().detach().item(), 
-            #                       c_mix[:, mix_indices].norm().detach().item())
-        else:
-            # Mix the whole sequence.
-            c_mix = c1 * c1_mix_scale + c2 * (1 - c1_mix_scale)
-            #print("cls/subj/mix:", c1.norm().detach().item(), c2.norm().detach().item(), c_mix.norm().detach().item())
-
-    elif mix_scheme == 'concat':
-        c_mix = torch.cat([ c1, c2 * c2_mix_weight ], dim=1)
-    elif mix_scheme == 'addconcat':
-        c_mix = torch.cat([ c1, c1 * (1 - c2_mix_weight) + c2 * c2_mix_weight ], dim=1)
-
-    # sdeltaconcat: subject-delta concat. Requires placeholder_indices.
-    elif mix_scheme == 'sdeltaconcat':
-        assert mix_indices is not None
-        # delta_embedding is the difference between the subject embedding and the class embedding.
-        if use_ortho_subtract:
-            delta_embedding = ortho_subtract(c2, c1)
-        else:
-            delta_embedding = c2 - c1
-            
-        delta_embedding = delta_embedding[:, mix_indices]
-        assert delta_embedding.shape[0] == c1.shape[0]
-
-        c2_delta = c1.clone()
-        # c2_mix_weight only boosts the delta embedding, and other tokens in c2 always have weight 1.
-        c2_delta[:, mix_indices] = delta_embedding
-        c_mix = torch.cat([ c1, c2_delta * c2_mix_weight ], dim=1)
-
-    # adeltaconcat: all-delta concat.
-    elif mix_scheme == 'adeltaconcat':
-        # delta_embedding is the difference between all the subject tokens and the class tokens.
-        if use_ortho_subtract:
-            delta_embedding = ortho_subtract(c2, c1)
-        else:
-            delta_embedding = c2 - c1
-            
-        # c2_mix_weight scales all tokens in delta_embedding.
-        c_mix = torch.cat([ c1, delta_embedding * c2_mix_weight ], dim=1)
-
-    return c_mix
-
-# mix_cls_subj_embeddings() is NO LONGER USED.
-def mix_cls_subj_embeddings(prompt_emb, subj_indices_1b_N, cls_subj_mix_scale=0.8):
-    subj_emb, cls_emb = prompt_emb.chunk(2)
-
-    # First mix the prompt embeddings.
-    # mix_embeddings('add', ...):  being subj_comp_emb almost everywhere, except those at subj_indices_1b_N,
-    # where they are subj_comp_emb * cls_subj_mix_scale + cls_comp_emb * (1 - cls_subj_mix_scale).
-    # subj_single_emb, cls_single_emb, subj_comp_emb, cls_comp_emb: [1, 77, 768].
-    # Each is of a single instance. So only provides subj_indices_1b_N 
-    # (multiple token indices of the same instance).
-    mixed_emb = mix_embeddings('add', cls_emb, subj_emb, mix_indices=subj_indices_1b_N,
-                                      c1_mix_scale=cls_subj_mix_scale)
-
-    PROMPT_MIX_GRAD_SCALE = 0.05
-    grad_scaler = gen_gradient_scaler(PROMPT_MIX_GRAD_SCALE)
-    # mix_comp_emb receives smaller grad, since it only serves as the reference.
-    # If we don't scale gradient on mix_comp_emb, chance is mix_comp_emb might be 
-    # dominated by subj_comp_emb,
-    # so that mix_comp_emb will produce images similar as subj_comp_emb does.
-    # Scaling the gradient will improve compositionality but reduce face similarity.
-    mixed_emb = grad_scaler(mixed_emb)
-
-    # prompt_emb_mixed is the prompt embeddings of the prompts used in losses other than 
-    # the prompt delta loss, e.g., used to estimate the ada embeddings.
-    # prompt_emb_mixed: [4, 77, 768]
-    # Unmixed embeddings and mixed embeddings will be merged in one batch for guiding
-    # image generation and computing compositional mix loss.
-    prompt_emb_mixed = torch.cat([ subj_emb, mixed_emb ], dim=0)
-
-    return prompt_emb_mixed 
 
 # masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
 # Don't call like:
@@ -2660,8 +2440,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     if do_q_demean:
         # Demean the queries. Otherwise the similarities between any two token qs will always be huge (65~90),
         # preventing the optical flow model from estimating the flow.
-        # NOTE: when do_q_demean, take mean across the instances, otherwise ss_q (mainly consisting of subject features) 
-        # will remove too much subject-specific features.
+        # ca_q: [4, 1280, 961]
+        # NOTE: when do_q_demean, take mean across 0 and 2, the instances and the spatial dims.
+        # Mean across the instances (subjects) dim is to avoid the mean containing too much 
+        # subject-specific features.
         ca_q = ca_q - ca_q.mean(dim=(0,2), keepdim=True).detach()
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
