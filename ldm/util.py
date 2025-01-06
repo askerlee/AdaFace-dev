@@ -2008,7 +2008,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         comp_subj_bg_attn_suppress_loss_scale   = 0.02
         sc_recon_ssfg_loss_scale                = 5
         # loss_sc_recon_mc is a small L2 loss, so we scale it up by 20x.
-        # loss_sc_recon_mc: 0.02, sc_recon_mc_loss_scale: 60 => 1.2.
+        # loss_sc_recon_mc: 0.03~0.04, sc_recon_mc_loss_scale: 60: 1.8~2.4.
         sc_recon_mc_loss_scale                  = 60
         sc_to_mc_flow_attns_distill_loss_scale  = 10
         

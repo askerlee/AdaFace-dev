@@ -189,6 +189,7 @@ class DDPM(pl.LightningModule):
             self.model = DiffusersUNetWrapper(base_model_path=base_model_path, 
                                               torch_dtype=torch.float16,
                                               use_attn_lora=self.unet_uses_attn_lora,
+                                              # Only add a lora to the q projection (q -> q2)
                                               attn_lora_layer_names=['q'],
                                               use_ffn_lora=self.unet_uses_ffn_lora,
                                               # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
@@ -1642,10 +1643,10 @@ class LatentDiffusion(DDPM):
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
-            # But we don't use img_mask in compositional iterations. Because in compositional iterations,
+            # NOTE: We don't use img_mask in compositional iterations. Because in compositional iterations,
             # the original images don't play a role (even if is_comp_init_fg_from_training_image,
-            # the unet doesn't consider the actual pixels outside of the subject areas, so img_mask is
-            # set to None).
+            # the unet still often draws the face outside the input face areas, 
+            # so img_mask is inaccurate and set to None).
 
             # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
             # noise_preds is not used for loss computation.
@@ -2807,6 +2808,7 @@ class DiffusionWrapper(pl.LightningModule):
         return out
 
 # The diffusers UNet wrapper.
+# attn_lora_layer_names=['q']: only add a lora to the q projection (q -> q2).
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, base_model_path, torch_dtype=torch.float16,
                  use_attn_lora=False, attn_lora_layer_names=['q'], 
