@@ -303,9 +303,11 @@ class DDPM(pl.LightningModule):
         num_remaining_keys = len(list(sd.keys()))
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
-        # Restored from models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors with 1266 missing and 1 unexpected keys
+        # Restored from models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors with 1018 missing and 1 unexpected keys
         # This is OK, because the missing keys are from the UNet model, which is replaced by DiffusersUNetWrapper
         # when not use_ldm_unet, and the key names are different.
+        # NOTE: we still load first_stage_model from the checkpoint. 
+        # len(self.first_stage_model.state_dict().keys()) = 248. 1018 + 248 = 1266.
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing[0]} ... {missing[-1]}")
@@ -1420,6 +1422,7 @@ class LatentDiffusion(DDPM):
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, subj_indices=None, 
                        suppress_subj_attn=False, batch_part_has_grad='all', 
+                       comp_feat_distill_on_subj_comp_rep_prompts=False,
                        do_pixel_recon=False, cfg_scale=-1, 
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
@@ -1471,8 +1474,17 @@ class LatentDiffusion(DDPM):
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
             extra_info_c2 = copy.copy(extra_info)
-            extra_info_c2['subj_indices'] = None
-            extra_info_c2['suppress_subj_attn'] = False
+            if comp_feat_distill_on_subj_comp_rep_prompts:
+                # The two instances in the c2 slice is sc_comp_rep and mc_comp.
+                # So we can use the same subj_indices as the sc instance.
+                extra_info_c2['subj_indices'] = subj_indices
+                extra_info_c2['suppress_subj_attn'] = suppress_subj_attn
+            else:
+                # The two instances in the c2 slice are mc_single and mc_comp.
+                # We never need to suppress the subject attention in the mc instances.
+                extra_info_c2['subj_indices'] = None
+                extra_info_c2['suppress_subj_attn'] = False
+
             cond_context2 = (cond_context[0], cond_context[1], extra_info_c2)
             model_output_c2 = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 4),
                                                       enable_grad=False, use_attn_lora=False, 
@@ -1563,6 +1575,7 @@ class LatentDiffusion(DDPM):
                                     uncond_emb, img_mask, all_subj_indices_1b, 
                                     suppress_subj_attn=suppress_sc_subj_attn,
                                     batch_part_has_grad='subject-compos', 
+                                    comp_feat_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
