@@ -230,6 +230,11 @@ def get_parser(**parser_kwargs):
                         help="Whether to load the attn LoRA modules from the checkpoint")
     parser.add_argument("--load_unet_ffn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to load the ffn LoRA modules from the checkpoint")
+    parser.add_argument("--suppress_sc_subj_attn", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to suppress the subject attention in the subject-compositional instances")
+    parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
+                        help="Shrink factor of the standard deviation of the subject attention")
+
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
                         help="Prompt delta regularization weight")
 
@@ -695,6 +700,9 @@ if __name__ == "__main__":
         if hasattr(opt, 'unet_weights_in_ensemble'):
             # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights_in_ensemble                 = opt.unet_weights_in_ensemble
+
+        config.model.params.suppress_sc_subj_attn = opt.suppress_sc_subj_attn
+        config.model.params.sc_subj_attn_var_shrink_factor = opt.sc_subj_attn_var_shrink_factor
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

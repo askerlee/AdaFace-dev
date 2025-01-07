@@ -103,6 +103,8 @@ class DDPM(pl.LightningModule):
                  unet_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=16,
+                 suppress_sc_subj_attn=False,
+                 sc_subj_attn_var_shrink_factor=2.,
                  ):
         
         super().__init__()
@@ -182,6 +184,8 @@ class DDPM(pl.LightningModule):
         self.unet_uses_ffn_lora     = unet_uses_ffn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
+        self.suppress_sc_subj_attn  = suppress_sc_subj_attn
+        self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -195,7 +199,8 @@ class DDPM(pl.LightningModule):
                                               # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
                                               lora_rank=self.unet_lora_rank, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 16
-                                              ffn_lora_scale_down=self.unet_lora_scale_down     # 16
+                                              ffn_lora_scale_down=self.unet_lora_scale_down,    # 16
+                                              subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
                                              )
             self.vae = self.model.pipeline.vae
 
@@ -1399,11 +1404,10 @@ class LatentDiffusion(DDPM):
         c_prompt_emb, c_in, extra_info = cond_context
         c_prompt_emb_ = c_prompt_emb[slice_inst]
         c_in_ = c_in[slice_inst]
-        extra_info_ = copy.copy(extra_info)
         with torch.set_grad_enabled(enable_grad):
-            model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info_), 
+            model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info), 
                                             use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
-        return model_output, extra_info_
+        return model_output
 
     # do_pixel_recon: return denoised images for CLIP evaluation. 
     # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
@@ -1411,7 +1415,7 @@ class LatentDiffusion(DDPM):
     # batch_part_has_grad: 'all', 'none', 'subject-compos'.
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, subj_indices=None, 
-                       batch_part_has_grad='all', 
+                       suppress_subj_attn=False, batch_part_has_grad='all', 
                        do_pixel_recon=False, cfg_scale=-1, 
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
@@ -1422,6 +1426,7 @@ class LatentDiffusion(DDPM):
         extra_info['capture_ca_activations'] = capture_ca_activations
         extra_info['img_mask']               = img_mask
         extra_info['subj_indices']           = subj_indices
+        extra_info['suppress_subj_attn']     = suppress_subj_attn
 
         # model_output is the predicted noise.
         # if not batch_part_has_grad, we save RAM by not storing the computation graph.
@@ -1445,17 +1450,29 @@ class LatentDiffusion(DDPM):
         elif batch_part_has_grad == 'subject-compos':
             # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, it will be overridden
             # in the unet.
-            model_output_ss, extra_info_ss = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(0, 1), 
-                                                                     enable_grad=False, use_attn_lora=use_attn_lora,
-                                                                     use_ffn_lora=use_ffn_lora)
-            model_output_sc, extra_info_sc = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(1, 2),
-                                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
-                                                                     use_ffn_lora=use_ffn_lora)
+            extra_info_ss = copy.copy(extra_info)
+            extra_info_ss['subj_indices'] = None
+            extra_info_ss['suppress_subj_attn'] = False
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
+            model_output_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
+                                                      enable_grad=False, use_attn_lora=use_attn_lora,
+                                                      use_ffn_lora=use_ffn_lora)
+            extra_info_sc = copy.copy(extra_info)
+            extra_info_sc['subj_indices'] = subj_indices
+            extra_info_sc['suppress_subj_attn'] = suppress_subj_attn
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
+            model_output_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
+                                                      enable_grad=True,  use_attn_lora=use_attn_lora,
+                                                      use_ffn_lora=use_ffn_lora)
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
-            model_output_c2, extra_info_c2 = self.sliced_apply_model(x_noisy, t, cond_context, slice_inst=slice(2, 4),
-                                                                     enable_grad=False, use_attn_lora=False, 
-                                                                     use_ffn_lora=False)
+            extra_info_c2 = copy.copy(extra_info)
+            extra_info_c2['subj_indices'] = None
+            extra_info_c2['suppress_subj_attn'] = False
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_c2)
+            model_output_c2 = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 4),
+                                                      enable_grad=False, use_attn_lora=False, 
+                                                      use_ffn_lora=False)
             
             model_output = torch.cat([model_output_ss, model_output_sc, model_output_c2], dim=0)
             extra_info = cond_context[2]
@@ -1501,13 +1518,11 @@ class LatentDiffusion(DDPM):
 
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
-                                       subj_indices=None,
+                                       all_subj_indices_1b=None, suppress_sc_subj_attn=False,
                                        cfg_scale=-1, capture_ca_activations=False,
                                        num_denoising_steps=1, 
                                        same_t_noise_across_instances=True):
         assert num_denoising_steps <= 10
-        if subj_indices is not None:
-            breakpoint()
 
         if same_t_noise_across_instances:
             # If same_t_noise_across_instances, we use the same t and noise for all instances.
@@ -1537,9 +1552,12 @@ class LatentDiffusion(DDPM):
             22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
             20, 21, 22, 23]))
             '''
+            # Always enable suppress_subj_attn during comp distillation iterations.
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
-                                    uncond_emb, img_mask, subj_indices, 
+                                    # all_subj_indices_1b is only used in the sc block. So we need "_1b" instead of "_2b".
+                                    uncond_emb, img_mask, all_subj_indices_1b, 
+                                    suppress_subj_attn=suppress_sc_subj_attn,
                                     batch_part_has_grad='subject-compos', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
@@ -1671,7 +1689,8 @@ class LatentDiffusion(DDPM):
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, img_mask=None, 
-                                                    subj_indices=all_subj_indices,
+                                                    all_subj_indices_1b=all_subj_indices_1b,
+                                                    suppress_sc_subj_attn=self.suppress_sc_subj_attn,
                                                     cfg_scale=5, capture_ca_activations=True,
                                                     num_denoising_steps=num_comp_denoising_steps,
                                                     same_t_noise_across_instances=True)
@@ -1887,7 +1906,7 @@ class LatentDiffusion(DDPM):
 
         # Randomly drop out subj_indices at 50% of the time, to increase robustness.
         # all_subj_indices should index all instances, as all of them contain subject prompts.
-        subj_indices_dropped = rand_dropout(all_subj_indices, 0.5)
+        suppress_subj_attn = False #torch.rand(1).item() < 0.5
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -1897,7 +1916,8 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ca_layers_activations = \
             self.guided_denoise(x_start, noise2, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
-                                subj_indices=subj_indices_dropped,
+                                subj_indices=all_subj_indices,
+                                suppress_subj_attn=suppress_subj_attn,
                                 batch_part_has_grad='all', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 do_pixel_recon=True,
@@ -2084,9 +2104,9 @@ class LatentDiffusion(DDPM):
             noise_t   = unet_teacher_noises[s].to(x_start.dtype)
             t_s       = all_t[s]
 
-            # Randomly drop out subj_indices at 50% of the time, to increase robustness.
-            # all_subj_indices should index all instances, as all of them contain subject prompts.
-            subj_indices_dropped = rand_dropout(subj_indices, 0.5)
+            # subj_indices should index all instances, as all of them contain subject prompts.
+            # Randomly enable suppress_subj_attn at 50% of the time, to increase robustness.
+            suppress_subj_attn = False #torch.rand(1).item() < 0.5
             # x_start_s, noise_t, t_s, unet_teacher.cfg_scale
             # are all randomly sampled from unet_teacher_cfg_scale_range in unet_teacher().
             # So, make sure unet_teacher() was called before guided_denoise() below.
@@ -2099,7 +2119,8 @@ class LatentDiffusion(DDPM):
             model_output_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
-                                    subj_indices=subj_indices_dropped,
+                                    subj_indices=subj_indices,
+                                    suppress_subj_attn=suppress_subj_attn,
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
@@ -2843,7 +2864,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, base_model_path, torch_dtype=torch.float16,
                  use_attn_lora=False, attn_lora_layer_names=['q'], 
                  use_ffn_lora=False, lora_rank=192, 
-                 attn_lora_scale_down=8, ffn_lora_scale_down=8):
+                 attn_lora_scale_down=8, ffn_lora_scale_down=8,
+                 subj_attn_var_shrink_factor=2.):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         # diffusion_model is actually a UNet. Use this variable name to be 
@@ -2860,10 +2882,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.lora_rank = lora_rank
 
         # Keep a reference to self.attn_capture_procs to change their flags later.
-        attn_capture_procs = \
+        attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(self.diffusion_model, self.use_attn_lora, 
                                    attn_lora_layer_names=attn_lora_layer_names,
-                                   lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down)
+                                   lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down,
+                                   subj_attn_var_shrink_factor=subj_attn_var_shrink_factor)
         self.attn_capture_procs = list(attn_capture_procs.values())
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
@@ -2895,27 +2918,46 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 target_modules_pat = DUMMY_TARGET_MODULES
 
             # By default, ffn_lora_scale_down = 16, i.e., the impact of LoRA is 1/16.
-            self.diffusion_model, ffn_lora_layers, unet_lora_modules = \
+            self.diffusion_model, ffn_lora_layers, ffn_opt_modules = \
                 set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
                                  lora_uses_dora=True, lora_rank=lora_rank, 
                                  lora_alpha=lora_rank // ffn_lora_scale_down,
                                 )
             self.ffn_lora_layers = list(ffn_lora_layers.values())
+
+            # Combine attn_opt_modules and ffn_opt_modules into unet_lora_modules.
             # unet_lora_modules is for optimization and loading/saving.
-            self.unet_lora_modules = torch.nn.ModuleDict(unet_lora_modules)
+            unet_lora_modules = {}
+            # attn_opt_modules and ffn_opt_modules have different depths of keys.
+            # attn_opt_modules:
+            # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_subj_attn_var_shrink_factor,
+            # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_to_q_lora_lora_A, ...
+            # ffn_opt_modules:
+            # base_model_model_up_blocks_3_resnets_1_conv1_lora_A, ...
+            # with the prefix 'base_model_model_'. Because ffn_opt_modules are extracted from the peft-wrapped model,
+            # and attn_opt_modules are extracted from the original unet model.
+            # To be compatible with old param keys, we append 'base_model_model_' to the keys of attn_opt_modules.
+            unet_lora_modules.update({ f'base_model_model_{k}': v for k, v in attn_opt_modules.items() })
+            unet_lora_modules.update(ffn_opt_modules)
+            # BUG: maybe in the future, we couldn't put nn.Module in nn.ParameterDict.
+            self.unet_lora_modules  = torch.nn.ParameterDict(unet_lora_modules)
             for param in self.unet_lora_modules.parameters():
                 param.requires_grad = True
         else:
             self.ffn_lora_layers    = []
-            self.unet_lora_modules  = torch.nn.ModuleDict()
+            self.unet_lora_modules  = torch.nn.ParameterDict()
 
-        print(f"Set up LoRA with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
+        print(f"Set up LoRAs with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context
         # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.
         img_mask     = extra_info.get('img_mask', None) if extra_info is not None else None
         subj_indices = extra_info.get('subj_indices', None) if extra_info is not None else None
+        # suppress_subj_attn is only set to the LoRA'ed attn layers, i.e., 
+        # layers 22, 23, 24, and only takes effect when subj_indices is not None.
+        # Other layers will always have suppress_subj_attn = False.
+        suppress_subj_attn = extra_info.get('suppress_subj_attn', False) if extra_info is not None else False
         #print(subj_indices)
 
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
@@ -2931,8 +2973,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # So we keep them in different lists.
         # The scaling factors of attn_capture_procs and ffn_lora_layers are also set differently.
         # (They can be unified, but currently it's more convenient to keep them separate.)
+        # use_attn_lora, capture_ca_activations, suppress_subj_attn are only applied to layers 
+        # in self.attn_capture_procs.
+        # use_ffn_lora is only applied to layers in self.ffn_lora_layers.
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   use_attn_lora, use_ffn_lora, capture_ca_activations)
+                                   use_attn_lora, use_ffn_lora, capture_ca_activations, suppress_subj_attn)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -2947,11 +2992,13 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.
         #LINK ldm/modules/diffusionmodules/openaimodel.py#unet_layers
         # If not capture_ca_activations, then get_captured_activations() returns a dict with only keys and empty values.
+        # NOTE: Layer 22 capturing is not supported, as layer 22 has internal_idx 0, and -1 maps
+        # to the last layer in attn_capture_procs, which is layer 24.        
         extra_info['ca_layers_activations'] = \
             get_captured_activations(capture_ca_activations, self.attn_capture_procs, 
                                      self.outfeat_capture_blocks,
-                                     # Only capture the activations of the last 3 CA layers.
-                                     captured_layer_indices = [22, 23, 24],
+                                     # Only capture the activations of the last 2 CA layers.
+                                     captured_layer_indices = [23, 24],
                                      out_dtype=out_dtype)
 
         # Restore capture_ca_activations to False, and disable all loras.
