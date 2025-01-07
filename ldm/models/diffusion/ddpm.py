@@ -102,7 +102,7 @@ class DDPM(pl.LightningModule):
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
                  unet_lora_rank=192,
-                 unet_lora_scale_down=16,
+                 unet_lora_scale_down=8,
                  suppress_sc_subj_attn=False,
                  sc_subj_attn_var_shrink_factor=2.,
                  ):

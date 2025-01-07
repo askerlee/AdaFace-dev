@@ -89,7 +89,7 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
     shrinker_grid = log_gaussian_2d(X, Y, x_center, y_center, shrinker_std_x, shrinker_std_y)
     # Normalize shrinker_grid, so that the maximum value (at the point nearest to the center) 
     # is always 0, i.e., the subject activation at this point is not scaled down.
-    # NOTE: shrinker_grid values are in the log scale.
+    # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
     shrinker_grid = shrinker_grid - shrinker_grid.max().detach()
     # shrinker_grid: [1, 64, 64] -> [1, 1, 4096]
     shrinker_grid = shrinker_grid.view(BS, 1, -1)

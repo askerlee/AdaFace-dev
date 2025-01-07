@@ -281,8 +281,8 @@ class AdaFaceWrapper(nn.Module):
         # We don't have to specify subj_attn_var_shrink_factor for set_up_attn_processors(),
         # as we'll load the learned subj_attn_var_shrink_factor from ckpt.
         attn_capture_procs, attn_opt_modules = \
-            set_up_attn_processors(unet, enable_lora=True, lora_layer_names=['q'],
-                                   lora_rank=192, lora_scale_down=16)
+            set_up_attn_processors(unet, use_attn_lora=True, attn_lora_layer_names=['q'],
+                                   lora_rank=192, lora_scale_down=8)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
         if use_ffn_lora:
             target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
