@@ -1238,7 +1238,7 @@ def extract_first_index_in_each_instance(token_indices):
 # indices are applied on the first 2 dims of attn_mat.
 def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=True, do_mean=False):
     indices_by_instance = split_indices_by_instance(indices)
-
+    
     # emb_attns[0]: [1, 9, 8, 64]
     # 8: 8 attention heads. Last dim 64: number of image tokens.
     emb_attns   = [ attn_mat[inst_indices].unsqueeze(0) for inst_indices in indices_by_instance ]
