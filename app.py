@@ -143,15 +143,15 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     # Extract the checkpoint signature as 112813-2000
     ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
 
-    prompt_keywords = ['armor', 'beach', 'chef', 'dancing', 'iron man', 'jedi', 
-                       'street', 'guitar', 'reading', 'running', 'superman']
-    keyword_morphs  = { 'iron man': 'ironman', 'dancing': 'dance', 
-                        'running': 'run',      'reading': 'read' }
+    prompt_keywords     = ['armor', 'beach', 'chef', 'dancing', 'iron man', 'jedi', 
+                           'street', 'guitar', 'reading', 'running', 'superman']
+    keywords_reduction  = { 'iron man': 'ironman', 'dancing': 'dance', 
+                            'running':  'run',     'reading': 'read' }
 
     prompt_sig = ""
     for keyword in prompt_keywords:
         if keyword in prompt.lower():
-            prompt_sig = keyword_morphs.get(keyword, keyword)
+            prompt_sig = keywords_reduction.get(keyword, keyword)
             break
 
     if len(prompt_sig) > 0:
