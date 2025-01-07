@@ -52,8 +52,6 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
     xs = torch.arange(W, device=subj_attn.device).view(1, 1, W)
     y_center = (subj_prob_3d * ys).sum(dim=(1,2))  # [N]
     x_center = (subj_prob_3d * xs).sum(dim=(1,2))  # [N]
-    # mass_center: [1, 2]
-    mass_center = torch.stack([y_center, x_center], dim=1)  # [N, 2]
     # 3) Variances
     y_sq = (subj_prob_3d * ys**2).sum(dim=(1,2))   # E[Y^2]
     x_sq = (subj_prob_3d * xs**2).sum(dim=(1,2))   # E[X^2]
@@ -62,7 +60,7 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
     var_x = x_sq - x_center**2
 
     # 4) 2D std
-    # mass_center: [35.1875, 32.9062], std_2d: [26.8281].  
+    # y_center, x_center: [35.1875, 32.9062], std_2d: [26.8281].  
     #var_2d = var_y + var_x
     #std_2d = var_2d.sqrt() 
     # std_x is often slightly smaller than std_y, meaning the face is slightly taller than wider.
@@ -91,8 +89,8 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
     # is always 0, i.e., the subject activation at this point is not scaled down.
     # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
     shrinker_grid = shrinker_grid - shrinker_grid.max().detach()
-    # shrinker_grid: [1, 64, 64] -> [1, 1, 4096]
-    shrinker_grid = shrinker_grid.view(BS, 1, -1)
+    # shrinker_grid: [1, X=64, Y=64] -> [1, Y=64, X=64] -> [1, 1, 4096]
+    shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(BS, 1, -1)
     # subj_attn_bias: [1, 77, 1, 4096]
     subj_attn_bias = torch.zeros_like(attn_score2[:, :, :1])
     # subj_attn_bias[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.

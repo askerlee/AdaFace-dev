@@ -303,6 +303,9 @@ class DDPM(pl.LightningModule):
         num_remaining_keys = len(list(sd.keys()))
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
+        # Restored from models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors with 1266 missing and 1 unexpected keys
+        # This is OK, because the missing keys are from the UNet model and .first_stage_model, which are not used
+        # when not use_ldm_unet.
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing[0]} ... {missing[-1]}")
@@ -453,9 +456,9 @@ class LatentDiffusion(DDPM):
         self.restarted_from_ckpt = (base_model_path is not None)
         if base_model_path is not None:
             # Ignore all keys of the UNet model, since we are using a diffusers UNet model.
-            # We still need to load the VAE and CLIP weights.
+            # We still need to load the CLIP weights.
             if not use_ldm_unet:
-                ignore_keys.append('model')
+                ignore_keys.extend(['model', 'first_stage_model'])
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
