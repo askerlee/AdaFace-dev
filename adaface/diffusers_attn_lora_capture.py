@@ -34,18 +34,18 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
     if subj_attn_var_shrink_factor <= 1:
         breakpoint()
 
-    BS = attn_score.size(0)
     # attn_score2: [1, 8, 4096, 77] -> [1, 77, 8, 4096]
     attn_score2 = attn_score.permute(0, 3, 1, 2)
     # subj_attn: [1, 8, 4096]. Already summed over subject embeddings.
     subj_attn = sel_emb_attns_by_indices(attn_score2, subj_indices, do_sum=True)
+    SN = subj_attn.size(0)
     # Average over the heads. subj_attn: [1, 4096]
     subj_attn = subj_attn.mean(dim=1)
     # 1) Normalize subj_attn as a 2D probability distribution.
     subj_prob = subj_attn.softmax(dim=1)
     H = W = int(np.sqrt(attn_score2.size(-1)))
     # subj_attn: [1, 4096] -> [1, 64, 64]
-    subj_prob_3d = subj_prob.view(BS, H, W)
+    subj_prob_3d = subj_prob.view(SN, H, W)
     # 2) Compute y_center and x_center
     # ys: [1, 64, 1]. xs: [1, 1, 64]
     ys = torch.arange(H, device=subj_attn.device).view(1, H, 1)
@@ -90,7 +90,7 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
     # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
     shrinker_grid = shrinker_grid - shrinker_grid.max().detach()
     # shrinker_grid: [1, X=64, Y=64] -> [1, Y=64, X=64] -> [1, 1, 4096]
-    shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(BS, 1, -1)
+    shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(SN, 1, -1)
     # subj_attn_bias: [1, 77, 1, 4096]
     subj_attn_bias = torch.zeros_like(attn_score2[:, :, :1])
     # subj_attn_bias[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.
