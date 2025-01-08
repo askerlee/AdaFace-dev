@@ -30,7 +30,7 @@ class AdaFaceWrapper(nn.Module):
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None,
                  enable_static_img_suffix_embs=None, unet_uses_attn_lora=False,
-                 suppress_sc_subj_attn=False, device='cuda', is_training=False):
+                 suppress_subj_attn=False, device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
         If None, it's used only as a face encoder, and the unet and vae are
@@ -48,7 +48,7 @@ class AdaFaceWrapper(nn.Module):
         self.unet_uses_attn_lora = unet_uses_attn_lora
         self.use_lcm = use_lcm
         self.subject_string = subject_string
-        self.suppress_sc_subj_attn = suppress_sc_subj_attn
+        self.suppress_subj_attn = suppress_subj_attn
 
         self.default_scheduler_name = default_scheduler_name
         self.num_inference_steps = num_inference_steps if not use_lcm else 4
@@ -180,9 +180,9 @@ class AdaFaceWrapper(nn.Module):
             pipeline.unet = unet_ensemble
 
         print(f"Loaded pipeline from {self.base_model_path}.")
-        if not remove_unet and (self.unet_uses_attn_lora or self.suppress_sc_subj_attn):
+        if not remove_unet and (self.unet_uses_attn_lora or self.suppress_subj_attn):
             unet2 = self.load_unet_lora_weights(pipeline.unet, use_attn_lora=self.unet_uses_attn_lora,
-                                                suppress_sc_subj_attn=self.suppress_sc_subj_attn)
+                                                suppress_subj_attn=self.suppress_subj_attn)
                                                 
             pipeline.unet = unet2
 
@@ -277,7 +277,7 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
-                        use_attn_lora=True, use_ffn_lora=False, suppress_sc_subj_attn=False):
+                        use_attn_lora=True, use_ffn_lora=False, suppress_subj_attn=False):
         # We don't have to specify subj_attn_var_shrink_factor for set_up_attn_processors(),
         # as we'll load the learned subj_attn_var_shrink_factor from ckpt.
         attn_capture_procs, attn_opt_modules = \
@@ -323,15 +323,15 @@ class AdaFaceWrapper(nn.Module):
         print(f"Loaded {len(unet_lora_modules_state_dict)} LoRA weights on the UNet:\n{unet_lora_modules.keys()}")
         self.outfeat_capture_blocks.append(unet.up_blocks[3])
 
-        # If suppress_sc_subj_attn is True and use_attn_lora is False, we load all these params from ckpt,
+        # If suppress_subj_attn is True and use_attn_lora is False, we load all these params from ckpt,
         # but since we set use_attn_lora to False, attn loras won't be used during inference nonetheless.
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
                                    use_attn_lora, use_ffn_lora, capture_ca_activations=False, 
-                                   suppress_subj_attn=suppress_sc_subj_attn)
+                                   suppress_subj_attn=suppress_subj_attn)
 
         return unet
 
-    def load_unet_lora_weights(self, unet, use_attn_lora=True, suppress_sc_subj_attn=False):
+    def load_unet_lora_weights(self, unet, use_attn_lora=True, suppress_subj_attn=False):
         unet_lora_weight_found = False
         if isinstance(self.adaface_ckpt_paths, str):
             adaface_ckpt_paths = [self.adaface_ckpt_paths]
@@ -357,13 +357,13 @@ class AdaFaceWrapper(nn.Module):
             for i, unet_ in enumerate(unet.unets):
                 unet_ = self.load_unet_loras(unet_, unet_lora_modules_state_dict, 
                                              use_attn_lora=use_attn_lora, 
-                                             suppress_sc_subj_attn=suppress_sc_subj_attn)
+                                             suppress_subj_attn=suppress_subj_attn)
                 unet.unets[i] = unet_
             print(f"Loaded LoRA processors on UNetEnsemble of {len(unet.unets)} UNets.")
         else:
             unet = self.load_unet_loras(unet, unet_lora_modules_state_dict, 
                                         use_attn_lora=use_attn_lora, 
-                                        suppress_sc_subj_attn=suppress_sc_subj_attn)
+                                        suppress_subj_attn=suppress_subj_attn)
 
         return unet
 

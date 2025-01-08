@@ -42,7 +42,7 @@ parser.add_argument("--guidance_scale", type=float, default=6.0,
                     help="The guidance scale for the diffusion model. Default: 6.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
-parser.add_argument("--suppress_sc_subj_attn", type=str2bool, nargs="?", const=True, default=False,
+parser.add_argument("--suppress_subj_attn", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to suppress the subject attention in the subject-compositional instances")
 
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
@@ -71,7 +71,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
                          unet_weights_in_ensemble=args.unet_weights_in_ensemble, 
                          unet_uses_attn_lora=args.unet_uses_attn_lora,
-                         suppress_sc_subj_attn=args.suppress_sc_subj_attn,
+                         suppress_subj_attn=args.suppress_subj_attn,
                          device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:

@@ -103,7 +103,7 @@ class DDPM(pl.LightningModule):
                  unet_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
-                 suppress_sc_subj_attn=False,
+                 suppress_subj_attn=False,
                  sc_subj_attn_var_shrink_factor=2.,
                  ):
         
@@ -184,7 +184,7 @@ class DDPM(pl.LightningModule):
         self.unet_uses_ffn_lora     = unet_uses_ffn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
-        self.suppress_sc_subj_attn  = suppress_sc_subj_attn
+        self.suppress_subj_attn  = suppress_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
 
         if self.use_ldm_unet:
@@ -1534,7 +1534,7 @@ class LatentDiffusion(DDPM):
 
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
-                                       all_subj_indices_1b=None, suppress_sc_subj_attn=False,
+                                       all_subj_indices_1b=None, suppress_subj_attn=False,
                                        cfg_scale=-1, capture_ca_activations=False,
                                        num_denoising_steps=1, 
                                        same_t_noise_across_instances=True):
@@ -1573,7 +1573,7 @@ class LatentDiffusion(DDPM):
                 self.guided_denoise(x_start, noise, t, cond_context,
                                     # all_subj_indices_1b is only used in the sc block. So we need "_1b" instead of "_2b".
                                     uncond_emb, img_mask, all_subj_indices_1b, 
-                                    suppress_subj_attn=suppress_sc_subj_attn,
+                                    suppress_subj_attn=suppress_subj_attn,
                                     batch_part_has_grad='subject-compos', 
                                     comp_feat_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
@@ -1707,7 +1707,7 @@ class LatentDiffusion(DDPM):
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, img_mask=None, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
-                                                    suppress_sc_subj_attn=self.suppress_sc_subj_attn,
+                                                    suppress_subj_attn=self.suppress_subj_attn,
                                                     cfg_scale=5, capture_ca_activations=True,
                                                     num_denoising_steps=num_comp_denoising_steps,
                                                     same_t_noise_across_instances=True)
