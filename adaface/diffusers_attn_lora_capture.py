@@ -24,6 +24,11 @@ def gaussian_pdf_2d(x, y, x0, y0, std_x, std_y):
     """
     return torch.exp(-(((x - x0)**2)/(2*std_x**2) + ((y - y0)**2)/(2*std_y**2)))
 
+@torch.compile
+# Return a scale matrix, in which most elements are 1, and at the subject-embedding rows,
+# the scales decrease from 1 at the Gaussian center to something around 0.3 at the image boundary.
+# This scale matrix is intended to multiple with the attention prob matrix, so that the subject
+# embeddings won't dominate the whole image.
 def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor):
     # attn_score: [1, 8, 4096, 77]
     # subj_indices: 
@@ -67,9 +72,7 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
     var_x = x_sq - x_center**2
 
     # 4) 2D std
-    # y_center, x_center: [35.1875, 32.9062], std_2d: [26.8281].  
-    #var_2d = var_y + var_x
-    #std_2d = var_2d.sqrt() 
+    # y_center, x_center: [35.1875, 32.9062].  
     # std_x is often slightly smaller than std_y, meaning the face is slightly taller than wider.
     # std_x: [16.0312], std_y: [17.7500].
     std_x  = var_x.sqrt()
