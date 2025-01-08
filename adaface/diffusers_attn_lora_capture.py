@@ -15,14 +15,16 @@ import numpy as np
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-def log_gaussian_2d(x, y, x0, y0, std_x, std_y):
+def gaussian_pdf_2d(x, y, x0, y0, std_x, std_y):
     """
     Evaluate the uncorrelated 2D Gaussian PDF at coordinates (x, y).
     x, y can be scalars, or NumPy arrays of the same shape.
+    We don't need to normalize the PDF in the traditional way, as we'll normalize the center to 1,
+    and the traditional normalization factor will be canceled out.
     """
     return -(((x - x0)**2)/(2*std_x**2) + ((y - y0)**2)/(2*std_y**2))
 
-def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
+def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor):
     # attn_score: [1, 8, 4096, 77]
     # subj_indices: 
     '''
@@ -36,16 +38,21 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
 
     # attn_score2: [1, 8, 4096, 77] -> [1, 77, 8, 4096]
     attn_score2 = attn_score.permute(0, 3, 1, 2)
-    # subj_attn: [1, 8, 4096]. Already summed over subject embeddings.
+    # subj_attn: [1, 8, 4096]. 
+    # do_sum=True: the returned subj_attn is summed over subject embeddings.
     subj_attn = sel_emb_attns_by_indices(attn_score2, subj_indices, do_sum=True)
-    SN = subj_attn.size(0)
+    # NSUB: Number of subject instances
+    NSUB = subj_attn.size(0)
     # Average over the heads. subj_attn: [1, 4096]
     subj_attn = subj_attn.mean(dim=1)
     # 1) Normalize subj_attn as a 2D probability distribution.
+    # To be precise, we should consider other tokens than the subject embeddings when computing subj_prob.
+    # However, after normalization, the subj_prob below should only differ from the precise subj_pro
+    # by a constant factor, which doesn't affect our estimation of the subject center and variances.
     subj_prob = subj_attn.softmax(dim=1)
     H = W = int(np.sqrt(attn_score2.size(-1)))
     # subj_attn: [1, 4096] -> [1, 64, 64]
-    subj_prob_3d = subj_prob.view(SN, H, W)
+    subj_prob_3d = subj_prob.view(NSUB, H, W)
     # 2) Compute y_center and x_center
     # ys: [1, 64, 1]. xs: [1, 1, 64]
     ys = torch.arange(H, device=subj_attn.device).view(1, H, 1)
@@ -84,21 +91,21 @@ def calc_subj_attn_bias(attn_score, subj_indices, subj_attn_var_shrink_factor):
                           torch.arange(H, device=subj_attn.device))
     X = X.to(attn_score.dtype).unsqueeze(0)
     Y = Y.to(attn_score.dtype).unsqueeze(0)
-    shrinker_grid = log_gaussian_2d(X, Y, x_center, y_center, shrinker_std_x, shrinker_std_y)
+    shrinker_grid = gaussian_pdf_2d(X, Y, x_center, y_center, shrinker_std_x, shrinker_std_y)
     # Normalize shrinker_grid, so that the maximum value (at the point nearest to the center) 
-    # is always 0, i.e., the subject activation at this point is not scaled down.
+    # is always 1, i.e., the subject activation at this point is not scaled down.
     # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
-    shrinker_grid = shrinker_grid - shrinker_grid.max().detach()
+    shrinker_grid = shrinker_grid / shrinker_grid.max().detach()
     # shrinker_grid: [1, X=64, Y=64] -> [1, Y=64, X=64] -> [1, 1, 4096]
-    shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(SN, 1, -1)
-    # subj_attn_bias: [1, 77, 1, 4096]
-    subj_attn_bias = torch.zeros_like(attn_score2[:, :, :1])
-    # subj_attn_bias[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.
-    subj_attn_bias[subj_indices] = shrinker_grid
-    # subj_attn_bias: [1, 1, 4096, 77]
-    subj_attn_bias = subj_attn_bias.permute(0, 2, 3, 1)
-    # print(f"std_2d: {std_2d.item():.4f}, std_x: {std_x.mean().item():.4f}, std_y: {std_y.mean().item():.4f}")
-    return subj_attn_bias
+    shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(NSUB, 1, -1)
+    # subj_attn_scales: [1, 77, 1, 4096]
+    subj_attn_scales = torch.ones_like(attn_score2[:, :, :1])
+    # subj_attn_scales[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.
+    subj_attn_scales[subj_indices] = shrinker_grid
+    # subj_attn_scales: [1, 1, 4096, 77]
+    subj_attn_scales = subj_attn_scales.permute(0, 2, 3, 1)
+    # print(f"shrinker_grid mean: {shrinker_grid.mean().item():.4f}")
+    return subj_attn_scales
 
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
@@ -127,16 +134,19 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
 
     if subj_indices is not None:
-        subj_attn_bias = calc_subj_attn_bias(attn_weight, subj_indices, subj_attn_var_shrink_factor)
+        # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
+        # for the subject embeddings indexed by subj_indices.
+        subj_attn_scales = calc_subj_attn_scales(attn_weight, subj_indices, subj_attn_var_shrink_factor)
     else:
-        subj_attn_bias = 0
+        subj_attn_scales = 1
 
     # attn_bias: [1, 1, 4096, 77], the same size as a single-head attn_weight.
-    # subj_attn_bias: [1, 1, 4096, 77]. At the last dim, 0 everywhere except 
-    # for the subject embeddings indexed by subj_indices.
-    attn_weight += attn_bias + subj_attn_bias
+    attn_weight += attn_bias
     attn_score = attn_weight
     attn_weight = torch.softmax(attn_weight, dim=-1)
+    # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
+    # for the subject embeddings indexed by subj_indices.
+    attn_weight = attn_weight * subj_attn_scales
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     output = attn_weight @ value
     return output, attn_score, attn_weight
