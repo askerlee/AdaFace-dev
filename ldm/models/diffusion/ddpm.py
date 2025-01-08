@@ -90,7 +90,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_input_noise=0.5,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
-                 p_comp_feat_distill_on_subj_comp_rep_prompts=1,
+                 p_comp_feat_distill_repeat_subj_comp_prompts=0.5,
                  subj_comp_rep_distill_loss_weight=1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
@@ -159,7 +159,7 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
-        self.p_comp_feat_distill_on_subj_comp_rep_prompts = p_comp_feat_distill_on_subj_comp_rep_prompts
+        self.p_comp_feat_distill_repeat_subj_comp_prompts = p_comp_feat_distill_repeat_subj_comp_prompts
         self.subj_comp_rep_distill_loss_weight      = subj_comp_rep_distill_loss_weight
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
@@ -1333,14 +1333,14 @@ class LatentDiffusion(DDPM):
             # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
             # are manually mixed into their embeddings.
-            if torch.rand(1) < self.p_comp_feat_distill_on_subj_comp_rep_prompts:
-                self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] = True
-                # 20% of the time, we use subj_comp_rep_prompts instead of cls_single_prompts.
-                # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
-                c_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
-                c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+            if torch.rand(1) < self.p_comp_feat_distill_repeat_subj_comp_prompts:
+                self.iter_flags['comp_feat_distill_repeat_subj_comp_prompts'] = True
+                # 50% of the time, we use subj_comp_rep_prompts instead of subj_comp_prompts.
+                # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
+                c_in = subj_single_prompts + subj_comp_rep_prompts + cls_single_prompts + cls_comp_prompts
+                c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep_emb, cls_single_emb, cls_comp_emb], dim=0)
             else:
-                self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'] = False
+                self.iter_flags['comp_feat_distill_repeat_subj_comp_prompts'] = False
                 # 80% of the time, we use cls_single_prompts.
                 c_in         = delta_prompts
                 c_prompt_emb = c_prompt_emb_4b
@@ -1422,7 +1422,6 @@ class LatentDiffusion(DDPM):
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, subj_indices=None, 
                        suppress_subj_attn=False, batch_part_has_grad='all', 
-                       comp_feat_distill_on_subj_comp_rep_prompts=False,
                        do_pixel_recon=False, cfg_scale=-1, 
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
@@ -1474,16 +1473,10 @@ class LatentDiffusion(DDPM):
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
             extra_info_c2 = copy.copy(extra_info)
-            if comp_feat_distill_on_subj_comp_rep_prompts:
-                # The two instances in the c2 slice is sc_comp_rep and mc_comp.
-                # So we can use the same subj_indices as the sc instance.
-                extra_info_c2['subj_indices'] = subj_indices
-                extra_info_c2['suppress_subj_attn'] = suppress_subj_attn
-            else:
-                # The two instances in the c2 slice are mc_single and mc_comp.
-                # We never need to suppress the subject attention in the mc instances.
-                extra_info_c2['subj_indices'] = None
-                extra_info_c2['suppress_subj_attn'] = False
+            # These two instances in the c2 slice are mc_single and mc_comp.
+            # We never need to suppress the subject attention in the mc instances.
+            extra_info_c2['subj_indices'] = None
+            extra_info_c2['suppress_subj_attn'] = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_c2)
             model_output_c2 = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 4),
@@ -1575,7 +1568,6 @@ class LatentDiffusion(DDPM):
                                     uncond_emb, img_mask, all_subj_indices_1b, 
                                     suppress_subj_attn=suppress_subj_attn,
                                     batch_part_has_grad='subject-compos', 
-                                    comp_feat_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
@@ -1651,11 +1643,6 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            # Since we do comp_feat_distill_on_subj_comp_rep_prompts, cond_context contains 
-            # (subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb).
-            # But in order to do priming, we need cond_context_old which contains
-            # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
-            cond_context_old = (extra_info['c_prompt_emb_4b'], cond_context[1], cond_context[2])
             # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
             # and the bg mask area filled with noise. Returned only for logging.
             # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
@@ -1665,18 +1652,11 @@ class LatentDiffusion(DDPM):
             # since the current iteration is do_comp_feat_distill. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
-                self.prime_x_start_for_comp_prompts(cond_context_old, x_start, noise,
+                self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
                                                     (img_mask, fg_mask), fg_noise_amount=0.2,
                                                     BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
-            if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts']:
-                x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
-                # Block 2 is the subject comp repeat (sc-repeat) instance.
-                # Make the sc-repeat and sc blocks use the same x_start, so that their output features
-                # are more aligned, and more effective for distillation.
-                x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
-
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
             # t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
@@ -2503,36 +2483,6 @@ class LatentDiffusion(DDPM):
         
         if sc_fg_mask is not None:
             loss_dict.update({f'{session_prefix}/sc_fg_mask_percent': sc_fg_mask.float().mean().item() })
-
-        if self.iter_flags['comp_feat_distill_on_subj_comp_rep_prompts']:
-            # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
-            # and we are distilling on the subject-comp rep prompts,
-            # then the subject-comp rep instance guides the subject-comp instance at the non-face area.
-            loss_subj_comp_rep_distill = 0
-            FG_THRES = 0.22
-            for x_recon in x_recons:
-                # mc_recon: reconstructed image of the class comp instance. 
-                # The name mc_* is to be consistent with the naming in calc_elastic_matching_loss().
-                ss_recon, sc_recon, sc_rep_recon, mc_recon = x_recon.chunk(4)
-                # If sc_fg_mask only occupies < FG_THRES=22% of the image, then we only 
-                # distill on the non-face area. Otherwise, we distill on the whole image.
-                # sc_rep_recon.detach() is not really needed, since sc_rep_recon 
-                # was generated without gradient. We added .detach() just in case.
-                if sc_fg_mask is not None and sc_fg_mask.float().mean() < FG_THRES:
-                    loss_subj_comp_rep_distill_step = \
-                        masked_l2_loss(sc_rep_recon.detach(), sc_recon, 1 - sc_fg_mask.float())
-                        # F.mse_loss(sc_recon * (1 - sc_fg_mask.float()), sc_rep_recon.detach() * (1 - sc_fg_mask.float()))
-                else:
-                    loss_subj_comp_rep_distill_step = \
-                        F.mse_loss(sc_rep_recon.detach(), sc_recon)
-                                
-                loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_step
-
-            loss_subj_comp_rep_distill /= len(x_recons)
-            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill': loss_subj_comp_rep_distill.item() })
-            loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap
-            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill * self.subj_comp_rep_distill_loss_weight \
-                                             * loss_subj_comp_rep_distill_scale
 
         # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
         # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
