@@ -22,7 +22,7 @@ def gaussian_pdf_2d(x, y, x0, y0, std_x, std_y):
     We don't need to normalize the PDF in the traditional way, as we'll normalize the center to 1,
     and the traditional normalization factor will be canceled out.
     """
-    return -(((x - x0)**2)/(2*std_x**2) + ((y - y0)**2)/(2*std_y**2))
+    return torch.exp(-(((x - x0)**2)/(2*std_x**2) + ((y - y0)**2)/(2*std_y**2)))
 
 def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor):
     # attn_score: [1, 8, 4096, 77]
@@ -95,6 +95,7 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
     # Normalize shrinker_grid, so that the maximum value (at the point nearest to the center) 
     # is always 1, i.e., the subject activation at this point is not scaled down.
     # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
+    # shrinker_grid.mean(): 0.2~0.4.
     shrinker_grid = shrinker_grid / shrinker_grid.max().detach()
     # shrinker_grid: [1, X=64, Y=64] -> [1, Y=64, X=64] -> [1, 1, 4096]
     shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(NSUB, 1, -1)
