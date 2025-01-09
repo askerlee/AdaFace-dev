@@ -1457,8 +1457,8 @@ class LatentDiffusion(DDPM):
             # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, it will be overridden
             # in the unet.
             extra_info_ss = copy.copy(extra_info)
-            extra_info_ss['subj_indices'] = None
-            extra_info_ss['suppress_subj_attn'] = False
+            extra_info_ss['subj_indices'] = subj_indices
+            extra_info_ss['suppress_subj_attn'] = suppress_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             model_output_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
                                                       enable_grad=False, use_attn_lora=use_attn_lora,
