@@ -9,9 +9,9 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--sig", dest='ckpt_sig', type=str, required=True)
 parser.add_argument("--sig2", type=str, default="")
-parser.add_argument("--only100", action="store_true")
 parser.add_argument("--skipnames", nargs="+", default=[])
 parser.add_argument("--startiter", type=int, default=0)
+parser.add_argument("--chk_shrink_factor", action="store_true")
 args = parser.parse_args()
 
 np.set_printoptions(precision=4, suppress=True)
@@ -36,22 +36,30 @@ iterations = sorted(iter2path.keys())
 
 emb_path = os.path.join(emb_folder, iter2path[iterations[0]])
 emb_ckpt = torch.load(emb_path, map_location="cpu")
-tokens = emb_ckpt['string_to_token'].keys()
+
+if args.chk_shrink_factor:
+    for it, emb_path in iter2path.items():
+        emb_ckpt = torch.load(os.path.join(emb_folder, emb_path), map_location="cpu")
+        for param_name, param in emb_ckpt['unet_lora_modules'].items():
+            if param_name.endswith("shrink_factor"):
+                print(f"{param_name}-{it} {param.item():.4f}")
+
+    exit()
 
 if 'string_to_subj_basis_generator_dict' in emb_ckpt:
-    for token in tokens:
-        print(f"{token} => subj_basis_generator:")
+    for s in emb_ckpt['string_to_subj_basis_generator_dict']:
+        print(f"{s} => subj_basis_generator:")
 
         prev_subj_basis_generator = None
 
         for idx, iteration in enumerate(iterations):
-            if (args.only100 and iteration % 100 != 0) or (iteration < args.startiter):
+            if iteration < args.startiter:
                 continue
                     
             emb_path = os.path.join(emb_folder, iter2path[iteration])
             emb_ckpt = torch.load(emb_path, map_location="cpu")
 
-            subj_basis_generator = emb_ckpt['string_to_subj_basis_generator_dict'][token]
+            subj_basis_generator = emb_ckpt['string_to_subj_basis_generator_dict'][s]
             print(f"{iteration}:")
 
             if prev_subj_basis_generator is not None:
@@ -74,15 +82,3 @@ if 'string_to_subj_basis_generator_dict' in emb_ckpt:
                 print(f"Total norm/diff: {param_total_norm:.4f}/{param_total_delta:.4f}")
 
             prev_subj_basis_generator = subj_basis_generator
-
-for idx, iteration in enumerate(iterations):
-    if args.only100 and iteration % 100 != 0:
-        continue
-            
-    emb_path = os.path.join(emb_folder, iter2path[iteration])
-    emb_ckpt = torch.load(emb_path, map_location="cpu")
-    emb_global_scale_scores = emb_ckpt['emb_global_scale_scores'].sigmoid() + 0.5
-    emb_global_scale_scores = emb_global_scale_scores.detach().cpu().numpy()
-    print(f"{iteration} emb_global_scale_scores: {emb_global_scale_scores}")
-
-print()
