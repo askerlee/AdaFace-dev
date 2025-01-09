@@ -74,7 +74,16 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
     # 4) 2D std
     # y_center, x_center: [35.1875, 32.9062].  
     # std_x is often slightly smaller than std_y, meaning the face is slightly taller than wider.
-    # std_x: [N_SUB, N_EMB], [[16.0312, ...]], std_y: [[17.7500, ...]].
+    # std_x, std_y: [N_SUB, N_EMB]. The stds across embeddings are quite similar. 
+    # So using embedding-specific stds may not make much difference. But who knows?
+    '''
+    std_x: [[18.9531, 18.1719, 19.0000, 19.2031, 19.0469, 19.0469, 18.2969, 18.2969,
+             18.7969, 18.5000, 18.5000, 18.2031, 18.2031, 18.2031, 18.2031, 18.2031,
+             18.2031, 18.2344, 19.2812, 18.5781]]    
+    std_y: [[18.8750, 17.9375, 18.7188, 18.9062, 18.7344, 18.7344, 18.1719, 18.1875,
+             18.7344, 18.4219, 18.3906, 18.2188, 18.1875, 18.1875, 18.2188, 18.1875,
+             18.2188, 18.2188, 19.0000, 18.5469]]
+    '''
     std_x  = var_x.sqrt()
     std_y  = var_y.sqrt()
 
