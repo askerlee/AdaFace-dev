@@ -1804,7 +1804,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                    + loss_sc_to_ssfg_sparse_attns_distill \
                                    + loss_sc_to_mc_sparse_attns_distill * sc_to_mc_flow_attns_distill_loss_scale
     else:
-        loss_comp_fg_bg_preserve = torch.zeros(1, device=ca_outfeats[23].device)
+        loss_comp_fg_bg_preserve = torch.tensor(0., device=ca_outfeats[23].device)
 
     return loss_comp_fg_bg_preserve
 
@@ -1988,6 +1988,29 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                             })
     
     return loss_dict
+
+def calc_subj_comp_rep_distill_loss(ca_layers_activations, sc_fg_mask_percent):
+    # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
+    # and the face area is > 0.22 of the whole image, 
+    # we will distill the whole image on the subject-comp rep prompts.
+    FG_THRES = 0.22
+    loss_subj_comp_rep_distill = 0
+    subj_comp_rep_distill_layer_weights = { 23: 1, 24: 1, 
+                                          }
+    subj_comp_rep_distill_layer_weights = normalize_dict_values(subj_comp_rep_distill_layer_weights)
+
+    if sc_fg_mask_percent >= FG_THRES:
+        # q is computed from image features, and k is from the prompt embeddings.
+        for unet_layer_idx, ca_q in ca_layers_activations['k'].items():
+            if unet_layer_idx not in subj_comp_rep_distill_layer_weights:
+                continue
+            ss_q, sc_q, sc_rep_q, mc_q = ca_q.chunk(4)
+            # sc_rep_q.detach() is not really needed, since the sc_rep instance
+            # was generated without gradient. We added .detach() just in case.
+            loss_subj_comp_rep_distill_layer = F.mse_loss(sc_q, sc_rep_q.detach())    
+            loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_layer * subj_comp_rep_distill_layer_weights[unet_layer_idx]
+
+    return loss_subj_comp_rep_distill
 
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
