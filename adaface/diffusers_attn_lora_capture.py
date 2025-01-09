@@ -18,7 +18,7 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 def gaussian_pdf_2d(x, y, x0, y0, std_x, std_y):
     """
     Evaluate the uncorrelated 2D Gaussian PDF at coordinates (x, y).
-    x, y can be scalars, or NumPy arrays of the same shape.
+    x, y are torch tensors of the same shape.
     We don't need to normalize the PDF in the traditional way, as we'll normalize the center to 1,
     and the traditional normalization factor will be canceled out.
     """
@@ -43,30 +43,30 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
 
     # attn_score2: [1, 8, 4096, 77] -> [1, 77, 8, 4096]
     attn_score2 = attn_score.permute(0, 3, 1, 2)
-    # subj_attn: [1, 8, 4096]. 
+    # subj_attn: [1, 20, 8, 4096]. 
     # do_sum=True: the returned subj_attn is summed over subject embeddings.
-    subj_attn = sel_emb_attns_by_indices(attn_score2, subj_indices, do_sum=True)
-    # NSUB: Number of subject instances
-    NSUB = subj_attn.size(0)
-    # Average over the heads. subj_attn: [1, 4096]
-    subj_attn = subj_attn.mean(dim=1)
+    subj_attn = sel_emb_attns_by_indices(attn_score2, subj_indices, do_sum=False)
+    # N_SUB: Number of subject instances
+    N_SUB, N_EMB = subj_attn.size(0), subj_attn.size(1)
+    # Average over the heads. subj_attn: [1, 20, 4096]
+    subj_attn = subj_attn.mean(dim=2)
     # 1) Normalize subj_attn as a 2D probability distribution.
     # To be precise, we should consider other tokens than the subject embeddings when computing subj_prob.
     # However, after normalization, the subj_prob below should only differ from the precise subj_pro
     # by a constant factor, which doesn't affect our estimation of the subject center and variances.
-    subj_prob = subj_attn.softmax(dim=1)
+    subj_prob = subj_attn.softmax(dim=2)
     H = W = int(np.sqrt(attn_score2.size(-1)))
-    # subj_attn: [1, 4096] -> [1, 64, 64]
-    subj_prob_3d = subj_prob.view(NSUB, H, W)
+    # subj_attn: [1, 20, 4096] -> [1, 20, 64, 64]
+    subj_prob_3d = subj_prob.view(N_SUB, N_EMB, H, W)
     # 2) Compute y_center and x_center
     # ys: [1, 64, 1]. xs: [1, 1, 64]
     ys = torch.arange(H, device=subj_attn.device).view(1, H, 1)
     xs = torch.arange(W, device=subj_attn.device).view(1, 1, W)
-    y_center = (subj_prob_3d * ys).sum(dim=(1,2))  # [N]
-    x_center = (subj_prob_3d * xs).sum(dim=(1,2))  # [N]
+    y_center = (subj_prob_3d * ys).sum(dim=(2,3))  # [N_SUB, N_EMB]
+    x_center = (subj_prob_3d * xs).sum(dim=(2,3))  # [N_SUB, N_EMB]
     # 3) Variances
-    y_sq = (subj_prob_3d * ys**2).sum(dim=(1,2))   # E[Y^2]
-    x_sq = (subj_prob_3d * xs**2).sum(dim=(1,2))   # E[X^2]
+    y_sq = (subj_prob_3d * ys**2).sum(dim=(2,3))   # E[Y^2]
+    x_sq = (subj_prob_3d * xs**2).sum(dim=(2,3))   # E[X^2]
 
     var_y = y_sq - y_center**2
     var_x = x_sq - x_center**2
@@ -74,7 +74,7 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
     # 4) 2D std
     # y_center, x_center: [35.1875, 32.9062].  
     # std_x is often slightly smaller than std_y, meaning the face is slightly taller than wider.
-    # std_x: [16.0312], std_y: [17.7500].
+    # std_x: [N_SUB, N_EMB], [[16.0312, ...]], std_y: [[17.7500, ...]].
     std_x  = var_x.sqrt()
     std_y  = var_y.sqrt()
 
@@ -89,19 +89,20 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
     shrinker_std_x = std_x * 1 / (subj_attn_var_shrink_factor - 1)
     shrinker_std_y = std_y * 1 / (subj_attn_var_shrink_factor - 1)
     # Create 1D coordinate arrays (the range can be chosen as needed)
-    # Make a meshgrid. X: [1, 64, 64], Y: [1, 64, 64]
+    # Make a meshgrid. X: [64, 64, 1, 1], Y: [64, 64, 1, 1]
     X, Y = torch.meshgrid(torch.arange(W, device=subj_attn.device), 
                           torch.arange(H, device=subj_attn.device))
-    X = X.to(attn_score.dtype).unsqueeze(0)
-    Y = Y.to(attn_score.dtype).unsqueeze(0)
+    X = X.to(attn_score.dtype).unsqueeze(-1).unsqueeze(-1)
+    Y = Y.to(attn_score.dtype).unsqueeze(-1).unsqueeze(-1)
+    # shrinker_grid: [64, 64, 1, 20]
     shrinker_grid = gaussian_pdf_2d(X, Y, x_center, y_center, shrinker_std_x, shrinker_std_y)
     # Normalize shrinker_grid, so that the maximum value (at the point nearest to the center) 
     # is always 1, i.e., the subject activation at this point is not scaled down.
     # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
     # shrinker_grid.mean(): 0.2~0.4.
     shrinker_grid = shrinker_grid / shrinker_grid.max().detach()
-    # shrinker_grid: [1, X=64, Y=64] -> [1, Y=64, X=64] -> [1, 1, 4096]
-    shrinker_grid = shrinker_grid.permute(0, 2, 1).reshape(NSUB, 1, -1)
+    # shrinker_grid: [1, 20, X=64, Y=64] -> [1, 20, Y=64, X=64] -> [1, 20, 1, 4096]
+    shrinker_grid = shrinker_grid.permute(2, 3, 0, 1).reshape(N_SUB, N_EMB, 1, -1)
     # subj_attn_scales: [1, 77, 1, 4096]
     subj_attn_scales = torch.ones_like(attn_score2[:, :, :1])
     # subj_attn_scales[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.
@@ -175,15 +176,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
-        self.subj_attn_var_shrink_factor = nn.Parameter(torch.tensor(subj_attn_var_shrink_factor, dtype=float), 
-                                                        requires_grad=True)
+        self.subj_attn_var_shrink_factor = subj_attn_var_shrink_factor
 
-        '''
-        network_alpha (`float`, `optional`, defaults to `None`):
-            The value of the network alpha used for stable learning and preventing underflow. This value has the same
-            meaning as the `--network_alpha` option in the kohya-ss trainer script. See
-            https://github.com/darkstorm2150/sd-scripts/blob/main/docs/train_network_README-en.md#execute-learning        
-        '''
         self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
         if self.global_enable_lora:
             for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
@@ -526,7 +520,6 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'],
         # ModuleDict doesn't allow "." in the key.
         name = name.replace(".", "_")
         attn_capture_procs[name] = attn_capture_proc
-        attn_opt_modules[name + "_subj_attn_var_shrink_factor"] = attn_capture_proc.subj_attn_var_shrink_factor
     
         if use_attn_lora:
             for subname, module in attn_capture_proc.named_modules():

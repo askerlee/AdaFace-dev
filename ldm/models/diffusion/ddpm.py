@@ -2906,7 +2906,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # To be compatible with old param keys, we append 'base_model_model_' to the keys of attn_opt_modules.
             unet_lora_modules.update({ f'base_model_model_{k}': v for k, v in attn_opt_modules.items() })
             unet_lora_modules.update(ffn_opt_modules)
-            # BUG: maybe in the future, we couldn't put nn.Module in nn.ParameterDict.
+            # ParameterDict can contain both Parameter and nn.Module.
+            # TODO: maybe in the future, we couldn't put nn.Module in nn.ParameterDict.
             self.unet_lora_modules  = torch.nn.ParameterDict(unet_lora_modules)
             for param in self.unet_lora_modules.parameters():
                 param.requires_grad = True

@@ -277,12 +277,12 @@ class AdaFaceWrapper(nn.Module):
 
     # Adapted from ConsistentIDPipeline:set_ip_adapter().
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
-                        use_attn_lora=True, use_ffn_lora=False, suppress_subj_attn=False):
-        # We don't have to specify subj_attn_var_shrink_factor for set_up_attn_processors(),
-        # as we'll load the learned subj_attn_var_shrink_factor from ckpt.
+                        use_attn_lora=True, use_ffn_lora=False, 
+                        suppress_subj_attn=False, subj_attn_var_shrink_factor=2):
         attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(unet, use_attn_lora=True, attn_lora_layer_names=['q'],
-                                   lora_rank=192, lora_scale_down=8)
+                                   lora_rank=192, lora_scale_down=8, 
+                                   subj_attn_var_shrink_factor=subj_attn_var_shrink_factor)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
         if use_ffn_lora:
             target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
@@ -312,6 +312,8 @@ class AdaFaceWrapper(nn.Module):
         # To be compatible with old param keys, we append 'base_model_model_' to the keys of attn_opt_modules.
         unet_lora_modules.update({ f'base_model_model_{k}': v for k, v in attn_opt_modules.items() })
         unet_lora_modules.update(ffn_opt_modules)
+        # ParameterDict can contain both Parameter and nn.Module.
+        # TODO: maybe in the future, we couldn't put nn.Module in nn.ParameterDict.
         self.unet_lora_modules  = torch.nn.ParameterDict(unet_lora_modules)
 
         missing, unexpected = self.unet_lora_modules.load_state_dict(unet_lora_modules_state_dict, strict=False)
