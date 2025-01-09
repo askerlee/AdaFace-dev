@@ -1253,7 +1253,7 @@ class LatentDiffusion(DDPM):
         # in total subj_comp_rep_prompts contains 2 copies of the modifier, and 3 copies of compos_partial_prompt.
         # This is to avoid the subj comp instance receives too much style guidance from the subj_comp_rep instances,
         # and becomes overly stylized.
-        COMP_REPEATS = 2
+        COMP_REPEATS = 1
         subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
                                    + ", " + ", ".join([ compos_partial_prompt[i] ] * COMP_REPEATS) \
                                     for i in range(BLOCK_SIZE) ]
