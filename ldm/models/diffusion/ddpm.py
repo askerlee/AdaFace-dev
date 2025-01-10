@@ -18,7 +18,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         calc_subj_masked_bg_suppress_loss, save_grid, init_x_with_fg_from_training_image, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
-                        merge_cls_token_embeddings, anneal_perturb_embedding, \
+                        merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
@@ -2387,6 +2387,10 @@ class LatentDiffusion(DDPM):
         loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
         sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
+        # When sc_fg_mask_percent >= 0.22, we think the face is too large and 
+        # do subj_comp_rep_distill to discourage it.
+        # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
+        rep_dist_fg_bounds              = (0.22, 0.25)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
@@ -2503,7 +2507,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces']:
                 loss_subj_comp_rep_distill_attn, loss_subj_comp_rep_distill_k = \
                     calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
-                                                    prompt_emb_mask, sc_fg_mask_percent)
+                                                    prompt_emb_mask, sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])
                 if loss_subj_comp_rep_distill_attn == 0:
                     loss_subj_comp_rep_distill_attn = loss_subj_comp_rep_distill_k = \
                         torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
@@ -2542,11 +2546,17 @@ class LatentDiffusion(DDPM):
 
         if loss_subj_comp_rep_distill_attn > 0:
             loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_attn': loss_subj_comp_rep_distill_attn.item() })
-            loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap
+            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_k':    loss_subj_comp_rep_distill_k.item() })
+            # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
+            # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 1.
+            fg_percent_rep_distill_scale = \
+                calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[0], 0.1), (rep_dist_fg_bounds[1], 1), 
+                                    rel_scale_range=(0.1, 1))
+            # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
+            loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
+            
             loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_attn * loss_subj_comp_rep_distill_scale
-
-            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_k': loss_subj_comp_rep_distill_k.item() })
-            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_k * loss_subj_comp_rep_distill_scale
+            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_k    * loss_subj_comp_rep_distill_scale
             
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:

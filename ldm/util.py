@@ -1989,11 +1989,11 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     
     return loss_dict
 
-def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prompt_emb_mask, sc_fg_mask_percent):
+def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prompt_emb_mask, 
+                                    sc_fg_mask_percent, FG_THRES=0.22):
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
     # and the face area is > 0.22 of the whole image, 
     # we will distill the whole image on the subject-comp rep prompts.
-    FG_THRES = 0.22
     loss_subj_comp_rep_distill_attn = 0
     loss_subj_comp_rep_distill_k    = 0
     subj_comp_rep_distill_layer_weights = { 23: 1, 24: 1, 
