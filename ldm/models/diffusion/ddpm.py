@@ -459,8 +459,14 @@ class LatentDiffusion(DDPM):
 
         self.restarted_from_ckpt = (base_model_path is not None)
         if base_model_path is not None:
+            # Don't load the position embedding of CLIP, as we may change the max number of tokens in the prompt.
+            # In addition, we've loaded the CLIP model weights, including the position embedding, in the ctor of
+            # FrozenCLIPEmbedder.
+            ignore_keys.append('cond_stage_model.transformer.text_model.embeddings.position_embedding.weight')
             # Ignore all keys of the UNet model, since we are using a diffusers UNet model.
             # We still need to load the CLIP (cond_stage_model) and VAE (first_stage_model) weights.
+            # We've changed the openai CLIP to transformers CLIP, so in principle we don't need to load the CLIP weights again.
+            # However, in the ckpt, the CLIP may be finetuned and better than the pretrained CLIP weights.
             # NOTE: we use diffusers vae to decode, but still use ldm VAE to encode.
             if not use_ldm_unet:
                 ignore_keys.extend(['model'])
