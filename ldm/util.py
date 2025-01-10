@@ -2001,14 +2001,19 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, sc_fg_mask_percent):
 
     if sc_fg_mask_percent >= FG_THRES:
         # q is computed from image features, and k is from the prompt embeddings.
-        for unet_layer_idx, ca_q in ca_layers_activations['k'].items():
+        for unet_layer_idx, ca_attn in ca_layers_activations['attn'].items():
             if unet_layer_idx not in subj_comp_rep_distill_layer_weights:
                 continue
-            ss_q, sc_q, sc_rep_q, mc_q = ca_q.chunk(4)
+
+            # ca_attn: [4, 8, 4096, 77].
+            ss_attn, sc_attn, sc_rep_attn, mc_attn = ca_attn.chunk(4)
             # sc_rep_q.detach() is not really needed, since the sc_rep instance
             # was generated without gradient. We added .detach() just in case.
-            loss_subj_comp_rep_distill_layer = F.mse_loss(sc_q, sc_rep_q.detach())    
-            loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_layer * subj_comp_rep_distill_layer_weights[unet_layer_idx]
+            loss_subj_comp_rep_distill_layer = F.mse_loss(sc_attn, sc_rep_attn.detach())
+            # The prob is distributed over 77 tokens. We scale up the loss by 77 * 10.
+            subj_comp_rep_distill_layer_loss_layer_scale = ca_attn.shape[3] * 15
+            loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_layer * subj_comp_rep_distill_layer_loss_layer_scale \
+                                          * subj_comp_rep_distill_layer_weights[unet_layer_idx]
 
     return loss_subj_comp_rep_distill
 
