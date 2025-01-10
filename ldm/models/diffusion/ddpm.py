@@ -2556,9 +2556,10 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_k':    loss_subj_comp_rep_distill_k.item() })
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 1.
+            # rel_scale_range=(-0.1, 1): If sc_fg_mask_percent < 0.22, then fg_percent_rep_distill_scale = 0.
             fg_percent_rep_distill_scale = \
                 calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[0], 0.1), (rep_dist_fg_bounds[1], 1), 
-                                    rel_scale_range=(0.1, 1))
+                                    valid_scale_range=(0, 1))
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
