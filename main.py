@@ -234,7 +234,8 @@ def get_parser(**parser_kwargs):
                         help="Whether to suppress the subject attention in the subject-compositional instances")
     parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
                         help="Shrink factor of the standard deviation of the subject attention")
-
+    parser.add_argument("--comp_distill_prompt_repeats", type=int, default=argparse.SUPPRESS,
+                        choices=[1, 2], help="Number of repeats for the composition repeat distillation")
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
                         help="Prompt delta regularization weight")
 
@@ -691,18 +692,20 @@ if __name__ == "__main__":
             config.model.params.unet_teacher_types = opt.unet_teacher_types
 
         if hasattr(opt, 'p_unet_teacher_uses_cfg'):
-            config.model.params.p_unet_teacher_uses_cfg         = opt.p_unet_teacher_uses_cfg
+            config.model.params.p_unet_teacher_uses_cfg     = opt.p_unet_teacher_uses_cfg
         if hasattr(opt, 'unet_teacher_cfg_scale_range'):
-            config.model.params.unet_teacher_cfg_scale_range    = opt.unet_teacher_cfg_scale_range
+            config.model.params.unet_teacher_cfg_scale_range = opt.unet_teacher_cfg_scale_range
 
         if hasattr(opt, 'extra_unet_dirpaths'):
-            config.model.params.extra_unet_dirpaths             = opt.extra_unet_dirpaths
+            config.model.params.extra_unet_dirpaths         = opt.extra_unet_dirpaths
         if hasattr(opt, 'unet_weights_in_ensemble'):
             # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
-            config.model.params.unet_weights_in_ensemble                 = opt.unet_weights_in_ensemble
+            config.model.params.unet_weights_in_ensemble    = opt.unet_weights_in_ensemble
 
         config.model.params.suppress_subj_attn = opt.suppress_subj_attn
-        config.model.params.sc_subj_attn_var_shrink_factor = opt.sc_subj_attn_var_shrink_factor
+        config.model.params.sc_subj_attn_var_shrink_factor  = opt.sc_subj_attn_var_shrink_factor
+        if hasattr(opt, 'comp_distill_prompt_repeats'):
+            config.model.params.comp_distill_prompt_repeats = opt.comp_distill_prompt_repeats
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)

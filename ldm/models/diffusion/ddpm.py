@@ -90,6 +90,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_input_noise=0.5,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
+                 comp_distill_prompt_repeats=1,
                  p_comp_distill_repeat_subj_comp_prompts=0.2,
                  comp_distill_on_subj_comp_rep_prompts_for_large_faces=True,
                  recon_with_adv_attack_iter_gap=2,
@@ -159,6 +160,7 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
+        self.COMP_REPEATS                           = comp_distill_prompt_repeats
         self.p_comp_distill_repeat_subj_comp_prompts = p_comp_distill_repeat_subj_comp_prompts
         self.comp_distill_on_subj_comp_rep_prompts_for_large_faces = comp_distill_on_subj_comp_rep_prompts_for_large_faces
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
@@ -1255,9 +1257,8 @@ class LatentDiffusion(DDPM):
         # in total subj_comp_rep_prompts contains 2 copies of the modifier, and 3 copies of compos_partial_prompt.
         # This is to avoid the subj comp instance receives too much style guidance from the subj_comp_rep instances,
         # and becomes overly stylized.
-        COMP_REPEATS = 1
         subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                   + ", " + ", ".join([ compos_partial_prompt[i] ] * COMP_REPEATS) \
+                                   + ", " + ", ".join([ compos_partial_prompt[i] ] * self.COMP_REPEATS) \
                                     for i in range(BLOCK_SIZE) ]
 
         # We still compute the prompt embeddings of the first 4 types of prompts, 
@@ -2554,7 +2555,7 @@ class LatentDiffusion(DDPM):
                                     rel_scale_range=(0.1, 1))
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
-            
+
             loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_attn * loss_subj_comp_rep_distill_scale
             loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_k    * loss_subj_comp_rep_distill_scale
             
