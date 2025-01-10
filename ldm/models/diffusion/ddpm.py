@@ -696,9 +696,7 @@ class LatentDiffusion(DDPM):
             # But this should be a minor issue.
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                            self.embedding_manager.cls_delta_string_indices)
-            if self.iter_flags['do_comp_feat_distill']:
-                breakpoint()
-                
+
         # return_prompt_embs_type: ['id', 'text_id']. Training default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         # 'id': the subject embeddings only. 
