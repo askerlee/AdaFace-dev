@@ -258,10 +258,11 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
                              "(The last element is the weight of the last layer, ...)")
-
     parser.add_argument("--randomize_clip_skip_weights", nargs="?", type=str2bool, const=True, default=False,
                         help="Whether to randomize the skip weights of CLIP text embedder. "
                              "If True, the weights are sampled from a Dirichlet distribution with clip_last_layers_skip_weights as the alpha.")
+    parser.add_argument("--clip_prompt_max_length", type=int, default=77,
+                        help="Maximum length of the prompt for CLIP text embedder")
 
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
@@ -706,6 +707,8 @@ if __name__ == "__main__":
         config.model.params.sc_subj_attn_var_shrink_factor  = opt.sc_subj_attn_var_shrink_factor
         if hasattr(opt, 'comp_distill_prompt_repeats'):
             config.model.params.comp_distill_prompt_repeats = opt.comp_distill_prompt_repeats
+            # If comp_distill_prompt_repeats is 2, then the prompt length is 77 + 20 = 97.
+            opt.clip_prompt_max_length = 77 + (opt.comp_distill_prompt_repeats - 1) * 20
 
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
@@ -726,6 +729,7 @@ if __name__ == "__main__":
         # DDPM model config
         config.model.params.cond_stage_config.params.last_layers_skip_weights    = opt.clip_last_layers_skip_weights
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
+        config.model.params.cond_stage_config.params.max_length                  = opt.clip_prompt_max_length
         config.model.params.use_fp_trick = opt.use_fp_trick
 
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
