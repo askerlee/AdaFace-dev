@@ -1320,6 +1320,7 @@ def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_gra
 
     return loss_prompt_emb_delta
 
+# Assume loss is a float, not a tensor.
 def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, rel_scale_range=(0, 4)):
     """
     Return a loss scale as a function of loss.
@@ -1351,7 +1352,7 @@ def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, rel_scale
     assert ref_loss != base_loss, "ref_loss and base_loss cannot be the same."
     assert rel_scale_lb > -1,     "rel_scale_lb must be greater than -1, otherwise the scale can be negative."
 
-    relative_scale = (loss.item() - base_loss) / (ref_loss - base_loss)
+    relative_scale = (loss - base_loss) / (ref_loss - base_loss)
     relative_scale = np.clip(relative_scale, rel_scale_lb, rel_scale_ub)
     scale_delta = ref_scale - base_scale
     scale = relative_scale * scale_delta + base_scale
