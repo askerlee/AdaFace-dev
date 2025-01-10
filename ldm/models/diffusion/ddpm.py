@@ -92,7 +92,6 @@ class DDPM(pl.LightningModule):
                  p_recon_on_comp_prompt=0.4,
                  p_comp_distill_repeat_subj_comp_prompts=0.2,
                  comp_distill_on_subj_comp_rep_prompts_for_large_faces=True,
-                 subj_comp_rep_distill_loss_weight=1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -162,7 +161,6 @@ class DDPM(pl.LightningModule):
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.p_comp_distill_repeat_subj_comp_prompts = p_comp_distill_repeat_subj_comp_prompts
         self.comp_distill_on_subj_comp_rep_prompts_for_large_faces = comp_distill_on_subj_comp_rep_prompts_for_large_faces
-        self.subj_comp_rep_distill_loss_weight      = subj_comp_rep_distill_loss_weight
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
 
@@ -694,9 +692,13 @@ class LatentDiffusion(DDPM):
             # Example: cls_delta_string_indices = [(2, 4, 2, 'lisa'), (3, 4, 2, 'lisa')]
             # Then in the 2nd and 3rd instances, the 4th and 5th tokens are cls tokens and are averaged.
             # The 6th~76th token embeddings are moved towards the beginning of prompt_embeddings.
+            # BUG: after merge_cls_token_embeddings(), embedding_manager.prompt_emb_mask is not updated.
+            # But this should be a minor issue.
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                            self.embedding_manager.cls_delta_string_indices)
-
+            if self.iter_flags['do_comp_feat_distill']:
+                breakpoint()
+                
         # return_prompt_embs_type: ['id', 'text_id']. Training default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         # 'id': the subject embeddings only. 
@@ -1802,6 +1804,7 @@ class LatentDiffusion(DDPM):
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
                                                  extra_info['compos_partial_prompt'],
                                                  fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                                 extra_info['prompt_emb_mask'],
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
         ##### end of do_comp_feat_distill #####
@@ -2377,11 +2380,12 @@ class LatentDiffusion(DDPM):
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
     def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompt,
-                                    fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                    fg_mask, all_subj_indices_1b, all_subj_indices_2b, prompt_emb_mask,
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
         losses_subj_attn_norm_distill   = []
-        losses_subj_comp_rep_distill    = []
+        losses_subj_comp_rep_distill_attn   = []
+        losses_subj_comp_rep_distill_k      = []
         loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
         sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
@@ -2499,13 +2503,17 @@ class LatentDiffusion(DDPM):
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
         
             if self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces']:
-                loss_subj_comp_rep_distill = \
-                    calc_subj_comp_rep_distill_loss(ca_layers_activations, sc_fg_mask_percent)
-                if loss_subj_comp_rep_distill == 0:
-                    loss_subj_comp_rep_distill = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
+                loss_subj_comp_rep_distill_attn, loss_subj_comp_rep_distill_k = \
+                    calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
+                                                    prompt_emb_mask, sc_fg_mask_percent)
+                if loss_subj_comp_rep_distill_attn == 0:
+                    loss_subj_comp_rep_distill_attn = loss_subj_comp_rep_distill_k = \
+                        torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
             else:
-                loss_subj_comp_rep_distill = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
-            losses_subj_comp_rep_distill.append(loss_subj_comp_rep_distill)
+                loss_subj_comp_rep_distill_attn = loss_subj_comp_rep_distill_k = \
+                    torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
+            losses_subj_comp_rep_distill_attn.append(loss_subj_comp_rep_distill_attn)
+            losses_subj_comp_rep_distill_k.append(loss_subj_comp_rep_distill_k)
 
         for loss_name in loss_names:
             loss_name2 = loss_name.replace('loss_', '')
@@ -2517,9 +2525,10 @@ class LatentDiffusion(DDPM):
                     # Remove 0 losses from the loss_dict.
                     del loss_dict[loss_name2]
 
-        loss_comp_fg_bg_preserve    = torch.stack(losses_comp_fg_bg_preserve).mean()
-        loss_subj_attn_norm_distill = torch.stack(losses_subj_attn_norm_distill).mean()
-        loss_subj_comp_rep_distill  = torch.stack(losses_subj_comp_rep_distill).mean()
+        loss_comp_fg_bg_preserve        = torch.stack(losses_comp_fg_bg_preserve).mean()
+        loss_subj_attn_norm_distill     = torch.stack(losses_subj_attn_norm_distill).mean()
+        loss_subj_comp_rep_distill_attn = torch.stack(losses_subj_comp_rep_distill_attn).mean()
+        loss_subj_comp_rep_distill_k    = torch.stack(losses_subj_comp_rep_distill_k).mean()
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
@@ -2533,12 +2542,14 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
 
-        if loss_subj_comp_rep_distill > 0:
-            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill': loss_subj_comp_rep_distill.item() })
+        if loss_subj_comp_rep_distill_attn > 0:
+            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_attn': loss_subj_comp_rep_distill_attn.item() })
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap
-            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill * self.subj_comp_rep_distill_loss_weight \
-                                                * loss_subj_comp_rep_distill_scale
+            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_attn * loss_subj_comp_rep_distill_scale
 
+            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_k': loss_subj_comp_rep_distill_k.item() })
+            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_k * loss_subj_comp_rep_distill_scale
+            
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:
             sc_x_recon = x_recons[-1].chunk(4)[1]

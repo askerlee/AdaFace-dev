@@ -265,11 +265,10 @@ class EmbeddingManager(nn.Module):
         
         # We need to clone embedded_text, as the modification in update_text_embeddings() 
         # will be in-place. 
-        static_embeded_text, tokenized_text_repeated = \
-                self.update_text_embeddings(tokenized_text, embedded_text.clone())
+        static_embeded_text = self.update_text_embeddings(tokenized_text, embedded_text.clone())
 
         # Update the prompt token embedding mask.
-        self.update_prompt_masks(tokenized_text, tokenized_text_repeated)
+        self.update_prompt_masks(tokenized_text)
 
         return static_embeded_text
     
@@ -315,6 +314,7 @@ class EmbeddingManager(nn.Module):
             # occurs in the prompts without the placeholder token. If so, we need to merge 
             # their embeddings to one (the first) embedding, and delete the 2nd to the last embeddings,
             # using merge_cls_token_embeddings().
+            # BUG: after merge_cls_token_embeddings(), the prompt_emb_mask is not updated.
             # current_subj_name_to_cls_delta_tokens only contains the cls_delta_tokens of the current batch.
             if REAL_OCCURS_IN_BATCH < BS and self.CLS_DELTA_STRING_MAX_SEARCH_SPAN > 0 \
               and len(self.current_subj_name_to_cls_delta_tokens) > 0:
@@ -471,7 +471,7 @@ class EmbeddingManager(nn.Module):
             self.update_placeholder_indices(orig_tokenized_text, placeholder_string, placeholder_token, 
                                             adaface_subj_embs.shape[1])
 
-        return embedded_text, tokenized_text
+        return embedded_text
 
     # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
@@ -484,7 +484,7 @@ class EmbeddingManager(nn.Module):
     # .get_text_conditioning() -> ... -> here.
     # Such prompt_emb_mask won't be used in calc_prompt_emb_delta_loss() and won't be cleared.
     # prompt_emb_mask: [B, N, 1], where N=77 is the prompt length after padding.
-    def update_prompt_masks(self, tokenized_text, tokenized_text_repeated=False):
+    def update_prompt_masks(self, tokenized_text):
         # Exclude the starting (49406) and padding tokens (49047) from delta loss.
         prompt_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
         # [B, N] => [B, N, 1]

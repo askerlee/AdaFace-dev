@@ -1989,15 +1989,19 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     
     return loss_dict
 
-def calc_subj_comp_rep_distill_loss(ca_layers_activations, sc_fg_mask_percent):
+def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prompt_emb_mask, sc_fg_mask_percent):
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
     # and the face area is > 0.22 of the whole image, 
     # we will distill the whole image on the subject-comp rep prompts.
     FG_THRES = 0.22
-    loss_subj_comp_rep_distill = 0
+    loss_subj_comp_rep_distill_attn = 0
+    loss_subj_comp_rep_distill_k    = 0
     subj_comp_rep_distill_layer_weights = { 23: 1, 24: 1, 
                                           }
     subj_comp_rep_distill_layer_weights = normalize_dict_values(subj_comp_rep_distill_layer_weights)
+    # prompt_emb_mask: [4, 77, 1] -> [4, 77].
+    # sc_emb_mask: [1, 77]
+    ss_emb_mask, sc_emb_mask, ms_emb_mask, mc_emb_mask = prompt_emb_mask.squeeze(2).chunk(4)
 
     if sc_fg_mask_percent >= FG_THRES:
         # q is computed from image features, and k is from the prompt embeddings.
@@ -2005,17 +2009,33 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, sc_fg_mask_percent):
             if unet_layer_idx not in subj_comp_rep_distill_layer_weights:
                 continue
 
-            # ca_attn: [4, 8, 4096, 77].
+            LAYER_W = subj_comp_rep_distill_layer_weights[unet_layer_idx]
+            # ca_attn: [4, 8, 4096, 77] -> [4, 77, 8, 4096]
+            ca_attn = ca_attn.permute(0, 3, 1, 2)
             ss_attn, sc_attn, sc_rep_attn, mc_attn = ca_attn.chunk(4)
+            sc_subj_attn     = sc_attn[subj_indices_1b]
+            sc_subj_rep_attn = sc_rep_attn[subj_indices_1b]
             # sc_rep_q.detach() is not really needed, since the sc_rep instance
             # was generated without gradient. We added .detach() just in case.
-            loss_subj_comp_rep_distill_layer = F.mse_loss(sc_attn, sc_rep_attn.detach())
+            loss_subj_attn_distill_layer = F.mse_loss(sc_subj_attn, sc_subj_rep_attn.detach())
             # The prob is distributed over 77 tokens. We scale up the loss by 77 * 10.
-            subj_comp_rep_distill_layer_loss_layer_scale = ca_attn.shape[3] * 15
-            loss_subj_comp_rep_distill += loss_subj_comp_rep_distill_layer * subj_comp_rep_distill_layer_loss_layer_scale \
-                                          * subj_comp_rep_distill_layer_weights[unet_layer_idx]
+            subj_attn_distill_layer_loss_layer_scale = ca_attn.shape[3] * 10
+            loss_subj_comp_rep_distill_attn += loss_subj_attn_distill_layer * subj_attn_distill_layer_loss_layer_scale \
+                                                * LAYER_W
+            
+            # sc_k, sc_rep_k: [1, 320, 77]
+            # sc_emb_mask: [1, 77]
+            ss_k, sc_k, sc_rep_k, mc_k = ca_layers_activations['k'][unet_layer_idx].chunk(4)
+            # sc_valid_k, sc_valid_rep_k: [1, 320, 77] -> [320, 1, 77] -> [320, 47]
+            # Remove BOS and EOS (padding) tokens.
+            # NOTE: use the same sc_emb_mask for sc_valid_rep_k, so that we'll ignore the 
+            # repeated compositional prompt part. Otherwise it will be aligned with the k of padding tokens.
+            sc_valid_k      = sc_k.permute(1,0,2)[:, sc_emb_mask.bool()]
+            sc_valid_rep_k  = sc_rep_k.permute(1,0,2)[:, sc_emb_mask.bool()]
+            loss_subj_k_distill_layer = F.mse_loss(sc_valid_k, sc_valid_rep_k.detach())
+            loss_subj_comp_rep_distill_k += loss_subj_k_distill_layer * LAYER_W
 
-    return loss_subj_comp_rep_distill
+    return loss_subj_comp_rep_distill_attn, loss_subj_comp_rep_distill_k
 
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
