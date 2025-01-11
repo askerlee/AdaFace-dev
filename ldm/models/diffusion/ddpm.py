@@ -314,7 +314,10 @@ class DDPM(pl.LightningModule):
         if len(missing) > 0:
             print(f"Missing Keys: {missing[0]} ... {missing[-1]}")
         if len(unexpected) > 0:
-            print(f"Unexpected Keys: {unexpected[0]} ... {unexpected[-1]}")
+            if len(unexpected) > 1:
+                print(f"Unexpected Keys: {unexpected[0]} ... {unexpected[-1]}")
+            else:
+                print(f"Unexpected Key: {unexpected[0]}")
 
         print(f"Successfully loaded {num_remaining_keys - len(unexpected)} keys")
 
@@ -538,6 +541,8 @@ class LatentDiffusion(DDPM):
             # and only train the embedding_manager.
             self.model.eval()
             self.model.train = disabled_train
+            # unet lora params are set to requires_grad = False here.
+            # But in embedding_manager.optimized_parameters(), they are set to requires_grad = True.
             for param in self.model.parameters():
                 param.requires_grad = False
 
@@ -562,6 +567,7 @@ class LatentDiffusion(DDPM):
             self.flow_model = None
 
         if self.arcface_align_loss_weight > 0:
+            # arcface will be moved to GPU automatically.
             self.arcface = ArcFaceWrapper('cpu')
             # Disable training mode, as this mode 
             # doesn't accept only 1 image as input.
@@ -570,7 +576,7 @@ class LatentDiffusion(DDPM):
             self.arcface = None
 
         if self.clip_align_loss_weight > 0:
-            # Will be moved to GPU automatically.
+            # clip_evator will be moved to GPU automatically.
             self.clip_evator = CLIPEvaluator('cpu', torch.float16)
 
         self.generation_cache = []
