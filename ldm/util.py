@@ -2035,17 +2035,15 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
             ss_k, sc_k, sc_rep_k, mc_k = ca_layers_activations['k'][unet_layer_idx].chunk(4)
             # sc_valid_k, sc_valid_rep_k: [1, 320, 77] -> [320, 1, 77] -> [320, 47]
             # Remove BOS and EOS (padding) tokens.
-            # NOTE: use the same sc_emb_mask for sc_valid_rep_k, so that we'll ignore the 
-            # repeated compositional prompt part. Otherwise it will be aligned with the k of padding tokens.
-            #sc_valid_k      = sc_k.permute(1,0,2)[:, sc_emb_mask.bool()]
-            #sc_valid_rep_k  = sc_rep_k.permute(1,0,2)[:, sc_emb_mask.bool()]
-            # sc_valid_k, sc_valid_rep_k: [1, 320, 77] -> [1, 77, 320] -> [1, 20, 320]
             sc_subj_k      = sc_k.permute(0, 2, 1)[subj_indices_1b]
             sc_subj_rep_k  = sc_rep_k.permute(0, 2, 1)[subj_indices_1b]
             loss_subj_k_distill_layer = F.mse_loss(sc_subj_k, sc_subj_rep_k.detach())
             loss_comp_rep_distill_subj_k += loss_subj_k_distill_layer * LAYER_W
 
-            loss_nonsubj_k_distill_layer = masked_l2_loss(sc_k, mc_k, sc_nonsubj_emb_mask)
+            # NOTE: sc_nonsubj_emb_mask for nonsubj_k_distill is derived from sc_emb_mask, so that 
+            # the repeated compositional prompt part is ignored from distillation. 
+            # Otherwise they will be aligned with the ks of padding tokens in sc_k.
+            loss_nonsubj_k_distill_layer = masked_l2_loss(sc_k, mc_k.detach(), sc_nonsubj_emb_mask)
             loss_comp_rep_distill_nonsubj_k += loss_nonsubj_k_distill_layer * LAYER_W
 
     return loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k

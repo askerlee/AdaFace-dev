@@ -2527,7 +2527,7 @@ class LatentDiffusion(DDPM):
                     loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
                         torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
             else:
-                loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
+                loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
                     torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
 
             losses_comp_rep_distill_subj_attn.append(loss_comp_rep_distill_subj_attn)
