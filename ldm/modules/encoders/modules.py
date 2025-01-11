@@ -76,7 +76,7 @@ class ClassEmbedder(nn.Module):
 
 class TransformerEmbedder(AbstractEncoder):
     """Some transformer encoder layers"""
-    def __init__(self, n_embed, n_layer, vocab_size, max_seq_len=77, device="cuda"):
+    def __init__(self, n_embed, n_layer, vocab_size, max_seq_len=77, device="cpu"):
         super().__init__()
         self.device = device
         self.transformer = TransformerWrapper(num_tokens=vocab_size, max_seq_len=max_seq_len,
@@ -93,7 +93,7 @@ class TransformerEmbedder(AbstractEncoder):
 
 class BERTTokenizer(AbstractEncoder):
     """ Uses a pretrained BERT tokenizer by huggingface. Vocab size: 30522 (?)"""
-    def __init__(self, device="cuda", vq_interface=True, max_length=77):
+    def __init__(self, device="cpu", vq_interface=True, max_length=77):
         super().__init__()
         from transformers import BertTokenizerFast  # TODO: add to reuquirements
         self.tokenizer = BertTokenizerFast.from_pretrained("bert-base-uncased")
@@ -121,7 +121,7 @@ class BERTTokenizer(AbstractEncoder):
 class BERTEmbedder(AbstractEncoder):
     """Uses the BERT tokenizr model and add some transformer encoder layers"""
     def __init__(self, n_embed, n_layer, vocab_size=30522, max_seq_len=77,
-                 device="cuda",use_tokenizer=True, embedding_dropout=0.0):
+                 device="cpu",use_tokenizer=True, embedding_dropout=0.0):
         super().__init__()
         self.use_tknz_fn = use_tokenizer
         if self.use_tknz_fn:
@@ -181,11 +181,13 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
         self.transformer = CLIPTextModel.from_pretrained(version)
-        # self.transformer.text_model.embeddings.position_embedding.weight: [77, 768] -> [max_length, 768]
-        # We reuse the last EL position embeddings for the new position embeddings.
-        # If we use a larger max_position_embeddings in a CLIPTextConfig, and ignore_mismatched_sizes,
-        # then the old position embeddings won't be loaded, leading to poor performance. 
         if max_length != 77:
+            # self.transformer.text_model.embeddings.position_embedding.weight: [77, 768] -> [max_length, 768]
+            # We reuse the last EL position embeddings for the new position embeddings.
+            # If we use the "neat" way, i.e., initialize CLIPTextModel with a CLIPTextConfig with 
+            # a larger max_position_embeddings, and set ignore_mismatched_sizes=True, 
+            # then the old position embeddings won't be loaded from the pretrained ckpt, 
+            # leading to degenerated performance. 
             EL = max_length - 77
             new_position_embedding = extend_nn_embedding(self.transformer.text_model.embeddings.position_embedding,
                                                          self.transformer.text_model.embeddings.position_embedding.weight[-EL:])
