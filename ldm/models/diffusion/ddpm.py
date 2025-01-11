@@ -1909,7 +1909,7 @@ class LatentDiffusion(DDPM):
                 # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
                 faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
                 # adv_grad_fg_mean: 8~9e-6.
-                adv_grad_fg_mean = adv_grad[faceloss_fg_mask].abs().mean().item()
+                adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().item()
                 loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                 # adv_grad_mag: ~1e-4.
                 adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
@@ -2396,15 +2396,16 @@ class LatentDiffusion(DDPM):
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
         losses_subj_attn_norm_distill   = []
-        losses_subj_comp_rep_distill_attn   = []
-        losses_subj_comp_rep_distill_k      = []
+        losses_comp_rep_distill_subj_attn       = []
+        losses_comp_rep_distill_subj_k     = []
+        losses_comp_rep_distill_nonsubj_k  = []
         loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
         sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
         # When sc_fg_mask_percent >= 0.22, we think the face is too large and 
         # do subj_comp_rep_distill to discourage it.
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
-        rep_dist_fg_bounds              = (0.22, 0.25)
+        rep_dist_fg_bounds              = (0.20, 0.22, 0.25)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
@@ -2496,7 +2497,7 @@ class LatentDiffusion(DDPM):
                                               # but the composition will degrade. So we use L2 loss.
                                               recon_feat_objectives=['attn_out', 'outfeat'],
                                               recon_loss_discard_thres=recon_loss_discard_thres,
-                                              do_feat_attn_pooling=True)
+                                              do_feat_attn_pooling=False)
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
             # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
@@ -2519,17 +2520,19 @@ class LatentDiffusion(DDPM):
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
         
             if self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces']:
-                loss_subj_comp_rep_distill_attn, loss_subj_comp_rep_distill_k = \
+                loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
                     calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                     prompt_emb_mask, sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])
-                if loss_subj_comp_rep_distill_attn == 0:
-                    loss_subj_comp_rep_distill_attn = loss_subj_comp_rep_distill_k = \
+                if loss_comp_rep_distill_subj_attn == 0:
+                    loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
                         torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
             else:
-                loss_subj_comp_rep_distill_attn = loss_subj_comp_rep_distill_k = \
+                loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
                     torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
-            losses_subj_comp_rep_distill_attn.append(loss_subj_comp_rep_distill_attn)
-            losses_subj_comp_rep_distill_k.append(loss_subj_comp_rep_distill_k)
+
+            losses_comp_rep_distill_subj_attn.append(loss_comp_rep_distill_subj_attn)
+            losses_comp_rep_distill_subj_k.append(loss_comp_rep_distill_subj_k)
+            losses_comp_rep_distill_nonsubj_k.append(loss_comp_rep_distill_nonsubj_k)
 
         for loss_name in loss_names:
             loss_name2 = loss_name.replace('loss_', '')
@@ -2541,14 +2544,15 @@ class LatentDiffusion(DDPM):
                     # Remove 0 losses from the loss_dict.
                     del loss_dict[loss_name2]
 
-        loss_comp_fg_bg_preserve        = torch.stack(losses_comp_fg_bg_preserve).mean()
-        loss_subj_attn_norm_distill     = torch.stack(losses_subj_attn_norm_distill).mean()
-        loss_subj_comp_rep_distill_attn = torch.stack(losses_subj_comp_rep_distill_attn).mean()
-        loss_subj_comp_rep_distill_k    = torch.stack(losses_subj_comp_rep_distill_k).mean()
+        loss_comp_fg_bg_preserve             = torch.stack(losses_comp_fg_bg_preserve).mean()
+        loss_subj_attn_norm_distill          = torch.stack(losses_subj_attn_norm_distill).mean()
+        loss_comp_rep_distill_subj_attn      = torch.stack(losses_comp_rep_distill_subj_attn).mean()
+        loss_comp_rep_distill_subj_k         = torch.stack(losses_comp_rep_distill_subj_k).mean()
+        loss_comp_rep_distill_nonsubj_k      = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
-            loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve':    loss_comp_fg_bg_preserve.mean().detach().item() })
+            loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
             # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
             # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
@@ -2558,20 +2562,21 @@ class LatentDiffusion(DDPM):
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
 
-        if loss_subj_comp_rep_distill_attn > 0:
-            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_attn': loss_subj_comp_rep_distill_attn.item() })
-            loss_dict.update({f'{session_prefix}/subj_comp_rep_distill_k':    loss_subj_comp_rep_distill_k.item() })
+        if loss_comp_rep_distill_subj_attn > 0:
+            loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
+            loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_k':     loss_comp_rep_distill_subj_k.item() })
+            loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.item() })
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
             # valid_scale_range=(0, 1): If sc_fg_mask_percent = 0.21, then fg_percent_rep_distill_scale = 0.
             fg_percent_rep_distill_scale = \
-                calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[0], 0.1), (rep_dist_fg_bounds[1], 2), 
+                calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[1], 0.1), (rep_dist_fg_bounds[2], 2), 
                                     valid_scale_range=(0, 2))
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
-            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_attn * loss_subj_comp_rep_distill_scale
-            loss_comp_feat_distill_loss += loss_subj_comp_rep_distill_k    * loss_subj_comp_rep_distill_scale
+            loss_comp_feat_distill_loss += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
+                                            loss_comp_rep_distill_nonsubj_k) * loss_subj_comp_rep_distill_scale
             
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
         if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:

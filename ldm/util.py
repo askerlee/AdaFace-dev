@@ -1995,14 +1995,20 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
     # and the face area is > 0.22 of the whole image, 
     # we will distill the whole image on the subject-comp rep prompts.
-    loss_subj_comp_rep_distill_attn = 0
-    loss_subj_comp_rep_distill_k    = 0
+    loss_comp_rep_distill_subj_attn      = 0
+    loss_comp_rep_distill_subj_k    = 0
+    loss_comp_rep_distill_nonsubj_k = 0
     subj_comp_rep_distill_layer_weights = { 23: 1, 24: 1, 
                                           }
     subj_comp_rep_distill_layer_weights = normalize_dict_values(subj_comp_rep_distill_layer_weights)
     # prompt_emb_mask: [4, 77, 1] -> [4, 77].
     # sc_emb_mask: [1, 77]
     ss_emb_mask, sc_emb_mask, ms_emb_mask, mc_emb_mask = prompt_emb_mask.squeeze(2).chunk(4)
+    sc_nonsubj_emb_mask = sc_emb_mask.clone()
+    # sc_nonsubj_emb_mask: [1, 77], so we can use subj_indices_1b directly to index it.
+    sc_nonsubj_emb_mask[subj_indices_1b] = 0
+    # sc_emb_mask: [1, 77] -> [1, 1, 77], to be broadcasted to sc_k and mc_k [1, 320, 77].
+    sc_nonsubj_emb_mask = sc_nonsubj_emb_mask.unsqueeze(1)
 
     if sc_fg_mask_percent >= FG_THRES:
         # q is computed from image features, and k is from the prompt embeddings.
@@ -2021,7 +2027,7 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
             loss_subj_attn_distill_layer = F.mse_loss(sc_subj_attn, sc_subj_rep_attn.detach())
             # The prob is distributed over 77 tokens. We scale up the loss by 77 * 10.
             subj_attn_distill_layer_loss_layer_scale = ca_attn.shape[3] * 10
-            loss_subj_comp_rep_distill_attn += loss_subj_attn_distill_layer * subj_attn_distill_layer_loss_layer_scale \
+            loss_comp_rep_distill_subj_attn += loss_subj_attn_distill_layer * subj_attn_distill_layer_loss_layer_scale \
                                                 * LAYER_W
             
             # sc_k, sc_rep_k: [1, 320, 77]
@@ -2031,12 +2037,18 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
             # Remove BOS and EOS (padding) tokens.
             # NOTE: use the same sc_emb_mask for sc_valid_rep_k, so that we'll ignore the 
             # repeated compositional prompt part. Otherwise it will be aligned with the k of padding tokens.
-            sc_valid_k      = sc_k.permute(1,0,2)[:, sc_emb_mask.bool()]
-            sc_valid_rep_k  = sc_rep_k.permute(1,0,2)[:, sc_emb_mask.bool()]
-            loss_subj_k_distill_layer = F.mse_loss(sc_valid_k, sc_valid_rep_k.detach())
-            loss_subj_comp_rep_distill_k += loss_subj_k_distill_layer * LAYER_W
+            #sc_valid_k      = sc_k.permute(1,0,2)[:, sc_emb_mask.bool()]
+            #sc_valid_rep_k  = sc_rep_k.permute(1,0,2)[:, sc_emb_mask.bool()]
+            # sc_valid_k, sc_valid_rep_k: [1, 320, 77] -> [1, 77, 320] -> [1, 20, 320]
+            sc_subj_k      = sc_k.permute(0, 2, 1)[subj_indices_1b]
+            sc_subj_rep_k  = sc_rep_k.permute(0, 2, 1)[subj_indices_1b]
+            loss_subj_k_distill_layer = F.mse_loss(sc_subj_k, sc_subj_rep_k.detach())
+            loss_comp_rep_distill_subj_k += loss_subj_k_distill_layer * LAYER_W
 
-    return loss_subj_comp_rep_distill_attn, loss_subj_comp_rep_distill_k
+            loss_nonsubj_k_distill_layer = masked_l2_loss(sc_k, mc_k, sc_nonsubj_emb_mask)
+            loss_comp_rep_distill_nonsubj_k += loss_nonsubj_k_distill_layer * LAYER_W
+
+    return loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k
 
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 
@@ -2472,9 +2484,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         if sc_fg_mask_3d is not None:
             sc_fg_mask_3d = pool_feat_or_attn_mat(sc_fg_mask_3d, (H, W))
         H2, W2       = ca_outfeat.shape[-2:]
-        # Flatten the spatial dims of ca_outfeat for reconstruction.
+        # Flatten the spatial dims of ca_outfeat for reconstruction, 
+        # to restore consistency with the input shape.
         ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
     else:
+        # Do nothing.
         H2, W2       = H, W
 
     # ss_fg_mask_2d: [1, 961]
