@@ -247,7 +247,7 @@ def parse_args():
                         help="Repeat the prompt for each encoder during inference (default behavior)")
     parser.add_argument("--use_lcm", type=str2bool, const=True, nargs="?", default=False,
                         help="Use LCM to do quick inference")
-    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM UNet implementation as the base UNet (only effective when --use_ldm_pipeline is enabled)")
     parser.add_argument("--use_ldm_pipeline", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM pipeline to do the inference")

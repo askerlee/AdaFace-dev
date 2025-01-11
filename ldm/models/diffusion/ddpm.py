@@ -99,7 +99,7 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
                  clip_align_loss_weight=0,  # Currently disabled. Cannot afford the extra RAM.
-                 use_ldm_unet=True,
+                 use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
                  unet_lora_rank=192,
@@ -629,7 +629,8 @@ class LatentDiffusion(DDPM):
         self.cond_stage_model = instantiate_from_config(config)
         
     def instantiate_embedding_manager(self, config, text_embedder):
-        if (not self.use_ldm_unet) and self.unet_uses_attn_lora:
+        if not self.use_ldm_unet:
+            # If not unet_uses_attn_lora or unet_uses_ffn_lora, then unet_lora_modules is None.
             unet_lora_modules = self.model.unet_lora_modules
         else:
             unet_lora_modules = None
@@ -2995,11 +2996,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.unet_lora_modules  = torch.nn.ParameterDict(unet_lora_modules)
             for param in self.unet_lora_modules.parameters():
                 param.requires_grad = True
+            print(f"Set up LoRAs with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
         else:
             self.ffn_lora_layers    = []
-            self.unet_lora_modules  = torch.nn.ParameterDict()
-
-        print(f"Set up LoRAs with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
+            self.unet_lora_modules  = None
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         c_prompt_emb, c_in, extra_info = cond_context

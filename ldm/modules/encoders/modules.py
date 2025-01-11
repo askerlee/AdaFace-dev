@@ -1,12 +1,10 @@
 import torch
 import torch.nn as nn
 from functools import partial
-import clip
-from einops import repeat
-from transformers import CLIPTokenizer, CLIPTextModel, CLIPTextConfig
-import kornia
+from transformers import CLIPTokenizer, CLIPTextModel
 import numpy as np
-from ldm.modules.x_transformer import Encoder, TransformerWrapper  # TODO: can we directly rely on lucidrains code and simply add this as a requirement? --> test
+from ldm.modules.x_transformer import Encoder, TransformerWrapper  
+from ldm.util import extend_nn_embedding
 
 def _expand_mask(mask, dtype, tgt_len = None):
     """
@@ -182,10 +180,17 @@ class FrozenCLIPEmbedder(AbstractEncoder):
                  last_layers_skip_weights=[0.5, 0.5], randomize_clip_skip_weights=False):
         super().__init__()
         self.tokenizer = CLIPTokenizer.from_pretrained(version)
-        config = CLIPTextConfig.from_pretrained(version)
-        config.max_position_embeddings = max_length
-        self.transformer = CLIPTextModel.from_pretrained(version, config=config,
-                                                         ignore_mismatched_sizes=True)
+        self.transformer = CLIPTextModel.from_pretrained(version)
+        # self.transformer.text_model.embeddings.position_embedding.weight: [77, 768] -> [max_length, 768]
+        # We reuse the last EL position embeddings for the new position embeddings.
+        # If we use a larger max_position_embeddings in a CLIPTextConfig, and ignore_mismatched_sizes,
+        # then the old position embeddings won't be loaded, leading to poor performance. 
+        if max_length != 77:
+            EL = max_length - 77
+            new_position_embedding = extend_nn_embedding(self.transformer.text_model.embeddings.position_embedding,
+                                                         self.transformer.text_model.embeddings.position_embedding.weight[-EL:])
+            self.transformer.text_model.embeddings.position_embedding = new_position_embedding
+
         self.device = device
         self.max_length = max_length
         # If randomize_clip_skip_weights, then use last_layers_skip_weights as Dirichlet weights
