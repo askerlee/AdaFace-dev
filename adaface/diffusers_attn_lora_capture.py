@@ -7,13 +7,47 @@ from diffusers.utils import logging, is_torch_version, deprecate
 from peft import LoraConfig, get_peft_model
 import peft.tuners.lora as peft_lora
 from peft.tuners.lora.dora import DoraLinearLayer
-from ldm.util import sel_emb_attns_by_indices
 from einops import rearrange
 import math, re
 import numpy as np
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
+def split_indices_by_instance(indices, as_dict=False):
+    indices_B, indices_N = indices
+    unique_indices_B = torch.unique(indices_B)
+    if not as_dict:
+        indices_by_instance = [ (indices_B[indices_B == uib], indices_N[indices_B == uib]) for uib in unique_indices_B ]
+    else:
+        indices_by_instance = { uib.item(): indices_N[indices_B == uib] for uib in unique_indices_B }
+    return indices_by_instance
+
+# If do_sum, returned emb_attns is 3D. Otherwise 4D.
+# indices are applied on the first 2 dims of attn_mat.
+def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=True, do_mean=False):
+    indices_by_instance = split_indices_by_instance(indices)
+    
+    # emb_attns[0]: [1, 9, 8, 64]
+    # 8: 8 attention heads. Last dim 64: number of image tokens.
+    emb_attns   = [ attn_mat[inst_indices].unsqueeze(0) for inst_indices in indices_by_instance ]
+    if all_token_weights is not None:
+        # all_token_weights: [4, 77].
+        # token_weights_by_instance[0]: [1, 9, 1, 1].
+        token_weights = [ all_token_weights[inst_indices].reshape(1, -1, 1, 1) for inst_indices in indices_by_instance ]
+    else:
+        token_weights = [ 1 ] * len(indices_by_instance)
+
+    # Apply token weights.
+    emb_attns = [ emb_attns[i] * token_weights[i] for i in range(len(indices_by_instance)) ]
+
+    # sum among K_subj_i subj embeddings -> [1, 8, 64]
+    if do_sum:
+        emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
+    elif do_mean:
+        emb_attns   = [ emb_attns[i].mean(dim=1) for i in range(len(indices_by_instance)) ]
+
+    emb_attns = torch.cat(emb_attns, dim=0)
+    return emb_attns
 
 def gaussian_pdf_2d(x, y, x0, y0, std_x, std_y):
     """

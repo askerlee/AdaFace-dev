@@ -2402,8 +2402,9 @@ class LatentDiffusion(DDPM):
         loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
         sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
-        # When sc_fg_mask_percent >= 0.22, we think the face is too large and 
+        # When sc_fg_mask_percent >= 0.20, we think the face is close to be too large and 
         # do subj_comp_rep_distill to discourage it.
+        # 0.22 is borderline large, and 0.25 is too large.
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
         rep_dist_fg_bounds              = (0.20, 0.22, 0.25)
 
