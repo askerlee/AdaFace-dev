@@ -490,8 +490,8 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
-            # Use SAR UNet to prime x_start for compositional distillation, since 
-            # it's more compositional than SD15 UNet and closer to SD15 UNet than RealisticVision4 UNet.
+            # Use ealisticVision UNet to prime x_start for compositional distillation, since 
+            # it has better compositionality than SD15 UNet.
             unet = UNet2DConditionModel.from_pretrained('models/ensemble/rv4-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
@@ -503,7 +503,7 @@ class LatentDiffusion(DDPM):
                                     unets = [unet, unet],
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
-                                    # unet_weights_in_ensemble: [0.4, 0.6]. The "first unet" uses subject embeddings, 
+                                    # unet_weights_in_ensemble: [0.2, 0.8]. The "first unet" uses subject embeddings, 
                                     # the second uses class embeddings. This means that,
                                     # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
@@ -1935,6 +1935,7 @@ class LatentDiffusion(DDPM):
                 #loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
 
         if self.iter_flags['recon_on_comp_prompt']:
+            # When recon_on_comp_prompt is True, we apply CFG on the recon images.
             # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
@@ -1946,9 +1947,6 @@ class LatentDiffusion(DDPM):
             uncond_emb = None
             cfg_scale  = -1
 
-        # Randomly drop out subj_indices at 50% of the time, to increase robustness.
-        # all_subj_indices should index all instances, as all of them contain subject prompts.
-        suppress_subj_attn = False #torch.rand(1).item() < 0.5
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -1959,7 +1957,7 @@ class LatentDiffusion(DDPM):
             self.guided_denoise(x_start, noise2, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
                                 subj_indices=all_subj_indices,
-                                suppress_subj_attn=suppress_subj_attn,
+                                suppress_subj_attn=False,
                                 batch_part_has_grad='all', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 do_pixel_recon=True,
@@ -2146,9 +2144,6 @@ class LatentDiffusion(DDPM):
             noise_t   = unet_teacher_noises[s].to(x_start.dtype)
             t_s       = all_t[s]
 
-            # subj_indices should index all instances, as all of them contain subject prompts.
-            # Randomly enable suppress_subj_attn at 50% of the time, to increase robustness.
-            suppress_subj_attn = False #torch.rand(1).item() < 0.5
             # x_start_s, noise_t, t_s, unet_teacher.cfg_scale
             # are all randomly sampled from unet_teacher_cfg_scale_range in unet_teacher().
             # So, make sure unet_teacher() was called before guided_denoise() below.
@@ -2162,7 +2157,7 @@ class LatentDiffusion(DDPM):
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
                                     subj_indices=subj_indices,
-                                    suppress_subj_attn=suppress_subj_attn,
+                                    suppress_subj_attn=False,
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
@@ -2296,9 +2291,6 @@ class LatentDiffusion(DDPM):
             subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
                 [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
-            #mix_comp_prompt_emb = cls_comp_prompt_emb 
-                                  #subj_comp_prompt_emb * (1 - self.cls_subj_mix_scale) \
-                                  #+ cls_comp_prompt_emb * self.cls_subj_mix_scale
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
             # cfg_scale_range of comp_distill_priming_unet is [2, 4].
@@ -2346,9 +2338,6 @@ class LatentDiffusion(DDPM):
         noise_2 = torch.randn_like(x_start[:2*BLOCK_SIZE]) #.repeat(2, 1, 1, 1)
         subj_double_prompt_emb, cls_double_prompt_emb = c_prompt_emb.chunk(2)
         subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
-        #mix_double_prompt_emb = cls_double_prompt_emb 
-                                #subj_double_prompt_emb * (1 - self.cls_subj_mix_scale) \
-                                #+ cls_double_prompt_emb * self.cls_subj_mix_scale
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         #     x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
         # and x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
