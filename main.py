@@ -234,6 +234,11 @@ def get_parser(**parser_kwargs):
                         help="Whether to suppress the subject attention in the subject-compositional instances")
     parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
                         help="Shrink factor of the standard deviation of the subject attention")
+    parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q'],
+                        choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
+    parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether the q LoRA updates the query in the Diffusers UNet model. "
+                             "If False, the q lora only updates query2.")
     parser.add_argument("--comp_distill_prompt_repeats", type=int, default=argparse.SUPPRESS,
                         choices=[1, 2], help="Number of repeats for the composition repeat distillation")
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
@@ -705,6 +710,8 @@ if __name__ == "__main__":
 
         config.model.params.suppress_subj_attn = opt.suppress_subj_attn
         config.model.params.sc_subj_attn_var_shrink_factor  = opt.sc_subj_attn_var_shrink_factor
+        config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
+        config.model.params.q_lora_updates_query = opt.q_lora_updates_query
         if hasattr(opt, 'comp_distill_prompt_repeats'):
             config.model.params.comp_distill_prompt_repeats = opt.comp_distill_prompt_repeats
             # If comp_distill_prompt_repeats is 2, then the prompt length is 77 + 20 = 97.

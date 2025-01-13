@@ -194,6 +194,9 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_weight = torch.softmax(attn_weight, dim=-1)
     # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
     # for the subject embeddings indexed by subj_indices.
+    # NOTE: After scaling, the "probabilities" of the subject embeddings will sum to < 1.
+    # But this is intended, as we want to scale down the impact of the subject embeddings 
+    # in the computed attention output tensors.
     attn_weight = attn_weight * subj_attn_scales
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     output = attn_weight @ value
@@ -207,9 +210,9 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     # lora_proj_layers is a dict of lora_layer_name -> lora_proj_layer.
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  lora_uses_dora=True, lora_proj_layers=None, 
-                 hidden_size: int = -1, cross_attention_dim: int = 768, 
                  lora_rank: int = 192, lora_alpha: float = 16,
-                 subj_attn_var_shrink_factor: float = 2.):
+                 subj_attn_var_shrink_factor: float = 2.,
+                 q_lora_updates_query=False):
         super().__init__()
 
         self.global_enable_lora = enable_lora
@@ -220,6 +223,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
         self.subj_attn_var_shrink_factor = subj_attn_var_shrink_factor
+        self.q_lora_updates_query = q_lora_updates_query
 
         self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
         if self.global_enable_lora:
@@ -292,10 +296,17 @@ class AttnProcessor_LoRA_Capture(nn.Module):
 
         query = attn.to_q(hidden_states)
         # NOTE: there's a inconsistency between q lora and k, v loras. 
-        # k, v loras are applied to key and value (currently k, v loras are never enabled), 
-        # while q lora is applied to query2, and we keep query unchanged. 
+        # k, v loras are directly applied to key and value (currently k, v loras are never enabled), 
+        # while q lora is applied to query2, and we keep the query unchanged. 
         if self.enable_lora and self.to_q_lora is not None:
+            # query2 will be used in ldm/util.py:calc_elastic_matching_loss() to get more accurate
+            # cross attention scores between the latent images of the sc and mc instances.
             query2 = self.to_q_lora(hidden_states)
+            # If not q_lora_updates_query, only query2 will be impacted by the LoRA layer.
+            # The query, and thus the attention score and attn_out, will be the same 
+            # as the original ones. 
+            if self.q_lora_updates_query:
+                query = query2
         else:
             query2 = query
 
@@ -510,7 +521,8 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
 def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'], 
-                           lora_rank=192, lora_scale_down=8, subj_attn_var_shrink_factor=2.):
+                           lora_rank=192, lora_scale_down=8, subj_attn_var_shrink_factor=2.,
+                           q_lora_updates_query=False):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
@@ -535,9 +547,9 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'],
                 capture_ca_activations=False, enable_lora=False)
             continue
 
-        block_id = 3
+        # block_id = 3
         # hidden_size: 320
-        hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
+        # hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
         # 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.processor' ->
         # 'up_blocks.3.attentions.1.transformer_blocks.0.attn2.to_q'
         lora_layer_dict = {}
@@ -555,10 +567,10 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'],
         attn_capture_proc = AttnProcessor_LoRA_Capture(
             capture_ca_activations=True, enable_lora=use_attn_lora, 
             lora_uses_dora=True, lora_proj_layers=lora_proj_layers,
-            hidden_size=hidden_size, cross_attention_dim=cross_attention_dim, 
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
-            subj_attn_var_shrink_factor=subj_attn_var_shrink_factor)
+            subj_attn_var_shrink_factor=subj_attn_var_shrink_factor,
+            q_lora_updates_query=q_lora_updates_query)
         
         # attn_procs has to use the original names.
         attn_procs[name] = attn_capture_proc

@@ -104,6 +104,8 @@ class DDPM(pl.LightningModule):
                  unet_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
+                 attn_lora_layer_names=['q'],
+                 q_lora_updates_query=False,
                  suppress_subj_attn=False,
                  sc_subj_attn_var_shrink_factor=2.,
                  ):
@@ -186,6 +188,8 @@ class DDPM(pl.LightningModule):
         self.unet_uses_ffn_lora     = unet_uses_ffn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
+        self.attn_lora_layer_names  = attn_lora_layer_names
+        self.q_lora_updates_query  = q_lora_updates_query
         self.suppress_subj_attn  = suppress_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
 
@@ -195,14 +199,16 @@ class DDPM(pl.LightningModule):
             self.model = DiffusersUNetWrapper(base_model_path=base_model_path, 
                                               torch_dtype=torch.float16,
                                               use_attn_lora=self.unet_uses_attn_lora,
-                                              # Only add a lora to the q projection (q -> q2)
-                                              attn_lora_layer_names=['q'],
+                                              # attn_lora_layer_names: ['q'], only add a lora to the q projection 
+                                              # (q -> query2)
+                                              attn_lora_layer_names=self.attn_lora_layer_names,
                                               use_ffn_lora=self.unet_uses_ffn_lora,
                                               # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
                                               lora_rank=self.unet_lora_rank, 
-                                              attn_lora_scale_down=self.unet_lora_scale_down,   # 16
-                                              ffn_lora_scale_down=self.unet_lora_scale_down,    # 16
+                                              attn_lora_scale_down=self.unet_lora_scale_down,   # 8
+                                              ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
                                               subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
+                                              q_lora_updates_query=self.q_lora_updates_query
                                              )
             self.vae = self.model.pipeline.vae
 
@@ -323,13 +329,13 @@ class DDPM(pl.LightningModule):
 
     def predict_start_from_noise(self, x_t, t, noise):
         return (
-                extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
+                extract_into_tensor(self.sqrt_recip_alphas_cumprod,   t, x_t.shape) * x_t -
                 extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * noise
         )
 
     def q_sample(self, x_start, t, noise=None):
         noise = default(noise, lambda: torch.randn_like(x_start))
-        return (extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start +
+        return (extract_into_tensor(self.sqrt_alphas_cumprod,           t, x_start.shape) * x_start +
                 extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise)
 
     def get_input(self, batch, k):
@@ -1852,6 +1858,8 @@ class LatentDiffusion(DDPM):
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
         orig_image = self.decode_first_stage_with_grad(x_start)
+        # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
+        # so such faces are really small.
         embs, failed_indices, face_coords = \
             self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, 
                                             use_whole_image_if_no_face=False, enable_grad=True)
@@ -2918,7 +2926,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_attn_lora=False, attn_lora_layer_names=['q'], 
                  use_ffn_lora=False, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 subj_attn_var_shrink_factor=2.):
+                 subj_attn_var_shrink_factor=2., q_lora_updates_query=False):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         # diffusion_model is actually a UNet. Use this variable name to be 
@@ -2939,7 +2947,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             set_up_attn_processors(self.diffusion_model, self.use_attn_lora, 
                                    attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down,
-                                   subj_attn_var_shrink_factor=subj_attn_var_shrink_factor)
+                                   subj_attn_var_shrink_factor=subj_attn_var_shrink_factor,
+                                   q_lora_updates_query=q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]

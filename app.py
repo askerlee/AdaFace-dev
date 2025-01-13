@@ -34,14 +34,15 @@ parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
 parser.add_argument('--model_style_type', type=str, default='realistic',
                     choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
-parser.add_argument('--extra_unet_dirpaths', type=str, nargs="*", default=[], 
-                    help="Extra paths to the checkpoints of the UNet models")
-parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=[1], 
-                    help="Weights for the UNet models")
 parser.add_argument("--guidance_scale", type=float, default=6.0,
                     help="The guidance scale for the diffusion model. Default: 6.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
+parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q'],
+                    choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
+parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
+                    help="Whether the q LoRA updates the query in the Diffusers UNet model. "
+                         "If False, the q lora only updates query2.")
 parser.add_argument("--suppress_subj_attn", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to suppress the subject attention in the subject-compositional instances")
 
@@ -68,10 +69,11 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          adaface_ckpt_paths=args.adaface_ckpt_path, 
                          adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
                          enabled_encoders=args.enabled_encoders,
-                         unet_types=None, extra_unet_dirpaths=args.extra_unet_dirpaths, 
-                         unet_weights_in_ensemble=args.unet_weights_in_ensemble, 
+                         unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
                          unet_uses_attn_lora=args.unet_uses_attn_lora,
+                         attn_lora_layer_names=args.attn_lora_layer_names,
                          suppress_subj_attn=args.suppress_subj_attn,
+                         q_lora_updates_query=args.q_lora_updates_query,
                          device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
