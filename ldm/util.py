@@ -712,8 +712,11 @@ def merge_cls_token_embeddings(prompt_embedding, cls_delta_string_indices):
         # Therefore, the new offset is i_off + M - 1, and then prompt_embedding2 ends at -(i_off + M - 1) of the original.
         # NOTE: we don't need to take care of the last (i_off + M - 1) embeddings, 
         # and they will remain the old values.
-        prompt_embedding2[batch_i, start_index_N - i_off + 1: -(i_off + M - 1)] = \
-         prompt_embedding[batch_i, start_index_N + M        :]
+        if i_off + M - 1 > 0:
+            prompt_embedding2[batch_i, start_index_N - i_off + 1: -(i_off + M - 1)] = \
+             prompt_embedding[batch_i, start_index_N + M        :]
+        # Otherwise, M = 1, and we don't need to move the embeddings.
+
         batch_i2offset[batch_i] = i_off + M - 1
         # We combine all the cls delta tokens to 1 token cls_delta_embedding_sum, so that
         # their positions align with the subject tokens in the first half of the batch.
