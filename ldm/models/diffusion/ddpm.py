@@ -72,7 +72,6 @@ class DDPM(pl.LightningModule):
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
                  comp_sc_subj_mb_suppress_loss_weight=0.,
-                 pred_l2_loss_weight=0, #1e-4,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -126,7 +125,6 @@ class DDPM(pl.LightningModule):
         self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
-        self.pred_l2_loss_weight                    = pred_l2_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -1996,14 +1994,12 @@ class LatentDiffusion(DDPM):
         else:
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
             
+        # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
         loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
         print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
         # loss_recon: 0.02~0.03.
-        # loss_pred_l2: 0.92~0.99. pred_l2_loss_weight: 0, DISABLED.
-        # If pred_l2_loss_weight == 1e-3 -> 1e-3, 1/20~1/30 of recon loss.
-        #　loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
-        loss_normal_recon += loss_recon + loss_pred_l2 * self.pred_l2_loss_weight \
-                             + loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
+        # loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
+        loss_normal_recon += loss_recon + loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.

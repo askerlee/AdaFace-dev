@@ -49,7 +49,6 @@ model:
     # and make the face harder to reconstruct. We cannot use recon_with_adv_attack_iter_gap=1,
     # otherwise the gender information is gradually lost.
     recon_with_adv_attack_iter_gap:   2
-
     # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
     # ** but to find neighbors of the subject image embeddings for UNet distillation.
     # After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent.
@@ -57,16 +56,15 @@ model:
     # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
     perturb_face_id_embs_std_range:   [0.1, 0.2]
     # typical delta reg loss: 0.9, * weight -> 9e-5
-    prompt_emb_delta_reg_weight:      1e-4
+    prompt_emb_delta_reg_weight:            1e-4
     # Set cls_subj_mix_scale to 1 to use only class embeddings.
     # 0.8: 0.2 * subj embeddings + 0.8 * class embeddings
-    cls_subj_mix_scale:               0.8
-    comp_fg_bg_preserve_loss_weight:  3e-3
+    cls_subj_mix_scale:                     0.8
+    comp_fg_bg_preserve_loss_weight:        3e-3
     # DISABLED: subj_bg_suppress loss used in recon iters.
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 1.5e-2
     recon_subj_mb_suppress_loss_weight:     1e-2
     comp_sc_subj_mb_suppress_loss_weight:   0 #2e-3
-    pred_l2_loss_weight:                    0 #1e-4
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     optimizer_type:           CAdamW 
