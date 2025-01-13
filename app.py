@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import random
 import os, re
-
+import time
 import gradio as gr
 import spaces
 
@@ -178,7 +178,11 @@ def generate_image(image_paths, guidance_scale, perturb_std,
             extra_filepath = os.path.join(extra_save_dir, filename)
             sample.save(extra_filepath)
             print(extra_filepath)
-            
+    
+    # Solution suggested by o1 to force the client browser to reload images 
+    # when we change guidance scales only.
+    saved_image_paths = [f"{url}?t={int(time.time())}" for url in saved_image_paths]
+
     return saved_image_paths
 
 def check_prompt_and_model_type(prompt, model_style_type):
