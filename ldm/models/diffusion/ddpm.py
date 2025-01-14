@@ -1072,7 +1072,8 @@ class LatentDiffusion(DDPM):
             if faceless_img_count > 0:
                 # If the iteration is do_comp_feat_distill/do_normal_recon, convert it to a do_unet_distill iteration.
                 # We don't have to update self.unet_distill_iters_count, self.normal_recon_iters_count, etc., 
-                # as they don't have to be so precise.
+                # as they don't have to be so precise. Moreover, updating them will break the synchronization 
+                # between different training instances.
                 self.iter_flags['do_normal_recon']       = False
                 self.iter_flags['do_comp_feat_distill']  = False
                 self.iter_flags['do_unet_distill']       = True
