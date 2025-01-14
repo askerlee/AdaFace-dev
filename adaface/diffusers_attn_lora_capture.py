@@ -265,7 +265,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
             deprecate("scale", "1.0.0", deprecation_message)
         
-        if (subj_indices is not None) and not self.suppress_subj_attn:
+        if not self.suppress_subj_attn:
             subj_indices = None
         
         # hidden_states: [1, 4096, 320]

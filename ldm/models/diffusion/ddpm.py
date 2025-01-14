@@ -1449,9 +1449,9 @@ class LatentDiffusion(DDPM):
     # This is not used for the iter_type 'do_normal_recon'.
     # batch_part_has_grad: 'all', 'none', 'subject-compos'.
     def guided_denoise(self, x_start, noise, t, cond_context,
-                       uncond_emb=None, img_mask=None, subj_indices=None, 
-                       suppress_subj_attn=False, batch_part_has_grad='all', 
-                       do_pixel_recon=False, cfg_scale=-1, 
+                       uncond_emb=None, img_mask=None, 
+                       suppress_subj_attn=False, subj_indices=None, 
+                       batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        comp_distill_on_subj_comp_rep_prompts=False,
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
@@ -1461,8 +1461,9 @@ class LatentDiffusion(DDPM):
         extra_info = cond_context[2]
         extra_info['capture_ca_activations'] = capture_ca_activations
         extra_info['img_mask']               = img_mask
-        extra_info['subj_indices']           = subj_indices
         extra_info['suppress_subj_attn']     = suppress_subj_attn
+        # subj_indices are not used if suppress_subj_attn is False.
+        extra_info['subj_indices']           = subj_indices
 
         # model_output is the predicted noise.
         # if not batch_part_has_grad, we save RAM by not storing the computation graph.
@@ -1487,14 +1488,14 @@ class LatentDiffusion(DDPM):
             # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, it will be overridden
             # in the unet.
             extra_info_ss = copy.copy(extra_info)
-            extra_info_ss['subj_indices'] = subj_indices
+            extra_info_ss['subj_indices']       = subj_indices
             extra_info_ss['suppress_subj_attn'] = suppress_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             model_output_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
                                                       enable_grad=False, use_attn_lora=use_attn_lora,
                                                       use_ffn_lora=use_ffn_lora)
             extra_info_sc = copy.copy(extra_info)
-            extra_info_sc['subj_indices'] = subj_indices
+            extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['suppress_subj_attn'] = suppress_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             model_output_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
@@ -1506,12 +1507,12 @@ class LatentDiffusion(DDPM):
             if comp_distill_on_subj_comp_rep_prompts:
                 # The two instances in the c2 slice is sc_comp_rep and mc_comp.
                 # So we can use the same subj_indices as the sc instance.
-                extra_info_c2['subj_indices'] = subj_indices
+                extra_info_c2['subj_indices']       = subj_indices
                 extra_info_c2['suppress_subj_attn'] = suppress_subj_attn
             else:
                 # These two instances in the c2 slice are mc_single and mc_comp.
                 # We never need to suppress the subject attention in the mc instances.
-                extra_info_c2['subj_indices'] = None
+                extra_info_c2['subj_indices']       = None
                 extra_info_c2['suppress_subj_attn'] = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_c2)
@@ -1601,8 +1602,9 @@ class LatentDiffusion(DDPM):
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
                                     # all_subj_indices_1b is only used in the sc block. So we need "_1b" instead of "_2b".
-                                    uncond_emb, img_mask, all_subj_indices_1b, 
+                                    uncond_emb, img_mask, 
                                     suppress_subj_attn=suppress_subj_attn,
+                                    subj_indices=all_subj_indices_1b, 
                                     batch_part_has_grad='subject-compos', 
                                     comp_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
@@ -1963,8 +1965,8 @@ class LatentDiffusion(DDPM):
         model_output, x_recon, ca_layers_activations = \
             self.guided_denoise(x_start, noise2, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
-                                subj_indices=all_subj_indices,
                                 suppress_subj_attn=False,
+                                subj_indices=all_subj_indices,
                                 batch_part_has_grad='all', 
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 do_pixel_recon=True,
@@ -2161,8 +2163,8 @@ class LatentDiffusion(DDPM):
             model_output_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
-                                    subj_indices=subj_indices,
                                     suppress_subj_attn=False,
+                                    subj_indices=subj_indices,
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
