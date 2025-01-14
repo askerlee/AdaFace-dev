@@ -2762,33 +2762,27 @@ class LatentDiffusion(DDPM):
 
         count_optimized_params(opt_params_with_lrs)
 
-        # Adam series.
-        if 'Prodigy' not in self.optimizer_type:
-            if 'adam' in self.optimizer_type.lower():
-                if self.optimizer_type == 'CAdamW':
-                    opt = OptimizerClass(opt_params, lr=lr, weight_decay=self.weight_decay,
-                                         betas=self.adam_config.betas)
-                else:
-                    opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
+        if 'adam' in self.optimizer_type.lower():
+            if self.optimizer_type == 'CAdamW':
+                # CAdamW doesn't support individual LRs.
+                opt = OptimizerClass(opt_params, lr=lr, weight_decay=self.weight_decay,
                                         betas=self.adam_config.betas)
-
+            else:
+                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
+                                    betas=self.adam_config.betas)
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
             print("Setting up LambdaLR scheduler...")
             scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
 
-        else:
-            # Use Prodigy. Remove 'lr' from the parameter groups, since Prodigy doesn't use it.
-            prodigy_params = [ param_group['params'] for param_group in opt_params_with_lrs ]
-            prodigy_params = sum(prodigy_params, [])
-
+        elif self.optimizer_type == 'Prodigy':
             # [0.9, 0.999]. Converge more slowly.
             betas = self.prodigy_config.zs_betas
 
             # Prodigy uses an LR = 1.
             # weight_decay is always disabled (set to 0).
-            opt = OptimizerClass(prodigy_params, lr=1., weight_decay=self.weight_decay,
+            opt = OptimizerClass(opt_params, lr=1., weight_decay=self.weight_decay,
                                  betas=betas,   # default: [0.985, 0.993]
                                  d_coef=self.prodigy_config.d_coef, # default: 5
                                  safeguard_warmup = self.prodigy_config.scheduler_cycles > 1, 
@@ -2853,6 +2847,10 @@ class LatentDiffusion(DDPM):
             
             scheduler = SequentialLR2(opt, schedulers=schedulers,
                                       milestones=transition_milestones)
+
+        else:
+            # Unsupported optimizer.
+            breakpoint()
 
         if scheduler is None:
             return opt
