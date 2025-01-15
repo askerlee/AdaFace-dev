@@ -43,8 +43,6 @@ parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q'
 parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                          "If False, the q lora only updates query2.")
-parser.add_argument("--suppress_subj_attn", type=str2bool, nargs="?", const=True, default=False,
-                    help="Whether to suppress the subject attention in the subject-compositional instances")
 
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
 parser.add_argument('--gpu', type=int, default=None)
@@ -72,7 +70,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
                          unet_uses_attn_lora=args.unet_uses_attn_lora,
                          attn_lora_layer_names=args.attn_lora_layer_names,
-                         suppress_subj_attn=args.suppress_subj_attn,
+                         suppress_subj_attn=False,
                          q_lora_updates_query=args.q_lora_updates_query,
                          device='cpu')
 
@@ -95,7 +93,7 @@ def remove_back_to_files():
 
 @spaces.GPU
 def generate_image(image_paths, guidance_scale, perturb_std,
-                   num_images, prompt, negative_prompt, enhance_face,
+                   num_images, prompt, negative_prompt, enhance_face, enhance_composition, 
                    seed, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
@@ -136,7 +134,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     samples = adaface(noise, prompt, negative_prompt=negative_prompt, 
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, 
-                      repeat_prompt_for_each_encoder=True,
+                      repeat_prompt_for_each_encoder=enhance_composition,
                       verbose=True)
 
     session_signature = ",".join(image_paths + [prompt, str(seed)])
@@ -280,6 +278,9 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
                                        info="Enhance the face features by prepending 'face portrait' to the prompt")
+            enhance_composition = \
+                gr.Checkbox(label="Enhance composition", value=True, 
+                            info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(
                 label="Nickname of Subject", 
@@ -351,7 +352,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         ).then(
             fn=generate_image,
             inputs=[img_files, guidance_scale, perturb_std, num_images, 
-                    prompt, negative_prompt, enhance_face, seed, subj_name_sig],
+                    prompt, negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
             outputs=[out_gallery]
         )
 
@@ -365,7 +366,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         ).then(
             fn=generate_image,
             inputs=[img_files, guidance_scale, perturb_std, num_images, 
-                    prompt, negative_prompt, enhance_face, seed, subj_name_sig],
+                    prompt, negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
             outputs=[out_gallery]
         )
         
