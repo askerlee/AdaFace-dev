@@ -137,7 +137,7 @@ def parse_args():
     parser.add_argument(
         "--scale",
         type=float,
-        default=6,
+        default=5,
         help="Conditional guidance scale",
     )
     parser.add_argument(

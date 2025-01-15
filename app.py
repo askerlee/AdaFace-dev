@@ -34,7 +34,7 @@ parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
 parser.add_argument('--model_style_type', type=str, default='realistic',
                     choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
-parser.add_argument("--guidance_scale", type=float, default=6.0,
+parser.add_argument("--guidance_scale", type=float, default=5.0,
                     help="The guidance scale for the diffusion model. Default: 6.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
