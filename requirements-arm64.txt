@@ -12,8 +12,8 @@ pillow>=9.0.1
 einops>=0.4.1
 transformers>=4.44.2
 exrex
-tensorflow[and-cuda]>=2.17.0
-tf_keras
+#tensorflow[and-cuda]>=2.17.0
+#tf_keras
 nvidia-pyindex
 # For unknown reasons, installing nvidia-tensorrt hangs.
 tensorrt-lean
@@ -26,9 +26,9 @@ webdataset
 bitsandbytes
 prodigyopt
 numpy>=1.24.0,<2.0
-onnxruntime-gpu
+onnxruntime
 insightface
-deepface>=0.0.94
+#deepface>=0.0.94
 ftfy
 peft
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
