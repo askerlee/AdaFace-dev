@@ -99,7 +99,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0.1,
                  input_noise_perturb_std=0.05,
                  p_gen_rand_id_for_id2img=0,
-                 p_perturb_input_noise=0.5,
+                 p_perturb_input_noise=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  comp_distill_prompt_repeats=1,
@@ -1905,9 +1905,10 @@ class LatentDiffusion(DDPM):
             # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
             FACELOSS_BS = x_start.shape[0]
 
+        # perturb_input_noise: DISABLED.
         self.iter_flags['perturb_input_noise'] = (torch.rand(1) < self.p_perturb_input_noise)
         if self.iter_flags['perturb_input_noise']:
-            #　input_noise_perturb_std: 0.05.
+            # input_noise_perturb_std: 0.05.
             # In https://github.com/bghira/SimpleTuner/pull/723, the std is 0.1.
             # We are slightly more conservative.
             noise2 = noise + torch.randn_like(noise) * self.input_noise_perturb_std
@@ -1948,6 +1949,10 @@ class LatentDiffusion(DDPM):
                 # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
                 # We predict the updated noise to remain consistent with the training paradigm.
+                # Q: should we subtract adv_grad from x_start instead of noise? I'm not sure.
+                # Currently, noise2 is added with a weight increasing with t, so adv_grad 
+                # also has greater impact on x_start as t increases.
+                # perturb_input_noise is DISABLED. So noise2 == noise.
                 noise2[:FACELOSS_BS] -= adv_grad
                 if self.iter_flags['perturb_input_noise']:
                     noise[:FACELOSS_BS] -= adv_grad
