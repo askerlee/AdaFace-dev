@@ -8,7 +8,6 @@ from torch.optim.lr_scheduler import LambdaLR, ConstantLR, PolynomialLR, \
 from ldm.modules.lr_scheduler import SequentialLR2
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
-import bitsandbytes as bnb
 from ldm.c_adamw import AdamW as CAdamW
 from diffusers import UNet2DConditionModel, StableDiffusionPipeline
 
@@ -42,6 +41,20 @@ from evaluation.clip_eval import CLIPEvaluator
 import sys
 import asyncio
 torch.set_printoptions(precision=4, sci_mode=False)
+
+import platform
+
+# Check the architecture
+arch = platform.machine()
+
+if arch != "arm64" and arch != "aarch64":
+    try:
+        import bitsandbytes as bnb
+        print("bitsandbytes imported successfully!")
+    except ImportError:
+        print("bitsandbytes is not installed or cannot be imported.")
+else:
+    print("Skipping bitsandbytes import on arm64 architecture.")
 
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
@@ -2731,6 +2744,7 @@ class LatentDiffusion(DDPM):
             # In torch 1.13, decoupled_weight_decay is not supported. 
             # But since we disabled weight decay, it doesn't matter.
             OptimizerClass = torch.optim.NAdam
+        # 8bit optimizers are not supported under arm64.
         elif self.optimizer_type == 'Adam8bit':
             OptimizerClass = bnb.optim.Adam8bit
         elif self.optimizer_type == 'AdamW8bit':
