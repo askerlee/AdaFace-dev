@@ -105,7 +105,7 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q'],
                  q_lora_updates_query=False,
-                 suppress_subj_attn=False,
+                 p_suppress_subj_attn=0.5,
                  sc_subj_attn_var_shrink_factor=2.,
                  ):
         
@@ -188,7 +188,7 @@ class DDPM(pl.LightningModule):
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query  = q_lora_updates_query
-        self.suppress_subj_attn  = suppress_subj_attn
+        self.p_suppress_subj_attn  = p_suppress_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
 
         if self.use_ldm_unet:
@@ -1564,7 +1564,7 @@ class LatentDiffusion(DDPM):
 
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
-                                       all_subj_indices_1b=None, suppress_subj_attn=False,
+                                       all_subj_indices_1b=None, p_suppress_subj_attn=0.5,
                                        cfg_scale=-1, capture_ca_activations=False,
                                        num_denoising_steps=1, 
                                        same_t_noise_across_instances=True):
@@ -1598,7 +1598,8 @@ class LatentDiffusion(DDPM):
             22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
             20, 21, 22, 23]))
             '''
-            # Always enable suppress_subj_attn during comp distillation iterations.
+            # Enable suppress_subj_attn 50% of the time during comp distillation iterations.
+            suppress_subj_attn = torch.rand(1) < p_suppress_subj_attn
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
                                     # all_subj_indices_1b is only used in the sc block. So we need "_1b" instead of "_2b".
@@ -1738,7 +1739,7 @@ class LatentDiffusion(DDPM):
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, img_mask=None, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
-                                                    suppress_subj_attn=self.suppress_subj_attn,
+                                                    p_suppress_subj_attn=self.p_suppress_subj_attn,
                                                     cfg_scale=5, capture_ca_activations=True,
                                                     num_denoising_steps=num_comp_denoising_steps,
                                                     same_t_noise_across_instances=True)
