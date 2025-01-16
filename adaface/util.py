@@ -156,10 +156,11 @@ class UNetEnsemble(nn.Module):
     def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights_in_ensemble=None, device='cuda', torch_dtype=torch.float16):
         super().__init__()
 
-        unets = []
         if unets is not None:
-            unets += [ unet.to(device) for unet in unets ]
-
+            unets = [ unet.to(device) for unet in unets ]
+        else:
+            unets = []
+            
         if unet_types is not None:
             for unet_type in unet_types:
                 if unet_type == "arc2face":
