@@ -516,16 +516,18 @@ class LatentDiffusion(DDPM):
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
             if self.cls_subj_mix_scheme == 'unet':
+                unets = [unet, unet]
                 unet_weights_in_ensemble = [1 - self.cls_subj_mix_ratio, self.cls_subj_mix_ratio]
             else:
-                # cls_subj_mix_scheme == 'embedding'. Only use one unet by setting subj unet weight to 0.
-                unet_weights_in_ensemble = [0, 1]
+                unets = [unet]
+                # cls_subj_mix_scheme == 'embedding'. Only use one unet.
+                unet_weights_in_ensemble = [1]
 
             self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
                                     # A trick to avoid creating multiple UNet instances.
                                     # Same underlying unet, applied with different prompts, then mixed.
-                                    unets = [unet, unet],
+                                    unets = unets,
                                     unet_types=None,
                                     extra_unet_dirpaths=None,
                                     # unet_weights_in_ensemble: [0.2, 0.8]. The "first unet" uses subject embeddings, 
@@ -2330,7 +2332,7 @@ class LatentDiffusion(DDPM):
             else:
                 mix_comp_prompt_emb = (subj_comp_prompt_emb * (1 - self.cls_subj_mix_ratio) \
                                       + cls_comp_prompt_emb * self.cls_subj_mix_ratio)
-                teacher_context=[subj_single_prompt_emb, mix_comp_prompt_emb]
+                teacher_context=[mix_comp_prompt_emb]
 
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
@@ -2390,7 +2392,7 @@ class LatentDiffusion(DDPM):
         else:
             mix_double_prompt_emb = (subj_double_prompt_emb * (1 - self.cls_subj_mix_ratio) \
                                     + cls_double_prompt_emb * self.cls_subj_mix_ratio)
-            teacher_context=[subj_double_prompt_emb, mix_double_prompt_emb]
+            teacher_context=[mix_double_prompt_emb]
 
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \

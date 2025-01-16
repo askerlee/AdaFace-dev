@@ -186,14 +186,9 @@ class UNetEnsemble(nn.Module):
         unet_weights_in_ensemble = torch.tensor(unet_weights_in_ensemble, dtype=torch_dtype)
         unet_weights_in_ensemble = unet_weights_in_ensemble / unet_weights_in_ensemble.sum()
 
-        # Filter out unets with zero weights.
-        unets = [unet for unet, weight in zip(unets, unet_weights_in_ensemble) if weight > 0]
         self.unets = nn.ModuleList(unets)
-        # Filter out unet_weights_in_ensemble with zero weights.
-        unet_weights_in_ensemble = unet_weights_in_ensemble[unet_weights_in_ensemble > 0]
         # Put the weights in a Parameter so that they will be moved to the same device as the model.
         self.unet_weights_in_ensemble = nn.Parameter(unet_weights_in_ensemble, requires_grad=False)
-
         print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights_in_ensemble.data.cpu().numpy()}")
         # Set these fields to be compatible with diffusers.
         self.dtype  = self.unets[0].dtype
