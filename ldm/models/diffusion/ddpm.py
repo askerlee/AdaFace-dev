@@ -107,7 +107,7 @@ class DDPM(pl.LightningModule):
                  p_comp_distill_subj_comp_uses_repeat_prompts=0.2,
                  comp_distill_subj_comp_on_rep_prompts_for_small_faces=True,
                  recon_with_adv_attack_iter_gap=2,
-                 recon_adv_mod_mag_range=[0.001, 0.02],
+                 recon_adv_mod_mag_range=[0.001, 0.005],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
@@ -1952,9 +1952,9 @@ class LatentDiffusion(DDPM):
                 # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: 10~200.
                 adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
                 loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                # Cap the adv_grad_scale to 500, just in case.
+                # Cap the adv_grad_scale to 250, as we observe most adv_grad_scale are below 250.
                 # adv_grad mean at fg area after scaling: 1e-3.
-                adv_grad = adv_grad * min(adv_grad_scale, 500)
+                adv_grad = adv_grad * min(adv_grad_scale, 250)
                 # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
                 # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.

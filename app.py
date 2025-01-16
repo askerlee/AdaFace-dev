@@ -25,7 +25,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
 parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-14T16-09-24_zero3-ada-3500.pt',
-                    help="Paths to the checkpoints of the ID2Ada prompt encoders")
+                    help="Path to the checkpoint of the ID2Ada prompt encoders")
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                     help="Scales for the ID2Ada prompt encoders")
