@@ -1947,14 +1947,14 @@ class LatentDiffusion(DDPM):
                 loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                 # adv_grad_mag: ~1e-4.
                 adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
-                # recon_adv_mod_mag_range: [0.001, 0.02].
+                # recon_adv_mod_mag_range: [0.001, 0.005].
                 recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
-                # recon_adv_mod_mag: 0.001~0.02. adv_grad_scale: 10~200.
+                # recon_adv_mod_mag: 0.001~0.005. adv_grad_scale: 10~50.
                 adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
                 loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                # Cap the adv_grad_scale to 250, as we observe most adv_grad_scale are below 250.
+                # Cap the adv_grad_scale to 100, as we observe most adv_grad_scale are below 250.
                 # adv_grad mean at fg area after scaling: 1e-3.
-                adv_grad = adv_grad * min(adv_grad_scale, 250)
+                adv_grad = adv_grad * min(adv_grad_scale, 100)
                 # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
                 # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
