@@ -80,7 +80,8 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
-                 cls_subj_mix_scale=0.8,
+                 cls_subj_mix_ratio=0.8,        
+                 cls_subj_mix_scheme='unet', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
@@ -103,8 +104,8 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
                  comp_distill_prompt_repeats=1,
-                 p_comp_distill_repeat_subj_comp_prompts=0.2,
-                 comp_distill_on_subj_comp_rep_prompts_for_large_faces=True,
+                 p_comp_distill_subj_comp_uses_repeat_prompts=0.2,
+                 comp_distill_subj_comp_on_rep_prompts_for_small_faces=True,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.001, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -141,7 +142,8 @@ class DDPM(pl.LightningModule):
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
-        self.cls_subj_mix_scale                     = cls_subj_mix_scale
+        self.cls_subj_mix_ratio                     = cls_subj_mix_ratio
+        self.cls_subj_mix_scheme                    = cls_subj_mix_scheme
 
         self.use_fp_trick                           = use_fp_trick
         self.unet_distill_iter_gap                  = unet_distill_iter_gap if self.training else 0
@@ -174,8 +176,8 @@ class DDPM(pl.LightningModule):
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.COMP_REPEATS                           = comp_distill_prompt_repeats
-        self.p_comp_distill_repeat_subj_comp_prompts = p_comp_distill_repeat_subj_comp_prompts
-        self.comp_distill_on_subj_comp_rep_prompts_for_large_faces = comp_distill_on_subj_comp_rep_prompts_for_large_faces
+        self.p_comp_distill_subj_comp_uses_repeat_prompts = p_comp_distill_subj_comp_uses_repeat_prompts
+        self.comp_distill_subj_comp_on_rep_prompts_for_small_faces = comp_distill_subj_comp_on_rep_prompts_for_small_faces
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
 
@@ -513,6 +515,12 @@ class LatentDiffusion(DDPM):
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
+            if self.cls_subj_mix_scheme == 'unet':
+                unet_weights_in_ensemble = [1 - self.cls_subj_mix_ratio, self.cls_subj_mix_ratio]
+            else:
+                # cls_subj_mix_scheme == 'embedding'. Only use one unet by setting subj unet weight to 0.
+                unet_weights_in_ensemble = [0, 1]
+
             self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
                                     # A trick to avoid creating multiple UNet instances.
@@ -524,10 +532,10 @@ class LatentDiffusion(DDPM):
                                     # the second uses class embeddings. This means that,
                                     # when aggregating the results of using subject embeddings vs. class embeddings,
                                     # we give more weights to the class embeddings for better compositionality.
-                                    unet_weights_in_ensemble = [1 - self.cls_subj_mix_scale, self.cls_subj_mix_scale],
+                                    unet_weights_in_ensemble = unet_weights_in_ensemble,
                                     p_uses_cfg=1, # Always uses CFG for priming denoising.
                                     cfg_scale_range=[2, 4],
-                                    torch_dtype=torch.float16)
+                                    torch_dtype=torch.float16)             
             self.comp_distill_priming_unet.train = disabled_train
 
         # cond_stage_model = FrozenCLIPEmbedder training = False.
@@ -1367,21 +1375,21 @@ class LatentDiffusion(DDPM):
             # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
             # are manually mixed into their embeddings.
-            if torch.rand(1) < self.p_comp_distill_repeat_subj_comp_prompts:
-                self.iter_flags['comp_distill_repeat_subj_comp_prompts'] = True
-                self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces'] = False
+            if torch.rand(1) < self.p_comp_distill_subj_comp_uses_repeat_prompts:
+                self.iter_flags['comp_distill_subj_comp_uses_repeat_prompts'] = True
+                self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'] = False
                 # 20% of the time, we use subj_comp_rep_prompts instead of subj_comp_prompts.
                 # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
                 c_in = subj_single_prompts + subj_comp_rep_prompts + cls_single_prompts + cls_comp_prompts
                 c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep_emb, cls_single_emb, cls_comp_emb], dim=0)
             else:
-                self.iter_flags['comp_distill_repeat_subj_comp_prompts'] = False
-                if self.comp_distill_on_subj_comp_rep_prompts_for_large_faces:
-                    self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces'] = True
+                self.iter_flags['comp_distill_subj_comp_uses_repeat_prompts'] = False
+                if self.comp_distill_subj_comp_on_rep_prompts_for_small_faces:
+                    self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'] = True
                     c_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
                     c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
                 else:
-                    self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces'] = False
+                    self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'] = False
                     # Otherwise, 80% of the time, we use cls_single_prompts.
                     c_in         = delta_prompts
                     c_prompt_emb = c_prompt_emb_4b
@@ -1620,7 +1628,7 @@ class LatentDiffusion(DDPM):
                                     suppress_subj_attn=suppress_subj_attn,
                                     subj_indices=all_subj_indices_1b, 
                                     batch_part_has_grad='subject-compos', 
-                                    comp_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces'],
+                                    comp_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
@@ -1696,7 +1704,7 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            # If we do comp_distill_on_subj_comp_rep_prompts_for_large_faces, cond_context contains 
+            # If we do comp_distill_subj_comp_on_rep_prompts_for_small_faces, cond_context contains 
             # (subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb).
             # But in order to do priming, we need cond_context_old which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
@@ -1715,7 +1723,7 @@ class LatentDiffusion(DDPM):
                                                     BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
-            if self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces']:
+            if self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces']:
                 x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
                 # Block 2 is the subject comp repeat (sc-repeat) instance.
                 # Make the sc-repeat and sc blocks use the same x_start, so that their output features
@@ -2317,6 +2325,13 @@ class LatentDiffusion(DDPM):
             subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
                 [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
+            if self.cls_subj_mix_scheme == 'unet':
+                teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb]
+            else:
+                mix_comp_prompt_emb = (subj_comp_prompt_emb * (1 - self.cls_subj_mix_ratio) \
+                                      + cls_comp_prompt_emb * self.cls_subj_mix_ratio)
+                teacher_context=[subj_single_prompt_emb, mix_comp_prompt_emb]
+
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
             # cfg_scale_range of comp_distill_priming_unet is [2, 4].
@@ -2328,7 +2343,7 @@ class LatentDiffusion(DDPM):
                                                    # with subj_single_prompt_emb, subj_comp_prompt_emb and cls_comp_prompt_emb, then average the results.
                                                    # It's similar to do averaging on the prompt embeddings, but yields sharper results.
                                                    # From the outside, the unet ensemble is transparent, like a single unet.
-                                                   teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb], 
+                                                   teacher_context=teacher_context, 
                                                    negative_context=uncond_emb,
                                                    num_denoising_steps=num_shared_denoising_steps,
                                                    # Same t and noise across instances.
@@ -2369,6 +2384,14 @@ class LatentDiffusion(DDPM):
         # and x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
         # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
         # default cfg_scale_range=[2, 4].
+
+        if self.cls_subj_mix_scheme == 'unet':
+            teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb]
+        else:
+            mix_double_prompt_emb = (subj_double_prompt_emb * (1 - self.cls_subj_mix_ratio) \
+                                    + cls_double_prompt_emb * self.cls_subj_mix_ratio)
+            teacher_context=[subj_double_prompt_emb, mix_double_prompt_emb]
+
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
@@ -2376,7 +2399,7 @@ class LatentDiffusion(DDPM):
                                                # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
                                                # It's similar to do averaging on the prompt embeddings, but yields sharper results.
                                                # From the outside, the unet ensemble is transparent, like a single unet.
-                                               teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb], 
+                                               teacher_context=teacher_context, 
                                                negative_context=uncond_emb,
                                                num_denoising_steps=num_sep_denoising_steps,
                                                # Same t and noise across instances.
@@ -2535,7 +2558,7 @@ class LatentDiffusion(DDPM):
 
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
         
-            if self.iter_flags['comp_distill_on_subj_comp_rep_prompts_for_large_faces']:
+            if self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces']:
                 loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
                     calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                     prompt_emb_mask, sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])

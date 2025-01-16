@@ -156,9 +156,9 @@ class UNetEnsemble(nn.Module):
     def __init__(self, unets, unet_types, extra_unet_dirpaths, unet_weights_in_ensemble=None, device='cuda', torch_dtype=torch.float16):
         super().__init__()
 
-        self.unets = nn.ModuleList()
+        unets = []
         if unets is not None:
-            self.unets += [ unet.to(device) for unet in unets ]
+            unets += [ unet.to(device) for unet in unets ]
 
         if unet_types is not None:
             for unet_type in unet_types:
@@ -169,22 +169,29 @@ class UNetEnsemble(nn.Module):
                     unet = create_consistentid_pipeline(unet_only=True)
                 else:
                     breakpoint()
-                self.unets.append(unet.to(device=device))
+                unets.append(unet.to(device=device))
 
         if extra_unet_dirpaths is not None:
             for unet_path in extra_unet_dirpaths:
                 unet = UNet2DConditionModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
-                self.unets.append(unet.to(device=device))
+                unets.append(unet.to(device=device))
 
         if unet_weights_in_ensemble is None:
-            unet_weights_in_ensemble = [1.] * len(self.unets)
-        elif len(self.unets) < len(unet_weights_in_ensemble):
-            unet_weights_in_ensemble = unet_weights_in_ensemble[:len(self.unets)]
-        elif len(self.unets) > len(unet_weights_in_ensemble):
+            unet_weights_in_ensemble = [1.] * len(unets)
+        elif len(unets) < len(unet_weights_in_ensemble):
+            unet_weights_in_ensemble = unet_weights_in_ensemble[:len(unets)]
+        elif len(unets) > len(unet_weights_in_ensemble):
             breakpoint()
             
         unet_weights_in_ensemble = torch.tensor(unet_weights_in_ensemble, dtype=torch_dtype)
         unet_weights_in_ensemble = unet_weights_in_ensemble / unet_weights_in_ensemble.sum()
+
+        # Filter out unets with zero weights.
+        unets = [unet for unet, weight in zip(unets, unet_weights_in_ensemble) if weight > 0]
+        self.unets = nn.ModuleList(unets)
+        # Filter out unet_weights_in_ensemble with zero weights.
+        unet_weights_in_ensemble = unet_weights_in_ensemble[unet_weights_in_ensemble > 0]
+        # Put the weights in a Parameter so that they will be moved to the same device as the model.
         self.unet_weights_in_ensemble = nn.Parameter(unet_weights_in_ensemble, requires_grad=False)
 
         print(f"UNetEnsemble: {len(self.unets)} UNets loaded with weights: {self.unet_weights_in_ensemble.data.cpu().numpy()}")
