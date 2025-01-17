@@ -2005,7 +2005,7 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
     # and the face area is > 0.22 of the whole image, 
     # we will distill the whole image on the subject-comp rep prompts.
-    loss_comp_rep_distill_subj_attn      = 0
+    loss_comp_rep_distill_subj_attn = 0
     loss_comp_rep_distill_subj_k    = 0
     loss_comp_rep_distill_nonsubj_k = 0
     subj_comp_rep_distill_layer_weights = { 23: 1, 24: 1, 
@@ -2335,52 +2335,62 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
         sc_recon_feats_avg[feat_name] = (sc_recon_feats_attn_agg[feat_name] + sc_recon_feats_flow[feat_name]) / 2
 
         # sc_feat: [1, 1280, 961] -> [1, 961, 1280]
-        sc_recon_feats_candidates = [ sc_recon_feats_avg[feat_name], sc_recon_feats_flow[feat_name], 
-                                      sc_feat.permute(0, 2, 1) ]
-        if feat_name == 'ssfg':
-            # Don't do 'sameloc' matching on ssfg, i.e., matching sc_feat with ssfg features.
-            sc_recon_feats_candidates.pop()
+        sc_recon_feats_candidates = [ sc_recon_feats_avg[feat_name], sc_recon_feats_flow[feat_name] ]
+        if feat_name == 'mc':
+            # Do 'sameloc' matching on mc, i.e., in addition to matching sc_recon_feats_* with ssfg features, 
+            # we also match sc_feat with ssfg features.
+            sc_recon_feats_candidates.append(sc_feat.permute(0, 2, 1))
 
         for i, sc_recon_feat in enumerate(sc_recon_feats_candidates):
             if sc_recon_feat is None:
+                # If flow model is not provided, sc_recon_feats_flow is None.
                 loss_sc_recon = torch.tensor(0., device=sc_feat.device)
             else:
                 # target_feat has no grad. So no need to cut off the gradients of target_feat.
-                # sc_recon_feat, target_feat: [1, N_fg, 1280] or [1, 961, 1280].
+                # sc_recon_feat, target_feat, token_losses_sc_recon: [1, N_fg, 1280] or [1, 961, 1280].
                 token_losses_sc_recon = F.mse_loss(sc_recon_feat, target_feat, reduction='none')
-                # Here loss_sc_recon_ssfg (corresponding to loss_sc_recon_ssfg_attn_agg, loss_sc_recon_ssfg_flow) 
-                # is only for debugging. 
-                # The optimized loss_sc_recon_ssfg is loss_sc_recon_ssfg_min, computed by 
-                # taking the tokenwise min of the two losses.
+                # We compute the tokenwise losses of the 2 or 3 losses,
+                # prepared for the computation of the min loss at each token.
                 loss_sc_recon = token_losses_sc_recon.mean()
                 all_token_losses_sc_recon[feat_name].append(token_losses_sc_recon)
 
             losses_sc_recons[feat_name].append(loss_sc_recon)
             print(f"{matching_type_names[i]} {loss_sc_recon}", end=' ')
 
-        # We have both attn and flow token losses.
+        # We have both attn and flow token losses, and if mc, also sameloc token losses.
         if len(all_token_losses_sc_recon[feat_name]) > 1:
-            # all_token_losses_sc_recon_ssfg: [2, 1, 210, 320]. 210: number of fg tokens. 320: feature dim.
-            all_token_losses_sc_recon_3types = torch.stack(all_token_losses_sc_recon[feat_name], dim=0)
+            # all_token_losses_sc_recon_2_3types: [2 or 3, 1, 210, 320]. 210: number of fg tokens. 320: feature dim.
+            all_token_losses_sc_recon_2_3types = torch.stack(all_token_losses_sc_recon[feat_name], dim=0)
             # Calculate the mean loss at each token by averaging across the feature dim.
-            all_token_losses_sc_recon_3types = all_token_losses_sc_recon_3types.mean(dim=3)
+            # [2 or 3, 1, 210, 320] -> [2 or 3, 1, 210].
+            all_token_losses_sc_recon_2_3types = all_token_losses_sc_recon_2_3types.mean(dim=3)
 
-            # *** Compute sc recon feat-obj min loss. ***
-            # Add a small margin to the losses of the attn scheme in all_token_losses_sc_recon_3types,
+            # *** Compute sc recon feat-obj min loss among the 2 or 3 losses. ***
+            # token_losses[0] * 1.3: Add a small margin to the losses of the attn scheme 
+            # in all_token_losses_sc_recon_2_3types,
             # so that other schemes are preferred over the attn scheme when they 
             # are not worse beyond the margin.
             # sc_recon_mc_min: 0.03~0.04. sc_recon_ssfg_min: 0.04~0.05. 
             # So a margin of 30% is ~0.01.
-            # NOTE: adding this margin increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
-            all_token_losses_sc_recon_3types[0] = all_token_losses_sc_recon_3types[0] * 1.3
+            # If mc, we also add a 10% margin to the flow loss, so that the same location loss is preferred when 
+            # the flow loss and the same location loss are close.
+            # The relative margin of the flow loss over the attn loss is ~25% now.
+            # Adding margin to attn loss increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
+            # Adding margin to flow loss increases mc_sameloc_win_rate and decreases mc_flow_win_rate.
+            if feat_name == 'mc':
+                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.35
+                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.1
+            else:
+                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
+
             # Take the smaller loss tokenwise between attn and flow.
-            min_token_losses_sc_recon = all_token_losses_sc_recon_3types.min(dim=0).values
+            min_token_losses_sc_recon = all_token_losses_sc_recon_2_3types.min(dim=0).values
             loss_sc_recon_min = min_token_losses_sc_recon.mean()
 
             # *** Compute flow distillation loss. ***
             # ss_tokens_sparse_attn_advantages: [1, 210=N_fg] or [2, 961]. How much the flow loss is smaller 
             # than the attn loss at each token. The larger the advantage, the better.
-            ss_tokens_sparse_attn_advantages = all_token_losses_sc_recon_3types[:1] - all_token_losses_sc_recon_3types[1:]
+            ss_tokens_sparse_attn_advantages = all_token_losses_sc_recon_2_3types[:1] - all_token_losses_sc_recon_2_3types[1:]
             ss_tokens_sparse_attn_advantage, max_sparse_attn_type_indices  = \
                 ss_tokens_sparse_attn_advantages.max(dim=0)
             ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1)
@@ -2419,7 +2429,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             # NOTE: The effect of detach(): if not doing detach(), since ss_tokens_sparse_attn_advantage are positively correlated 
             # with sc_tokens_sparse_attn_weights (ignoring the normalization by the layer_norm), the coeffs of 
             # loss_sparse_attn_distill, then minimizing loss_sparse_attn_distill will also minimize ss_tokens_sparse_attn_advantage,
-            # i.e., minimizing all_token_losses_sc_recon_3types[:1] == token losses of sc_recon_feats_attn_agg.
+            # i.e., minimizing all_token_losses_sc_recon_2_3types[:1] == token losses of sc_recon_feats_attn_agg.
             # This means, even if some image tokens are not well aligned using attn aggregation, they will be forced to align with the "wrong" tokens.
             # This is undesirable. So we detach ss_tokens_sparse_attn_advantage to avoid this.
             # Our purpose is to only minimize token losses of sc_recon_feats_attn_agg when the attn aggregation aligns better than flow/sameloc,

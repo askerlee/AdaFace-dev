@@ -230,9 +230,9 @@ def get_parser(**parser_kwargs):
                         help="Whether to load the attn LoRA modules from the checkpoint")
     parser.add_argument("--load_unet_ffn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to load the ffn LoRA modules from the checkpoint")
-    parser.add_argument("--p_suppress_subj_attn", type=float, default=0.5,
+    parser.add_argument("--p_shrink_subj_attn", type=float, default=0.5,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
-    parser.add_argument("--sc_subj_attn_var_suppress_factor", type=float, default=2.,
+    parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
                         help="Shrink factor of the standard deviation of the subject attention")
     parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q', 'k', 'v', 'out'],
                         choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
@@ -710,8 +710,8 @@ if __name__ == "__main__":
             # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights_in_ensemble    = opt.unet_weights_in_ensemble
 
-        config.model.params.p_suppress_subj_attn = opt.p_suppress_subj_attn
-        config.model.params.sc_subj_attn_var_suppress_factor  = opt.sc_subj_attn_var_suppress_factor
+        config.model.params.p_shrink_subj_attn = opt.p_shrink_subj_attn
+        config.model.params.sc_subj_attn_var_shrink_factor  = opt.sc_subj_attn_var_shrink_factor
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
         config.model.params.q_lora_updates_query = opt.q_lora_updates_query
         if hasattr(opt, 'comp_distill_prompt_repeats'):

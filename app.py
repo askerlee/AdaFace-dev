@@ -72,7 +72,7 @@ adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_pa
                          unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
                          unet_uses_attn_lora=args.unet_uses_attn_lora,
                          attn_lora_layer_names=args.attn_lora_layer_names,
-                         suppress_subj_attn=False,
+                         shrink_subj_attn=False,
                          q_lora_updates_query=args.q_lora_updates_query,
                          device='cpu')
 
@@ -154,11 +154,15 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     keywords_reduction  = { 'iron man': 'ironman', 'dancing': 'dance', 
                             'running':  'run',     'reading': 'read', 'new year': 'newyear' }
 
-    prompt_sig = ""
+    prompt_sig = None
     for keyword in prompt_keywords:
         if keyword in prompt.lower():
             prompt_sig = keywords_reduction.get(keyword, keyword)
             break
+
+    if prompt_sig is None:
+        # Use the last word of the prompt as the signature.
+        prompt_sig = prompt.lower().replace(",", " ").split()[-1]
 
     if len(prompt_sig) > 0:
         prompt_sig = "-" + prompt_sig

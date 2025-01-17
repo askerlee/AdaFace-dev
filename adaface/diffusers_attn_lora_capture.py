@@ -217,7 +217,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
 
         self.global_enable_lora = enable_lora
         # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
-        # By default, suppress_subj_attn is False. Later in layers 22, 23, 24 it will be set to True.
+        # By default, shrink_subj_attn is False. Later in layers 22, 23, 24 it will be set to True.
         self.reset_attn_cache_and_flags(capture_ca_activations, False, enable_lora)
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
@@ -242,9 +242,9 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                                                         use_dora=lora_uses_dora, lora_dropout=0.1)
 
     # LoRA layers can be enabled/disabled dynamically.
-    def reset_attn_cache_and_flags(self, capture_ca_activations, suppress_subj_attn, enable_lora):
+    def reset_attn_cache_and_flags(self, capture_ca_activations, shrink_subj_attn, enable_lora):
         self.capture_ca_activations = capture_ca_activations
-        self.suppress_subj_attn     = suppress_subj_attn
+        self.shrink_subj_attn     = shrink_subj_attn
         self.cached_activations     = {}
         # Only enable LoRA for the next call(s) if global_enable_lora is set to True.
         self.enable_lora = enable_lora and self.global_enable_lora
@@ -265,7 +265,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
             deprecate("scale", "1.0.0", deprecation_message)
         
-        if not self.suppress_subj_attn:
+        if not self.shrink_subj_attn:
             subj_indices = None
         
         # hidden_states: [1, 4096, 320]
@@ -365,7 +365,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        if is_cross_attn and (self.capture_ca_activations or self.suppress_subj_attn):
+        if is_cross_attn and (self.capture_ca_activations or self.shrink_subj_attn):
             hidden_states, attn_score, attn_prob = \
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
                                              dropout_p=0.0, subj_indices=subj_indices,
@@ -631,10 +631,10 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     return unet, ffn_lora_layers, ffn_opt_modules
 
 def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
-                               use_attn_lora, use_ffn_lora, capture_ca_activations, suppress_subj_attn=False):
+                               use_attn_lora, use_ffn_lora, capture_ca_activations, shrink_subj_attn=False):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
-        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, suppress_subj_attn, enable_lora=use_attn_lora)
+        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_subj_attn, enable_lora=use_attn_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
     for block in outfeat_capture_blocks:
