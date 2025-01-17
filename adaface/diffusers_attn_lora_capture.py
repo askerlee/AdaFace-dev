@@ -212,7 +212,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                  lora_uses_dora=True, lora_proj_layers=None, 
                  lora_rank: int = 192, lora_alpha: float = 16,
                  subj_attn_var_shrink_factor: float = 2.,
-                 q_lora_updates_query=False):
+                 q_lora_updates_query=True):
         super().__init__()
 
         self.global_enable_lora = enable_lora
@@ -520,9 +520,9 @@ def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Opti
 
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
-def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q'], 
+def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                            lora_rank=192, lora_scale_down=8, subj_attn_var_shrink_factor=2.,
-                           q_lora_updates_query=False):
+                           q_lora_updates_query=True):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())

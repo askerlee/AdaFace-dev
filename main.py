@@ -234,9 +234,9 @@ def get_parser(**parser_kwargs):
                         help="Whether to suppress the subject attention in the subject-compositional instances")
     parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
                         help="Shrink factor of the standard deviation of the subject attention")
-    parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q'],
+    parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q', 'k', 'v', 'out'],
                         choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
-    parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                              "If False, the q lora only updates query2.")
     parser.add_argument("--comp_distill_prompt_repeats", type=int, default=argparse.SUPPRESS,

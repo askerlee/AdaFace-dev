@@ -38,9 +38,11 @@ parser.add_argument("--guidance_scale", type=float, default=5.0,
                     help="The guidance scale for the diffusion model. Default: 6.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
-parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q'],
+# --attn_lora_layer_names and --q_lora_updates_query are only effective
+# when --unet_uses_attn_lora is set to True.
+parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q', 'k', 'v', 'out'],
                     choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
-parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
+parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=True,
                     help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                          "If False, the q lora only updates query2.")
 

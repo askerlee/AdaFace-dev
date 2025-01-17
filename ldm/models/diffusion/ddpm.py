@@ -117,8 +117,8 @@ class DDPM(pl.LightningModule):
                  unet_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
-                 attn_lora_layer_names=['q'],
-                 q_lora_updates_query=False,
+                 attn_lora_layer_names=['q', 'k', 'v', 'out'],
+                 q_lora_updates_query=True,
                  p_suppress_subj_attn=0.5,
                  sc_subj_attn_var_shrink_factor=2.,
                  ):
@@ -212,8 +212,8 @@ class DDPM(pl.LightningModule):
             self.model = DiffusersUNetWrapper(base_model_path=base_model_path, 
                                               torch_dtype=torch.float16,
                                               use_attn_lora=self.unet_uses_attn_lora,
-                                              # attn_lora_layer_names: ['q'], only add a lora to the q projection 
-                                              # (q -> query2)
+                                              # attn_lora_layer_names: ['q', 'k', 'v', 'out'], 
+                                              # add lora layers to all components in the designated cross-attn layers.
                                               attn_lora_layer_names=self.attn_lora_layer_names,
                                               use_ffn_lora=self.unet_uses_ffn_lora,
                                               # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
@@ -221,6 +221,8 @@ class DDPM(pl.LightningModule):
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
                                               ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
                                               subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
+                                              # q_lora_updates_query = True: q is updated by the LoRA layer.
+                                              # False: q is not updated, and an additional q2 is updated and returned.
                                               q_lora_updates_query=self.q_lora_updates_query
                                              )
             self.vae = self.model.pipeline.vae
@@ -2962,13 +2964,15 @@ class DiffusionWrapper(pl.LightningModule):
         return out
 
 # The diffusers UNet wrapper.
-# attn_lora_layer_names=['q']: only add a lora to the q projection (q -> q2).
+# attn_lora_layer_names=['q', 'k', 'v', 'out']: add lora layers to the q, k, v, out projections.
+# q_lora_updates_query: If True, the q projection is updated by the LoRA layer.
+# if False, the q projection is not updated by the LoRA layer. An additional q2 projection is updated.
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, base_model_path, torch_dtype=torch.float16,
-                 use_attn_lora=False, attn_lora_layer_names=['q'], 
+                 use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                  use_ffn_lora=False, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 subj_attn_var_shrink_factor=2., q_lora_updates_query=False):
+                 subj_attn_var_shrink_factor=2., q_lora_updates_query=True):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         # diffusion_model is actually a UNet. Use this variable name to be 
