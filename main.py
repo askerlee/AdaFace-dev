@@ -241,6 +241,8 @@ def get_parser(**parser_kwargs):
                              "If False, the q lora only updates query2.")
     parser.add_argument("--comp_distill_prompt_repeats", type=int, default=argparse.SUPPRESS,
                         choices=[1, 2], help="Number of repeats for the composition repeat distillation")
+    parser.add_argument("--cls_subj_mix_scheme", type=str, default=argparse.SUPPRESS,
+                        choices=['unet', 'embedding'], help="Scheme for mixing the subject and class embeddings")
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
                         help="Prompt delta regularization weight")
 
@@ -716,7 +718,9 @@ if __name__ == "__main__":
             config.model.params.comp_distill_prompt_repeats = opt.comp_distill_prompt_repeats
             # If comp_distill_prompt_repeats is 2, then the prompt length is 77 + 20 = 97.
             opt.clip_prompt_max_length = 77 + (opt.comp_distill_prompt_repeats - 1) * 20
-
+        if hasattr(opt, 'cls_subj_mix_scheme'):
+            config.model.params.cls_subj_mix_scheme = opt.cls_subj_mix_scheme
+            
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://lightning.ai/docs/pytorch/stable/data/datamodule.html
