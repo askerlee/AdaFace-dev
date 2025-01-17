@@ -279,7 +279,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
                                        info="Enhance the face features by prepending 'face portrait' to the prompt")
             enhance_composition = \
-                gr.Checkbox(label="Enhance composition", value=True, 
+                gr.Checkbox(label="Enhance composition", value=False, 
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(

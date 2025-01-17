@@ -107,7 +107,7 @@ class DDPM(pl.LightningModule):
                  p_comp_distill_subj_comp_uses_repeat_prompts=0.2,
                  comp_distill_subj_comp_on_rep_prompts_for_small_faces=True,
                  recon_with_adv_attack_iter_gap=2,
-                 recon_adv_mod_mag_range=[0.001, 0.005],
+                 recon_adv_mod_mag_range=[0.005, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
