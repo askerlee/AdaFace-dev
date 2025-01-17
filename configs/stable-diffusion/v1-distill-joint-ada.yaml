@@ -61,7 +61,7 @@ model:
     # 0.8: 0.2 * subj embeddings + 0.8 * class embeddings
     cls_subj_mix_ratio:                     0.8
     # cls_subj_mix_scheme: 'embedding' or 'unet'
-    cls_subj_mix_scheme:                    'unet'
+    cls_subj_mix_scheme:                   'embedding'
     comp_fg_bg_preserve_loss_weight:        3e-3
     # DISABLED: subj_bg_suppress loss used in recon iters.
     # loss_recon_subj_bg_suppress: 1.5, * weight -> 1.5e-2

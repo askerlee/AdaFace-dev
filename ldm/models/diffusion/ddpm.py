@@ -81,7 +81,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
                  cls_subj_mix_ratio=0.8,        
-                 cls_subj_mix_scheme='unet', # 'embedding' or 'unet'
+                 cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
@@ -120,7 +120,9 @@ class DDPM(pl.LightningModule):
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=True,
                  p_suppress_subj_attn=0.5,
-                 sc_subj_attn_var_shrink_factor=2.,
+                 # Reduce the variance of the subject attention distribution by a factor of 2,
+                 # so that the subject attention is more concentrated takes up a smaller area.
+                 sc_subj_attn_var_suppress_factor=2.,
                  ):
         
         super().__init__()
@@ -204,7 +206,7 @@ class DDPM(pl.LightningModule):
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query  = q_lora_updates_query
         self.p_suppress_subj_attn  = p_suppress_subj_attn
-        self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
+        self.sc_subj_attn_var_suppress_factor = sc_subj_attn_var_suppress_factor
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -220,7 +222,7 @@ class DDPM(pl.LightningModule):
                                               lora_rank=self.unet_lora_rank, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
                                               ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
-                                              subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
+                                              subj_attn_var_shrink_factor=self.sc_subj_attn_var_suppress_factor,
                                               # q_lora_updates_query = True: q is updated by the LoRA layer.
                                               # False: q is not updated, and an additional q2 is updated and returned.
                                               q_lora_updates_query=self.q_lora_updates_query
