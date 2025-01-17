@@ -196,7 +196,6 @@ class UNetEnsemble(nn.Module):
         self.device = self.unets[0].device
         self.config = self.unets[0].config
 
-    @torch.compile
     def forward(self, *args, **kwargs):
         return_dict = kwargs.get('return_dict', True)
         teacher_contexts = kwargs.pop('encoder_hidden_states', None)
