@@ -32,10 +32,10 @@ parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", defau
 parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     choices=["arc2face", "consistentID"], 
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
-parser.add_argument('--model_style_type', type=str, default='realistic',
+parser.add_argument('--model_style_type', type=str, default='photorealistic',
                     choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
 parser.add_argument("--guidance_scale", type=float, default=5.0,
-                    help="The guidance scale for the diffusion model. Default: 6.0")
+                    help="The guidance scale for the diffusion model. Default: 5.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
 # --attn_lora_layer_names and --q_lora_updates_query are only effective
@@ -344,32 +344,23 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         img_files.upload(fn=swap_to_gallery, inputs=img_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
         remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files, subj_name_sig])
 
-        submit.click(fn=check_prompt_and_model_type,
-                     inputs=[prompt, model_style_type],outputs=None).success(
-            fn=randomize_seed_fn,
-            inputs=[seed, randomize_seed],
-            outputs=seed,
-            queue=False,
-            api_name=False,
-        ).then(
-            fn=generate_image,
-            inputs=[img_files, guidance_scale, perturb_std, num_images, 
-                    prompt, negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
-            outputs=[out_gallery]
-        )
-
-        subj_name_sig.submit(fn=check_prompt_and_model_type,
-                     inputs=[prompt, model_style_type],outputs=None).success(
-            fn=randomize_seed_fn,
-            inputs=[seed, randomize_seed],
-            outputs=seed,
-            queue=False,
-            api_name=False,
-        ).then(
-            fn=generate_image,
-            inputs=[img_files, guidance_scale, perturb_std, num_images, 
-                    prompt, negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
-            outputs=[out_gallery]
-        )
+        check_prompt_and_model_type_call_dict = {
+            'fn': check_prompt_and_model_type,
+            'inputs': [prompt, model_style_type],
+            'outputs': None
+        }
+        randomize_seed_fn_call_dict = {
+            'fn': randomize_seed_fn,
+            'inputs': [seed, randomize_seed],
+            'outputs': seed
+        }
+        generate_image_call_dict = {
+            'fn': generate_image,
+            'inputs': [img_files, guidance_scale, perturb_std, num_images, prompt, 
+                       negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
+            'outputs': [out_gallery]
+        }
+        submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
+        subj_name_sig.submit(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
         
 demo.launch(share=True, server_name=args.ip, ssl_verify=False)
