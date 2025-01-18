@@ -230,7 +230,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to load the attn LoRA modules from the checkpoint")
     parser.add_argument("--load_unet_ffn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to load the ffn LoRA modules from the checkpoint")
-    parser.add_argument("--p_shrink_subj_attn", type=float, default=0.5,
+    parser.add_argument("--p_shrink_subj_attn", type=float, default=argparse.SUPPRESS,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
     parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
                         help="Shrink factor of the standard deviation of the subject attention")
@@ -710,7 +710,8 @@ if __name__ == "__main__":
             # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights_in_ensemble    = opt.unet_weights_in_ensemble
 
-        config.model.params.p_shrink_subj_attn = opt.p_shrink_subj_attn
+        if hasattr(opt, 'p_shrink_subj_attn'):
+            config.model.params.p_shrink_subj_attn = opt.p_shrink_subj_attn
         config.model.params.sc_subj_attn_var_shrink_factor  = opt.sc_subj_attn_var_shrink_factor
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
         config.model.params.q_lora_updates_query = opt.q_lora_updates_query
