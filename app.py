@@ -27,7 +27,7 @@ parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["co
 parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-14T16-09-24_zero3-ada-3500.pt',
                     help="Path to the checkpoint of the ID2Ada prompt encoders")
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
-parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
+parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=[6.0, 1.0],    
                     help="Scales for the ID2Ada prompt encoders")
 parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     choices=["arc2face", "consistentID"], 
@@ -191,18 +191,33 @@ def generate_image(image_paths, guidance_scale, perturb_std,
 
     return saved_image_paths
 
-def check_prompt_and_model_type(prompt, model_style_type):
+def check_prompt_and_model_type(prompt, model_style_type, adaface_encoder_cfg_scale1):
     global adaface
 
     model_style_type = model_style_type.lower()
-    base_model_path = model_style_type2base_model_path[model_style_type]
     # If the base model type is changed, reload the model.
-    if model_style_type != args.model_style_type:
-        adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
-                                 adaface_encoder_types=args.adaface_encoder_types,
-                                 adaface_ckpt_paths=args.adaface_ckpt_path, device='cpu')
-        # Update base model type.
-        args.model_style_type = model_style_type
+    if model_style_type != args.model_style_type or adaface_encoder_cfg_scale1 != args.adaface_encoder_cfg_scales[0]:
+        if model_style_type != args.model_style_type:
+            # Update base model type.
+            args.model_style_type = model_style_type
+            print(f"Switching to the base model type: {model_style_type}.")
+
+            adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=model_style_type2base_model_path[model_style_type],
+                                    adaface_encoder_types=args.adaface_encoder_types,
+                                    adaface_ckpt_paths=args.adaface_ckpt_path,                          
+                                    adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
+                                    enabled_encoders=args.enabled_encoders,
+                                    unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
+                                    unet_uses_attn_lora=args.unet_uses_attn_lora,
+                                    attn_lora_layer_names=args.attn_lora_layer_names,
+                                    shrink_subj_attn=False,
+                                    q_lora_updates_query=args.q_lora_updates_query,
+                                    device='cpu')
+
+    if adaface_encoder_cfg_scale1 != args.adaface_encoder_cfg_scales[0]:
+        args.adaface_encoder_cfg_scales[0] = adaface_encoder_cfg_scale1
+        adaface.set_adaface_encoder_cfg_scales(args.adaface_encoder_cfg_scales)
+        print(f"Updating the scale for consistentID encoder to {adaface_encoder_cfg_scale1}.")
 
     if not prompt:
         raise gr.Error("Prompt cannot be blank")
@@ -308,6 +323,15 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 value=args.guidance_scale,
             )
 
+            adaface_encoder_cfg_scale1 = gr.Slider(
+                label="Scale for consistentID encoder",
+                minimum=1.0,
+                maximum=12.0,
+                step=1.0,
+                value=args.adaface_encoder_cfg_scales[0],
+                visible=False,
+            )
+
             model_style_type = gr.Dropdown(
                 label="Base Model Style Type",
                 info="Switching the base model type will take 10~20 seconds to reload the model",
@@ -350,7 +374,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
         check_prompt_and_model_type_call_dict = {
             'fn': check_prompt_and_model_type,
-            'inputs': [prompt, model_style_type],
+            'inputs': [prompt, model_style_type, adaface_encoder_cfg_scale1],
             'outputs': None
         }
         randomize_seed_fn_call_dict = {

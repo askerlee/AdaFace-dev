@@ -251,6 +251,10 @@ class AdaFaceWrapper(nn.Module):
         #            if     use_lcm, pipeline.scheduler == LCMScheduler
         self.pipeline = pipeline.to(self.device)
 
+    def set_adaface_encoder_cfg_scales(self, adaface_encoder_cfg_scales):
+        self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
+        self.id2ada_prompt_encoder.set_out_id_embs_cfg_scale(adaface_encoder_cfg_scales)
+
     def load_unet_from_file(self, unet_path, device=None):
         if os.path.isfile(unet_path):
             if unet_path.endswith(".safetensors"):

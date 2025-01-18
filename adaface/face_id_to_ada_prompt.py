@@ -169,6 +169,11 @@ class FaceID2AdaPrompt(nn.Module):
 
         self.subj_basis_generator.freeze_prompt2token_proj()
 
+    def set_out_id_embs_cfg_scale(self, out_id_embs_cfg_scale):
+        if isinstance(out_id_embs_cfg_scale, (list, tuple, ListConfig)):
+            out_id_embs_cfg_scale = out_id_embs_cfg_scale[0]
+        self.out_id_embs_cfg_scale = out_id_embs_cfg_scale
+
     @torch.no_grad()
     def get_clip_neg_features(self, BS):
         if self.clip_neg_features is None:
@@ -893,7 +898,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             self.out_id_embs_cfg_scales = [-1] * self.num_sub_encoders
         else:
             # Do not normalize the weights, and just use them as is.
-            self.out_id_embs_cfg_scales = out_id_embs_cfg_scales
+            self.out_id_embs_cfg_scales = list(out_id_embs_cfg_scales)
 
         # Note we don't pass the adaface_ckpt_paths to the base class, but instead,
         # we load them once and for all in self.load_adaface_ckpt().
@@ -1031,6 +1036,11 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             subj_basis_generator.freeze_prompt2token_proj()
 
         print(f"{adaface_ckpt_paths}: {len(self.subj_basis_generator)} subj_basis_generators loaded for {self.name}.")
+
+    def set_out_id_embs_cfg_scale(self, out_id_embs_cfg_scales):
+        self.out_id_embs_cfg_scales = list(out_id_embs_cfg_scales)
+        for i, out_id_embs_cfg_scale in enumerate(out_id_embs_cfg_scales):
+            self.id2ada_prompt_encoders[i].set_out_id_embs_cfg_scale(out_id_embs_cfg_scale)
 
     def extract_init_id_embeds_from_images(self, *args, **kwargs):
         total_faceless_img_count = 0
