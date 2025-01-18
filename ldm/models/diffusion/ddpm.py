@@ -1479,7 +1479,7 @@ class LatentDiffusion(DDPM):
                        uncond_emb=None, img_mask=None, 
                        shrink_subj_attn=False, subj_indices=None, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
-                       comp_distill_on_subj_comp_rep_prompts=False,
+                       comp_distill_subj_comp_on_rep_prompts_for_small_faces=False,
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1530,30 +1530,44 @@ class LatentDiffusion(DDPM):
                                                       use_ffn_lora=use_ffn_lora)
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
-            extra_info_c2 = copy.copy(extra_info)
-            if comp_distill_on_subj_comp_rep_prompts:
-                # The two instances in the c2 slice is sc_comp_rep and mc_comp.
-                # So we can use the same subj_indices as the sc instance.
-                extra_info_c2['subj_indices']       = subj_indices
-                extra_info_c2['shrink_subj_attn']   = shrink_subj_attn
+            extra_info_ms = copy.copy(extra_info)
+            if comp_distill_subj_comp_on_rep_prompts_for_small_faces:
+                # The ms instance is actually sc_comp_rep.
+                # So we use the same subj_indices, shrink_subj_attn and LoRAs as the sc instance.
+                extra_info_ms['subj_indices']       = subj_indices
+                extra_info_ms['shrink_subj_attn']   = shrink_subj_attn
+                ms_uses_attn_lora                   = use_attn_lora
+                ms_uses_ffn_lora                    = use_ffn_lora
             else:
-                # These two instances in the c2 slice are mc_single and mc_comp.
-                # We never need to suppress the subject attention in the mc instances.
-                extra_info_c2['subj_indices']       = None
-                extra_info_c2['shrink_subj_attn']   = False
+                # The mc instance is indeed mc.
+                # We never need to suppress the subject attention in the mc instances, nor do we apply LoRAs.
+                extra_info_ms['subj_indices']       = None
+                extra_info_ms['shrink_subj_attn']   = False
+                ms_uses_attn_lora                   = False
+                ms_uses_ffn_lora                    = False
 
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_c2)
-            model_output_c2 = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 4),
-                                                      enable_grad=False, use_attn_lora=False, 
-                                                      use_ffn_lora=False)
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
+            model_output_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
+                                                      enable_grad=False, use_attn_lora=ms_uses_attn_lora, 
+                                                      use_ffn_lora=ms_uses_ffn_lora)
             
-            model_output = torch.cat([model_output_ss, model_output_sc, model_output_c2], dim=0)
+            extra_info_mc = copy.copy(extra_info)
+            extra_info_mc['subj_indices']       = None
+            extra_info_mc['shrink_subj_attn']   = False
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
+            # Never use attn LoRAs and ffn LoRAs on mc instances.
+            model_output_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
+                                                      enable_grad=False, use_attn_lora=False,
+                                                      use_ffn_lora=False)
+
+            model_output = torch.cat([model_output_ss, model_output_sc, model_output_ms, model_output_mc], dim=0)
             extra_info = cond_context[2]
             if capture_ca_activations:
                 # Collate three captured activation dicts into extra_info.
                 ca_layers_activations = collate_dicts([extra_info_ss['ca_layers_activations'],
                                                        extra_info_sc['ca_layers_activations'],
-                                                       extra_info_c2['ca_layers_activations']])
+                                                       extra_info_ms['ca_layers_activations'],
+                                                       extra_info_mc['ca_layers_activations']])
         else:
             breakpoint()
 
@@ -1634,7 +1648,7 @@ class LatentDiffusion(DDPM):
                                     shrink_subj_attn=shrink_subj_attn,
                                     subj_indices=all_subj_indices_1b, 
                                     batch_part_has_grad='subject-compos', 
-                                    comp_distill_on_subj_comp_rep_prompts=self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'],
+                                    comp_distill_subj_comp_on_rep_prompts_for_small_faces=self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
