@@ -1959,6 +1959,8 @@ class LatentDiffusion(DDPM):
                 # Cap the adv_grad_scale to 100, as we observe most adv_grad_scale are below 250.
                 # adv_grad mean at fg area after scaling: 1e-3.
                 adv_grad = adv_grad * min(adv_grad_scale, 100)
+                # Randomly drop 30% of the adv_grad, to reduce the chance of overfitting the adv_grad direction.
+                adv_grad = F.dropout(adv_grad, p=0.3, training=self.training)
                 # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
                 # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
