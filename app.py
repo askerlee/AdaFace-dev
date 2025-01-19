@@ -94,7 +94,7 @@ def remove_back_to_files():
     return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True), gr.update(value="")
 
 @spaces.GPU
-def generate_image(image_paths, guidance_scale, perturb_std,
+def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face, enhance_composition, 
                    seed, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
@@ -105,6 +105,9 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     if image_paths is None or len(image_paths) == 0:
         raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
     
+    if image_paths2 is not None and len(image_paths2) > 0:
+        image_paths = image_paths + image_paths2
+
     if prompt is None:
         prompt = ""
 
@@ -174,7 +177,7 @@ def generate_image(image_paths, guidance_scale, perturb_std,
     for i, sample in enumerate(samples):
         filename = f"adaface{ckpt_sig}{prompt_sig}-{i+1}.png"
         if len(subj_name_sig) > 0:
-            filename = f"{subj_name_sig}-{filename}"
+            filename = f"{subj_name_sig.lower()}-{filename}"
         filepath = os.path.join(temp_folder, filename)
         # Save the image
         sample.save(filepath)  # Adjust to your image saving method
@@ -250,7 +253,7 @@ description = r"""
 css = '''
 .gradio-container {width: 95% !important},
 .custom-gallery { 
-    height: 800px; 
+    height: 1600px; 
     width: 100%; 
     margin: 10px auto; 
     padding: 10px; 
@@ -273,9 +276,22 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                         file_types=["image"],
                         file_count="multiple"
                     )
-            uploaded_files_gallery = gr.Gallery(label="Subject images", visible=False, columns=3, rows=1, height=300)
+            # When files are uploaded, show the images in the gallery and hide the file uploader.
+            uploaded_files_gallery  = gr.Gallery(label="Subject images", visible=False, columns=3, rows=1, height=300)
             with gr.Column(visible=False) as clear_button_column:
-                remove_and_reupload = gr.ClearButton(value="Remove and upload subject images", components=img_files, size="sm")
+                remove_and_reupload = gr.ClearButton(value="Remove and upload subject images", 
+                                                     components=img_files, size="sm")
+
+            img_files2 = gr.File(
+                        label="Drag / Select 1 or more photos of another person's face (optional)",
+                        file_types=["image"],
+                        file_count="multiple"
+                    )
+            
+            uploaded_files_gallery2 = gr.Gallery(label="Second Subject images (optional)", visible=False, columns=3, rows=1, height=300)
+            with gr.Column(visible=False) as clear_button_column2:
+                remove_and_reupload2 = gr.ClearButton(value="Remove and upload Second Subject images", 
+                                                      components=img_files2, size="sm")
 
             prompt = gr.Dropdown(label="Prompt",
                        info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
@@ -304,7 +320,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(
-                label="Nickname of Subject", 
+                label="Nickname of Subject (optional for saving images)", 
                 value="",
             )
 
@@ -352,7 +368,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             num_images = gr.Slider(
                 label="Number of output images",
                 minimum=1,
-                maximum=6,
+                maximum=8,
                 step=1,
                 value=4,
             )
@@ -366,11 +382,15 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             randomize_seed = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
 
         with gr.Column():
-            out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=2, height=800,
+            out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=4, height=1600,
                                      elem_classes="custom-gallery")
 
-        img_files.upload(fn=swap_to_gallery, inputs=img_files, outputs=[uploaded_files_gallery, clear_button_column, img_files])
-        remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, img_files, subj_name_sig])
+        img_files.upload(fn=swap_to_gallery,  inputs=img_files,  outputs=[uploaded_files_gallery,  clear_button_column,  img_files])
+        img_files2.upload(fn=swap_to_gallery, inputs=img_files2, outputs=[uploaded_files_gallery2, clear_button_column2, img_files2])
+        remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, 
+                                                                    img_files, subj_name_sig])
+        remove_and_reupload2.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery2, clear_button_column2, 
+                                                                    img_files2, subj_name_sig])
 
         check_prompt_and_model_type_call_dict = {
             'fn': check_prompt_and_model_type,
@@ -384,7 +404,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         }
         generate_image_call_dict = {
             'fn': generate_image,
-            'inputs': [img_files, guidance_scale, perturb_std, num_images, prompt, 
+            'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
                        negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
             'outputs': [out_gallery]
         }
