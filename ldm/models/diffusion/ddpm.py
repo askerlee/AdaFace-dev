@@ -1534,24 +1534,22 @@ class LatentDiffusion(DDPM):
             if comp_distill_subj_comp_on_rep_prompts_for_small_faces:
                 # The ms instance is actually sc_comp_rep.
                 # So we use the same subj_indices and shrink_subj_attn as the sc instance.
-                # But we don't apply LoRAs on the ms instance, otherwise, the LoRA layers will be trained
-                # to remove background semantics, losing the purpose of comp_distill_subj_comp_on_rep_prompts_for_small_faces.
                 extra_info_ms['subj_indices']       = subj_indices
                 extra_info_ms['shrink_subj_attn']   = shrink_subj_attn
-                ms_uses_attn_lora                   = False
-                ms_uses_ffn_lora                    = False
             else:
                 # The mc instance is indeed mc.
                 # We never need to suppress the subject attention in the mc instances, nor do we apply LoRAs.
+                # NOTE: currently the mc instance is not in use. So how these values are set doesn't really matter.
                 extra_info_ms['subj_indices']       = None
                 extra_info_ms['shrink_subj_attn']   = False
-                ms_uses_attn_lora                   = False
-                ms_uses_ffn_lora                    = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
+            # We don't apply LoRAs on the ms instance even if comp_distill_subj_comp_on_rep_prompts_for_small_faces.
+            # Otherwise, the LoRA layers will be trained to remove background semantics, 
+            # defeating the purpose of comp_distill_subj_comp_on_rep_prompts_for_small_faces.
             model_output_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
-                                                      enable_grad=False, use_attn_lora=ms_uses_attn_lora, 
-                                                      use_ffn_lora=ms_uses_ffn_lora)
+                                                      enable_grad=False, use_attn_lora=False, 
+                                                      use_ffn_lora=False)
             
             extra_info_mc = copy.copy(extra_info)
             extra_info_mc['subj_indices']       = None
