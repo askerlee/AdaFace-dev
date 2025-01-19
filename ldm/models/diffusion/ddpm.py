@@ -119,7 +119,7 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=True,
-                 p_shrink_subj_attn=1,
+                 p_shrink_subj_attn=0.5,
                  # Reduce the variance of the subject attention distribution by a factor of 2,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=2.,
@@ -1605,7 +1605,7 @@ class LatentDiffusion(DDPM):
 
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
-                                       all_subj_indices_1b=None, p_shrink_subj_attn=1,
+                                       all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
                                        cfg_scale=-1, capture_ca_activations=False,
                                        num_denoising_steps=1, 
                                        same_t_noise_across_instances=True):

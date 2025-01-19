@@ -2372,14 +2372,14 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             # are not worse beyond the margin.
             # sc_recon_mc_min: 0.03~0.04. sc_recon_ssfg_min: 0.04~0.05. 
             # So a margin of 30% is ~0.01.
-            # ** If mc, we also add a 10% margin to the flow loss, so that the same location loss is preferred when 
-            # the flow loss and the same location loss are close.
-            # The relative margin of the flow loss over the attn loss is ~25% now.
+            # ** If mc, we also add a 1% margin to the flow loss, so that when flow loss and same loc loss
+            # are tie, same loc loss is preferred.
+            # The relative margin of the flow loss over the attn loss is still almost 30%.
             # Adding margin to attn loss increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
             # Adding margin to flow loss increases mc_sameloc_win_rate and decreases mc_flow_win_rate.
             if feat_name == 'mc':
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
-                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.05
+                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.01
             else:
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
 
