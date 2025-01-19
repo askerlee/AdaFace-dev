@@ -251,13 +251,13 @@ description = r"""
 """
 
 css = '''
-.gradio-container {width: 95% !important},
+.gradio-container {width: 95% !important}
 .custom-gallery { 
-    height: 1600px; 
+    height: 800px !important; 
     width: 100%; 
     margin: 10px auto; 
     padding: 10px; 
-    overflow-y: auto; 
+    overflow-y: auto !important; 
 }
 '''
 with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
@@ -288,9 +288,9 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                         file_count="multiple"
                     )
             
-            uploaded_files_gallery2 = gr.Gallery(label="Second Subject images (optional)", visible=False, columns=3, rows=1, height=300)
+            uploaded_files_gallery2 = gr.Gallery(label="2nd Subject images (optional)", visible=False, columns=3, rows=1, height=300)
             with gr.Column(visible=False) as clear_button_column2:
-                remove_and_reupload2 = gr.ClearButton(value="Remove and upload Second Subject images", 
+                remove_and_reupload2 = gr.ClearButton(value="Remove and upload 2nd Subject images", 
                                                       components=img_files2, size="sm")
 
             prompt = gr.Dropdown(label="Prompt",
@@ -322,6 +322,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             subj_name_sig = gr.Textbox(
                 label="Nickname of Subject (optional for saving images)", 
                 value="",
+            )
+            subj_name_sig2 = gr.Textbox(
+                label="Nickname of 2nd Subject (optional for saving images)", 
+                value="",
+                visible=False,
             )
 
             submit = gr.Button("Submit", variant="primary")
@@ -382,7 +387,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             randomize_seed = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
 
         with gr.Column():
-            out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=4, height=1600,
+            out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=4, height=800,
                                      elem_classes="custom-gallery")
 
         img_files.upload(fn=swap_to_gallery,  inputs=img_files,  outputs=[uploaded_files_gallery,  clear_button_column,  img_files])
@@ -390,7 +395,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, 
                                                                     img_files, subj_name_sig])
         remove_and_reupload2.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery2, clear_button_column2, 
-                                                                    img_files2, subj_name_sig])
+                                                                    img_files2, subj_name_sig2])
 
         check_prompt_and_model_type_call_dict = {
             'fn': check_prompt_and_model_type,
