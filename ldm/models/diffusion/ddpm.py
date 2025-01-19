@@ -1533,11 +1533,13 @@ class LatentDiffusion(DDPM):
             extra_info_ms = copy.copy(extra_info)
             if comp_distill_subj_comp_on_rep_prompts_for_small_faces:
                 # The ms instance is actually sc_comp_rep.
-                # So we use the same subj_indices, shrink_subj_attn and LoRAs as the sc instance.
+                # So we use the same subj_indices and shrink_subj_attn as the sc instance.
+                # But we don't apply LoRAs on the ms instance, otherwise, the LoRA layers will be trained
+                # to remove background semantics, losing the purpose of comp_distill_subj_comp_on_rep_prompts_for_small_faces.
                 extra_info_ms['subj_indices']       = subj_indices
                 extra_info_ms['shrink_subj_attn']   = shrink_subj_attn
-                ms_uses_attn_lora                   = use_attn_lora
-                ms_uses_ffn_lora                    = use_ffn_lora
+                ms_uses_attn_lora                   = False
+                ms_uses_ffn_lora                    = False
             else:
                 # The mc instance is indeed mc.
                 # We never need to suppress the subject attention in the mc instances, nor do we apply LoRAs.
