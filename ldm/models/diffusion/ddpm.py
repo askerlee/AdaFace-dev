@@ -81,7 +81,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=-1,
                  cls_subj_mix_ratio=0.8,        
-                 cls_subj_mix_scheme='unet', # 'embedding' or 'unet'
+                 cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
                  comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
