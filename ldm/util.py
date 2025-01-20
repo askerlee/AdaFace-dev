@@ -2029,6 +2029,7 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
                 continue
 
             LAYER_W = subj_comp_rep_distill_layer_weights[unet_layer_idx]
+            subj_attn_distill_layer_loss_layer_scale = ca_attn.shape[3] * 10
             # ca_attn: [4, 8, 4096, 77] -> [4, 77, 8, 4096]
             ca_attn = ca_attn.permute(0, 3, 1, 2)
             ss_attn, sc_attn, sc_rep_attn, mc_attn = ca_attn.chunk(4)
@@ -2038,7 +2039,6 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
             # was generated without gradient. We added .detach() just in case.
             loss_subj_attn_distill_layer = F.mse_loss(sc_subj_attn, sc_subj_rep_attn.detach())
             # The prob is distributed over 77 tokens. We scale up the loss by 77 * 10.
-            subj_attn_distill_layer_loss_layer_scale = ca_attn.shape[3] * 10
             loss_comp_rep_distill_subj_attn += loss_subj_attn_distill_layer * subj_attn_distill_layer_loss_layer_scale \
                                                 * LAYER_W
             
