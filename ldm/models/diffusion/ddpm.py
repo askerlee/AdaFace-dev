@@ -103,9 +103,8 @@ class DDPM(pl.LightningModule):
                  p_perturb_input_noise=0,
                  p_perturb_face_id_embs=0.6,
                  p_recon_on_comp_prompt=0.4,
-                 comp_distill_prompt_repeats=1,
-                 p_comp_distill_subj_comp_uses_repeat_prompts=0.2,
-                 comp_distill_subj_comp_on_rep_prompts_for_small_faces=True,
+                 p_subj_comp_uses_repeat_prompts=0.2,
+                 p_subj_comp_distill_on_rep_prompts=1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.005, 0.02],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -177,9 +176,8 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
-        self.COMP_REPEATS                           = comp_distill_prompt_repeats
-        self.p_comp_distill_subj_comp_uses_repeat_prompts = p_comp_distill_subj_comp_uses_repeat_prompts
-        self.comp_distill_subj_comp_on_rep_prompts_for_small_faces = comp_distill_subj_comp_on_rep_prompts_for_small_faces
+        self.p_subj_comp_uses_repeat_prompts        = p_subj_comp_uses_repeat_prompts
+        self.p_subj_comp_distill_on_rep_prompts     = p_subj_comp_distill_on_rep_prompts
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
 
@@ -1296,14 +1294,18 @@ class LatentDiffusion(DDPM):
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
 
-        # Repeat the compositional prompts twice, to further highlight the compositional features.
-        # NOTE: we repeat compos_partial_prompt twice, but only repeat prompt_modifier once. 
+        # Repeat the compositional prompts once or twice, to further highlight the compositional features.
+        # NOTE: for subj_comp_rep2_prompts, we repeat compos_partial_prompt twice, 
+        # but only repeat prompt_modifier once. 
         # Since subj_comp_prompts already contains 1 copy of the modifier,
-        # in total subj_comp_rep_prompts contains 2 copies of the modifier, and 3 copies of compos_partial_prompt.
+        # in total subj_comp_rep2_prompts contains 2 copies of the modifier, and 3 copies of compos_partial_prompt.
         # This is to avoid the subj comp instance receives too much style guidance from the subj_comp_rep instances,
         # and becomes overly stylized.
-        subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                   + ", " + ", ".join([ compos_partial_prompt[i] ] * self.COMP_REPEATS) \
+        subj_comp_rep1_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                   + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                    for i in range(BLOCK_SIZE) ]
+        subj_comp_rep2_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                   + ", " + ", ".join([ compos_partial_prompt[i] ] * 2) \
                                     for i in range(BLOCK_SIZE) ]
 
         # We still compute the prompt embeddings of the first 4 types of prompts, 
@@ -1326,14 +1328,22 @@ class LatentDiffusion(DDPM):
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
             c_prompt_emb.chunk(4)
 
-        subj_comp_rep_emb, _, _ = \
-            self.get_text_conditioning(subj_comp_rep_prompts,
+        subj_comp_rep1_emb, _, _ = \
+            self.get_text_conditioning(subj_comp_rep1_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
                                        randomize_clip_weights=True,
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
                                        real_batch_size=ORIG_BS)
-        
+
+        subj_comp_rep2_emb, _, _ = \
+            self.get_text_conditioning(subj_comp_rep2_prompts,
+                                       self.iter_flags['id2img_prompt_embs'],
+                                       self.iter_flags['clip_bg_features'],
+                                       randomize_clip_weights=True,
+                                       text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
+                                       real_batch_size=ORIG_BS)
+
         # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
         # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
         # Only keep the first half (for single prompts), as the second half is the same 
@@ -1381,21 +1391,25 @@ class LatentDiffusion(DDPM):
             # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
             # are manually mixed into their embeddings.
-            if torch.rand(1) < self.p_comp_distill_subj_comp_uses_repeat_prompts:
-                self.iter_flags['comp_distill_subj_comp_uses_repeat_prompts'] = True
-                self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'] = False
-                # 20% of the time, we use subj_comp_rep_prompts instead of subj_comp_prompts.
-                # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
-                c_in = subj_single_prompts + subj_comp_rep_prompts + cls_single_prompts + cls_comp_prompts
-                c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep_emb, cls_single_emb, cls_comp_emb], dim=0)
-            else:
-                self.iter_flags['comp_distill_subj_comp_uses_repeat_prompts'] = False
-                if self.comp_distill_subj_comp_on_rep_prompts_for_small_faces:
-                    self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'] = True
-                    c_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
-                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+            self.iter_flags['subj_comp_uses_repeat_prompts']    = torch.rand(1) < self.p_subj_comp_uses_repeat_prompts
+            self.iter_flags['subj_comp_distill_on_rep_prompts'] = torch.rand(1) < self.p_subj_comp_distill_on_rep_prompts
+            
+            if self.iter_flags['subj_comp_uses_repeat_prompts']:
+                if self.iter_flags['subj_comp_distill_on_rep_prompts']:
+                    # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
+                    # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
+                    c_in = subj_single_prompts + subj_comp_rep1_prompts + subj_comp_rep2_prompts + cls_comp_prompts
+                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb], dim=0)
                 else:
-                    self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'] = False
+                    # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
+                    # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
+                    c_in = subj_single_prompts + subj_comp_rep1_prompts + cls_single_prompts + cls_comp_prompts
+                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, cls_single_emb, cls_comp_emb], dim=0)
+            else:
+                if self.iter_flags['subj_comp_distill_on_rep_prompts']:
+                    c_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep1_prompts + cls_comp_prompts
+                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep1_emb, cls_comp_emb], dim=0)
+                else:
                     # Otherwise, 80% of the time, we use cls_single_prompts.
                     c_in         = delta_prompts
                     c_prompt_emb = c_prompt_emb_4b
@@ -1479,7 +1493,7 @@ class LatentDiffusion(DDPM):
                        uncond_emb=None, img_mask=None, 
                        shrink_subj_attn=False, subj_indices=None, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
-                       comp_distill_subj_comp_on_rep_prompts_for_small_faces=False,
+                       subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1531,7 +1545,7 @@ class LatentDiffusion(DDPM):
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
             extra_info_ms = copy.copy(extra_info)
-            if comp_distill_subj_comp_on_rep_prompts_for_small_faces:
+            if subj_comp_distill_on_rep_prompts:
                 # The ms instance is actually sc_comp_rep.
                 # So we use the same subj_indices and shrink_subj_attn as the sc instance.
                 extra_info_ms['subj_indices']       = subj_indices
@@ -1544,9 +1558,9 @@ class LatentDiffusion(DDPM):
                 extra_info_ms['shrink_subj_attn']   = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
-            # We don't apply LoRAs on the ms instance even if comp_distill_subj_comp_on_rep_prompts_for_small_faces.
+            # We don't apply LoRAs on the ms instance even if subj_comp_distill_on_rep_prompts.
             # Otherwise, the LoRA layers will be trained to remove background semantics, 
-            # defeating the purpose of comp_distill_subj_comp_on_rep_prompts_for_small_faces.
+            # defeating the purpose of subj_comp_distill_on_rep_prompts.
             model_output_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
                                                       enable_grad=False, use_attn_lora=False, 
                                                       use_ffn_lora=False)
@@ -1648,7 +1662,7 @@ class LatentDiffusion(DDPM):
                                     shrink_subj_attn=shrink_subj_attn,
                                     subj_indices=all_subj_indices_1b, 
                                     batch_part_has_grad='subject-compos', 
-                                    comp_distill_subj_comp_on_rep_prompts_for_small_faces=self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces'],
+                                    subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'],
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
@@ -1724,8 +1738,9 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            # If we do comp_distill_subj_comp_on_rep_prompts_for_small_faces, cond_context contains 
-            # (subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb).
+            # If we do subj_comp_distill_on_rep_prompts, cond_context contains 
+            #    (subj_single_emb, subj_comp_emb,      subj_comp_rep1_emb, cls_comp_emb) 
+            # or (subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb).
             # But in order to do priming, we need cond_context_old which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
             cond_context_old = (extra_info['c_prompt_emb_4b'], cond_context[1], cond_context[2])
@@ -1743,7 +1758,7 @@ class LatentDiffusion(DDPM):
                                                     BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
-            if self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces']:
+            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                 x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
                 # Block 2 is the subject comp repeat (sc-repeat) instance.
                 # Make the sc-repeat and sc blocks use the same x_start, so that their output features
@@ -2400,7 +2415,7 @@ class LatentDiffusion(DDPM):
 
         # We've made sure they use the same x_start and t.
         # Here we ensure the two instances (one single, one comp) use the same noise.
-        # This is necessary for comp_distill_subj_comp_on_rep_prompts_for_small_faces iterations,
+        # This is necessary for subj_comp_distill_on_rep_prompts iterations,
         # since the class-single instance is actually the subj-comp-rep instance, using different noise 
         # will lead to multiple-face artifacts.
         noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
@@ -2585,7 +2600,7 @@ class LatentDiffusion(DDPM):
 
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
         
-            if self.iter_flags['comp_distill_subj_comp_on_rep_prompts_for_small_faces']:
+            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                 loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
                     calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                     prompt_emb_mask, sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])
@@ -2635,9 +2650,16 @@ class LatentDiffusion(DDPM):
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
             # valid_scale_range=(0, 1): If sc_fg_mask_percent = 0.21, then fg_percent_rep_distill_scale = 0.
-            fg_percent_rep_distill_scale = \
-                calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[1], 0.1), (rep_dist_fg_bounds[2], 2), 
-                                    valid_scale_range=(0, 2))
+            if sc_fg_mask_percent > 0:
+                fg_percent_rep_distill_scale = \
+                    calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[1], 0.1), (rep_dist_fg_bounds[2], 2), 
+                                        valid_scale_range=(0, 2))
+            else:
+                # sc_fg_mask_percent == 0 means no face is detected in the subject-comp instance.
+                # In this case, we still do distillation on the subject-comp-rep instance, 
+                # but with a smaller scale.
+                fg_percent_rep_distill_scale = 0.03
+
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 

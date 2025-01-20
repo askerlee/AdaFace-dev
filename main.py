@@ -239,8 +239,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                              "If False, the q lora only updates query2.")
-    parser.add_argument("--comp_distill_prompt_repeats", type=int, default=argparse.SUPPRESS,
-                        choices=[1, 2], help="Number of repeats for the composition repeat distillation")
     parser.add_argument("--cls_subj_mix_scheme", type=str, default=argparse.SUPPRESS,
                         choices=['unet', 'embedding'], help="Scheme for mixing the subject and class embeddings")
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
@@ -268,7 +266,9 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--randomize_clip_skip_weights", nargs="?", type=str2bool, const=True, default=False,
                         help="Whether to randomize the skip weights of CLIP text embedder. "
                              "If True, the weights are sampled from a Dirichlet distribution with clip_last_layers_skip_weights as the alpha.")
-    parser.add_argument("--clip_prompt_max_length", type=int, default=77,
+    # Since sometimes we repeat compositional part of the prompt for distillation, 
+    # we extend clip prompt length to 97.
+    parser.add_argument("--clip_prompt_max_length", type=int, default=97,
                         help="Maximum length of the prompt for CLIP text embedder")
 
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
@@ -715,10 +715,6 @@ if __name__ == "__main__":
         config.model.params.sc_subj_attn_var_shrink_factor  = opt.sc_subj_attn_var_shrink_factor
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
         config.model.params.q_lora_updates_query = opt.q_lora_updates_query
-        if hasattr(opt, 'comp_distill_prompt_repeats'):
-            config.model.params.comp_distill_prompt_repeats = opt.comp_distill_prompt_repeats
-            # If comp_distill_prompt_repeats is 2, then the prompt length is 77 + 20 = 97.
-            opt.clip_prompt_max_length = 77 + (opt.comp_distill_prompt_repeats - 1) * 20
         if hasattr(opt, 'cls_subj_mix_scheme'):
             config.model.params.cls_subj_mix_scheme = opt.cls_subj_mix_scheme
             

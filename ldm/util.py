@@ -2020,7 +2020,9 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
     # sc_emb_mask: [1, 77] -> [1, 1, 77], to be broadcasted to sc_k and mc_k [1, 320, 77].
     sc_nonsubj_emb_mask = sc_nonsubj_emb_mask.unsqueeze(1)
 
-    if sc_fg_mask_percent >= FG_THRES:
+    # If no face is detected in the subject-comp instance, sc_fg_mask_percent = 0.
+    # In this case, we still distill the subject-comp rep attns and ks from the subject-comp rep instance.
+    if (sc_fg_mask_percent == 0) or (sc_fg_mask_percent >= FG_THRES):
         # q is computed from image features, and k is from the prompt embeddings.
         for unet_layer_idx, ca_attn in ca_layers_activations['attn'].items():
             if unet_layer_idx not in subj_comp_rep_distill_layer_weights:
