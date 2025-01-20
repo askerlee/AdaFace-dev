@@ -1332,7 +1332,7 @@ class LatentDiffusion(DDPM):
             self.get_text_conditioning(subj_comp_rep1_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
-                                       randomize_clip_weights=True,
+                                       randomize_clip_weights=False,
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
                                        real_batch_size=ORIG_BS)
 
@@ -1340,7 +1340,7 @@ class LatentDiffusion(DDPM):
             self.get_text_conditioning(subj_comp_rep2_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
-                                       randomize_clip_weights=True,
+                                       randomize_clip_weights=False,
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
                                        real_batch_size=ORIG_BS)
 
@@ -1393,7 +1393,7 @@ class LatentDiffusion(DDPM):
             # are manually mixed into their embeddings.
             self.iter_flags['subj_comp_uses_repeat_prompts']    = torch.rand(1) < self.p_subj_comp_uses_repeat_prompts
             self.iter_flags['subj_comp_distill_on_rep_prompts'] = torch.rand(1) < self.p_subj_comp_distill_on_rep_prompts
-            
+
             if self.iter_flags['subj_comp_uses_repeat_prompts']:
                 if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                     # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
