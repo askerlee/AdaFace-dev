@@ -621,7 +621,7 @@ class LatentDiffusion(DDPM):
             #random.seed(10000)
             self.num_teachable_iters = 0
             self.num_reuse_teachable_iters = 0
-            # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+            # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
             # uncond_context[0]: [1, 77, 768].
             self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
             # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
@@ -1313,11 +1313,11 @@ class LatentDiffusion(DDPM):
         # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
         delta_prompts = subj_single_prompts + subj_comp_prompts \
                         + cls_single_prompts + cls_comp_prompts
-        # c_prompt_emb: the prompt embeddings for prompt delta loss [4, 77, 768].
+        # prompt_emb: the prompt embeddings for prompt delta loss [4, 77, 768].
         # delta_prompts: the concatenation of
         # (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts).
         # extra_info: a dict that contains extra info.
-        c_prompt_emb, _, extra_info = \
+        prompt_emb, _, extra_info = \
             self.get_text_conditioning(delta_prompts, 
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
@@ -1326,9 +1326,9 @@ class LatentDiffusion(DDPM):
                                        real_batch_size=ORIG_BS)
 
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
-            c_prompt_emb.chunk(4)
+            prompt_emb.chunk(4)
 
-        subj_comp_rep1_emb, _, _ = \
+        subj_comp_rep1_emb, _, extra_info_rep1 = \
             self.get_text_conditioning(subj_comp_rep1_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
@@ -1336,13 +1336,18 @@ class LatentDiffusion(DDPM):
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
                                        real_batch_size=ORIG_BS)
 
-        subj_comp_rep2_emb, _, _ = \
+        subj_comp_rep2_emb, _, extra_info_rep2 = \
             self.get_text_conditioning(subj_comp_rep2_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
                                        randomize_clip_weights=False,
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
                                        real_batch_size=ORIG_BS)
+
+        # Rename extra_info['prompt_emb_mask'] to extra_info['prompt_emb_mask_4b_orig'].
+        extra_info['prompt_emb_mask_4b_orig'] = extra_info.pop('prompt_emb_mask')
+        extra_info['prompt_emb_mask_sc_rep1'] = extra_info_rep1['prompt_emb_mask']
+        extra_info['prompt_emb_mask_sc_rep2'] = extra_info_rep2['prompt_emb_mask']
 
         # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
         # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
@@ -1376,17 +1381,17 @@ class LatentDiffusion(DDPM):
         extra_info['placeholder2indices_1b'] = placeholder2indices_1b
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
-        # These embeddings are patched. So combine them back into c_prompt_emb.
-        # c_prompt_emb_4b is the 4 sets of embeddings of subj_single_prompts, subj_comp_prompts, 
+        # These embeddings are patched. So combine them back into prompt_emb.
+        # prompt_emb_4b_orig is the 4 sets of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts used for prompt delta loss.             
-        # c_prompt_emb_4b: [64, 77, 768].
-        c_prompt_emb_4b = torch.cat([subj_single_emb, subj_comp_emb, 
+        # prompt_emb_4b_orig: [64, 77, 768].
+        prompt_emb_4b_orig = torch.cat([subj_single_emb, subj_comp_emb, 
                                      cls_single_emb,  cls_comp_emb], dim=0)
-        extra_info['c_prompt_emb_4b'] = c_prompt_emb_4b
+        extra_info['prompt_emb_4b_orig'] = prompt_emb_4b_orig
 
         if self.iter_flags['do_comp_feat_distill']:
-            # c_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
-            # The cls_single_prompts/cls_comp_prompts within c_in will only be used to 
+            # prompt_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
+            # The cls_single_prompts/cls_comp_prompts within prompt_in will only be used to 
             # generate ordinary prompt embeddings, i.e., 
             # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
@@ -1395,31 +1400,37 @@ class LatentDiffusion(DDPM):
             self.iter_flags['subj_comp_distill_on_rep_prompts'] = torch.rand(1) < self.p_subj_comp_distill_on_rep_prompts
 
             if self.iter_flags['subj_comp_uses_repeat_prompts']:
+                prompt_emb_mask_4b = extra_info['prompt_emb_mask_4b_orig'].clone()
+                # Update the sc embedding mask to be prompt_emb_mask_sc_rep1.
+                prompt_emb_mask_4b[BLOCK_SIZE:BLOCK_SIZE*2] = extra_info['prompt_emb_mask_sc_rep1']
+                extra_info['prompt_emb_mask_4b'] = prompt_emb_mask_4b
+
                 if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                     # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
                     # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
-                    c_in = subj_single_prompts + subj_comp_rep1_prompts + subj_comp_rep2_prompts + cls_comp_prompts
-                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb], dim=0)
+                    prompt_in = subj_single_prompts + subj_comp_rep1_prompts + subj_comp_rep2_prompts + cls_comp_prompts
+                    prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb], dim=0)
                 else:
                     # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
                     # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
-                    c_in = subj_single_prompts + subj_comp_rep1_prompts + cls_single_prompts + cls_comp_prompts
-                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, cls_single_emb, cls_comp_emb], dim=0)
+                    prompt_in = subj_single_prompts + subj_comp_rep1_prompts + cls_single_prompts + cls_comp_prompts
+                    prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, cls_single_emb, cls_comp_emb], dim=0)
             else:
+                extra_info['prompt_emb_mask_4b'] = extra_info['prompt_emb_mask_4b_orig']
                 if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                    c_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep1_prompts + cls_comp_prompts
-                    c_prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep1_emb, cls_comp_emb], dim=0)
+                    prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep1_prompts + cls_comp_prompts
+                    prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep1_emb, cls_comp_emb], dim=0)
                 else:
                     # Otherwise, 80% of the time, we use cls_single_prompts.
-                    c_in         = delta_prompts
-                    c_prompt_emb = c_prompt_emb_4b
+                    prompt_in       = delta_prompts
+                    prompt_emb = prompt_emb_4b_orig
 
             # The prompts are either (subj single, subj comp, cls single, cls comp).
             # So the first 2 sub-blocks always contain the subject tokens, and we use *_2b.    
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
         else:
             # do_normal_recon or do_unet_distill.
-            c_in = captions
+            prompt_in = captions
             # Use the original "captions" prompts and embeddings.
             # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
             # it holds in all other cases.
@@ -1429,16 +1440,16 @@ class LatentDiffusion(DDPM):
                 assert captions == subj_comp_prompts
             # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
             # So in this case, subj_single_emb == subj_comp_emb.
-            c_prompt_emb = subj_single_emb
+            prompt_emb = subj_single_emb
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
             extra_info['placeholder2indices']   = extra_info['placeholder2indices_1b']
-            extra_info['c_prompt_emb_1b']       = subj_single_emb
+            extra_info['prompt_emb_1b']       = subj_single_emb
 
-            # extra_info['c_prompt_emb_4b'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
+            # extra_info['prompt_emb_4b_orig'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
             # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
             # to do the replacement.
-            # extra_info['c_prompt_emb_4b'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
+            # extra_info['prompt_emb_4b_orig'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
                                 
             ##### End of normal_recon/do_unet_distill with prompt delta loss iters. #####
                             
@@ -1453,13 +1464,13 @@ class LatentDiffusion(DDPM):
         # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
         extra_info['compos_partial_prompt'] = compos_partial_prompt
 
-        # c_prompt_emb: [64, 77, 768]                    
-        cond_context = (c_prompt_emb, c_in, extra_info)
+        # prompt_emb: [64, 77, 768]                    
+        cond_context = (prompt_emb, prompt_in, extra_info)
 
         # self.model (UNetModel) is called in p_losses().
         #LINK #p_losses
-        c_prompt_emb, c_in, extra_info = cond_context
-        return self.p_losses(x_start, c_prompt_emb, c_in, extra_info)
+        prompt_emb, prompt_in, extra_info = cond_context
+        return self.p_losses(x_start, prompt_emb, prompt_in, extra_info)
 
     # apply_model() is called both during training and inference.
     # apply_model() is called in sliced_apply_model() and guided_denoise().
@@ -1477,11 +1488,11 @@ class LatentDiffusion(DDPM):
                            enable_grad, use_attn_lora=False, use_ffn_lora=False):
         x_noisy_ = x_noisy[slice_inst]
         t_ = t[slice_inst]
-        c_prompt_emb, c_in, extra_info = cond_context
-        c_prompt_emb_ = c_prompt_emb[slice_inst]
-        c_in_ = c_in[slice_inst]
+        prompt_emb, prompt_in, extra_info = cond_context
+        prompt_emb_ = prompt_emb[slice_inst]
+        prompt_in_ = prompt_in[slice_inst]
         with torch.set_grad_enabled(enable_grad):
-            model_output = self.apply_model(x_noisy_, t_, (c_prompt_emb_, c_in_, extra_info), 
+            model_output = self.apply_model(x_noisy_, t_, (prompt_emb_, prompt_in_, extra_info), 
                                             use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
         return model_output
 
@@ -1550,20 +1561,21 @@ class LatentDiffusion(DDPM):
                 # So we use the same subj_indices and shrink_subj_attn as the sc instance.
                 extra_info_ms['subj_indices']       = subj_indices
                 extra_info_ms['shrink_subj_attn']   = shrink_subj_attn
+                mc_uses_attn_lora = use_attn_lora
+                mc_uses_ffn_lora  = use_ffn_lora
             else:
                 # The mc instance is indeed mc.
                 # We never need to suppress the subject attention in the mc instances, nor do we apply LoRAs.
                 # NOTE: currently the mc instance is not in use. So how these values are set doesn't really matter.
                 extra_info_ms['subj_indices']       = None
                 extra_info_ms['shrink_subj_attn']   = False
+                mc_uses_attn_lora = False
+                mc_uses_ffn_lora  = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
-            # We don't apply LoRAs on the ms instance even if subj_comp_distill_on_rep_prompts.
-            # Otherwise, the LoRA layers will be trained to remove background semantics, 
-            # defeating the purpose of subj_comp_distill_on_rep_prompts.
             model_output_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
-                                                      enable_grad=False, use_attn_lora=False, 
-                                                      use_ffn_lora=False)
+                                                      enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
+                                                      use_ffn_lora=mc_uses_ffn_lora)
             
             extra_info_mc = copy.copy(extra_info)
             extra_info_mc['subj_indices']       = None
@@ -1590,13 +1602,13 @@ class LatentDiffusion(DDPM):
         if cfg_scale > 1:
             if uncond_emb is None:
                 # Use self.uncond_context as the unconditional context.
-                # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
                 # By default, 'capture_ca_activations' = False in a generated text context, 
                 # including uncond_context. So we don't need to set it in self.uncond_context explicitly.                
                 uncond_emb  = self.uncond_context[0].repeat(x_noisy.shape[0], 1, 1)
 
-            uncond_c_in = self.uncond_context[1] * x_noisy.shape[0]
-            uncond_context = (uncond_emb, uncond_c_in, self.uncond_context[2])
+            uncond_prompt_in = self.uncond_context[1] * x_noisy.shape[0]
+            uncond_context = (uncond_emb, uncond_prompt_in, self.uncond_context[2])
 
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
@@ -1704,12 +1716,12 @@ class LatentDiffusion(DDPM):
         return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list
             
     # t: timesteps.
-    # c_in is the textual prompts. 
+    # prompt_in is the textual prompts. 
     # extra_info: a dict that contains various fields. 
     # ANCHOR[id=p_losses]
-    def p_losses(self, x_start, c_prompt_emb, c_in, extra_info):
-        #print(c_in)
-        cond_context = (c_prompt_emb, c_in, extra_info)
+    def p_losses(self, x_start, prompt_emb, prompt_in, extra_info):
+        #print(prompt_in)
+        cond_context = (prompt_emb, prompt_in, extra_info)
         img_mask     = self.iter_flags['img_mask']
         fg_mask      = self.iter_flags['fg_mask']
 
@@ -1741,9 +1753,10 @@ class LatentDiffusion(DDPM):
             # If we do subj_comp_distill_on_rep_prompts, cond_context contains 
             #    (subj_single_emb, subj_comp_emb,      subj_comp_rep1_emb, cls_comp_emb) 
             # or (subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb).
-            # But in order to do priming, we need cond_context_old which contains
+            # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
-            cond_context_old = (extra_info['c_prompt_emb_4b'], cond_context[1], cond_context[2])
+            # Therefore, we use extra_info['prompt_emb_4b_orig'] to get the old context.
+            cond_context_orig = (extra_info['prompt_emb_4b_orig'], cond_context[1], cond_context[2])
             # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
             # and the bg mask area filled with noise. Returned only for logging.
             # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
@@ -1753,7 +1766,7 @@ class LatentDiffusion(DDPM):
             # since the current iteration is do_comp_feat_distill. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
-                self.prime_x_start_for_comp_prompts(cond_context_old, x_start, noise,
+                self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
                                                     (img_mask, fg_mask), fg_noise_amount=0.2,
                                                     BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
@@ -1842,7 +1855,7 @@ class LatentDiffusion(DDPM):
         # do_prompt_emb_delta_reg is always done, regardless of the iter_type.
         if self.iter_flags['do_prompt_emb_delta_reg']:
             loss_prompt_emb_delta = \
-                calc_prompt_emb_delta_loss(extra_info['c_prompt_emb_4b'], extra_info['prompt_emb_mask'])
+                calc_prompt_emb_delta_loss(extra_info['prompt_emb_4b_orig'], extra_info['prompt_emb_mask_4b_orig'])
 
             loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
@@ -1875,12 +1888,12 @@ class LatentDiffusion(DDPM):
 
         ###### begin of do_comp_feat_distill ######
         elif self.iter_flags['do_comp_feat_distill']:
-            # compos_partial_prompt is used only if clip_align_loss_weight > 0.
+            # if clip_align_loss_weight > 0, compos_partial_prompt is used for CLIP guidance loss.
             loss_comp_feat_distill_loss = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
                                                  extra_info['compos_partial_prompt'],
                                                  fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
-                                                 extra_info['prompt_emb_mask'],
+                                                 extra_info['prompt_emb_mask_4b'],
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
         ##### end of do_comp_feat_distill #####
@@ -2095,7 +2108,7 @@ class LatentDiffusion(DDPM):
                                img_mask, fg_mask, subj_indices, loss_dict, session_prefix):
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), 
                           device=self.device).long()
-        c_prompt_emb, c_in, extra_info = cond_context
+        prompt_emb, prompt_in, extra_info = cond_context
         BLOCK_SIZE = x_start.shape[0]
 
         # num_unet_denoising_steps > 1 implies do_unet_distill, but not vice versa.
@@ -2144,7 +2157,7 @@ class LatentDiffusion(DDPM):
                     if self.p_unet_teacher_uses_cfg > 0:
                         # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
                         # to the teacher.
-                        # self.uncond_context is a tuple of (uncond_embs, uncond_c_in, extra_info).
+                        # self.uncond_context is a tuple of (uncond_embs, uncond_prompt_in, extra_info).
                         # Truncate the uncond_embs to the same length as teacher_context.
                         LEN_POS_PROMPT = teacher_context.shape[1]
                         # NOTE: Since arc2face doesn't respond to compositional prompts, 
@@ -2171,7 +2184,7 @@ class LatentDiffusion(DDPM):
                         # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
                         # to the teacher.
                         global_neg_id_embs = all_id2img_neg_prompt_embs[teacher_idx]
-                        # uncond_context is a tuple of (uncond_emb, uncond_c_in, extra_info).
+                        # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
                         # uncond_context[0]: [1, 77, 768] -> [BS, 77, 768]
                         cls_neg_prompt_embs = self.uncond_context[0].repeat(teacher_context.shape[0], 1, 1)
 
@@ -2300,7 +2313,7 @@ class LatentDiffusion(DDPM):
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
     def prime_x_start_for_comp_prompts(self, cond_context, x_start, noise,
                                        masks, fg_noise_amount=0.2, BLOCK_SIZE=1):
-        c_prompt_emb, c_in, extra_info = cond_context
+        prompt_emb, prompt_in, extra_info = cond_context
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
         img_mask, fg_mask = masks
@@ -2329,7 +2342,7 @@ class LatentDiffusion(DDPM):
         t      = t_rear.repeat(4)
 
         x_start_maskfilled = x_start
-        subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = c_prompt_emb.chunk(4)
+        subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = prompt_emb.chunk(4)
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         # Update masks to be a 1-repeat-4 structure.
@@ -2419,7 +2432,7 @@ class LatentDiffusion(DDPM):
         # since the class-single instance is actually the subj-comp-rep instance, using different noise 
         # will lead to multiple-face artifacts.
         noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
-        subj_double_prompt_emb, cls_double_prompt_emb = c_prompt_emb.chunk(2)
+        subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
         subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
@@ -3003,8 +3016,8 @@ class DiffusionWrapper(pl.LightningModule):
 
     # t: a 1-D batch of timesteps (during training: randomly sample one timestep for each instance).
     def forward(self, x, t, cond_context):
-        c_prompt_emb, c_in, extra_info = cond_context
-        out = self.diffusion_model(x, t, context=c_prompt_emb, context_in=c_in, extra_info=extra_info)
+        prompt_emb, prompt_in, extra_info = cond_context
+        out = self.diffusion_model(x, t, context=prompt_emb, context_in=prompt_in, extra_info=extra_info)
 
         return out
 
@@ -3103,7 +3116,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.unet_lora_modules  = None
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
-        c_prompt_emb, c_in, extra_info = cond_context
+        prompt_emb, prompt_in, extra_info = cond_context
         # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.
         img_mask     = extra_info.get('img_mask', None) if extra_info is not None else None
         subj_indices = extra_info.get('subj_indices', None) if extra_info is not None else None
@@ -3133,10 +3146,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                    use_attn_lora, use_ffn_lora, capture_ca_activations, shrink_subj_attn)
 
         # x: x_noisy from LatentDiffusion.apply_model().
-        x, c_prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
-                                       for ts in (x, c_prompt_emb, img_mask) ]
+        x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
+                                       for ts in (x, prompt_emb, img_mask) ]
         
-        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=c_prompt_emb, 
+        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=prompt_emb, 
                                    cross_attention_kwargs={'img_mask': img_mask, 
                                                            'subj_indices': subj_indices},
                                    return_dict=False)[0]

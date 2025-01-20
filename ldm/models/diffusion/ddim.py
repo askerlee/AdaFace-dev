@@ -97,7 +97,7 @@ class DDIMSampler:
                 #if cbs != batch_size:
                 #    print(f"Warning: Got {cbs} conditionings but batch-size is {batch_size}")
             else:
-                # conditioning is actually (conditioning, c_in, extra_info).
+                # conditioning is actually (conditioning, prompt_in, extra_info).
                 # So conditioning[0] is the actual conditioning.
                 if isinstance(conditioning, tuple):
                     conditioning_ = conditioning[0]
@@ -233,8 +233,8 @@ class DDIMSampler:
             t_in = torch.cat([t] * 2)
 
             if isinstance(c, tuple):
-                c_c, c_in_c, extra_info = c
-                c_u, c_in_u, _ = unconditional_conditioning
+                c_c, prompt_in_c, extra_info = c
+                c_u, prompt_in_u, _ = unconditional_conditioning
 
                 # Concatenated conditining embedding in the order of (conditional, unconditional).
                 # NOTE: the original order is (unconditional, conditional). But if we use conv attn,
@@ -243,7 +243,7 @@ class DDIMSampler:
                 # (conditional, unconditional) don't need to adjust subj_indices.
                 twin_c = torch.cat([c_c, c_u])
                 # Concatenated input context (prompts) in the order of (conditional, unconditional).
-                twin_in = sum([c_in_c, c_in_u], [])
+                twin_in = sum([prompt_in_c, prompt_in_u], [])
                 # Combined context tuple.
                 c2 = (twin_c, twin_in, extra_info)
             else:
