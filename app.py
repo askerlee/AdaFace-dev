@@ -256,7 +256,7 @@ css = '''
     height: 800px !important; 
     width: 100%; 
     margin: 10px auto; 
-    padding: 10px; 
+    padding: 0px; 
     overflow-y: auto !important; 
 }
 '''
@@ -282,16 +282,17 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 remove_and_reupload = gr.ClearButton(value="Remove and upload subject images", 
                                                      components=img_files, size="sm")
 
-            img_files2 = gr.File(
-                        label="Drag / Select 1 or more photos of another person's face (optional)",
-                        file_types=["image"],
-                        file_count="multiple"
-                    )
-            
-            uploaded_files_gallery2 = gr.Gallery(label="2nd Subject images (optional)", visible=False, columns=3, rows=1, height=300)
-            with gr.Column(visible=False) as clear_button_column2:
-                remove_and_reupload2 = gr.ClearButton(value="Remove and upload 2nd Subject images", 
-                                                      components=img_files2, size="sm")
+            with gr.Accordion("Second Subject (Optional)", open=False):
+                img_files2 = gr.File(
+                            label="Drag / Select 1 or more photos of second subject's face (optional)",
+                            file_types=["image"],
+                            file_count="multiple"
+                        )
+                
+                uploaded_files_gallery2 = gr.Gallery(label="2nd Subject images (optional)", visible=False, columns=3, rows=1, height=300)
+                with gr.Column(visible=False) as clear_button_column2:
+                    remove_and_reupload2 = gr.ClearButton(value="Remove and upload 2nd Subject images", 
+                                                        components=img_files2, size="sm")
 
             prompt = gr.Dropdown(label="Prompt",
                        info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
@@ -316,7 +317,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
                                        info="Enhance the face features by prepending 'face portrait' to the prompt")
             enhance_composition = \
-                gr.Checkbox(label="Enhance composition", value=False, 
+                gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(
@@ -415,5 +416,5 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
         subj_name_sig.submit(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
-        
+
 demo.launch(share=True, server_name=args.ip, ssl_verify=False)
