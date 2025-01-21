@@ -511,9 +511,10 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
-            # Use ealisticVision UNet to prime x_start for compositional distillation, since 
-            # it has better compositionality than SD15 UNet.
-            unet = UNet2DConditionModel.from_pretrained('models/ensemble/rv4-unet', torch_dtype=torch.float16)
+            # Although using RealisticVision UNet has better compositionality than sar UNet,
+            # seems the semantics doesn't effectively pass to the subsequent denoising by the sar UNet.
+            # Therefore, we still use sar UNET to prime x_start for compositional distillation.
+            unet = UNet2DConditionModel.from_pretrained('models/ensemble/sar-unet', torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
