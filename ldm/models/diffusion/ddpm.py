@@ -1288,11 +1288,22 @@ class LatentDiffusion(DDPM):
                 subj_single_prompts[:BLOCK_SIZE],   subj_comp_prompts[:BLOCK_SIZE], \
                 cls_single_prompts[:BLOCK_SIZE],    cls_comp_prompts[:BLOCK_SIZE], \
                 compos_partial_prompt[:BLOCK_SIZE], prompt_modifier[:BLOCK_SIZE]
+            self.iter_flags['subj_comp_uses_repeat_prompts'] = torch.rand(1) < self.p_subj_comp_uses_repeat_prompts
+            if self.iter_flags['subj_comp_uses_repeat_prompts']:
+                subj_comp_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                      + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                      for i in range(BLOCK_SIZE) ]
+                # Repeat the compositional part of cls_comp_prompts as well, so that they are aligned,
+                # and loss computation is made easier.
+                cls_comp_prompts  = [ cls_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                      + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                      for i in range(BLOCK_SIZE) ]
         else:
             # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
+            self.iter_flags['subj_comp_uses_repeat_prompts']   = False
 
         # Repeat the compositional prompts once or twice, to further highlight the compositional features.
         # NOTE: for subj_comp_rep2_prompts, we repeat compos_partial_prompt twice, 
@@ -1301,13 +1312,16 @@ class LatentDiffusion(DDPM):
         # in total subj_comp_rep2_prompts contains 2 copies of the modifier, and 3 copies of compos_partial_prompt.
         # This is to avoid the subj comp instance receives too much style guidance from the subj_comp_rep instances,
         # and becomes overly stylized.
-        subj_comp_rep1_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                   + ", " + ", ".join([ compos_partial_prompt[i] ]) \
-                                    for i in range(BLOCK_SIZE) ]
-        subj_comp_rep2_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                   + ", " + ", ".join([ compos_partial_prompt[i] ] * 2) \
-                                    for i in range(BLOCK_SIZE) ]
-
+        if self.iter_flags['subj_comp_uses_repeat_prompts']:
+            # Do not add prompt_modifier to subj_comp_prompts, as it's already added in the previous step.
+            subj_comp_rep_prompts = [ subj_comp_prompts[i] \
+                                       + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                        for i in range(BLOCK_SIZE) ]
+        else:
+            subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                       + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                        for i in range(BLOCK_SIZE) ]
+                        
         # We still compute the prompt embeddings of the first 4 types of prompts, 
         # to compute prompt delta loss. 
         # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
@@ -1328,16 +1342,8 @@ class LatentDiffusion(DDPM):
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
             prompt_emb.chunk(4)
 
-        subj_comp_rep1_emb, _, extra_info_rep1 = \
-            self.get_text_conditioning(subj_comp_rep1_prompts,
-                                       self.iter_flags['id2img_prompt_embs'],
-                                       self.iter_flags['clip_bg_features'],
-                                       randomize_clip_weights=False,
-                                       text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
-                                       real_batch_size=ORIG_BS)
-
-        subj_comp_rep2_emb, _, extra_info_rep2 = \
-            self.get_text_conditioning(subj_comp_rep2_prompts,
+        subj_comp_rep_emb, _, extra_info_rep = \
+            self.get_text_conditioning(subj_comp_rep_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
                                        randomize_clip_weights=False,
@@ -1346,8 +1352,7 @@ class LatentDiffusion(DDPM):
 
         # Rename extra_info['prompt_emb_mask'] to extra_info['prompt_emb_mask_4b_orig'].
         extra_info['prompt_emb_mask_4b_orig'] = extra_info.pop('prompt_emb_mask')
-        extra_info['prompt_emb_mask_sc_rep1'] = extra_info_rep1['prompt_emb_mask']
-        extra_info['prompt_emb_mask_sc_rep2'] = extra_info_rep2['prompt_emb_mask']
+        extra_info['prompt_emb_mask_sc_rep']  = extra_info_rep['prompt_emb_mask']
 
         # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
         # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
@@ -1396,30 +1401,25 @@ class LatentDiffusion(DDPM):
             # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
             # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
             # are manually mixed into their embeddings.
-            self.iter_flags['subj_comp_uses_repeat_prompts']    = torch.rand(1) < self.p_subj_comp_uses_repeat_prompts
             self.iter_flags['subj_comp_distill_on_rep_prompts'] = torch.rand(1) < self.p_subj_comp_distill_on_rep_prompts
 
             if self.iter_flags['subj_comp_uses_repeat_prompts']:
                 prompt_emb_mask_4b = extra_info['prompt_emb_mask_4b_orig'].clone()
-                # Update the sc embedding mask to be prompt_emb_mask_sc_rep1.
-                prompt_emb_mask_4b[BLOCK_SIZE:BLOCK_SIZE*2] = extra_info['prompt_emb_mask_sc_rep1']
+                # Update the sc embedding mask to be prompt_emb_mask_sc_rep.
+                prompt_emb_mask_4b[BLOCK_SIZE:BLOCK_SIZE*2] = extra_info['prompt_emb_mask_sc_rep']
                 extra_info['prompt_emb_mask_4b'] = prompt_emb_mask_4b
 
                 if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                    # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
-                    # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
-                    prompt_in = subj_single_prompts + subj_comp_rep1_prompts + subj_comp_rep2_prompts + cls_comp_prompts
-                    prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb], dim=0)
-                else:
-                    # 20% of the time, we use subj_comp_rep1_prompts instead of subj_comp_prompts.
-                    # The 4 blocks of instances are (subj_single, subj_comp_rep, cls_single, cls_comp).
-                    prompt_in = subj_single_prompts + subj_comp_rep1_prompts + cls_single_prompts + cls_comp_prompts
-                    prompt_emb = torch.cat([subj_single_emb, subj_comp_rep1_emb, cls_single_emb, cls_comp_emb], dim=0)
+                    # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
+                    # *** Since subj_comp_uses_repeat_prompts, subj_comp repeats the compositional part once,
+                    # *** and subj_comp_rep repeats the compositional part twice.
+                    prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
+                    prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
             else:
                 extra_info['prompt_emb_mask_4b'] = extra_info['prompt_emb_mask_4b_orig']
                 if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                    prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep1_prompts + cls_comp_prompts
-                    prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep1_emb, cls_comp_emb], dim=0)
+                    prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
+                    prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
                 else:
                     # Otherwise, 80% of the time, we use cls_single_prompts.
                     prompt_in       = delta_prompts
@@ -1443,7 +1443,7 @@ class LatentDiffusion(DDPM):
             prompt_emb = subj_single_emb
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
-            extra_info['placeholder2indices']   = extra_info['placeholder2indices_1b']
+            extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
             extra_info['prompt_emb_1b']       = subj_single_emb
 
             # extra_info['prompt_emb_4b_orig'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
@@ -1751,8 +1751,7 @@ class LatentDiffusion(DDPM):
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
             # If we do subj_comp_distill_on_rep_prompts, cond_context contains 
-            #    (subj_single_emb, subj_comp_emb,      subj_comp_rep1_emb, cls_comp_emb) 
-            # or (subj_single_emb, subj_comp_rep1_emb, subj_comp_rep2_emb, cls_comp_emb).
+            #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
             # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
             # Therefore, we use extra_info['prompt_emb_4b_orig'] to get the old context.
