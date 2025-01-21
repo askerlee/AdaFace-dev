@@ -2017,6 +2017,7 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
     ss_emb_mask, sc_emb_mask, ms_emb_mask, mc_emb_mask = prompt_emb_mask_4b.squeeze(2).chunk(4)
     ss_pad_mask, sc_pad_mask, ms_pad_mask, mc_pad_mask = prompt_pad_mask_4b.squeeze(2).chunk(4)
     sc_nonsubj_emb_mask = sc_emb_mask.clone()
+    # sc_nonsubj_emb_mask := sc_emb_mask + sc_pad_mask - subj_emb_mask.
     # sc_nonsubj_emb_mask: [1, 77], so we can use subj_indices_1b directly to index it.
     sc_nonsubj_emb_mask[subj_indices_1b] = 0
     # Align padding embeddings in sc_subj_k with sc_subj_rep_k as well,
