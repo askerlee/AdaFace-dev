@@ -1389,12 +1389,13 @@ class LatentDiffusion(DDPM):
         extra_info['placeholder2indices_1b'] = placeholder2indices_1b
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
 
-        # These embeddings are patched. So combine them back into prompt_emb.
+        # cls_single_emb and cls_comp_emb have been patched above. 
+        # Then combine them back into prompt_emb_4b_orig.
         # prompt_emb_4b_orig is the 4 sets of embeddings of subj_single_prompts, subj_comp_prompts, 
         # cls_single_prompts, cls_comp_prompts used for prompt delta loss.             
-        # prompt_emb_4b_orig: [64, 77, 768].
+        # prompt_emb_4b_orig: [4, 77, 768].
         prompt_emb_4b_orig = torch.cat([subj_single_emb, subj_comp_emb, 
-                                     cls_single_emb,  cls_comp_emb], dim=0)
+                                        cls_single_emb,  cls_comp_emb], dim=0)
         extra_info['prompt_emb_4b_orig'] = prompt_emb_4b_orig
 
         if self.iter_flags['do_comp_feat_distill']:
@@ -1412,15 +1413,17 @@ class LatentDiffusion(DDPM):
                 # *** and subj_comp_rep repeats the compositional part twice.
                 prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
                 prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+                
+                # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
                 prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
                 prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
-                # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
                 prompt_emb_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_emb_mask']
                 prompt_pad_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_pad_mask']
                 extra_info['prompt_emb_mask_4b'] = prompt_emb_mask_4b
                 extra_info['prompt_pad_mask_4b'] = prompt_pad_mask_4b
             else:
-                # Otherwise, we use the original cls_single_prompts.
+                # Otherwise, the original cls_single_prompts is in the batch, 
+                # so we use prompt_emb_4b_orig.
                 prompt_in  = delta_prompts
                 prompt_emb = prompt_emb_4b_orig
                 extra_info['prompt_emb_mask_4b'] = extra_info['prompt_emb_mask_4b_orig']
@@ -1435,7 +1438,8 @@ class LatentDiffusion(DDPM):
             # Use the original "captions" prompts and embeddings.
             # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
             # it holds in all other cases.
-            if not (self.iter_flags['unet_distill_uses_comp_prompt'] or self.iter_flags['recon_on_comp_prompt']):
+            if not self.iter_flags['unet_distill_uses_comp_prompt'] \
+              and not self.iter_flags['recon_on_comp_prompt']:
                 assert captions == subj_single_prompts
             else:
                 assert captions == subj_comp_prompts
@@ -1445,27 +1449,15 @@ class LatentDiffusion(DDPM):
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
-            extra_info['prompt_emb_1b']       = subj_single_emb
-
-            # extra_info['prompt_emb_4b_orig'] is already [16, 4, 77, 768]. Replace the first block [4, 4, 77, 768].
-            # As adaface_subj_embs0 is only the subject embeddings, we need to rely on placeholder_indices 
-            # to do the replacement.
-            # extra_info['prompt_emb_4b_orig'][:BLOCK_SIZE] = self.embedding_manager.adaface_subj_embs0
-                                
-            ##### End of normal_recon/do_unet_distill with prompt delta loss iters. #####
                             
-
-        # extra_info['cls_single_emb'] and extra_info['cls_comp_emb'] are used 
-        # during unet distillation.
-        extra_info['cls_single_prompts'] = cls_single_prompts
-        extra_info['cls_single_emb']     = cls_single_emb
-        extra_info['cls_comp_prompts']   = cls_comp_prompts
-        extra_info['cls_comp_emb']       = cls_comp_emb
-                                                      
-        # iter_flags['delta_prompts'] is not used in p_losses(). Keep it for debugging purpose.
+        # extra_info['cls_single_emb'] and extra_info['cls_comp_emb'] are used in unet distillation.
+        extra_info['cls_single_prompts']    = cls_single_prompts
+        extra_info['cls_single_emb']        = cls_single_emb
+        extra_info['cls_comp_prompts']      = cls_comp_prompts
+        extra_info['cls_comp_emb']          = cls_comp_emb                          
         extra_info['compos_partial_prompt'] = compos_partial_prompt
 
-        # prompt_emb: [64, 77, 768]                    
+        # prompt_emb: [4, 77, 768]                    
         cond_context = (prompt_emb, prompt_in, extra_info)
 
         # self.model (UNetModel) is called in p_losses().
