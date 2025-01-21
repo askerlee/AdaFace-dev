@@ -2019,6 +2019,8 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
     sc_nonsubj_emb_mask = sc_emb_mask.clone()
     # sc_nonsubj_emb_mask: [1, 77], so we can use subj_indices_1b directly to index it.
     sc_nonsubj_emb_mask[subj_indices_1b] = 0
+    # Align padding embeddings in sc_subj_k with sc_subj_rep_k as well,
+    # to prevent subject information leaking into the padding embeddings.
     sc_nonsubj_emb_mask = torch.logical_or(sc_nonsubj_emb_mask, sc_pad_mask)
     # sc_emb_mask: [1, 77] -> [1, 1, 77], to be broadcasted to sc_k and mc_k [1, 320, 77].
     sc_nonsubj_emb_mask = sc_nonsubj_emb_mask.unsqueeze(1)
