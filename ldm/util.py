@@ -2173,6 +2173,7 @@ def backward_warp_by_flow(image2, flow1to2):
 
     return image1_recovered
 
+# Convert an optical flow to an equivalent attention matrix.
 @conditional_compile(enable_compile=EnableCompile)
 def flow2attn(s2c_flow, H, W, mask_N=None):
     # Generate a diagonal attention matrix from comp tokens (feature dim) to comp tokens (spatial dims).
