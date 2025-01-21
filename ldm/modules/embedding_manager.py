@@ -473,27 +473,20 @@ class EmbeddingManager(nn.Module):
 
         return embedded_text
 
-    # Update prompt_emb_mask.
     # tokenized_text: [B, N] = [2/4, 77].
-    # If 'validation' is present in the config file,
-    # DDPM.validation_step() -> LatentDiffusion.shared_step() -> .forward()
-    # -> .get_text_conditioning() -> .cond_stage_model.encode()
-    # -> EmbeddingManager.forward() -> here.
-    # In the beginning of an epoch, a few validation_step() is called. But I don't know why.
-    # Occasionally, image_logger is called, which calls LatentDiffusion.log_images ->
-    # .get_text_conditioning() -> ... -> here.
-    # Such prompt_emb_mask won't be used in calc_prompt_emb_delta_loss() and won't be cleared.
     # prompt_emb_mask: [B, N, 1], where N=77 is the prompt length after padding.
     def update_prompt_masks(self, tokenized_text):
-        # Exclude the starting (49406) and padding tokens (49047) from delta loss.
+        # Exclude the BOS (49406) and EOS tokens (padding tokens, 49047) from delta loss.
         prompt_emb_mask  = (tokenized_text != 49406 ) & (tokenized_text != 49407)
         # [B, N] => [B, N, 1]
-        self.prompt_emb_mask  = prompt_emb_mask.float().unsqueeze(2)
+        self.prompt_emb_mask = prompt_emb_mask.unsqueeze(2)
+        self.prompt_pad_mask = (tokenized_text == 49047).unsqueeze(2)
 
     # clear_prompt_adhoc_info() is called in ddpm.py:guided_denoise() when switching prompts.
     def clear_prompt_adhoc_info(self):
         self.placeholder2indices    = {}
         self.prompt_emb_mask        = None
+        self.prompt_pad_mask        = None
 
     # During training,  set_curr_batch_subject_names() is called in ddpm.py.
     # During inference, set_curr_batch_subject_names() is called by the embedding manager.

@@ -797,6 +797,7 @@ class LatentDiffusion(DDPM):
         extra_info = { 
                         'placeholder2indices':      copy.copy(self.embedding_manager.placeholder2indices),
                         'prompt_emb_mask':          copy.copy(self.embedding_manager.prompt_emb_mask),
+                        'prompt_pad_mask':      copy.copy(self.embedding_manager.prompt_pad_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
                         'capture_ca_activations':   False,
                         'use_attn_lora':            False,
@@ -1273,9 +1274,9 @@ class LatentDiffusion(DDPM):
         # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
 
         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
-        delta_prompts = self.iter_flags['delta_prompts']
-        compos_partial_prompt = self.iter_flags['compos_partial_prompt']
-        prompt_modifier = self.iter_flags['prompt_modifier']
+        delta_prompts           = self.iter_flags['delta_prompts']
+        compos_partial_prompt   = self.iter_flags['compos_partial_prompt']
+        prompt_modifier         = self.iter_flags['prompt_modifier']
 
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts = delta_prompts
 
@@ -1342,7 +1343,7 @@ class LatentDiffusion(DDPM):
         subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
             prompt_emb.chunk(4)
 
-        subj_comp_rep_emb, _, extra_info_rep = \
+        subj_comp_rep_emb, _, extra_info_sc_rep = \
             self.get_text_conditioning(subj_comp_rep_prompts,
                                        self.iter_flags['id2img_prompt_embs'],
                                        self.iter_flags['clip_bg_features'],
@@ -1350,9 +1351,10 @@ class LatentDiffusion(DDPM):
                                        text_conditioning_iter_type=self.iter_flags['text_conditioning_iter_type'],
                                        real_batch_size=ORIG_BS)
 
-        # Rename extra_info['prompt_emb_mask'] to extra_info['prompt_emb_mask_4b_orig'].
-        extra_info['prompt_emb_mask_4b_orig'] = extra_info.pop('prompt_emb_mask')
-        extra_info['prompt_emb_mask_sc_rep']  = extra_info_rep['prompt_emb_mask']
+        # Rename extra_info['prompt_emb_mask'] to extra_info['prompt_emb_mask_4b_orig'],
+        #        extra_info['prompt_pad_mask'] to extra_info['prompt_pad_mask_4b_orig'].
+        extra_info['prompt_emb_mask_4b_orig']   = extra_info.pop('prompt_emb_mask')
+        extra_info['prompt_pad_mask_4b_orig']   = extra_info.pop('prompt_pad_mask')
 
         # *_2b: two sub-blocks of the batch (e.g., subj single prompts and subj comp prompts).
         # *_1b: one sub-block  of the batch (e.g., only subj single prompts).
@@ -1395,35 +1397,33 @@ class LatentDiffusion(DDPM):
         extra_info['prompt_emb_4b_orig'] = prompt_emb_4b_orig
 
         if self.iter_flags['do_comp_feat_distill']:
+            # If subj_comp_distill_on_rep_prompts, then:
+            # prompt_in: subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
+            # Otherwise:
             # prompt_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
             # The cls_single_prompts/cls_comp_prompts within prompt_in will only be used to 
             # generate ordinary prompt embeddings, i.e., 
-            # it doesn't contain subject token, and no ada embedding will be injected by embedding manager.
-            # Instead, subj_single_emb, subj_comp_emb and subject ada embeddings 
-            # are manually mixed into their embeddings.
+            # it doesn't contain subject tokens.
             self.iter_flags['subj_comp_distill_on_rep_prompts'] = torch.rand(1) < self.p_subj_comp_distill_on_rep_prompts
-
-            if self.iter_flags['subj_comp_uses_repeat_prompts']:
-                prompt_emb_mask_4b = extra_info['prompt_emb_mask_4b_orig'].clone()
-                # Update the sc embedding mask to be prompt_emb_mask_sc_rep.
-                prompt_emb_mask_4b[BLOCK_SIZE:BLOCK_SIZE*2] = extra_info['prompt_emb_mask_sc_rep']
+            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
+                # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
+                # *** Since subj_comp_uses_repeat_prompts, subj_comp repeats the compositional part once,
+                # *** and subj_comp_rep repeats the compositional part twice.
+                prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
+                prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+                prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
+                prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
+                # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
+                prompt_emb_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_emb_mask']
+                prompt_pad_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_pad_mask']
                 extra_info['prompt_emb_mask_4b'] = prompt_emb_mask_4b
-
-                if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                    # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
-                    # *** Since subj_comp_uses_repeat_prompts, subj_comp repeats the compositional part once,
-                    # *** and subj_comp_rep repeats the compositional part twice.
-                    prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
-                    prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+                extra_info['prompt_pad_mask_4b'] = prompt_pad_mask_4b
             else:
+                # Otherwise, we use the original cls_single_prompts.
+                prompt_in  = delta_prompts
+                prompt_emb = prompt_emb_4b_orig
                 extra_info['prompt_emb_mask_4b'] = extra_info['prompt_emb_mask_4b_orig']
-                if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                    prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
-                    prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
-                else:
-                    # Otherwise, 80% of the time, we use cls_single_prompts.
-                    prompt_in       = delta_prompts
-                    prompt_emb = prompt_emb_4b_orig
+                extra_info['prompt_pad_mask_4b'] = extra_info['prompt_pad_mask_4b_orig']
 
             # The prompts are either (subj single, subj comp, cls single, cls comp).
             # So the first 2 sub-blocks always contain the subject tokens, and we use *_2b.    
@@ -1893,6 +1893,7 @@ class LatentDiffusion(DDPM):
                                                  extra_info['compos_partial_prompt'],
                                                  fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
+                                                 extra_info['prompt_pad_mask_4b'],
                                                  BLOCK_SIZE, loss_dict, session_prefix)
             loss += loss_comp_feat_distill_loss
         ##### end of do_comp_feat_distill #####
@@ -2484,7 +2485,8 @@ class LatentDiffusion(DDPM):
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
     def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompt,
-                                    fg_mask, all_subj_indices_1b, all_subj_indices_2b, prompt_emb_mask,
+                                    fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                    prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve      = []
         losses_subj_attn_norm_distill   = []
@@ -2494,11 +2496,11 @@ class LatentDiffusion(DDPM):
         loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
         sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
-        # When sc_fg_mask_percent >= 0.20, we think the face is close to be too large and 
+        # When sc_fg_mask_percent >= 0.19, we think the face is close to be too large and 
         # do subj_comp_rep_distill to discourage it.
         # 0.22 is borderline large, and 0.25 is too large.
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
-        rep_dist_fg_bounds              = (0.20, 0.22, 0.25)
+        rep_dist_fg_bounds              = (0.19, 0.22, 0.25)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
@@ -2615,7 +2617,8 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                 loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
                     calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
-                                                    prompt_emb_mask, sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])
+                                                    prompt_emb_mask_4b, prompt_pad_mask_4b,
+                                                    sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])
                 if loss_comp_rep_distill_subj_attn == 0:
                     loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
                         torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
@@ -2661,16 +2664,15 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.item() })
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
-            # valid_scale_range=(0, 1): If sc_fg_mask_percent = 0.21, then fg_percent_rep_distill_scale = 0.
+            # valid_scale_range=(0.02, 1): If sc_fg_mask_percent = 0.19, then fg_percent_rep_distill_scale = 0.02.
             if sc_fg_mask_percent > 0:
                 fg_percent_rep_distill_scale = \
                     calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[1], 0.1), (rep_dist_fg_bounds[2], 2), 
-                                        valid_scale_range=(0, 2))
+                                        valid_scale_range=(0.02, 2))
             else:
                 # sc_fg_mask_percent == 0 means no face is detected in the subject-comp instance.
-                # In this case, we still do distillation on the subject-comp-rep instance, 
-                # but with a smaller scale.
-                fg_percent_rep_distill_scale = 0.03
+                # In this case, we don't do distillation on the subject-comp-rep instance.
+                fg_percent_rep_distill_scale = 0
 
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale

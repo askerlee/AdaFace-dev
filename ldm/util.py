@@ -1280,10 +1280,10 @@ def calc_prompt_emb_delta_loss(prompt_embeddings, prompt_emb_mask, cls_delta_gra
     # prompt_embeddings: [4, 16, 77, 768].
     # cls_*: embeddings generated from prompts containing a class token (as opposed to the subject token).
     # Each is [1, 16, 77, 768]
-    subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = \
-            prompt_embeddings.chunk(4)
+    subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb = prompt_embeddings.chunk(4)
 
     if prompt_emb_mask is not None:
+        prompt_emb_mask = prompt_emb_mask.float()
         # Regularization on padding tokens.
         # prompt_emb_mask[prompt_emb_mask == 0] = 0.25
         # Exclude the start token.
@@ -2000,7 +2000,8 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
     
     return loss_dict
 
-def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prompt_emb_mask, 
+def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, 
+                                    prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     sc_fg_mask_percent, FG_THRES=0.22):
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
     # and the face area is > 0.22 of the whole image, 
@@ -2013,16 +2014,18 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, prom
     subj_comp_rep_distill_layer_weights = normalize_dict_values(subj_comp_rep_distill_layer_weights)
     # prompt_emb_mask: [4, 77, 1] -> [4, 77].
     # sc_emb_mask: [1, 77]
-    ss_emb_mask, sc_emb_mask, ms_emb_mask, mc_emb_mask = prompt_emb_mask.squeeze(2).chunk(4)
+    ss_emb_mask, sc_emb_mask, ms_emb_mask, mc_emb_mask = prompt_emb_mask_4b.squeeze(2).chunk(4)
+    ss_pad_mask, sc_pad_mask, ms_pad_mask, mc_pad_mask = prompt_pad_mask_4b.squeeze(2).chunk(4)
     sc_nonsubj_emb_mask = sc_emb_mask.clone()
     # sc_nonsubj_emb_mask: [1, 77], so we can use subj_indices_1b directly to index it.
     sc_nonsubj_emb_mask[subj_indices_1b] = 0
+    sc_nonsubj_emb_mask = torch.logical_or(sc_nonsubj_emb_mask, sc_pad_mask)
     # sc_emb_mask: [1, 77] -> [1, 1, 77], to be broadcasted to sc_k and mc_k [1, 320, 77].
     sc_nonsubj_emb_mask = sc_nonsubj_emb_mask.unsqueeze(1)
 
     # If no face is detected in the subject-comp instance, sc_fg_mask_percent = 0.
     # In this case, we still distill the subject-comp rep attns and ks from the subject-comp rep instance.
-    if (sc_fg_mask_percent == 0) or (sc_fg_mask_percent >= FG_THRES):
+    if sc_fg_mask_percent >= FG_THRES:
         # q is computed from image features, and k is from the prompt embeddings.
         for unet_layer_idx, ca_attn in ca_layers_activations['attn'].items():
             if unet_layer_idx not in subj_comp_rep_distill_layer_weights:
