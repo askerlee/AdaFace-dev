@@ -96,7 +96,7 @@ def remove_back_to_files():
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, enhance_face, enhance_composition, 
-                   seed, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
+                   seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
 
@@ -140,6 +140,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, 
                       repeat_prompt_for_each_encoder=enhance_composition,
+                      ablate_prompt_no_placeholders=disable_adaface,
                       verbose=True)
 
     session_signature = ",".join(image_paths + [prompt, str(seed)])
@@ -385,7 +386,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 step=1,
                 value=0,
             )
-            randomize_seed = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
+            randomize_seed  = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
+            disable_adaface = gr.Checkbox(label="Disable AdaFace", value=False, info="Disable AdaFace for ablation")
 
         with gr.Column():
             out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=4, height=800,
@@ -411,7 +413,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         generate_image_call_dict = {
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
-                       negative_prompt, enhance_face, enhance_composition, seed, subj_name_sig],
+                       negative_prompt, enhance_face, enhance_composition, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)

@@ -107,6 +107,7 @@ class DDPM(pl.LightningModule):
                  p_subj_comp_distill_on_rep_prompts=1,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.005, 0.02],
+                 recon_bg_pixel_weight=0.01,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
@@ -180,6 +181,7 @@ class DDPM(pl.LightningModule):
         self.p_subj_comp_distill_on_rep_prompts     = p_subj_comp_distill_on_rep_prompts
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
+        self.recon_bg_pixel_weight                  = recon_bg_pixel_weight
 
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
@@ -1861,7 +1863,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_normal_recon']:  
             loss_normal_recon = \
                 self.calc_normal_recon_loss(x_start, noise, cond_context, img_mask, fg_mask, 
-                                            all_subj_indices, loss_dict, session_prefix)
+                                            all_subj_indices, self.recon_bg_pixel_weight, loss_dict, session_prefix)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
@@ -1870,7 +1872,7 @@ class LatentDiffusion(DDPM):
             # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, cond_context, extra_info, 
-                                            img_mask, fg_mask, all_subj_indices,
+                                            img_mask, fg_mask, all_subj_indices, 
                                             loss_dict, session_prefix)
             # loss_unet_distill: < 0.01, so we use a very large unet_distill_weight==8 to
             # make it comparable to the recon loss. Otherwise, loss_unet_distill will 
@@ -1943,7 +1945,7 @@ class LatentDiffusion(DDPM):
         return adv_grad
 
     def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
-                               all_subj_indices, loss_dict, session_prefix):
+                               all_subj_indices, recon_bg_pixel_weight, loss_dict, session_prefix):
         loss_normal_recon = 0
         BLOCK_SIZE = x_start.shape[0]
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
@@ -1954,7 +1956,7 @@ class LatentDiffusion(DDPM):
             # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
             FACELOSS_BS = x_start.shape[0]
 
-        # perturb_input_noise: DISABLED.
+        # perturb_input_noise: DISABLED, p_perturb_input_noise = 0.
         self.iter_flags['perturb_input_noise'] = (torch.rand(1) < self.p_perturb_input_noise)
         if self.iter_flags['perturb_input_noise']:
             # input_noise_perturb_std: 0.05.
@@ -2046,16 +2048,15 @@ class LatentDiffusion(DDPM):
 
         # If do_normal_recon, then there's only 1 objective:
         # **Objective 1**: Align the student predicted noise with the ground truth noise.
-        # bg loss is completely ignored. 
-        bg_pixel_weight = 0 
 
         # NOTE: guided_denoise() uses the perturbed noise2 as input, 
         # but the recon objective is the original noise instead of the perturbed noise2.
         # https://github.com/huggingface/diffusers/issues/3293
+        # NOTE: recon_bg_pixel_weight = 0.01: bg loss is given a tiny weight to suppress multi-face artifacts.
         loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
             calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
                                           all_subj_indices, img_mask, fg_mask,
-                                          bg_pixel_weight, x_start.shape[0])
+                                          recon_bg_pixel_weight, x_start.shape[0])
         v_loss_recon = loss_recon.mean().detach().item()
     
         # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
@@ -2260,26 +2261,21 @@ class LatentDiffusion(DDPM):
             except:
                 breakpoint()
 
-            # If we use the original image (noise) as target, and still wish to keep the original background
-            # after being reconstructed with id2img_prompt_embs, so as not to suppress the background pixels. 
-            # Therefore, bg_pixel_weight = 0.1.
-            if not self.iter_flags['do_unet_distill']:
-                bg_pixel_weight = 0.1
             # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
             # we want to do recon on the whole image. But considering background is not perfect, 
-            # esp. for consistentID whose compositionality is not so good, so bg_pixel_weight = 0.5.
-            elif self.iter_flags['unet_distill_uses_comp_prompt']:
-                bg_pixel_weight = 0.5
+            # esp. for consistentID whose compositionality is not so good, so recon_bg_pixel_weight = 0.5.
+            if self.iter_flags['unet_distill_uses_comp_prompt']:
+                recon_bg_pixel_weight = 0.5
             else:
                 # unet_teacher_type == ['arc2face'] or ['consistentID'] or ['consistentID', 'arc2face'].
-                bg_pixel_weight = 0
+                recon_bg_pixel_weight = 0
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
                 calc_recon_loss(F.mse_loss, model_output, target.to(model_output.dtype), 
                                 img_mask, fg_mask, fg_pixel_weight=1,
-                                bg_pixel_weight=bg_pixel_weight)
+                                bg_pixel_weight=recon_bg_pixel_weight)
 
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
             
