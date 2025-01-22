@@ -45,7 +45,8 @@ parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q'
 parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=True,
                     help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                          "If False, the q lora only updates query2.")
-
+parser.add_argument("--show_disable_adaface_checkbox", type=str2bool, nargs="?", const=True, default=False,
+                    help="Whether to show the checkbox for disabling AdaFace")
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
@@ -386,8 +387,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 step=1,
                 value=0,
             )
-            randomize_seed  = gr.Checkbox(label="Randomize seed", value=True, info="Uncheck for reproducible results")
-            disable_adaface = gr.Checkbox(label="Disable AdaFace", value=False, info="Disable AdaFace for ablation")
+            randomize_seed  = gr.Checkbox(label="Randomize seed", value=True, 
+                                          info="Uncheck for reproducible results")
+            disable_adaface = gr.Checkbox(label="Disable AdaFace", value=False, 
+                                          info="Disable AdaFace for ablation. If checked, the results are no longer personalized.",
+                                          visible=args.show_disable_adaface_checkbox)
 
         with gr.Column():
             out_gallery = gr.Gallery(label="Generated Images", interactive=False, columns=2, rows=4, height=800,
