@@ -2023,6 +2023,7 @@ class LatentDiffusion(DDPM):
             # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
             cfg_scale  = np.random.uniform(1.5, 2.5)
             print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
+            recon_bg_pixel_weight = 0
         else:
             # Use the default negative prompts.
             uncond_emb = None
@@ -2052,7 +2053,9 @@ class LatentDiffusion(DDPM):
         # NOTE: guided_denoise() uses the perturbed noise2 as input, 
         # but the recon objective is the original noise instead of the perturbed noise2.
         # https://github.com/huggingface/diffusers/issues/3293
-        # NOTE: recon_bg_pixel_weight = 0.01: bg loss is given a tiny weight to suppress multi-face artifacts.
+        # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01,
+        # bg loss is given a tiny weight to suppress multi-face artifacts.
+        # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0, i.e., we allow the bg to be compositional patterns.
         loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
             calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
                                           all_subj_indices, img_mask, fg_mask,
