@@ -48,6 +48,8 @@ parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=Tr
 parser.add_argument("--show_disable_adaface_checkbox", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to show the checkbox for disabling AdaFace")
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
+parser.add_argument('--test_ui_only', type=str2bool, nargs="?", const=True, default=False,
+                    help="Only test the UI layout, and skip loadding the adaface model")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
@@ -65,17 +67,20 @@ device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
 print(f"Device: {device}")
 
 global adaface
-adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
-                         adaface_encoder_types=args.adaface_encoder_types, 
-                         adaface_ckpt_paths=args.adaface_ckpt_path, 
-                         adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
-                         enabled_encoders=args.enabled_encoders,
-                         unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
-                         unet_uses_attn_lora=args.unet_uses_attn_lora,
-                         attn_lora_layer_names=args.attn_lora_layer_names,
-                         shrink_subj_attn=False,
-                         q_lora_updates_query=args.q_lora_updates_query,
-                         device='cpu')
+adaface = None
+
+if not args.test_ui_only:
+    adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
+                            adaface_encoder_types=args.adaface_encoder_types, 
+                            adaface_ckpt_paths=args.adaface_ckpt_path, 
+                            adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
+                            enabled_encoders=args.enabled_encoders,
+                            unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
+                            unet_uses_attn_lora=args.unet_uses_attn_lora,
+                            attn_lora_layer_names=args.attn_lora_layer_names,
+                            shrink_subj_attn=False,
+                            q_lora_updates_query=args.q_lora_updates_query,
+                            device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
@@ -96,7 +101,7 @@ def remove_back_to_files():
 
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
-                   num_images, prompt, negative_prompt, enhance_face, enhance_composition, 
+                   num_images, prompt, negative_prompt, gender, enhance_face, enhance_composition, 
                    seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
@@ -135,6 +140,12 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
             prompt = prompt.replace("portrait", "face portrait")
         else:
             prompt = "face portrait, " + prompt
+
+    if gender != "(none)":
+        if "portrait" in prompt:
+            prompt = prompt.replace("portrait, ", f"portrait, {gender} ")
+        else:
+            prompt = gender + ", " + prompt
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
     samples = adaface(noise, prompt, negative_prompt=negative_prompt, 
@@ -261,6 +272,11 @@ css = '''
     padding: 0px; 
     overflow-y: auto !important; 
 }
+.tight-row {
+    gap: 0 !important;        /* removes the horizontal gap between columns */
+    margin: 0 !important;     /* remove any extra margin if needed */
+    padding: 0 !important;    /* remove any extra padding if needed */
+}
 '''
 with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
@@ -296,28 +312,35 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                     remove_and_reupload2 = gr.ClearButton(value="Remove and upload 2nd Subject images", 
                                                         components=img_files2, size="sm")
 
-            prompt = gr.Dropdown(label="Prompt",
-                       info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
-                       value="portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                       allow_custom_value=True,
-                       filterable=False,
-                       choices=[
-                            "portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                            "portrait, walking on the beach, sunset, orange sky",
-                            "portrait, in a white apron and chef hat, garnishing a gourmet dish",
-                            "portrait, dancing pose among folks in a park, waving hands",
-                            "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
-                            "portrait, jedi wielding a lightsaber, star wars, eye level shot",
-                            "portrait, night view of tokyo street, neon light",
-                            "portrait, playing guitar on a boat, ocean waves",
-                            "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
-                            "portrait, celebrating chinese new year, fireworks",
-                            "portrait, running pose in a park, eye level shot",
-                            "portrait, in superman costume, the sky ablaze with hues of orange and purple"
-                       ])
+            with gr.Row(elem_classes="tight-row"):
+                with gr.Column(scale=1, min_width=100):
+                    gender = gr.Dropdown(label="Gender", value="(none)",
+                                        info="Gender prefix. Select only when the model errs.",
+                                        container=False,
+                                        choices=[ "(none)", "man", "woman", "girl", "boy" ])
+
+                with gr.Column(scale=100):                
+                    prompt = gr.Dropdown(label="Prompt",
+                            info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
+                            value="portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
+                            allow_custom_value=True,
+                            choices=[
+                                    "portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
+                                    "portrait, walking on the beach, sunset, orange sky",
+                                    "portrait, in a white apron and chef hat, garnishing a gourmet dish",
+                                    "portrait, dancing pose among folks in a park, waving hands",
+                                    "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
+                                    "portrait, jedi wielding a lightsaber, star wars, eye level shot",
+                                    "portrait, night view of tokyo street, neon light",
+                                    "portrait, playing guitar on a boat, ocean waves",
+                                    "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
+                                    "portrait, celebrating chinese new year, fireworks",
+                                    "portrait, running pose in a park, eye level shot",
+                                    "portrait, in superman costume, the sky ablaze with hues of orange and purple"
+                            ])
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
-                                       info="Enhance the face features by prepending 'face portrait' to the prompt")
+                                       info="Enhance the facial features by prepending 'face portrait' to the prompt")
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
@@ -417,7 +440,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         generate_image_call_dict = {
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
-                       negative_prompt, enhance_face, enhance_composition, seed, disable_adaface, subj_name_sig],
+                       negative_prompt, gender, enhance_face, enhance_composition, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
