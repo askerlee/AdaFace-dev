@@ -40,7 +40,7 @@ model:
     # should match the mixture of the two teachers' outputs.)
     p_gen_rand_id_for_id2img:         0
     # the delta recon loss is only computed when perturb_face_id_embs.
-    p_perturb_face_id_embs:           0.6
+    p_perturb_face_id_embs:           0.2
     # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
     # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6]. 
     # Otherwise, the inconsistency may lead to a noisy divergence between the student and the teacher outputs.
