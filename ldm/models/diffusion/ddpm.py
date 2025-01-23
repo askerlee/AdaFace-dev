@@ -2632,11 +2632,11 @@ class LatentDiffusion(DDPM):
                     # Remove 0 losses from the loss_dict.
                     del loss_dict[loss_name2]
 
-        loss_comp_fg_bg_preserve             = torch.stack(losses_comp_fg_bg_preserve).mean()
-        loss_subj_attn_norm_distill          = torch.stack(losses_subj_attn_norm_distill).mean()
-        loss_comp_rep_distill_subj_attn      = torch.stack(losses_comp_rep_distill_subj_attn).mean()
-        loss_comp_rep_distill_subj_k         = torch.stack(losses_comp_rep_distill_subj_k).mean()
-        loss_comp_rep_distill_nonsubj_k      = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
+        loss_comp_fg_bg_preserve         = torch.stack(losses_comp_fg_bg_preserve).mean()
+        loss_subj_attn_norm_distill      = torch.stack(losses_subj_attn_norm_distill).mean()
+        loss_comp_rep_distill_subj_attn  = torch.stack(losses_comp_rep_distill_subj_attn).mean()
+        loss_comp_rep_distill_subj_k     = torch.stack(losses_comp_rep_distill_subj_k).mean()
+        loss_comp_rep_distill_nonsubj_k  = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
 
         # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
