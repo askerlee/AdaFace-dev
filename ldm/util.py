@@ -2381,14 +2381,14 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat,
             # are not worse beyond the margin.
             # sc_recon_mc_min: 0.03~0.04. sc_recon_ssfg_min: 0.04~0.05. 
             # So a margin of 30% is ~0.01.
-            # ** If mc, we also add a 1% margin to the flow loss, so that when flow loss and same loc loss
+            # ** If mc, we also add a 5% margin to the flow loss, so that when flow loss and same loc loss
             # are tie, same loc loss is preferred.
-            # The relative margin of the flow loss over the attn loss is still almost 30%.
+            # The relative margin of the flow loss over the attn loss is still around 25%.
             # Adding margin to attn loss increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
             # Adding margin to flow loss increases mc_sameloc_win_rate and decreases mc_flow_win_rate.
             if feat_name == 'mc':
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
-                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.01
+                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.05
             else:
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
 
@@ -2494,7 +2494,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_loss_discard_thres=0.3, 
-                               num_flow_est_iters=12, do_feat_attn_pooling=True, do_q_demean=True):
+                               num_flow_est_iters=12, do_feat_attn_pooling=True, 
+                               do_q_demean=True, do_outfeat_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
         return None, None, None, None, None
@@ -2531,10 +2532,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Demean the queries. Otherwise the similarities between any two token qs will always be huge (65~90),
         # preventing the optical flow model from estimating the flow.
         # ca_q: [4, 1280, 961]
-        # NOTE: when do_q_demean, take mean across 0 and 2, the instances and the spatial dims.
+        # NOTE: take mean across 0 and 2, i.e., the instances and the spatial dims.
         # Mean across the instances (subjects) dim is to avoid the mean containing too much 
         # subject-specific features.
         ca_q = ca_q - ca_q.mean(dim=(0,2), keepdim=True).detach()
+
+    if do_outfeat_demean:
+        # Demean the feature maps. Otherwise the similarities between any two token feats will always be huge (65~90),
+        # preventing the optical flow model from estimating the flow.
+        # ca_outfeat: [4, 1280, 961]
+        ca_outfeat = ca_outfeat - ca_outfeat.mean(dim=(0,2), keepdim=True).detach()
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
@@ -2612,11 +2619,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
     ss2sc_flow = None
     mc2sc_flow = None
-    losses_sc_recons = {}
+    losses_sc_recons          = {}
     losses_flow_attns_distill = {}
     loss_sparse_attns_distill = {}
-    all_flow_distill_stats = {}
-    flow_distill_stats     = {}
+    all_flow_distill_stats    = {}
+    flow_distill_stats        = {}
 
     for feat_type in recon_feat_objectives:
         if feat_type == 'attn_out':
@@ -2633,11 +2640,15 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
         # Cut off the gradients into the subj single instance.
-        # We don't need to cut off ms_feat, mc_feat, because they were generated with no_grad().
+        # In fact, We don't need to cut off ms_feat, mc_feat, 
+        # because they were generated within no_grad().
         ss_feat = ss_feat.detach()
         # ss_fg_mask_N:  [N_fg] indices on the flattened spatial dim.
         # Apply mask, permute features to the last dim. [1, 1280, 961] => [1, 961, 1280] => [1, N_fg, 1280]
-        # TODO: this is buggy if block size > 1.
+        # BUG: if block size > 1, ss_fg_mask_N has different non-zero elements 
+        # on different instances.
+        # then we need more complex operations to apply the mask correctly 
+        # (padding instances with smaller masks).
         ssfg_feat = ss_feat.permute(0, 2, 1)[:, ss_fg_mask_N]
         mc_feat   = mc_feat.permute(0, 2, 1)
 
