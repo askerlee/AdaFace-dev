@@ -1149,7 +1149,7 @@ class LatentDiffusion(DDPM):
                                                 x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                 self.batch_subject_names, id2img_prompt_embs, zs_clip_fgbg_features)
                 
-            # ** Perturb the zero-shot ID image prompt embeddings with probability 0.6. **
+            # ** Perturb the zero-shot ID image prompt embeddings with probability 0.2. **
             # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
             # ** but to find neighbors of the subject image embeddings for UNet distillation.
             # The noise is added to the image prompt embeddings instead of the initial face ID embeddings.
@@ -1160,7 +1160,7 @@ class LatentDiffusion(DDPM):
             # If the subject is not face, then face_id_embs is DINO embeddings. We can still add noise to them.
             # Keep the first ID embedding as it is, and add noise to the rest.
             # ** After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent. **
-            # Therefore, for jointIDs, we should reduce perturb_face_id_embs_std_range to [0.3, 0.6].
+            # Therefore, for jointIDs, we reduce perturb_face_id_embs_std_range to [0.3, 0.6].
             id2img_prompt_embs[1:] = \
                 anneal_perturb_embedding(id2img_prompt_embs[1:], training_percent=0, 
                                          begin_noise_std_range=self.perturb_face_id_embs_std_range, 

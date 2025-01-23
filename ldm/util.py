@@ -1391,7 +1391,7 @@ def normalized_sum(losses_list, norm_pow=0):
 
 # perturb_tensor() adds a fixed amount of noise to the tensor.
 def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=False,
-                        std_dim=-1, norm_dim=-1, verbose=True):
+                   std_dim=-1, norm_dim=-1, verbose=True):
     orig_ts = ts
     if perturb_std_is_relative:
         ts_std_mean = ts.std(dim=std_dim).mean().detach()
