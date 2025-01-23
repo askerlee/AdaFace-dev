@@ -103,8 +103,9 @@ class DDPM(pl.LightningModule):
                  p_perturb_input_noise=0,
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.4,
-                 p_subj_comp_uses_repeat_prompts=0.8,
+                 p_subj_comp_uses_repeat_prompts=0,
                  p_subj_comp_distill_on_rep_prompts=1,
+                 subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.005, 0.02],
                  recon_bg_pixel_weight=0.01,
@@ -179,6 +180,7 @@ class DDPM(pl.LightningModule):
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.p_subj_comp_uses_repeat_prompts        = p_subj_comp_uses_repeat_prompts
         self.p_subj_comp_distill_on_rep_prompts     = p_subj_comp_distill_on_rep_prompts
+        self.subj_rep_prompts_count                 = subj_rep_prompts_count
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
         self.recon_bg_pixel_weight                  = recon_bg_pixel_weight
@@ -1318,12 +1320,15 @@ class LatentDiffusion(DDPM):
         # and becomes overly stylized.
         if self.iter_flags['subj_comp_uses_repeat_prompts']:
             # Do not add prompt_modifier to subj_comp_prompts, as it's already added in the previous step.
+            # Repeat compos_partial_prompt once only.
             subj_comp_rep_prompts = [ subj_comp_prompts[i] \
-                                       + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                       + ", " + ", ".join([ compos_partial_prompt[i] ] * max(1, self.subj_rep_prompts_count - 1)) \
                                         for i in range(BLOCK_SIZE) ]
         else:
+            # Add prompt_modifier only once.
+            # Repeat compos_partial_prompt twice.
             subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                       + ", " + ", ".join([ compos_partial_prompt[i] ]) \
+                                       + ", " + ", ".join([ compos_partial_prompt[i] ] * self.subj_rep_prompts_count) \
                                         for i in range(BLOCK_SIZE) ]
                         
         # We still compute the prompt embeddings of the first 4 types of prompts, 
