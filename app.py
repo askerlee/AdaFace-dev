@@ -97,7 +97,8 @@ def remove_back_to_files():
     # Hide uploaded_files_gallery,    show clear_button_column,      hide files,           reset init_img_selected_idx
     # Or:
     # Hide uploaded_init_img_gallery, hide init_clear_button_column, show init_img_files,  reset init_img_selected_idx
-    return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True), gr.update(value="")
+    return gr.update(visible=False), gr.update(visible=False), gr.update(value=None, visible=True), \
+           gr.update(value=""), gr.update(value="(none)")
 
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
@@ -359,7 +360,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
             negative_prompt = gr.Textbox(
                 label="Negative Prompt", 
-                value="flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, deformed eyeballs, cross-eyed, blurry, mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, nude, naked, nsfw, topless, bare breasts",
+                value="sagging face, sagging cheeks, flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, deformed eyeballs, cross-eyed, blurry, mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, nude, naked, nsfw, topless, bare breasts",
             )
 
             guidance_scale = gr.Slider(
@@ -423,9 +424,9 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         img_files.upload(fn=swap_to_gallery,  inputs=img_files,  outputs=[uploaded_files_gallery,  clear_button_column,  img_files])
         img_files2.upload(fn=swap_to_gallery, inputs=img_files2, outputs=[uploaded_files_gallery2, clear_button_column2, img_files2])
         remove_and_reupload.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery, clear_button_column, 
-                                                                    img_files, subj_name_sig])
+                                                                    img_files, subj_name_sig, gender])
         remove_and_reupload2.click(fn=remove_back_to_files, outputs=[uploaded_files_gallery2, clear_button_column2, 
-                                                                    img_files2, subj_name_sig2])
+                                                                    img_files2, subj_name_sig2, gender])
 
         check_prompt_and_model_type_call_dict = {
             'fn': check_prompt_and_model_type,
