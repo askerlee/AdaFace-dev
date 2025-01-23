@@ -25,7 +25,7 @@ model:
     unet_teacher_types:               ['consistentID', 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.5, 2.5]
-    # Reduce p_unet_distill_uses_comp_prompt from 0.2 to 0.1, since the joint teachers
+    # Reduce p_unet_distill_uses_comp_prompt from 0.1 to 0, since the joint teachers
     # only have weak compositionality and their outputs are not so informative.
     p_unet_distill_uses_comp_prompt:  0
     # unet_distill_iter_gap determines the percentage of unet_distill_iter among do_normal_recon iters.
