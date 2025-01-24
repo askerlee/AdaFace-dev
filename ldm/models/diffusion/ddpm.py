@@ -1309,7 +1309,7 @@ class LatentDiffusion(DDPM):
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
-            self.iter_flags['subj_comp_uses_repeat_prompts']   = False
+            self.iter_flags['subj_comp_uses_repeat_prompts'] = False
 
         # Repeat the compositional prompts once or twice, to further highlight the compositional features.
         # NOTE: for subj_comp_rep2_prompts, we repeat compos_partial_prompt twice, 
@@ -1320,13 +1320,13 @@ class LatentDiffusion(DDPM):
         # and becomes overly stylized.
         if self.iter_flags['subj_comp_uses_repeat_prompts']:
             # Do not add prompt_modifier to subj_comp_prompts, as it's already added in the previous step.
-            # Repeat compos_partial_prompt once only.
+            # Repeat compos_partial_prompt (subj_rep_prompts_count - 1) = 1 times.
             subj_comp_rep_prompts = [ subj_comp_prompts[i] \
                                        + ", " + ", ".join([ compos_partial_prompt[i] ] * max(1, self.subj_rep_prompts_count - 1)) \
                                         for i in range(BLOCK_SIZE) ]
         else:
             # Add prompt_modifier only once.
-            # Repeat compos_partial_prompt twice.
+            # Repeat compos_partial_prompt subj_rep_prompts_count = 2 times.
             subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
                                        + ", " + ", ".join([ compos_partial_prompt[i] ] * self.subj_rep_prompts_count) \
                                         for i in range(BLOCK_SIZE) ]
@@ -2614,8 +2614,8 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                 loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
                     calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
-                                                    prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                                    sc_fg_mask_percent, FG_THRES=rep_dist_fg_bounds[0])
+                                                    prompt_emb_mask_4b,    prompt_pad_mask_4b,
+                                                    sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
                 if loss_comp_rep_distill_subj_attn == 0:
                     loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
                         torch.tensor(0., device=x_start.device, dtype=x_start.dtype)

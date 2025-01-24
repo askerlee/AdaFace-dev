@@ -360,7 +360,12 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
             negative_prompt = gr.Textbox(
                 label="Negative Prompt", 
-                value="sagging face, sagging cheeks, flaws in the eyes, flaws in the face, lowres, non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, deformed eyeballs, cross-eyed, blurry, mutation, duplicate, out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, nude, naked, nsfw, topless, bare breasts",
+                value="sagging face, sagging cheeks, flaws in the eyes, flaws in the face, lowres, "
+                      "non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, "
+                      "mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, "
+                      "deformed eyeballs, cross-eyed, extra legs, extra arms, blurry, mutation, duplicate, "
+                      "out of frame, cropped, mutilated, bad anatomy, deformed, bad proportions, "
+                      "nude, naked, nsfw, topless, bare breasts",
             )
 
             guidance_scale = gr.Slider(
