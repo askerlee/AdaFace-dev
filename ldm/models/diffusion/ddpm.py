@@ -1941,12 +1941,16 @@ class LatentDiffusion(DDPM):
         if len(failed_indices) > 0:
             print(f"Failed to detect faces in image-{failed_indices}")
             return None
-        # We want to push embs towards the negative direction, i.e., minimize (embs*embs).mean().
-        # Therefore there's no negative sign when computing self_align_loss.
+        # NOTE: We want to push embs towards the negative direction, 
+        # which is equivalent to push embs towards 0 == minimize (embs*embs).mean().
         # It's not simply reduce the magnitude of the face embedding. Since we add noise to the face image,
         # which introduces other random directions of the face embedding. When we reduce the  
         # face embedding magnitude along the original direction, we boost the noisy face embedding 
         # along the other directions more effectively.
+        # Randomly drop 30% of the face embeddings, i.e., backprop only based on a subset of 
+        # the face embeddings, to make the generated adv grad more stochastic 
+        # and less artificial.
+        embs = F.dropout(embs, p=0.3, training=True)
         self_align_loss = (embs * embs).mean()
         self_align_loss.backward()
         adv_grad = x_start.grad
@@ -2005,8 +2009,6 @@ class LatentDiffusion(DDPM):
                 # Cap the adv_grad_scale to 100, as we observe most adv_grad_scale are below 250.
                 # adv_grad mean at fg area after scaling: 1e-3.
                 adv_grad = adv_grad * min(adv_grad_scale, 100)
-                # Randomly drop 30% of the adv_grad, to reduce the chance of overfitting the adv_grad direction.
-                adv_grad = F.dropout(adv_grad, p=0.3, training=self.training)
                 # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
                 # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
