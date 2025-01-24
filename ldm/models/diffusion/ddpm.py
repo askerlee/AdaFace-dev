@@ -1955,6 +1955,17 @@ class LatentDiffusion(DDPM):
         self_align_loss.backward()
         adv_grad = x_start.grad
         x_start.requires_grad = False
+        
+        # Map the face_coords from the pixel space to latent space (scale down by 8x).
+        # face_coords is None if there are no faces detected in x_recon.
+        face_coords = pixel_bboxes_to_latent(face_coords, orig_image.shape[-1], x_start.shape[-1])
+        # Set areas outside the face_coords of adv_grad to 0.
+        face_mask = torch.zeros_like(adv_grad)
+        for i in range(x_start.shape[0]):
+            x1, y1, x2, y2 = face_coords[i]
+            face_mask[i, :, y1:y2, x1:x2] = 1
+        adv_grad = adv_grad * face_mask
+
         return adv_grad
 
     def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
