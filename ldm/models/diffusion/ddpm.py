@@ -937,8 +937,9 @@ class LatentDiffusion(DDPM):
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
         if self.iter_flags['do_comp_feat_distill']:
-            # If do_comp_feat_distill, is_comp_init_fg_from_training_image is enabled at 80% of the time.
-            p_init_comp_fg_from_training_image = 0.8
+            # DISABLED: even if do_comp_feat_distill, is_comp_init_fg_from_training_image is still always False.
+            # Initializing from training image is a source of double faces in the latent images.
+            p_init_comp_fg_from_training_image = 0
         else:
             p_init_comp_fg_from_training_image = 0
 
