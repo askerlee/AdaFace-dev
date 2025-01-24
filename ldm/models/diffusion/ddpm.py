@@ -133,6 +133,7 @@ class DDPM(pl.LightningModule):
         self.parameterization = parameterization
         print(f"{self.__class__.__name__}: Running in {self.parameterization}-prediction mode")
         self.cond_stage_model = None
+        # clip_denoised: clip the range of denoised variables, not the CLIP model.
         self.clip_denoised = clip_denoised
         self.first_stage_key = first_stage_key
         self.channels = channels
@@ -1765,6 +1766,8 @@ class LatentDiffusion(DDPM):
             # But gt_target is probably not referred to in the following loss computations,
             # since the current iteration is do_comp_feat_distill. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
+            # NOTE: x_start still contains valid face images, as it's unchanged after priming.
+            # Later it will be used for loss computation.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
                                                     (img_mask, fg_mask), fg_noise_amount=0.2,
@@ -1820,8 +1823,8 @@ class LatentDiffusion(DDPM):
             # x_start_primed (x_start_maskfilled denoised for a few steps), and the denoised images for diagnosis.
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # All of them are 1, indicating green.
-            x_start0 = x_start[:1]
-            input_image = self.decode_first_stage(x_start0)
+            x_start_ss = x_start[:1]
+            input_image = self.decode_first_stage(x_start_ss)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
             # All of them are 1, indicating green.
             log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
@@ -2326,8 +2329,10 @@ class LatentDiffusion(DDPM):
                                                    fg_noise_amount=fg_noise_amount)
 
         else:
-            # 20% of the time, we use random noise for x_start, and 80% of the time, we use the training images.
-            x_start.normal_()
+            # Otherwise, we use random noise for x_start, and 80% of the time, we use the training images.
+            # NOTE: DO NOT x_start.normal_() here, as it will overwrite the x_start in the caller,
+            # which is useful for loss computation.
+            x_start = torch.randn_like(x_start) 
             # Set fg_mask to be the whole image.
             fg_mask = torch.ones_like(fg_mask)
 
@@ -2356,8 +2361,8 @@ class LatentDiffusion(DDPM):
         # MAX_N_SHARED is at most num_primed_denoising_steps / 3 + 1.
         MAX_N_SHARED = math.ceil(num_primed_denoising_steps // 3)
         # The number of separate denoising steps is around 2/3 of num_primed_denoising_steps, and at least 1.
-        num_sep_denoising_steps = max(num_primed_denoising_steps - MAX_N_SHARED, 1)
-        num_shared_denoising_steps = num_primed_denoising_steps - num_sep_denoising_steps
+        num_sep_denoising_steps     = num_primed_denoising_steps # max(num_primed_denoising_steps - MAX_N_SHARED, 1)
+        num_shared_denoising_steps  = 0                          # num_primed_denoising_steps - num_sep_denoising_steps
         all_t_list = []
 
         uncond_emb = self.uncond_context[0]
@@ -2717,16 +2722,16 @@ class LatentDiffusion(DDPM):
                 x_recon  = x_recons[sel_step]
                 # iter_flags['do_comp_feat_distill'] is True, which guarantees that 
                 # there are no faceless input images. Thus, x_start[0] is always a valid face image.
-                x_start0         = x_start.chunk(4)[0]
+                x_start_ss       = x_start.chunk(4)[0]
                 # Only compute arcface_align_loss on the subj comp block, as 
                 # the subj single block was generated without gradient.
                 subj_comp_recon  = x_recon.chunk(4)[1]
-                # x_start0 and subj_comp_recon are latent images, [1, 4, 64, 64]. 
+                # x_start_ss and subj_comp_recon are latent images, [1, 4, 64, 64]. 
                 # They need to be decoded first.
                 # If no faces are detected in x_recon, loss_arcface_align_comp_step is 0, 
                 # and sc_face_coords is None.
                 loss_arcface_align_comp_step, sc_face_coords = \
-                    self.calc_arcface_align_loss(x_start0, subj_comp_recon, bleed=2)
+                    self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                 if loss_arcface_align_comp_step > 0:
                     print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
@@ -2742,7 +2747,7 @@ class LatentDiffusion(DDPM):
                         PAD = 4
                         for i in range(len(sc_face_coords)):
                             x1, y1, x2, y2 = sc_face_coords[i]
-                            H, W = x_start0.shape[-2:]
+                            H, W = x_start_ss.shape[-2:]
                             x1, y1, x2, y2 = max(x1-PAD, 0), max(y1-PAD, 0), min(x2+PAD, W), min(y2+PAD, H)
                             # Add 4 pixels (2*bleed that undoes the bleed and adds 2 extra pixels) to each side of 
                             # the detected face area, to protect it from being suppressed.
