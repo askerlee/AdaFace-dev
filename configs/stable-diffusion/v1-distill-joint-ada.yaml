@@ -45,10 +45,8 @@ model:
     # Recon on compositional prompts (but only recon the fg areas indicated by the masks). 
     # This increases the orthogonality of face embeddings and other token embeddings.
     p_recon_on_comp_prompt:           0.4
-    # Recon on the adversarial attacked input images. The adv attack tries to erase the facial features
-    # and make the face harder to reconstruct. We cannot use recon_with_adv_attack_iter_gap=1,
-    # otherwise the gender information is gradually lost.
-    recon_with_adv_attack_iter_gap:   2
+    # Recon on the adversarial attacked input images. DISABLED.
+    recon_with_adv_attack_iter_gap:   -1
     # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
     # ** but to find neighbors of the subject image embeddings for UNet distillation.
     # After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent.

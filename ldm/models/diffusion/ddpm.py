@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
                  p_subj_comp_uses_repeat_prompts=0,
                  p_subj_comp_distill_on_rep_prompts=1,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=2,
+                 recon_with_adv_attack_iter_gap=-1,
                  recon_adv_mod_mag_range=[0.005, 0.02],
                  recon_bg_pixel_weight=0.01,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -1955,7 +1955,7 @@ class LatentDiffusion(DDPM):
         self_align_loss.backward()
         adv_grad = x_start.grad
         x_start.requires_grad = False
-        
+
         # Map the face_coords from the pixel space to latent space (scale down by 8x).
         # face_coords is None if there are no faces detected in x_recon.
         face_coords = pixel_bboxes_to_latent(face_coords, orig_image.shape[-1], x_start.shape[-1])
@@ -1990,9 +1990,11 @@ class LatentDiffusion(DDPM):
         else:
             noise2 = noise
 
-        # recon_with_adv_attack_iter_gap = 2, i.e., in half of the iterations, 
-        # we do adversarial attack on the input images.
-        do_adv_attack = (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+        # recon_with_adv_attack_iter_gap = -1, adversarial attack on the input images is DISABLED.
+        # As doing adversarial attack on the input images seems to introduce high-frequency noise 
+        # to the whole image, not just the face area.
+        do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
+                          and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
         # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
         # This way, we force the adaface encoders to better reconstruct the subject.
         # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
@@ -2114,7 +2116,7 @@ class LatentDiffusion(DDPM):
 
         recon_images = self.decode_first_stage(x_recon)
         # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-        # all of them are 2, indicating red.
+        # all of them are 3, indicating purple.
         log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
         self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
