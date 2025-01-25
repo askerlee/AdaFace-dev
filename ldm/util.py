@@ -1793,11 +1793,14 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                 add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
         comp_subj_bg_attn_suppress_loss_scale   = 0.02
+        # loss_sc_recon_ssfg_min: 0.01~0.02 -> 0.05~0.1.
         sc_recon_ssfg_loss_scale                = 5
-        # loss_sc_recon_mc is a small L2 loss, so we scale it up by 20x.
-        # loss_sc_recon_mc: 0.03~0.04, sc_recon_mc_loss_scale: 60: 1.8~2.4.
-        sc_recon_mc_loss_scale                  = 60
-        sc_to_mc_flow_attns_distill_loss_scale  = 10
+        # loss_sc_recon_mc: 0.03~0.05 -> 0.15~0.25.
+        sc_recon_mc_loss_scale                  = 5
+        # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.02.
+        sc_to_ssfg_sparse_attns_distill_loss_scale = 100
+        # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.04~0.05.
+        sc_to_mc_sparse_attns_distill_loss_scale  = 100
         
         # loss_sc_recon_ssfg_min: 0.04~0.05 -> 0.2~0.25.
         loss_sc_recon_ssfg = loss_sc_recon_ssfg_min * sc_recon_ssfg_loss_scale
@@ -1808,8 +1811,8 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         # Therefore, loss_comp_subj_bg_attn_suppress is given a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
         loss_comp_fg_bg_preserve = loss_sc_recon_ssfg + loss_sc_recon_mc \
                                    + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale \
-                                   + loss_sc_to_ssfg_sparse_attns_distill \
-                                   + loss_sc_to_mc_sparse_attns_distill * sc_to_mc_flow_attns_distill_loss_scale
+                                   + loss_sc_to_ssfg_sparse_attns_distill * sc_to_ssfg_sparse_attns_distill_loss_scale \
+                                   + loss_sc_to_mc_sparse_attns_distill * sc_to_mc_sparse_attns_distill_loss_scale
     else:
         loss_comp_fg_bg_preserve = torch.tensor(0., device=ca_outfeats[23].device)
 

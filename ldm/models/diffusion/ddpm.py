@@ -83,7 +83,6 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.8,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
-                 comp_fg_bg_preserve_loss_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
                  comp_sc_subj_mb_suppress_loss_weight=0.,
                  # 'face portrait' is only valid for humans/animals. 
@@ -141,7 +140,6 @@ class DDPM(pl.LightningModule):
 
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
-        self.comp_fg_bg_preserve_loss_weight        = comp_fg_bg_preserve_loss_weight
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
@@ -2648,9 +2646,9 @@ class LatentDiffusion(DDPM):
 
         if loss_comp_fg_bg_preserve > 0:
             loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
-            # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
+            # loss_comp_fg_bg_preserve: 2~3.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
-            loss_comp_feat_distill_loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
+            loss_comp_feat_distill_loss += loss_comp_fg_bg_preserve
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
         # #subj_attn_norm_distill_loss_weight: 0.1 -> 0.001~0.003.
