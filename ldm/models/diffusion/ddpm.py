@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
                  p_subj_comp_uses_repeat_prompts=0,
                  p_subj_comp_distill_on_rep_prompts=1,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=-1,
+                 recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.005, 0.02],
                  recon_bg_pixel_weight=0.01,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -1959,8 +1959,8 @@ class LatentDiffusion(DDPM):
         # Map the face_coords from the pixel space to latent space (scale down by 8x).
         # face_coords is None if there are no faces detected in x_recon.
         face_coords = pixel_bboxes_to_latent(face_coords, orig_image.shape[-1], x_start.shape[-1])
-        # Set areas outside the face_coords of adv_grad to 0.
-        face_mask = torch.zeros_like(adv_grad)
+        # Set areas outside the face_coords of adv_grad to negative.
+        face_mask = -torch.ones_like(adv_grad)
         for i in range(x_start.shape[0]):
             x1, y1, x2, y2 = face_coords[i]
             face_mask[i, :, y1:y2, x1:x2] = 1
