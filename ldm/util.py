@@ -1792,12 +1792,12 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                 # Accumulate the loss values to loss_dict when there are multiple denoising steps.
                 add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
-        # loss_comp_subj_bg_attn_suppress:  0.1~0.2     -> 0.002~0.004.
+        # loss_comp_subj_bg_attn_suppress: 0.01~0.02 -> 0.0002~0.0004.
         comp_subj_bg_attn_suppress_loss_scale   = 0.02
-        # loss_sc_recon_ssfg_min: 0.01~0.02
+        # loss_sc_recon_ssfg_min: 0.01~0.02.
         sc_recon_ssfg_loss_scale                = 1
-        # loss_sc_recon_mc: 0.03~0.05.
-        sc_recon_mc_loss_scale                  = 1
+        # loss_sc_recon_mc: 0.03~0.05 -> 0.015~0.025.
+        sc_recon_mc_loss_scale                  = 0.5
         # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
         sc_to_ssfg_sparse_attns_distill_loss_scale = 20
         # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.008~0.01.
@@ -1805,11 +1805,11 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
         
         # loss_sc_recon_mc_min has similar effects to suppress the subject attn values in the background tokens.
         # Therefore, loss_comp_subj_bg_attn_suppress is given a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
-        loss_comp_fg_bg_preserve = loss_sc_recon_ssfg_min * sc_recon_ssfg_loss_scale \
-                                   + loss_sc_recon_mc_min * sc_recon_mc_loss_scale \
-                                   + loss_comp_subj_bg_attn_suppress * comp_subj_bg_attn_suppress_loss_scale \
+        loss_comp_fg_bg_preserve =  loss_sc_recon_ssfg_min                * sc_recon_ssfg_loss_scale \
+                                   + loss_sc_recon_mc_min                 * sc_recon_mc_loss_scale \
+                                   + loss_comp_subj_bg_attn_suppress      * comp_subj_bg_attn_suppress_loss_scale \
                                    + loss_sc_to_ssfg_sparse_attns_distill * sc_to_ssfg_sparse_attns_distill_loss_scale \
-                                   + loss_sc_to_mc_sparse_attns_distill * sc_to_mc_sparse_attns_distill_loss_scale
+                                   + loss_sc_to_mc_sparse_attns_distill   * sc_to_mc_sparse_attns_distill_loss_scale
     else:
         loss_comp_fg_bg_preserve = torch.tensor(0., device=ca_outfeats[23].device)
 

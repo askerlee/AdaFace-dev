@@ -1623,15 +1623,13 @@ class LatentDiffusion(DDPM):
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
                                        all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
-                                       cfg_scale=-1, capture_ca_activations=False,
-                                       num_denoising_steps=1, 
-                                       same_t_noise_across_instances=True):
+                                       cfg_scale=2.5, capture_ca_activations=False,
+                                       num_denoising_steps=1):
         assert num_denoising_steps <= 10
 
-        if same_t_noise_across_instances:
-            # If same_t_noise_across_instances, we use the same t and noise for all instances.
-            t = t[0].repeat(x_start.shape[0])
-            noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
+        # Use the same t and noise for all instances.
+        t = t[:1].repeat(x_start.shape[0])
+        noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -1640,6 +1638,9 @@ class LatentDiffusion(DDPM):
         noise_preds = []
         x_recons    = []
         ca_layers_activations_list = []
+        # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
+        # Same shrink_subj_attn for all denoising steps in a comp_distill_multistep_denoise call.
+        shrink_subj_attn = torch.rand(1) < p_shrink_subj_attn
 
         for i in range(num_denoising_steps):
             x_start = x_starts[i]
@@ -1656,8 +1657,6 @@ class LatentDiffusion(DDPM):
             22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
             20, 21, 22, 23]))
             '''
-            # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
-            shrink_subj_attn = torch.rand(1) < p_shrink_subj_attn
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
                                     # all_subj_indices_1b is only used in the sc block. So we need "_1b" instead of "_2b".
@@ -1695,10 +1694,9 @@ class LatentDiffusion(DDPM):
                 earlier_timesteps = earlier_timesteps.long()
                 noise = torch.randn_like(pred_x0)
 
-                if same_t_noise_across_instances:
-                    # If same_t_noise_across_instances, we use the same t and noise for all instances.
-                    earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
-                    noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
+                # If same_t_noise_across_instances, we use the same t and noise for all instances.
+                earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
+                noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
 
                 # earlier_timesteps = ts[i+1] < ts[i].
                 ts.append(earlier_timesteps)
@@ -1800,9 +1798,8 @@ class LatentDiffusion(DDPM):
                                                     uncond_emb=uncond_emb, img_mask=None, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     p_shrink_subj_attn=self.p_shrink_subj_attn,
-                                                    cfg_scale=5, capture_ca_activations=True,
-                                                    num_denoising_steps=num_comp_denoising_steps,
-                                                    same_t_noise_across_instances=True)
+                                                    cfg_scale=2.5, capture_ca_activations=True,
+                                                    num_denoising_steps=num_comp_denoising_steps)
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
