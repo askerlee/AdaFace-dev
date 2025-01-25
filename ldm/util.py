@@ -1753,10 +1753,6 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
     ca_outfeats  = ca_layers_activations['outfeat']
 
     # In fg_mask, if an instance has no mask, then its fg_mask is all 1, including the background. 
-    # Therefore, using fg_mask for comp_init_fg_from_training_image will force the model remember 
-    # the background in the training images, which is not desirable.
-    # In fg_mask, if an instance has no mask, then its fg_mask is all 0, 
-    # excluding the instance from the fg_bg_preserve_loss.
     # fg_mask.chunk(4)[0].float().mean() < 0.998: in the subject-single instance, 
     # the fg is masked out in the fg_mask.
     # Otherwise, all the fg_mask in the subject-single instance is 1, 
@@ -1820,8 +1816,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
     return loss_comp_fg_bg_preserve
 
 # Intuition of comp_fg_bg_preserve_loss: 
-# In distillation iterations, if comp_init_fg_from_training_image, then at fg_mask areas, x_start is initialized with 
-# the noisy input images. (Otherwise in distillation iterations, x_start is initialized as pure noise.)
+# In distillation iterations, x_start is initialized as pure noise.
 # Essentially, it's to mask the background out of the input images with noise.
 # Therefore, intermediate features at the foreground with single prompts should be close to those of the original images.
 # Features with comp prompts should be similar with the original images at the foreground.

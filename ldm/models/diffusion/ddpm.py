@@ -107,10 +107,11 @@ class DDPM(pl.LightningModule):
                  p_subj_comp_distill_on_rep_prompts=1,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=2,
-                 recon_adv_mod_mag_range=[0.005, 0.02],
+                 recon_adv_mod_mag_range=[0.001, 0.005],
                  recon_bg_pixel_weights=[0.05, 0.01],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
+                 subj_attn_norm_distill_loss_weight=0,
                  arcface_align_loss_weight=5e-2,
                  clip_align_loss_weight=0,  # Currently disabled. Cannot afford the extra RAM.
                  use_ldm_unet=False,
@@ -192,7 +193,6 @@ class DDPM(pl.LightningModule):
         self.unet_distill_iters_count                = 0
         self.comp_iters_face_detected_count          = 0
         self.comp_iters_bg_match_loss_count          = 0
-        self.comp_init_fg_from_training_image_count  = 0
         self.adaface_adv_iters_count                 = 0
         self.adaface_adv_success_iters_count         = 0
 
@@ -238,6 +238,7 @@ class DDPM(pl.LightningModule):
         self.adam_config = adam_config
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
+        self.subj_attn_norm_distill_loss_weight = subj_attn_norm_distill_loss_weight
         self.arcface_align_loss_weight = arcface_align_loss_weight
         self.clip_align_loss_weight = clip_align_loss_weight
 
@@ -381,7 +382,6 @@ class DDPM(pl.LightningModule):
                             'do_prompt_emb_delta_reg':          False,
                             'unet_distill_uses_comp_prompt':    False,
                             'use_fp_trick':                     False,
-                            'is_comp_init_fg_from_training_image': False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -936,15 +936,6 @@ class LatentDiffusion(DDPM):
             p_use_fp_trick = 0
 
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
-
-        if self.iter_flags['do_comp_feat_distill']:
-            # DISABLED: even if do_comp_feat_distill, is_comp_init_fg_from_training_image is still always False.
-            # Initializing from training image is a source of double faces in the latent images.
-            p_init_comp_fg_from_training_image = 0
-        else:
-            p_init_comp_fg_from_training_image = 0
-
-        self.iter_flags['is_comp_init_fg_from_training_image'] = (torch.rand(1) < p_init_comp_fg_from_training_image).item()
 
         if self.iter_flags['use_fp_trick']:
             if self.iter_flags['do_comp_feat_distill']:
@@ -1800,9 +1791,8 @@ class LatentDiffusion(DDPM):
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
             # (img_mask is not used in the prompt-guided cross-attention layers).
             # NOTE: We don't use img_mask in compositional iterations. Because in compositional iterations,
-            # the original images don't play a role (even if is_comp_init_fg_from_training_image,
-            # the unet still often draws the face outside the input face areas, 
-            # so img_mask is inaccurate and set to None).
+            # the original images don't play a role, and the unet is supposed to generate the face from scratch.
+            # so img_mask doesn't match the generated face and is set to None).
 
             # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
             # noise_preds is not used for loss computation.
@@ -2336,22 +2326,12 @@ class LatentDiffusion(DDPM):
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
         img_mask, fg_mask = masks
 
-        if self.iter_flags['is_comp_init_fg_from_training_image']:
-            # x_start, fg_mask are scaled in init_x_with_fg_from_training_image()
-            # by the same scale, to make the fg_mask consistent with x_start.
-            # fg_noise_amount = 0.2
-            x_start, fg_mask = \
-                init_x_with_fg_from_training_image(x_start, fg_mask, 
-                                                   base_scale_range=(0.8, 1.0),
-                                                   fg_noise_amount=fg_noise_amount)
-
-        else:
-            # Otherwise, we use random noise for x_start, and 80% of the time, we use the training images.
-            # NOTE: DO NOT x_start.normal_() here, as it will overwrite the x_start in the caller,
-            # which is useful for loss computation.
-            x_start = torch.randn_like(x_start) 
-            # Set fg_mask to be the whole image.
-            fg_mask = torch.ones_like(fg_mask)
+        # We use random noise for x_start, and 80% of the time, we use the training images.
+        # NOTE: DO NOT x_start.normal_() here, as it will overwrite the x_start in the caller,
+        # which is useful for loss computation.
+        x_start = torch.randn_like(x_start) 
+        # Set fg_mask to be the whole image.
+        fg_mask = torch.ones_like(fg_mask)
 
         # Make the 4 instances in x_start, noise and t the same.
         x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
@@ -2508,11 +2488,11 @@ class LatentDiffusion(DDPM):
                                     fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     BLOCK_SIZE, loss_dict, session_prefix):
-        losses_comp_fg_bg_preserve      = []
-        losses_subj_attn_norm_distill   = []
-        losses_comp_rep_distill_subj_attn       = []
-        losses_comp_rep_distill_subj_k     = []
-        losses_comp_rep_distill_nonsubj_k  = []
+        losses_comp_fg_bg_preserve          = []
+        losses_subj_attn_norm_distill       = []
+        losses_comp_rep_distill_subj_attn   = []
+        losses_comp_rep_distill_subj_k      = []
+        losses_comp_rep_distill_nonsubj_k   = []
         loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
         sc_fg_mask                      = None
         is_sc_fg_mask_available         = False
@@ -2666,17 +2646,17 @@ class LatentDiffusion(DDPM):
         loss_comp_rep_distill_subj_k     = torch.stack(losses_comp_rep_distill_subj_k).mean()
         loss_comp_rep_distill_nonsubj_k  = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
 
-        # loss_comp_fg_bg_preserve = 0 if is_comp_init_fg_from_training_image and there's a valid fg_mask.
         if loss_comp_fg_bg_preserve > 0:
             loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
             # comp_fg_bg_preserve_loss_weight: 3e-3. loss_comp_fg_bg_preserve: 18~20 -> 0.054~0.06.
-            # loss_subj_attn_norm_distill: 0.08~0.12. DISABLED, only for monitoring.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill_loss += loss_comp_fg_bg_preserve * self.comp_fg_bg_preserve_loss_weight
 
-        # loss_subj_attn_norm_distill: 0.08~0.12.
+        # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
+        # #subj_attn_norm_distill_loss_weight: 0.1 -> 0.001~0.003.
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
+            loss_comp_feat_distill_loss += loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
 
         if loss_comp_rep_distill_subj_attn > 0:
             loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
@@ -2714,7 +2694,7 @@ class LatentDiffusion(DDPM):
         if v_loss_comp_feat_distill_loss > 0:
             loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill_loss})
         # loss_comp_feat_distill_loss could be 0 when:
-        # 1. when not is_comp_init_fg_from_training_image, the original fg_mask is full of 1s, and 
+        # 1. the original fg_mask is full of 1s, and 
         # 2. no face is detected in the subject-single or subject-comp instances.
         # Therefore, fg_mask is not updated with the detected face area => fg_mask is still full of 1s.
         # On one hand,       fg_mask is full of 1s -> loss_comp_fg_bg_preserve = 0.
