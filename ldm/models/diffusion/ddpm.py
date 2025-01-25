@@ -108,7 +108,7 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=2,
                  recon_adv_mod_mag_range=[0.005, 0.02],
-                 recon_bg_pixel_weight=0.01,
+                 recon_bg_pixel_weights=[0.05, 0.01],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=5e-2,
@@ -184,7 +184,7 @@ class DDPM(pl.LightningModule):
         self.subj_rep_prompts_count                 = subj_rep_prompts_count
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
-        self.recon_bg_pixel_weight                  = recon_bg_pixel_weight
+        self.recon_bg_pixel_weights                 = recon_bg_pixel_weights
 
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
@@ -1872,7 +1872,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_normal_recon']:  
             loss_normal_recon = \
                 self.calc_normal_recon_loss(x_start, noise, cond_context, img_mask, fg_mask, 
-                                            all_subj_indices, self.recon_bg_pixel_weight, loss_dict, session_prefix)
+                                            all_subj_indices, self.recon_bg_pixel_weights, loss_dict, session_prefix)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
@@ -1969,7 +1969,7 @@ class LatentDiffusion(DDPM):
         return adv_grad
 
     def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
-                               all_subj_indices, recon_bg_pixel_weight, loss_dict, session_prefix):
+                               all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
         loss_normal_recon = 0
         BLOCK_SIZE = x_start.shape[0]
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
@@ -2047,11 +2047,12 @@ class LatentDiffusion(DDPM):
             # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
             cfg_scale  = np.random.uniform(1.5, 2.5)
             print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
-            recon_bg_pixel_weight = 0
+            recon_bg_pixel_weight = recon_bg_pixel_weights[1]
         else:
             # Use the default negative prompts.
             uncond_emb = None
             cfg_scale  = -1
+            recon_bg_pixel_weight = recon_bg_pixel_weights[0]
 
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -2077,9 +2078,10 @@ class LatentDiffusion(DDPM):
         # NOTE: guided_denoise() uses the perturbed noise2 as input, 
         # but the recon objective is the original noise instead of the perturbed noise2.
         # https://github.com/huggingface/diffusers/issues/3293
-        # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01,
+        # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.05,
         # bg loss is given a tiny weight to suppress multi-face artifacts.
-        # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0, i.e., we allow the bg to be compositional patterns.
+        # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
+        # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
         loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
             calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
                                           all_subj_indices, img_mask, fg_mask,
