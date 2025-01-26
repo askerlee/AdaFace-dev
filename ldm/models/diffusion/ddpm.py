@@ -105,9 +105,9 @@ class DDPM(pl.LightningModule):
                  p_subj_comp_uses_repeat_prompts=0,
                  p_subj_comp_distill_on_rep_prompts=1,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=2,
+                 recon_with_adv_attack_iter_gap=4,
                  recon_adv_mod_mag_range=[0.001, 0.005],
-                 recon_bg_pixel_weights=[0.05, 0.01],
+                 recon_bg_pixel_weights=[0.1, 0.01],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
@@ -1482,8 +1482,10 @@ class LatentDiffusion(DDPM):
         prompt_emb, prompt_in, extra_info = cond_context
         prompt_emb_ = prompt_emb[slice_inst]
         prompt_in_  = prompt_in[slice_inst]
+        cond_context_ = (prompt_emb_, prompt_in_, extra_info)
         with torch.set_grad_enabled(enable_grad):
-            model_output = self.apply_model(x_noisy_, t_, (prompt_emb_, prompt_in_, extra_info), 
+            # use_attn_lora and use_ffn_lora are set in apply_model().
+            model_output = self.apply_model(x_noisy_, t_, cond_context_, 
                                             use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
         return model_output
 
