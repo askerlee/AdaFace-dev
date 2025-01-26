@@ -99,7 +99,6 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  input_noise_perturb_std=0.05,
                  p_gen_rand_id_for_id2img=0,
-                 p_perturb_input_noise=0,
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.4,
                  p_subj_comp_uses_repeat_prompts=0,
@@ -173,7 +172,6 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = 0
 
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
-        self.p_perturb_input_noise                  = p_perturb_input_noise
         self.input_noise_perturb_std                = input_noise_perturb_std
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
@@ -374,7 +372,6 @@ class DDPM(pl.LightningModule):
                             'id2img_prompt_embs':               None,
                             'id2img_neg_prompt_embs':           None,
                             'perturb_face_id_embs':             False,
-                            'perturb_input_noise':              False,
                             'faceless_img_count':               0,
                             'do_comp_feat_distill':             False,
                             'do_prompt_emb_delta_reg':          False,
@@ -1968,16 +1965,6 @@ class LatentDiffusion(DDPM):
             # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
             FACELOSS_BS = x_start.shape[0]
 
-        # perturb_input_noise: DISABLED, p_perturb_input_noise = 0.
-        self.iter_flags['perturb_input_noise'] = (torch.rand(1) < self.p_perturb_input_noise)
-        if self.iter_flags['perturb_input_noise']:
-            # input_noise_perturb_std: 0.05.
-            # In https://github.com/bghira/SimpleTuner/pull/723, the std is 0.1.
-            # We are slightly more conservative.
-            noise2 = noise + torch.randn_like(noise) * self.input_noise_perturb_std
-        else:
-            noise2 = noise
-
         # recon_with_adv_attack_iter_gap = -1, adversarial attack on the input images is DISABLED.
         # As doing adversarial attack on the input images seems to introduce high-frequency noise 
         # to the whole image, not just the face area.
@@ -2015,12 +2002,7 @@ class LatentDiffusion(DDPM):
                 # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
                 # We predict the updated noise to remain consistent with the training paradigm.
                 # Q: should we subtract adv_grad from x_start instead of noise? I'm not sure.
-                # Currently, noise2 is added with a weight increasing with t, so adv_grad 
-                # also has greater impact on x_start as t increases.
-                # perturb_input_noise is DISABLED. So noise2 == noise.
-                noise2[:FACELOSS_BS] -= adv_grad
-                if self.iter_flags['perturb_input_noise']:
-                    noise[:FACELOSS_BS] -= adv_grad
+                noise[:FACELOSS_BS] -= adv_grad
 
                 self.adaface_adv_success_iters_count += 1
                 # adaface_adv_success_rate is always close to 1, so we don't monitor it.
@@ -2046,10 +2028,11 @@ class LatentDiffusion(DDPM):
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
         # Don't do CFG. So uncond_emb is None.
-        # If unet_uses_attn_lora, then enable use_attn_lora with 50% chance during normal recon.
-        randomly_enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+        # If unet_uses_attn_lora, then enable use_attn_lora only when not do_adv_attack, 
+        # then 50% chance during normal recon.
+        enable_unet_attn_lora = self.unet_uses_attn_lora and (not do_adv_attack) and (torch.rand(1).item() < 0.5)
         model_output, x_recon, ca_layers_activations = \
-            self.guided_denoise(x_start, noise2, t, cond_context, 
+            self.guided_denoise(x_start, noise, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,
                                 shrink_subj_attn=False,
                                 subj_indices=all_subj_indices,
@@ -2057,16 +2040,13 @@ class LatentDiffusion(DDPM):
                                 # Reconstruct the images at the pixel level for CLIP loss.
                                 do_pixel_recon=True,
                                 cfg_scale=cfg_scale, capture_ca_activations=True,
-                                use_attn_lora=randomly_enable_unet_attn_lora,
-                                use_ffn_lora=False)
+                                use_attn_lora=enable_unet_attn_lora, use_ffn_lora=False)
 
         # If do_normal_recon, then there's only 1 objective:
         # **Objective 1**: Align the student predicted noise with the ground truth noise.
 
-        # NOTE: guided_denoise() uses the perturbed noise2 as input, 
-        # but the recon objective is the original noise instead of the perturbed noise2.
         # https://github.com/huggingface/diffusers/issues/3293
-        # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.05,
+        # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
         # bg loss is given a tiny weight to suppress multi-face artifacts.
         # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
         # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
