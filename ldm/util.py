@@ -1793,15 +1793,15 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                 add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': comp_subj_bg_preserve_loss_dict[loss_name].mean().detach().item() })
 
         # loss_comp_subj_bg_attn_suppress: 0.01~0.02 -> 0.0002~0.0004.
-        comp_subj_bg_attn_suppress_loss_scale   = 0.02
-        # loss_sc_recon_ssfg_min: 0.01~0.02.
-        sc_recon_ssfg_loss_scale                = 1
-        # loss_sc_recon_mc: 0.03~0.05 -> 0.015~0.025.
-        sc_recon_mc_loss_scale                  = 0.5
+        comp_subj_bg_attn_suppress_loss_scale       = 0.02
+        # loss_sc_recon_ssfg_min: 0.01~0.02 -> 0.002~0.004.
+        sc_recon_ssfg_loss_scale                    = 0.2
+        # loss_sc_recon_mc: 0.03~0.05 -> 0.006~0.01.
+        sc_recon_mc_loss_scale                      = 0.2
         # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
-        sc_to_ssfg_sparse_attns_distill_loss_scale = 20
+        sc_to_ssfg_sparse_attns_distill_loss_scale  = 20
         # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.008~0.01.
-        sc_to_mc_sparse_attns_distill_loss_scale   = 20
+        sc_to_mc_sparse_attns_distill_loss_scale    = 20
         
         # loss_sc_recon_mc_min has similar effects to suppress the subject attn values in the background tokens.
         # Therefore, loss_comp_subj_bg_attn_suppress is given a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.

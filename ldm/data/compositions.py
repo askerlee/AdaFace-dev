@@ -80,6 +80,9 @@ coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",    
                      # "house", "car",   "bus",    "train", "boat",    "bike",      "building", "tower" 
                   ] 
 
+all_shots = [ "front view", "side view", "close-up view", "zoomed-in view", "zoomed-out view", "full body view", 
+              "middle shot", "long shot", "wide shot" ]
+
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
                "sci-fi movie", "sculpture", "bronze sculpture", "abyss art", "blade runner style", "cyberpunk art",
@@ -90,7 +93,7 @@ all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "ste
                "low poly", "cubism style", "funko pop",
                "concept art", "realistic painting", "character design", "anime sketch", 
                "trending in artstation", "vivid colors", "clear face", 
-               "detailed face", "semirealism", "octane render",
+               "semirealism", "octane render",
                "unreal 5", "digital painting", "illustration",  "volumetric lighting", "dreamy", 
                "cinematic", "surreal", "pixelate", "macabre"
             ]
@@ -144,6 +147,7 @@ def sample_compositions(N, subj_type):
     # 0.75: option 0 (without certain components), 
     # 0.25: option 1 (with    certain components).
     option_probs     = [0.75, 0.25]
+    shot_probs       = [0.3,  0.7]
     # 0.4:  option 0 (without background),
     # 0.6:  option 1 (with    background).
     background_probs = [0.4,  0.6]
@@ -178,6 +182,12 @@ def sample_compositions(N, subj_type):
         elif has_styles == 0:   # 30% without style
             style = ""
 
+        has_shot = np.random.choice([0, 1], p=shot_probs)
+        if has_shot:   # p = 0.7 has a random shot
+            shot = np.random.choice(all_shots)
+        else:           # p = 0.3 has no shot
+            shot = ""
+
         has_art_by = np.random.choice([0, 1], p=option_probs)
     
         if has_art_by:
@@ -208,7 +218,7 @@ def sample_compositions(N, subj_type):
         else:
             light = ""
 
-        modifier = ", ".join(filter(lambda s: len(s) > 0, [time, style, light, art_by]))
+        modifier = ", ".join(filter(lambda s: len(s) > 0, [time, style, shot, light, art_by]))
         #compos_prompt = f"{composition}{obj_loc2}{background}"
         compos_prompt = ", ".join(filter(lambda s: len(s) > 0, [composition, obj_loc2, background]))
         modifiers.append(modifier)

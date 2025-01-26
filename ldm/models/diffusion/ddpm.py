@@ -1478,10 +1478,10 @@ class LatentDiffusion(DDPM):
     def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, 
                            enable_grad, use_attn_lora=False, use_ffn_lora=False):
         x_noisy_ = x_noisy[slice_inst]
-        t_ = t[slice_inst]
+        t_       = t[slice_inst]
         prompt_emb, prompt_in, extra_info = cond_context
         prompt_emb_ = prompt_emb[slice_inst]
-        prompt_in_ = prompt_in[slice_inst]
+        prompt_in_  = prompt_in[slice_inst]
         with torch.set_grad_enabled(enable_grad):
             model_output = self.apply_model(x_noisy_, t_, (prompt_emb_, prompt_in_, extra_info), 
                                             use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
@@ -1603,7 +1603,6 @@ class LatentDiffusion(DDPM):
 
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
-                x_noisy = self.q_sample(x_start, t, noise)
                 # model_output_uncond: [BS, 4, 64, 64]
                 model_output_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=False, 
                                                        use_ffn_lora=use_ffn_lora)
@@ -1628,8 +1627,8 @@ class LatentDiffusion(DDPM):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
-        t = t[:1].repeat(x_start.shape[0])
-        noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
+        t     = t.chunk(4)[0].repeat(4)
+        noise = noise.chunk(4)[0].repeat(4, 1, 1, 1)
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -1659,7 +1658,6 @@ class LatentDiffusion(DDPM):
             '''
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
-                                    # all_subj_indices_1b is only used in the sc block. So we need "_1b" instead of "_2b".
                                     uncond_emb, img_mask, 
                                     shrink_subj_attn=shrink_subj_attn,
                                     subj_indices=all_subj_indices_1b, 
@@ -1673,30 +1671,33 @@ class LatentDiffusion(DDPM):
                                     use_ffn_lora=False)
             
             noise_preds.append(noise_pred)
-            pred_x0 = x_recon
             # The predicted x0 is used as the x_start for the next denoising step.
+            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
+                x0_ss, x0_sc, x0_ms, x0_mc = x_recon.chunk(4)
+                pred_x0 = torch.cat([x0_ss, x0_ms, x0_ms, x0_mc], dim=0)
+            else:
+                pred_x0 = x_recon
+
             x_starts.append(pred_x0)
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
             # Sample an earlier timestep for the next denoising step.
             if i < num_denoising_steps - 1:
+                t0 = t.chunk(4)[0]
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                unscaled_ts = torch.rand_like(t.float())
+                unscaled_ts = torch.rand_like(t0.float())
                 # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
                 # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
                 # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
                 # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
                 # of the current timestep.
-                t_lb = t * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
-                t_ub = t * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
+                t_lb = t0 * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
+                t_ub = t0 * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
                 earlier_timesteps = (t_ub - t_lb) * unscaled_ts + t_lb
-                earlier_timesteps = earlier_timesteps.long()
-                noise = torch.randn_like(pred_x0)
-
-                # If same_t_noise_across_instances, we use the same t and noise for all instances.
-                earlier_timesteps = earlier_timesteps[0].repeat(x_start.shape[0])
-                noise = noise[:1].repeat(x_start.shape[0], 1, 1, 1)
+                # Use the same t and noise for all instances.
+                earlier_timesteps = earlier_timesteps.long().repeat(4)
+                noise = torch.randn_like(x_start.chunk(4)[0]).repeat(4, 1, 1, 1)
 
                 # earlier_timesteps = ts[i+1] < ts[i].
                 ts.append(earlier_timesteps)
