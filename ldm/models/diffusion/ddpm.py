@@ -2028,9 +2028,8 @@ class LatentDiffusion(DDPM):
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
         # Don't do CFG. So uncond_emb is None.
-        # If unet_uses_attn_lora, then enable use_attn_lora only when not do_adv_attack, 
-        # then 50% chance during normal recon.
-        enable_unet_attn_lora = self.unet_uses_attn_lora and (not do_adv_attack) and (torch.rand(1).item() < 0.5)
+        # If unet_uses_attn_lora, then enable use_attn_lora at 50% chance during normal recon.
+        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
         model_output, x_recon, ca_layers_activations = \
             self.guided_denoise(x_start, noise, t, cond_context, 
                                 uncond_emb=uncond_emb, img_mask=img_mask,

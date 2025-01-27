@@ -2490,7 +2490,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_loss_discard_thres=0.3, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True, 
-                               do_q_demean=True, do_outfeat_demean=True):
+                               do_q_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
         return None, None, None, None, None
@@ -2532,11 +2532,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # subject-specific features.
         ca_q = ca_q - ca_q.mean(dim=(0,2), keepdim=True).detach()
 
-    if do_outfeat_demean:
-        # Demean the feature maps. Otherwise the similarities between any two token feats will always be huge (65~90),
-        # preventing the optical flow model from estimating the flow.
+    '''    
+        # Demeaning the feature maps will lead to horrible artifacts.
         # ca_outfeat: [4, 1280, 961]
         ca_outfeat = ca_outfeat - ca_outfeat.mean(dim=(0,2), keepdim=True).detach()
+    '''
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
