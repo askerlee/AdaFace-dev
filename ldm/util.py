@@ -1906,7 +1906,9 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
         # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_to_ss_prob and mc_to_ms_prob.
         # sc_to_ss_fg_prob_below_mean is used as fg/bg soft masks of comp instances
         # to suppress the activations on background areas.
-        
+        #p_do_outfeat_demean = 0.2
+        do_outfeat_demean = True #torch.rand(1).item() < p_do_outfeat_demean
+
         losses_sc_recons, loss_sparse_attns_distill, sc_to_ss_fg_prob, sc_to_whole_mc_prob, flow_distill_stats = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_feat_h, ca_feat_w, 
@@ -1914,7 +1916,8 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                                        recon_feat_objectives=recon_feat_objectives,
                                        recon_loss_discard_thres=recon_loss_discard_thres,
                                        num_flow_est_iters=12,
-                                       do_feat_attn_pooling=do_feat_attn_pooling)
+                                       do_feat_attn_pooling=do_feat_attn_pooling,
+                                       do_outfeat_demean=do_outfeat_demean)
 
         if losses_sc_recons is None:
             continue
@@ -2490,7 +2493,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_loss_discard_thres=0.3, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True, 
-                               do_q_demean=True):
+                               do_q_demean=True, do_outfeat_demean=False):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
         return None, None, None, None, None
@@ -2532,11 +2535,14 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # subject-specific features.
         ca_q = ca_q - ca_q.mean(dim=(0,2), keepdim=True).detach()
 
-    '''    
-        # Demeaning the feature maps will lead to horrible artifacts.
-        # ca_outfeat: [4, 1280, 961]
-        ca_outfeat = ca_outfeat - ca_outfeat.mean(dim=(0,2), keepdim=True).detach()
-    '''
+    if do_outfeat_demean:
+        # ca_outfeat: [4, 1280, 961].
+        # Don't include the subject-single instance when computing the mean.
+        # It has a different nature from the other instances. 
+        # All other 3 instances are compositional, while the subject-single instance is not.
+        # The mean is the compositional semantics. Therefore, subtracting the mean from 
+        # the subject-comp instances can improve its matching with the subject-single instance.
+        ca_outfeat[1:] = ca_outfeat[1:] - ca_outfeat[1:].mean(dim=(0,2), keepdim=True).detach()
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
