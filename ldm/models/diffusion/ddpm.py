@@ -101,12 +101,10 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.4,
-                 p_subj_comp_uses_repeat_prompts=0,
-                 p_subj_comp_distill_on_rep_prompts=1,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=4,
                  recon_adv_mod_mag_range=[0.001, 0.005],
-                 recon_bg_pixel_weights=[0.1, 0.01],
+                 recon_bg_pixel_weights=[0.1, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
@@ -176,8 +174,6 @@ class DDPM(pl.LightningModule):
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
-        self.p_subj_comp_uses_repeat_prompts        = p_subj_comp_uses_repeat_prompts
-        self.p_subj_comp_distill_on_rep_prompts     = p_subj_comp_distill_on_rep_prompts
         self.subj_rep_prompts_count                 = subj_rep_prompts_count
         self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
@@ -1282,43 +1278,25 @@ class LatentDiffusion(DDPM):
                 subj_single_prompts[:BLOCK_SIZE],   subj_comp_prompts[:BLOCK_SIZE], \
                 cls_single_prompts[:BLOCK_SIZE],    cls_comp_prompts[:BLOCK_SIZE], \
                 compos_partial_prompt[:BLOCK_SIZE], prompt_modifier[:BLOCK_SIZE]
-            self.iter_flags['subj_comp_uses_repeat_prompts'] = torch.rand(1) < self.p_subj_comp_uses_repeat_prompts
-            if self.iter_flags['subj_comp_uses_repeat_prompts']:
-                subj_comp_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                      + ", " + ", ".join([ compos_partial_prompt[i] ]) \
-                                      for i in range(BLOCK_SIZE) ]
-                # Repeat the compositional part of cls_comp_prompts as well, so that they are aligned,
-                # and loss computation is made easier.
-                cls_comp_prompts  = [ cls_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                      + ", " + ", ".join([ compos_partial_prompt[i] ]) \
-                                      for i in range(BLOCK_SIZE) ]
         else:
             # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
-            self.iter_flags['subj_comp_uses_repeat_prompts'] = False
 
-        # Repeat the compositional prompts once or twice, to further highlight the compositional features.
-        # NOTE: for subj_comp_rep2_prompts, we repeat compos_partial_prompt twice, 
-        # but only repeat prompt_modifier once. 
+        # Repeat the compositional prompts, to further highlight the compositional features.
+        # NOTE: the prompt_modifier is repeated at most once, no matter subj_rep_prompts_count.
         # Since subj_comp_prompts already contains 1 copy of the modifier,
-        # in total subj_comp_rep2_prompts contains 2 copies of the modifier, and 3 copies of compos_partial_prompt.
+        # in total subj_comp_rep_prompts contains 2 copies of the modifier, and maybe 3 copies of compos_partial_prompt.
         # This is to avoid the subj comp instance receives too much style guidance from the subj_comp_rep instances,
         # and becomes overly stylized.
-        if self.iter_flags['subj_comp_uses_repeat_prompts']:
-            # Do not add prompt_modifier to subj_comp_prompts, as it's already added in the previous step.
-            # Repeat compos_partial_prompt (subj_rep_prompts_count - 1) = 1 times.
-            subj_comp_rep_prompts = [ subj_comp_prompts[i] \
-                                       + ", " + ", ".join([ compos_partial_prompt[i] ] * max(1, self.subj_rep_prompts_count - 1)) \
-                                        for i in range(BLOCK_SIZE) ]
-        else:
-            # Add prompt_modifier only once.
-            # Repeat compos_partial_prompt subj_rep_prompts_count = 2 times.
-            subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                       + ", " + ", ".join([ compos_partial_prompt[i] ] * self.subj_rep_prompts_count) \
-                                        for i in range(BLOCK_SIZE) ]
-                        
+
+        # Add prompt_modifier only once.
+        # Repeat compos_partial_prompt subj_rep_prompts_count = 2 times.
+        subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
+                                    + ", " + ", ".join([ compos_partial_prompt[i] ] * self.subj_rep_prompts_count) \
+                                    for i in range(BLOCK_SIZE) ]
+                    
         # We still compute the prompt embeddings of the first 4 types of prompts, 
         # to compute prompt delta loss. 
         # But now there are 16 prompts (4 * ORIG_BS = 16), as the batch is not halved.
@@ -1401,11 +1379,11 @@ class LatentDiffusion(DDPM):
             # The cls_single_prompts/cls_comp_prompts within prompt_in will only be used to 
             # generate ordinary prompt embeddings, i.e., 
             # it doesn't contain subject tokens.
-            self.iter_flags['subj_comp_distill_on_rep_prompts'] = torch.rand(1) < self.p_subj_comp_distill_on_rep_prompts
+            self.iter_flags['subj_comp_distill_on_rep_prompts'] = True
             if self.iter_flags['subj_comp_distill_on_rep_prompts']:
                 # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
-                # *** Since subj_comp_uses_repeat_prompts, subj_comp repeats the compositional part once,
-                # *** and subj_comp_rep repeats the compositional part twice.
+                # *** subj_comp_prompts repeats the compositional part once,
+                # *** and subj_comp_rep_prompts repeats the compositional part twice.
                 prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
                 prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
                 
@@ -1939,6 +1917,7 @@ class LatentDiffusion(DDPM):
         self_align_loss = (embs * embs).mean()
         self_align_loss.backward()
         adv_grad = x_start.grad
+        x_start.grad = None
         x_start.requires_grad = False
 
         # Map the face_coords from the pixel space to latent space (scale down by 8x).
@@ -1957,6 +1936,7 @@ class LatentDiffusion(DDPM):
                                all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
         loss_normal_recon = 0
         BLOCK_SIZE = x_start.shape[0]
+        # t sampled from the rear 50% of the timesteps.
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
         # LDM VAE uses fp32, and we can only afford a BS=1.
         if self.use_ldm_unet:
@@ -2017,6 +1997,7 @@ class LatentDiffusion(DDPM):
             # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
             cfg_scale  = np.random.uniform(1.5, 2.5)
             print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
+            # recon_bg_pixel_weight == 0, no penalty on bg errors.
             recon_bg_pixel_weight = recon_bg_pixel_weights[1]
         else:
             # Use the default negative prompts.

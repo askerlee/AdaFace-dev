@@ -81,7 +81,7 @@ coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",    
                   ] 
 
 all_shots = [ "front view", "side view", "close-up view", "zoomed-in view", "zoomed-out view", "full body view", 
-              "middle shot", "long shot", "wide shot" ]
+              "middle shot", "long shot", "wide shot", "eye level shot" ]
 
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
