@@ -102,7 +102,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.4,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=4,
+                 recon_with_adv_attack_iter_gap=-1,
                  recon_adv_mod_mag_range=[0.001, 0.005],
                  recon_bg_pixel_weights=[0.1, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -1902,6 +1902,8 @@ class LatentDiffusion(DDPM):
 
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
+        # NOTE: To avoid horrible adv_grad artifacts in the background, we should use mask here to separate 
+        # fg and bg when decode(). However, diffusers vae doesn't support mask, so we should avoid do_adv_attack. 
         orig_image = self.decode_first_stage_with_grad(x_start)
         # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
         # so such faces are really small.
@@ -1931,7 +1933,9 @@ class LatentDiffusion(DDPM):
         # face_coords is None if there are no faces detected in x_recon.
         face_coords = pixel_bboxes_to_latent(face_coords, orig_image.shape[-1], x_start.shape[-1])
         # Set areas outside the face_coords of adv_grad to negative.
-        face_mask = -torch.ones_like(adv_grad)
+        # NOTE: seems this trick still couldn't prevent the bg from being corrupted. Therefore,
+        # we should avoid do_adv_attack.
+        face_mask = torch.zeros_like(adv_grad)
         for i in range(x_start.shape[0]):
             x1, y1, x2, y2 = face_coords[i]
             face_mask[i, :, y1:y2, x1:x2] = 1
