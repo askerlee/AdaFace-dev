@@ -9,12 +9,12 @@ from ldm.modules.lr_scheduler import SequentialLR2
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 from ldm.c_adamw import AdamW as CAdamW
-from diffusers import UNet2DConditionModel, StableDiffusionPipeline
+from diffusers import UNet2DConditionModel, StableDiffusionPipeline, AutoencoderKL
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
                         calc_recon_and_complem_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
-                        calc_subj_masked_bg_suppress_loss, save_grid, init_x_with_fg_from_training_image, \
+                        calc_subj_masked_bg_suppress_loss, save_grid, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
@@ -842,8 +842,8 @@ class LatentDiffusion(DDPM):
     def decode_first_stage(self, z):
         if self.use_ldm_unet:
             z = 1. / self.scale_factor * z
-            # first_stage_model: AutoencoderKL
-            #LINK ldm/models/autoencoder.py#AutoencoderKL
+            # first_stage_model: ldm.models.autoencoder.AutoencoderKL
+            #LINK ldm/models/autoencoder.py#AutoencoderKL_decode
             return self.first_stage_model.decode(z)
         else:
             # Revised from StableDiffusionPipeline::decode_latents().
@@ -858,9 +858,12 @@ class LatentDiffusion(DDPM):
     def decode_first_stage_with_grad(self, z):
         if self.use_ldm_unet:
             z = 1. / self.scale_factor * z
+            # first_stage_model: ldm.models.autoencoder.AutoencoderKL
+            #LINK ldm/models/autoencoder.py#AutoencoderKL_decode
             return self.first_stage_model.decode(z)
         else:
             # Revised from StableDiffusionPipeline::decode_latents().
+            # from diffusers import AutoencoderKL
             z = z.to(self.model.pipeline.dtype)
             z = 1 / self.vae.config.scaling_factor * z
             # image: [-1, 1]
@@ -869,6 +872,10 @@ class LatentDiffusion(DDPM):
         
     @torch.no_grad()
     def encode_first_stage(self, x, mask=None):
+        # diffusers AutoencoderKL doesn't support mask.
+        # In order to support mask, we still use the old VAE.
+        # first_stage_model: ldm.models.autoencoder.AutoencoderKL
+        #LINK ldm/models/autoencoder.py#AutoencoderKL_encode
         return self.first_stage_model.encode(x, mask)
 
     # LatentDiffusion.shared_step() overloads DDPM.shared_step().

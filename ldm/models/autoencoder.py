@@ -48,12 +48,14 @@ class AutoencoderKL(pl.LightningModule):
         self.load_state_dict(sd, strict=False)
         print(f"Restored from {path}")
 
+    # ANCHOR[id=AutoencoderKL_encode]
     def encode(self, x, mask=None):
         h = self.encoder(x, mask)
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
         return posterior
 
+    # ANCHOR[id=AutoencoderKL_decode]
     def decode(self, z):
         z = self.post_quant_conv(z)
         dec = self.decoder(z)
