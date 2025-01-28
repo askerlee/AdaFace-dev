@@ -2060,8 +2060,13 @@ class LatentDiffusion(DDPM):
         loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
         print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
         # loss_recon: 0.02~0.03.
-        # loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
-        loss_normal_recon += loss_recon + loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
+        # But occasionally, loss_recon could be 0.08~0.1, which indicates wrongly placed faces. 
+        # In this case, we don't force the model to correct the face positions, otherwise double faces may appear.
+        if (self.iter_flags['recon_on_comp_prompt'] and loss_recon < 0.08) \
+          or (not self.iter_flags['recon_on_comp_prompt'] and loss_recon < 0.06):
+            loss_normal_recon += loss_recon
+        # loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0, DISABLED # 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
+        loss_normal_recon += loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
