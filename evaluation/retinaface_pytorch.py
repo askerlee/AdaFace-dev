@@ -143,26 +143,40 @@ class RetinaFaceClient(nn.Module):
             image_np = ((image_np + 1) * 127.5).astype(np.uint8)
 
             # .detect_faces() doesn't require grad. So we convert the image tensor to numpy.
-            facial_areas = self.detect_faces(image_np, T=T)
-            if len(facial_areas) == 0:
-                curr_img_found_face = False
+            faces = self.detect_faces(image_np, T=T)
+            if len(faces) == 0:
+                if use_whole_image_if_no_face:
+                    face_crop = image_ts
+                    face_coords.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
+                else:
+                    # No face detected
+                    failed_indices.append(i)
+                    face_coords.append((0, 0, 0, 0))
+                    continue
             else:
-                curr_img_found_face = True
+                max_facial_area = 0
+                x_start_max = x_end_max = y_start_max = y_end_max = 0
 
-            if curr_img_found_face:
-                # Only use the first detected face.
-                facial_area  = facial_areas[0]
-                x = facial_area.x
-                y = facial_area.y
-                w = facial_area.w
-                h = facial_area.h
+                # Find the largest facial area
+                for face in faces:
+                    x = face.x
+                    y = face.y
+                    w = face.w
+                    h = face.h
 
-                y_start = max(0, int(y + bleed))
-                y_end   = min(image_ts.shape[1], int(y + h - bleed))
-                x_start = max(0, int(x + bleed))
-                x_end   = min(image_ts.shape[2], int(x + w - bleed))
+                    y_start = max(0, int(y + bleed))
+                    y_end   = min(image_ts.shape[1], int(y + h - bleed))
+                    x_start = max(0, int(x + bleed))
+                    x_end   = min(image_ts.shape[2], int(x + w - bleed))
 
-                if y_start + T >= y_end or x_start + T >= x_end:
+                    if (y_end - y_start) * (x_end - x_start) > max_facial_area:
+                        max_facial_area = (y_end - y_start) * (x_end - x_start)
+                        y_start_max = y_start
+                        y_end_max   = y_end
+                        x_start_max = x_start
+                        x_end_max   = x_end
+
+                if y_start_max + T >= y_end_max or x_start_max + T >= x_end_max:
                     # After trimming bleed pixels, the face is < T, too small.
                     failed_indices.append(i)
                     face_coords.append((0, 0, 0, 0))
@@ -170,16 +184,8 @@ class RetinaFaceClient(nn.Module):
 
                 # Extract detected face without alignment
                 # Crop on the input tensor, so that computation graph is preserved.
-                face_crop = image_ts[:, y_start:y_end, x_start:x_end]
-                face_coords.append((x_start, y_start, x_end, y_end))
-            elif use_whole_image_if_no_face and not curr_img_found_face:
-                face_crop = image_ts
-                face_coords.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
-            else:
-                # No face detected
-                failed_indices.append(i)
-                face_coords.append((0, 0, 0, 0))
-                continue
+                face_crop = image_ts[:, y_start_max:y_end_max, x_start_max:x_end_max]
+                face_coords.append((x_start_max, y_start_max, x_end_max, y_end_max))
 
             # resize to (1, 3, 128, 128)
             face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
