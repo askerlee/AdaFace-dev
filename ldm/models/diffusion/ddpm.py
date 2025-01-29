@@ -117,7 +117,7 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=True,
-                 p_shrink_subj_attn=0.5,
+                 p_shrink_subj_attn=1,
                  # Reduce the variance of the subject attention distribution by a factor of 2,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=2.,
@@ -1945,7 +1945,7 @@ class LatentDiffusion(DDPM):
 
     def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
                                all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
-        loss_normal_recon = 0
+        loss_normal_recon = torch.tensor(0.0, device=x_start.device)
         BLOCK_SIZE = x_start.shape[0]
         # t sampled from the rear 50% of the timesteps.
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
@@ -2060,11 +2060,15 @@ class LatentDiffusion(DDPM):
         loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
         print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
         # loss_recon: 0.02~0.03.
-        # But occasionally, loss_recon could be 0.08~0.1, which indicates wrongly placed faces. 
-        # In this case, we don't force the model to correct the face positions, otherwise double faces may appear.
-        if (self.iter_flags['recon_on_comp_prompt'] and loss_recon < 0.08) \
-          or (not self.iter_flags['recon_on_comp_prompt'] and loss_recon < 0.06):
+        # But occasionally, loss_recon could spike at 0.08~0.1 (if recon_on_comp_prompt), or 0.06~0.08 (if not), 
+        # which indicates the face is generated at a misaligned position. In this case, we don't force the model to correct 
+        # the face positions, otherwise double faces may appear.
+        if self.iter_flags['recon_on_comp_prompt'] and loss_recon < 0.08:
             loss_normal_recon += loss_recon
+        elif (not self.iter_flags['recon_on_comp_prompt']) and loss_recon < 0.06:
+            # Double the loss_recon if not recon_on_comp_prompt.
+            loss_normal_recon += loss_recon * 2
+
         # loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0, DISABLED # 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
         loss_normal_recon += loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
