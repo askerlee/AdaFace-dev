@@ -1672,28 +1672,40 @@ class LatentDiffusion(DDPM):
 
                 t0 = t.chunk(4)[0]
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                unscaled_ts = torch.rand_like(t0.float())
-                # Make sure at the middle step (i = sqrt(num_denoising_steps - 1), the timestep 
+                rand_ts = torch.rand_like(t0.float())
+                # Make sure at the middle step (i < num_denoising_steps - 1), the timestep 
                 # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
                 # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
                 # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
                 # of the current timestep.
+                # In general, the larger num_denoising_steps, the ratio between et and t0 is closer to 1.
                 t_lb = t0 * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
                 t_ub = t0 * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
                 # et: earlier timestep, ts[i+1] < ts[i].
-                et = (t_ub - t_lb) * unscaled_ts + t_lb
+                # et is randomly sampled between [t_lb, t_ub].
+                et = (t_ub - t_lb) * rand_ts + t_lb
                 et = et.long()
 
                 sc_rep_uses_larger_timestep = False
                 if subj_comp_distill_on_rep_prompts and sc_rep_uses_larger_timestep:
-                    # Use t0, which is larger than et_sc_rep, as the earlier timestep for the sc-rep instance,
-                    # to counter the double-face issue.
-                    et_sc_rep = t0
+                    # Make the ratio of et2/t0 closer to 1 than et/t0, to counter the double-face issue.
+                    # If num_denoising_steps = 5, we take timesteps within [0.6^0.66, 0.8^0.66] = [0.71, 0.86] 
+                    # of the current timestep.
+                    # If num_denoising_steps = 4, we take timesteps within [0.6^0.72, 0.8^0.72] = [0.69, 0.85]
+                    # of the current timestep.
+                    # In general we add more noise to the sc_rep instance, so after denoising, the second face
+                    # may be more effectively removed.
+                    t_lb2 = t0 * np.power(0.6, np.power(num_denoising_steps - 1, -0.3))
+                    t_ub2 = t0 * np.power(0.8, np.power(num_denoising_steps - 1, -0.3))
+                    # et2: earlier timestep for sc and sc_rep instances.
+                    # et2 is randomly sampled between [t_lb2, t_ub2].
+                    et2 = (t_ub2 - t_lb2) * rand_ts + t_lb2
+                    et2 = et2.long()
                 else:
-                    et_sc_rep = et
+                    et2 = et
 
-                # Use the same t and noise for all instances.
-                earlier_timesteps = torch.cat([et, et, et_sc_rep, et], dim=0)
+                # Use the same t and noise for all instances except the sc_rep instance.
+                earlier_timesteps = torch.cat([et, et, et2, et], dim=0)
                 ts.append(earlier_timesteps)
                 noises.append(noise)
 

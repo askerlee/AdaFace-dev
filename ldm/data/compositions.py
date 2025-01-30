@@ -12,14 +12,14 @@ animal_action_regexs = \
   "pushing a (door|table|car|wheelchair|stroller|shopping cart|bicycle|motorcycle|scooter)",
   "running (in a forest|in a park|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
   "walking (in a forest|in a park|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
-  "throwing (a ball|a rock|water|a dart|a frisbee|a knife|a javelin)",
+  "throwing (a ball|a rock|water|a dart|a frisbee|a knife|a javelin|a tennis ball)",
   "catching (a ball|an arrow|a butterfly|a fish|a leaf)",
   "kicking a (ball|bottle|tree|rock|punching bag|pole|box)",
   "playing (a card game|a video game|a piano|a violin|basketball|tennis)",
   "riding a (bike|motorcycle|scooter|horse|car|bus|train|boat)",
   "(kissing|hugging|holding) a (boy|girl|baby|lady|man|cat)",
   "dancing with a (boy|girl|lady|man|villager)",
-  "standing (besides a friend|besides a tree|besides a car|in a river|on a table|on a stair|on a board|on a box)",
+  "standing (besides a tree|besides a car|in a river|on a table|on a stair|on a board|on a box)",
   "opening a (door|window|book|bottle|jar|box|envelope|bag|pouch|wallet|suitcase)",
   "pointing at (the sky|the sun|the beach|the mountains|the forest)",
   "looking at (a book|a mobile phone|the screen|the sky|the sun|the beach|a UFO|a painting|a clock|a mirror)",
@@ -46,7 +46,7 @@ static_action_regexs = \
   "in (a car|a meeting|a class|a wedding|a dinner|a concert|a gym|a library|a park)",
   "in (a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
   "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
-  "next to (a friend|a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
+  "next to (a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
   "made of (metal|stainless steel|fractal flame|marble|rubber|bronze|ice)",
   # Prompts below are from DreamBooth evaluation dataset
   #LINK - https://github.com/google/dreambooth/blob/main/dataset/prompts_and_classes.txt
@@ -70,15 +70,6 @@ all_locations = [ "at the left", "at the right", "at the top", "at the bottom",
                   "in the center", "in the middle", "at the upper left", "at the upper right",
                   "at the lower left", "at the lower right", "in the background", 
                 ]
-
-coexist_objects = [ "person", "man",  "woman",   "girl",    "boy",   "baby",       "crowd", "villager", 
-                     "cat",   "dog",  "bird",    "panda",  "monkey", "chimpanzee", "gorilla", "bear",  
-                     "horse", "sheep", "elephant", "lion"
-                     # No need to include non-animals below. They tend not to mix features with subjects.
-                     # "stone", "tree",  "flower", "rock", "mountain", "grass",     "cloud", "sun",
-                     # "moon",  "stars", "fire",   "lake", "ocean",    "river",     "beach", "village",
-                     # "house", "car",   "bus",    "train", "boat",    "bike",      "building", "tower" 
-                  ] 
 
 all_shots = [ "front view", "side view", "close-up view", "zoomed-in view", "zoomed-out view", "full body view", 
               "middle shot", "long shot", "wide shot", "eye level shot" ]
@@ -117,23 +108,10 @@ all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a lib
                     "a building", 
                   ]
 
-Debug_Prompts = False #True # 
-PRESET_DEBUG_PROMPTS = [ 'with a city in the background', 
-                        #'on a cobblestone street', 'on top of a wooden floor' 
-                       ]
-
 def sample_compositions(N, subj_type):
     compos_prompts = []
     modifiers = []
 
-    if Debug_Prompts:
-        K = len(PRESET_DEBUG_PROMPTS)
-        for i in range(N):
-            idx = np.random.choice(K)
-            compos_prompts.append(PRESET_DEBUG_PROMPTS[idx])
-            modifiers.append("")
-        return compos_prompts, modifiers
-    
     if subj_type == 'animal':
         composition_regexs = all_composition_regexs
     elif subj_type == 'object':
@@ -156,19 +134,6 @@ def sample_compositions(N, subj_type):
         idx = np.random.choice(K)
 
         composition = exrex.getone(composition_regexs[idx])
-        # Disable another object in the image for non-animal subjects,
-        # to avoid the spotlight of the non-animal subject being stolen by the other object.
-        if subj_type == 'animal':
-            has_another_obj = False #np.random.choice([0, 1], p=[0.7, 0.3])
-        else:
-            has_another_obj = False
-
-        if has_another_obj:
-            object2   = np.random.choice(coexist_objects)
-            location2 = np.random.choice(all_locations)
-            obj_loc2  = "a " + object2 + " " + location2
-        else:
-            obj_loc2  = ""
 
         style_probs = [0.3, 0.2, 0.5]
         has_styles = np.random.choice([0, 1, 2], p=style_probs)
@@ -220,7 +185,7 @@ def sample_compositions(N, subj_type):
 
         modifier = ", ".join(filter(lambda s: len(s) > 0, [time, style, shot, light, art_by]))
         #compos_prompt = f"{composition}{obj_loc2}{background}"
-        compos_prompt = ", ".join(filter(lambda s: len(s) > 0, [composition, obj_loc2, background]))
+        compos_prompt = ", ".join(filter(lambda s: len(s) > 0, [composition, background]))
         modifiers.append(modifier)
         compos_prompts.append(compos_prompt)
     return compos_prompts, modifiers
