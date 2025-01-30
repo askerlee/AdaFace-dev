@@ -1607,7 +1607,7 @@ class LatentDiffusion(DDPM):
                                        uncond_emb=None, img_mask=None, 
                                        all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
                                        cfg_scale=2.5, capture_ca_activations=False,
-                                       num_denoising_steps=1):
+                                       num_denoising_steps=1, subj_comp_distill_on_rep_prompts=True):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1646,7 +1646,7 @@ class LatentDiffusion(DDPM):
                                     shrink_subj_attn=shrink_subj_attn,
                                     subj_indices=all_subj_indices_1b, 
                                     batch_part_has_grad='subject-compos', 
-                                    subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'],
+                                    subj_comp_distill_on_rep_prompts=subj_comp_distill_on_rep_prompts,
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=capture_ca_activations,
                                     # Enable the attn lora in subject-compos batches, as long as 
@@ -1656,9 +1656,9 @@ class LatentDiffusion(DDPM):
             
             noise_preds.append(noise_pred)
             # The predicted x0 is used as the x_start for the next denoising step.
-            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                x0_ss, x0_sc, x0_ms, x0_mc = x_recon.chunk(4)
-                pred_x0 = torch.cat([x0_ss, x0_ms, x0_ms, x0_mc], dim=0)
+            if subj_comp_distill_on_rep_prompts:
+                x0_ss, x0_sc, x0_sc_rep, x0_mc = x_recon.chunk(4)
+                pred_x0 = torch.cat([x0_ss, x0_sc_rep, x0_sc_rep, x0_mc], dim=0)
             else:
                 pred_x0 = x_recon
 
@@ -1668,6 +1668,8 @@ class LatentDiffusion(DDPM):
 
             # Sample an earlier timestep for the next denoising step.
             if i < num_denoising_steps - 1:
+                noise = torch.randn_like(x_start.chunk(4)[0]).repeat(4, 1, 1, 1)
+
                 t0 = t.chunk(4)[0]
                 # NOTE: rand_like() samples from U(0, 1), not like randn_like().
                 unscaled_ts = torch.rand_like(t0.float())
@@ -1678,12 +1680,20 @@ class LatentDiffusion(DDPM):
                 # of the current timestep.
                 t_lb = t0 * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
                 t_ub = t0 * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
-                earlier_timesteps = (t_ub - t_lb) * unscaled_ts + t_lb
-                # Use the same t and noise for all instances.
-                earlier_timesteps = earlier_timesteps.long().repeat(4)
-                noise = torch.randn_like(x_start.chunk(4)[0]).repeat(4, 1, 1, 1)
+                # et: earlier timestep, ts[i+1] < ts[i].
+                et = (t_ub - t_lb) * unscaled_ts + t_lb
+                et = et.long()
 
-                # earlier_timesteps = ts[i+1] < ts[i].
+                sc_rep_uses_larger_timestep = False
+                if subj_comp_distill_on_rep_prompts and sc_rep_uses_larger_timestep:
+                    # Use t0, which is larger than et_sc_rep, as the earlier timestep for the sc-rep instance,
+                    # to counter the double-face issue.
+                    et_sc_rep = t0
+                else:
+                    et_sc_rep = et
+
+                # Use the same t and noise for all instances.
+                earlier_timesteps = torch.cat([et, et, et_sc_rep, et], dim=0)
                 ts.append(earlier_timesteps)
                 noises.append(noise)
 
@@ -1784,7 +1794,8 @@ class LatentDiffusion(DDPM):
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     p_shrink_subj_attn=self.p_shrink_subj_attn,
                                                     cfg_scale=2.5, capture_ca_activations=True,
-                                                    num_denoising_steps=num_comp_denoising_steps)
+                                                    num_denoising_steps=num_comp_denoising_steps,
+                                                    subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'])
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
