@@ -3,12 +3,11 @@ import numpy as np
 
 # animal compositions are used by humans or animals, not for objects
 animal_action_regexs = \
-[ "lifting a (rock|box|barbell|cat|dog)",
-  "doing (makeup|housekeeping|gardening|exercise)",
+[ "doing (makeup|housekeeping|gardening|exercise)",
   "carrying a (bag|backpack|luggage|laptop|book|briefcase|purse|suitcase|bouquet|baby|cat|dog|teddy bear)",
   "holding a (mobile phone|book|cup of water|piece of paper|flower|bouquet|pen|sign|cat|dog|teddy bear|baby|rock|leaf|mushroom|stick|fruit)",
   "(sitting|sleeping) (on a table|on a chair|on a bench|on a tank|in a wheelchair|on the ground|on flying cloud)",
-  "swimming (in a pool|underwater|in the ocean|in a lake|in a river)( among tropical fishes)?",
+  "swimming (in a pool|underwater|in the ocean|in a lake|in a river)( among tropical fishes)",
   "pushing a (door|table|car|wheelchair|stroller|shopping cart|bicycle|motorcycle|scooter)",
   "running (in a forest|in a park|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",
   "walking (in a forest|in a park|at the beach|over forest leaves|on a trail|under the moon|on a treadmill)",

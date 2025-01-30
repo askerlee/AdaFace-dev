@@ -1646,7 +1646,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
     # which would be the same as calculating on the whole batch.
     if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
       or fg_mask.chunk(4)[0].float().mean() >= 0.998:
-        return 0
+        return torch.tensor(0.0, device=list(ca_attnscore.values())[0].device)
 
     # Discard the first few bottom layers from alignment.
     # attn_align_layer_weights: relative weight of each layer. 

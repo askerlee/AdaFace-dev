@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
                  recon_subj_mb_suppress_loss_weight=0.,
-                 comp_sc_subj_mb_suppress_loss_weight=0.,
+                 comp_sc_subj_mb_suppress_loss_weight=2e-3,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -102,14 +102,14 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.4,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=-1,
+                 recon_with_adv_attack_iter_gap=-1,     # Disabled
                  recon_adv_mod_mag_range=[0.001, 0.005],
                  recon_bg_pixel_weights=[0.1, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
                  arcface_align_loss_weight=5e-2,
-                 clip_align_loss_weight=0,  # Currently disabled. Cannot afford the extra RAM.
+                 clip_align_loss_weight=0,          # Disabled. Cannot afford the extra RAM.
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=False,
@@ -2523,9 +2523,9 @@ class LatentDiffusion(DDPM):
                 # However, fg_mask is on the latents, 64*64. 
                 # Therefore, we need to scale them down by 8.
                 ss_face_coords = pixel_bboxes_to_latent(ss_face_coords, ss_x_recon_pixels.shape[-1], fg_mask.shape[-1])
-                # fg_mask is for the whole batch, and ss_face_coords is for the first block.
-                # Therefore, len(ss_face_coords) == len(fg_mask) // 4.
-                # len(ss_face_coords): BLOCK_SIZE, usually 1.
+                # fg_mask is for the whole batch, and ss_face_coords is for the first block. 
+                # Therefore, the i index for fg_mask is zero-based, and we don't need to add an offset to it.
+                # len(ss_face_coords) == BLOCK_SIZE == len(fg_mask) // 4, usually 1.
                 for i in range(len(ss_face_coords)):
                     x1, y1, x2, y2 = ss_face_coords[i]
                     fg_mask[i, :, y1:y2, x1:x2] = 1
@@ -2539,7 +2539,7 @@ class LatentDiffusion(DDPM):
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
                 loss_arcface_align_comp, loss_comp_sc_subj_mb_suppress, sc_fg_mask = \
-                    self.calc_comp_face_align_and_mb_suppress_losses(x_start, x_recons, ca_layers_activations_list, fg_mask,
+                    self.calc_comp_face_align_and_mb_suppress_losses(x_start, x_recons, ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix)
                 # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 0.1 => 0.05-0.08.
                 # This loss is around 1/150 of recon/distill losses (0.1).
@@ -2702,7 +2702,7 @@ class LatentDiffusion(DDPM):
 
         return loss_comp_feat_distill_loss            
 
-    def calc_comp_face_align_and_mb_suppress_losses(self, x_start, x_recons, ca_layers_activations_list, fg_mask,
+    def calc_comp_face_align_and_mb_suppress_losses(self, x_start, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
         # We cannot afford calculating loss_arcface_align_comp for > 1 steps. Otherwise, OOM.
         max_arcface_loss_calc_count = 1
@@ -2738,7 +2738,8 @@ class LatentDiffusion(DDPM):
 
                     # Generate sc_fg_mask for the first time, based on the detected face area.
                     if sc_fg_mask is None:
-                        sc_fg_mask = torch.zeros_like(fg_mask.chunk(4)[0])
+                        # sc_fg_mask: [1, 1, 64, 64].
+                        sc_fg_mask = torch.zeros_like(x_start_ss[:, :1])
                         # When loss_arcface_align_comp > 0, sc_face_coords is always not None.
                         # sc_face_coords: [[22, 15, 36, 33]].
                         PAD = 4
