@@ -1636,7 +1636,7 @@ def calc_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
 
 # calc_subj_masked_bg_suppress_loss() is called during normal recon,
 # as well as comp distillation iterations.
-def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg_mask):
+def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask):
     # fg_mask.chunk(4)[0].float().mean() >= 0.998: 
     # During comp distillation iterations, almost no background in the 
     # subject-single instance to suppress.
@@ -1646,7 +1646,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
     # which would be the same as calculating on the whole batch.
     if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
       or fg_mask.chunk(4)[0].float().mean() >= 0.998:
-        return torch.tensor(0.0, device=list(ca_attnscore.values())[0].device)
+        return torch.tensor(0.0, device=list(ca_attn.values())[0].device)
 
     # Discard the first few bottom layers from alignment.
     # attn_align_layer_weights: relative weight of each layer. 
@@ -1658,8 +1658,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
     attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
     # K_subj: 9, number of embeddings per subject token.
     K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-    subj_mb_suppress_scale      = 0.05
-    mfmb_contrast_attn_margin   = 0.4
+    mfmb_contrast_attn_margin = 0.01
 
     # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
     #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
@@ -1667,7 +1666,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
 
     loss_layers_subj_mb_suppress    = []
 
-    for unet_layer_idx, unet_attn in ca_attnscore.items():
+    for unet_layer_idx, unet_attn in ca_attn.items():
         if (unet_layer_idx not in attn_align_layer_weights):
             continue
 
@@ -1680,7 +1679,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
         subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, do_sum=True, do_mean=False)
 
         fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
-                                                mode="nearest|bilinear")
+                                              mode="nearest|bilinear")
         # Repeat 8 times to match the number of attention heads (for normalization).
         fg_mask2 = fg_mask2.reshape(BLOCK_SIZE, 1, -1).repeat(1, subj_attn.shape[1], 1)
         fg_mask3 = torch.zeros_like(fg_mask2)
@@ -1734,8 +1733,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attnscore, subj_indices, BLOCK_SIZE, fg
         # loss_layer_subj_bg_contrast_at_mf is usually 0, 
         # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
         # subj_mb_suppress_scale: 0.05.
-        loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress \
-                                            * attn_align_layer_weight * subj_mb_suppress_scale)
+        loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress * attn_align_layer_weight)
         
     loss_subj_mb_suppress = sum(loss_layers_subj_mb_suppress)
 

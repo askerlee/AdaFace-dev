@@ -2750,12 +2750,12 @@ class LatentDiffusion(DDPM):
                             # Add 4 pixels (2*bleed that undoes the bleed and adds 2 extra pixels) to each side of 
                             # the detected face area, to protect it from being suppressed.
                             sc_fg_mask[i, :, y1:y2, x1:x2] = 1
-                    # ca_layers_activations['attnscore']: { 22 -> [4, 8, 4096, 77], 23 -> [4, 8, 4096, 77], 24 -> [4, 8, 4096, 77] }.
-                    # sc_attn_scores: { 22 -> [1, 8, 64, 64], 23 -> [1, 8, 64, 64], 24 -> [1, 8, 64, 64] }.
-                    sc_attn_scores_dict = { layer_idx: attnscore.chunk(4)[1] for layer_idx, attnscore in ca_layers_activations['attnscore'].items() }
+                    # ca_layers_activations['attn']: { 22 -> [4, 8, 4096, 77], 23 -> [4, 8, 4096, 77], 24 -> [4, 8, 4096, 77] }.
+                    # sc_attn_dict: { 22 -> [1, 8, 64, 64], 23 -> [1, 8, 64, 64], 24 -> [1, 8, 64, 64] }.
+                    sc_attn_dict = { layer_idx: attn.chunk(4)[1] for layer_idx, attn in ca_layers_activations['attn'].items() }
+                    # Suppress the activation of the subject embeddings at the background area, to reduce double-face artifacts.
                     loss_comp_sc_subj_mb_suppress_step = \
-                        calc_subj_masked_bg_suppress_loss(sc_attn_scores_dict, all_subj_indices_1b, 
-                                                          BLOCK_SIZE, sc_fg_mask)
+                        calc_subj_masked_bg_suppress_loss(sc_attn_dict, all_subj_indices_1b, BLOCK_SIZE, sc_fg_mask)
                     loss_comp_sc_subj_mb_suppress += loss_comp_sc_subj_mb_suppress_step
                     
                     if arcface_loss_calc_count >= max_arcface_loss_calc_count:
