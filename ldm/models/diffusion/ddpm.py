@@ -83,8 +83,8 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.8,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
-                 recon_subj_mb_suppress_loss_weight=0.,
-                 comp_sc_subj_mb_suppress_loss_weight=2e-3,
+                 recon_subj_mb_suppress_loss_weight=0.01,
+                 comp_sc_subj_mb_suppress_loss_weight=0.01,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -104,7 +104,7 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=-1,     # Disabled
                  recon_adv_mod_mag_range=[0.001, 0.005],
-                 recon_bg_pixel_weights=[0.1, 0.0],
+                 recon_bg_pixel_weights=[0.01, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
@@ -112,16 +112,16 @@ class DDPM(pl.LightningModule):
                  clip_align_loss_weight=0,          # Disabled. Cannot afford the extra RAM.
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
-                 unet_uses_ffn_lora=False,
+                 unet_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
-                 q_lora_updates_query=True,
+                 q_lora_updates_query=False,
                  p_shrink_subj_attn=0.5,
-                 # Reduce the variance of the subject attention distribution by a factor of 2,
+                 # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
-                 sc_subj_attn_var_shrink_factor=2.,
-                 ):
+                 sc_subj_attn_var_shrink_factor=3.,
+                ):
         
         super().__init__()
         self.lightning_auto_optimization = lightning_auto_optimization
@@ -2064,15 +2064,15 @@ class LatentDiffusion(DDPM):
         # bg loss is given a tiny weight to suppress multi-face artifacts.
         # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
         # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
-        loss_subj_mb_suppress, loss_recon, loss_pred_l2 = \
+        loss_recon_subj_mb_suppress, loss_recon, loss_pred_l2 = \
             calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
                                           all_subj_indices, img_mask, fg_mask,
                                           recon_bg_pixel_weight, x_start.shape[0])
         v_loss_recon = loss_recon.mean().detach().item()
     
-        # If fg_mask is None, then loss_subj_mb_suppress = loss_bg_mf_suppress = 0.
-        if loss_subj_mb_suppress > 0:
-            loss_dict.update({f'{session_prefix}/subj_mb_suppress': loss_subj_mb_suppress.mean().detach().item()})
+        # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
+        if loss_recon_subj_mb_suppress > 0:
+            loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
 
         if self.iter_flags['recon_on_comp_prompt']:
             loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
@@ -2091,8 +2091,8 @@ class LatentDiffusion(DDPM):
         if loss_recon < loss_recon_threses[self.iter_flags['recon_on_comp_prompt']]:
             loss_normal_recon += loss_recon
 
-        # loss_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0, DISABLED # 2e-3 -> 1e-3, 1/20~1/30 of recon loss.
-        loss_normal_recon += loss_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
+        # loss_recon_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0.01 -> 5e-3, 1/20~1/30 of recon loss.
+        loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
@@ -2741,8 +2741,8 @@ class LatentDiffusion(DDPM):
                         # sc_fg_mask: [1, 1, 64, 64].
                         sc_fg_mask = torch.zeros_like(x_start_ss[:, :1])
                         # When loss_arcface_align_comp > 0, sc_face_coords is always not None.
-                        # sc_face_coords: [[22, 15, 36, 33]].
-                        PAD = 4
+                        # sc_face_coords: [[22, 15, 36, 33]], already scaled down to 64*64.
+                        PAD = 1
                         for i in range(len(sc_face_coords)):
                             x1, y1, x2, y2 = sc_face_coords[i]
                             H, W = x_start_ss.shape[-2:]

@@ -63,8 +63,8 @@ all_dress_regexs  = static_appearances   + animal_dresses
 all_composition_regexs    = all_action_regexs    + all_dress_regexs
 static_composition_regexs = static_action_regexs + static_appearances
 
-all_shots = [ "front view", "side view", "close-up view", "zoomed-in view", "zoomed-out view", "full body view", 
-              "middle shot", "long shot", "wide shot", "eye level shot" ]
+# Removed "eye level shot", "close-up view", "zoomed-in view"; sometimes it generates a huge eye.
+all_shots = [ "front view", "side view", "zoomed-out view", "full body view", "middle shot", "long shot", "wide shot" ]
 
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
