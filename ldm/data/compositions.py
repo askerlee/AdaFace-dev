@@ -1,7 +1,7 @@
 import exrex
 import numpy as np
 
-# animal compositions are used by humans/animals only
+# animal compositions are used by humans or animals, not for objects
 animal_action_regexs = \
 [ "lifting a (rock|box|barbell|cat|dog)",
   "doing (makeup|housekeeping|gardening|exercise)",
@@ -64,13 +64,6 @@ all_dress_regexs  = static_appearances   + animal_dresses
 all_composition_regexs    = all_action_regexs    + all_dress_regexs
 static_composition_regexs = static_action_regexs + static_appearances
 
-# Prompt with locations will be combined with a common animal/human.
-# E.g. "a z at the left, a dog in the center"
-all_locations = [ "at the left", "at the right", "at the top", "at the bottom", 
-                  "in the center", "in the middle", "at the upper left", "at the upper right",
-                  "at the lower left", "at the lower right", "in the background", 
-                ]
-
 all_shots = [ "front view", "side view", "close-up view", "zoomed-in view", "zoomed-out view", "full body view", 
               "middle shot", "long shot", "wide shot", "eye level shot" ]
 
@@ -95,17 +88,16 @@ all_time = [ "futuristic", "modern", "ancient", "antique", "retro", "old-fashion
 #add light prompts
 all_light = [ "daylight", "moonlight", "night sky", "natural light", "front light", 
               "backlight", "soft light", "hard light", "moody light", "dramatic light", 
-              "dynamic light", "natural light", "at night" ]
+              "dynamic light", "natural light", "at night", "neon light" ]
 
 all_art_by = [ "miho hirano", "makoto shinkai", "artgerm",  "greg rutkowski", "magali villeneuve",
                "mark ryden", "hayao miyazaki", "agnes Lawrence", "disney animation studio"]
 
 #add background prompts
-all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", "a theme park",
-                    "a city", "a mountain", "a blue house", "a wheat field", "a tree and autumn leaves", "the Eiffel Tower", "a jungle", "the snow",
-                    "a cobblestone street", "underwater", "an ocean of milk", "pink fabric", "a wooden floor", "green grass with sunflowers around it",
-                    "a mirror", "the sidewalk in a crowded street", "a dirt road", "a white rug", "a purple rug in a forest", "a red cube", "a purple cube",
-                    "a building", 
+all_backgrounds = [ "a beach", "a table", "a park", "a concert", "a gym", "a library", "a mall", "a movie theater", "a hotel room", 
+                    "a theme park", "a city", "a mountain", "a blue house", "a wheat field", "a tree and autumn leaves", 
+                    "the Eiffel Tower", "a jungle",  "underwater", "a red cube", "a purple cube", "a building", 
+                    "night view of the tokyo street"
                   ]
 
 def sample_compositions(N, subj_type):
