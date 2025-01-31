@@ -34,7 +34,7 @@ parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
 parser.add_argument('--model_style_type', type=str, default='photorealistic',
                     choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
-parser.add_argument("--guidance_scale", type=float, default=5.0,
+parser.add_argument("--guidance_scale", type=float, default=4.0,
                     help="The guidance scale for the diffusion model. Default: 5.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to use LoRA in the Diffusers UNet model")
@@ -360,7 +360,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
             negative_prompt = gr.Textbox(
                 label="Negative Prompt", 
-                value="sagging face, sagging cheeks, flaws in the eyes, flaws in the face, lowres, "
+                value="sagging face, sagging cheeks, wrinkles, flaws in the eyes, flaws in the face, lowres, "
                       "non-HDRi, low quality, worst quality, artifacts, noise, text, watermark, glitch, "
                       "mutated, ugly, disfigured, hands, partially rendered objects, partially rendered eyes, "
                       "deformed eyeballs, cross-eyed, extra legs, extra arms, blurry, mutation, duplicate, "
@@ -371,8 +371,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             guidance_scale = gr.Slider(
                 label="Guidance scale",
                 minimum=1.0,
-                maximum=12.0,
-                step=1.0,
+                maximum=8.0,
+                step=0.5,
                 value=args.guidance_scale,
             )
 
