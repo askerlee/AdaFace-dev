@@ -1554,21 +1554,22 @@ def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask,
 
 # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
 # (But there are still other losses used after calling this function.)
-def calc_recon_and_complem_losses(noise_pred, noise_gt, ca_layers_activations,
+def calc_recon_and_suppress_losses(noise_pred, noise_gt, ca_layers_activations,
                                   all_subj_indices, img_mask, fg_mask, 
                                   bg_pixel_weight, BLOCK_SIZE):
 
-    loss_recon_subj_mb_suppress = \
-        calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
-                                          all_subj_indices, BLOCK_SIZE, fg_mask)
 
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
     loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, img_mask, fg_mask, 
                                     fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
 
+    loss_recon_subj_mb_suppress = \
+        calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
+                                          all_subj_indices, BLOCK_SIZE, fg_mask)
+
     # Calc the L2 norm of noise_pred.
     loss_pred_l2 = (noise_pred ** 2).mean()
-    return loss_recon_subj_mb_suppress, loss_recon, loss_pred_l2
+    return loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2
 
 # calc_attn_norm_loss() is used by LatentDiffusion::calc_comp_feat_distill_loss().
 def calc_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):

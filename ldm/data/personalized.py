@@ -136,7 +136,6 @@ class PersonalizedBase(Dataset):
                 # the subject. If num_vectors_per_subj_token > 1, pad with "," in the prompts to leave
                 # room for those extra vectors.
                  num_vectors_per_subj_token=1,
-                 center_crop=False,
                  load_meta_subj2person_type_cache_path=None,
                  save_meta_subj2person_type_cache_path=None,
                  verbose=False, 
@@ -338,7 +337,6 @@ class PersonalizedBase(Dataset):
             self.subjects_are_faces.append(is_face)
 
         self.num_vectors_per_subj_token = num_vectors_per_subj_token
-        self.center_crop = center_crop
 
         self.size = size
         interpolation_scheme = "nearest"
@@ -350,23 +348,19 @@ class PersonalizedBase(Dataset):
         
         if self.is_training:
             self.flip = transforms.RandomHorizontalFlip(p=flip_p)
-            if rand_scale_range is not None:
-                # If the scale factor > 1, RandomAffine will crop the scaled image to the original size.
-                # If the scale factor < 1, RandomAffine will pad the scaled image to the original size.
-                # Because the scaled "images" are extended with two mask channels, which contain many zeros,
-                # We have to use interpolation=InterpolationMode.NEAREST, otherwise the zeros in the mask will 
-                # be interpolated to image pixel values.
-                # RandomAffine() doesn't change the input image size, 
-                # so transforms.Resize() is redundant. Anyway, just keep it here.
-                self.random_scaler = transforms.Compose([
-                                        transforms.RandomAffine(degrees=0, shear=0, scale=rand_scale_range,
-                                                                interpolation=InterpolationMode.NEAREST),
-                                        transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
-                                     ])
-                print(f"{set_name} images will be randomly scaled in range {rand_scale_range}")
-        else:
-            self.random_scaler = None
-            self.flip = None
+            # If the scale factor > 1, RandomAffine will crop the scaled image to the original size.
+            # If the scale factor < 1, RandomAffine will pad the scaled image to the original size.
+            # Because the scaled "images" are extended with two mask channels, which contain many zeros,
+            # We have to use interpolation=InterpolationMode.NEAREST, otherwise the zeros in the mask will 
+            # be interpolated to image pixel values.
+            # RandomAffine() doesn't change the input image size, 
+            # so transforms.Resize() is redundant. Anyway, just keep it here.
+            self.random_scaler = transforms.Compose([
+                                    transforms.RandomAffine(degrees=0, shear=0, scale=rand_scale_range,
+                                                            interpolation=InterpolationMode.NEAREST),
+                                    transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
+                                    ])
+            print(f"{set_name} images will be randomly scaled in range {rand_scale_range}")
 
     def __len__(self):
         return self._length
@@ -448,14 +442,6 @@ class PersonalizedBase(Dataset):
         #print(f"subj_comp_prompt: {subj_comp_prompt}")
         #print(f"cls_comp_prompt: {cls_comp_prompt}")
 
-        if self.center_crop:        # default: False
-            crop = min(image.shape[0], image.shape[1])
-            h, w, = image.shape[0], image.shape[1]
-            image_mask = image_mask[(h - crop) // 2:(h + crop) // 2,
-                         (w - crop) // 2:(w + crop) // 2]
-            
-            image_mask_obj  = Image.fromarray(image_mask)
-
         if self.size is not None:
             # Because image_mask_obj has an extra channel of mask, which contains many zeros.
             # Using resampling schemes other than 'NEAREST' will introduce many zeros at the border. 
@@ -469,81 +455,67 @@ class PersonalizedBase(Dataset):
         
         image_mask = np.array(image_mask_obj)
 
-        if self.random_scaler is not None:
-            scale_p = 1
-        else:
-            scale_p = 0
         shift_p = 1
 
         # Do random scaling with 50% chance. Not to do it all the time, 
         # as it seems to hurt (maybe introduced domain gap between training and inference?)
-        if scale_p > 0 and random.random() < scale_p:
-                image_tensor = torch.tensor(image_mask).permute(2, 0, 1)
-                # aug_mask doesn't have to take {0, 255}. Since some inaccuracy around the boundary
-                # doesn't really matter. But fg_mask has to take {0, 255}, otherwise after scaling,
-                # some foreground pixels will become 0, and when the foreground area is small, 
-                # such loss is significant.
-                aug_mask    = torch.ones_like(image_tensor[0:1])
-                image_ext   = torch.cat([image_tensor, aug_mask], dim=0)
-                # image_ext: [4, 512, 512]
-                image_ext   = self.random_scaler(image_ext)
-                # After random scaling, the valid area is only a sub-region at the center of the image.
-                # NOTE: random shifting DISABLED, as it seems to hurt.
-                # ??% chance to randomly roll towards right and bottom (), 
-                # and ??% chance to keep the valid area at the center.
-                if random.random() < shift_p:
-                    # count number of empty lines at the left, right, top, bottom edges of image_ext.
-                    # aug_mask = image_ext[3] is uint8, so all pixels >= 0. 
-                    # sum(dim=1).cumsum() == 0 means this is an empty row at the top of the image.
-                    top0     = (image_ext[3].sum(dim=1).cumsum(dim=0) == 0).sum().item()
-                    # flip first then cumsum(), so that cumsum() is from bottom to top.
-                    bottom0  = (image_ext[3].sum(dim=1).flip(dims=(0,)).cumsum(dim=0) == 0).sum().item()
-                    # sum(dim=0).cumsum() == 0 means this is an empty column at the left of the image.
-                    left0    = (image_ext[3].sum(dim=0).cumsum(dim=0) == 0).sum().item()
-                    # flip first then cumsum(), so that cumsum() is from right to left.
-                    right0   = (image_ext[3].sum(dim=0).flip(dims=(0,)).cumsum(dim=0) == 0).sum().item()
-                    # Randomly roll towards right and bottom, within the empty edges.
-                    # randint() includes both end points, so max(dy) =  top0 + bottom.
-                    # MG: margin at each side, i.e., after rolling, 
-                    # there are still at least 12 empty lines at each side.
-                    # The average scaling is (1+0.7)/2 = 0.85, i.e., 7.5% empty lines at each side.
-                    # 7.5% * 512 = 38.4 pixels, so set the margin to be around 1/3 of that.
-                    MG = 12     
-                    if top0 + bottom0 > 2*MG:
-                        dy = random.randint(0, top0 + bottom0 - 2*MG)
-                        # Shift up instead (negative dy)
-                        if dy > bottom0 - MG:
-                            dy = -(dy - bottom0 + MG)
-                    else:
-                        dy = 0
-                    if left0 + right0 > 2*MG:
-                        dx = random.randint(0, left0 + right0 - 2*MG)
-                        # Shift left instead (negative dx)
-                        if dx > right0 - MG:
-                            dx = -(dx - right0 + MG)
-                    else:
-                        dx = 0
-                    # Because the image border is padded with zeros, we can simply roll() 
-                    # without worrying about the border values.
-                    image_ext = torch.roll(image_ext, shifts=(dy, dx), dims=(1, 2))
-
-                # image_mask is a concatenation of image and mask, not a mask for the image.
-                image_mask  = image_ext[:4].permute(1, 2, 0).numpy().astype(np.uint8)
-                # aug_mask: [512, 512].
-                aug_mask    = image_ext[4].numpy().astype(np.uint8)
-
-                # Sanity check.
-                if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
-                    breakpoint()
-        else:
-            # If random scaling is enabled, then even if no scaling happens,
-            # we still need to put a all-1 'aug_mask' into the example.
-            # 'aug_mask' has to be present in all examples, otherwise collation will encounter exceptions.
-            if self.random_scaler:
-                aug_mask = np.ones_like(image_mask[:, :, 0])
+        image_tensor = torch.tensor(image_mask).permute(2, 0, 1)
+        # aug_mask doesn't have to take {0, 255}. Since some inaccuracy around the boundary
+        # doesn't really matter. But fg_mask has to take {0, 255}, otherwise after scaling,
+        # some foreground pixels will become 0, and when the foreground area is small, 
+        # such loss is significant.
+        aug_mask    = torch.ones_like(image_tensor[0:1])
+        image_ext   = torch.cat([image_tensor, aug_mask], dim=0)
+        # image_ext: [4, 512, 512]
+        image_ext   = self.random_scaler(image_ext)
+        # After random scaling, the valid area is only a sub-region at the center of the image.
+        # NOTE: random shifting DISABLED, as it seems to hurt.
+        # ??% chance to randomly roll towards right and bottom (), 
+        # and ??% chance to keep the valid area at the center.
+        if random.random() < shift_p:
+            # count number of empty lines at the left, right, top, bottom edges of image_ext.
+            # aug_mask = image_ext[3] is uint8, so all pixels >= 0. 
+            # sum(dim=1).cumsum() == 0 means this is an empty row at the top of the image.
+            top0     = (image_ext[3].sum(dim=1).cumsum(dim=0) == 0).sum().item()
+            # flip first then cumsum(), so that cumsum() is from bottom to top.
+            bottom0  = (image_ext[3].sum(dim=1).flip(dims=(0,)).cumsum(dim=0) == 0).sum().item()
+            # sum(dim=0).cumsum() == 0 means this is an empty column at the left of the image.
+            left0    = (image_ext[3].sum(dim=0).cumsum(dim=0) == 0).sum().item()
+            # flip first then cumsum(), so that cumsum() is from right to left.
+            right0   = (image_ext[3].sum(dim=0).flip(dims=(0,)).cumsum(dim=0) == 0).sum().item()
+            # Randomly roll towards right and bottom, within the empty edges.
+            # randint() includes both end points, so max(dy) =  top0 + bottom.
+            # MG: margin at each side, i.e., after rolling, 
+            # there are still at least 12 empty lines at each side.
+            # The average scaling is (1+0.7)/2 = 0.85, i.e., 7.5% empty lines at each side.
+            # 7.5% * 512 = 38.4 pixels, so set the margin to be around 1/3 of that.
+            MG = 12     
+            if top0 + bottom0 > 2*MG:
+                dy = random.randint(0, top0 + bottom0 - 2*MG)
+                # Shift up instead (negative dy)
+                if dy > bottom0 - MG:
+                    dy = -(dy - bottom0 + MG)
             else:
-                # aug_mask will not be present in any examples, so set it to None.
-                aug_mask = None
+                dy = 0
+            if left0 + right0 > 2*MG:
+                dx = random.randint(0, left0 + right0 - 2*MG)
+                # Shift left instead (negative dx)
+                if dx > right0 - MG:
+                    dx = -(dx - right0 + MG)
+            else:
+                dx = 0
+            # Because the image border is padded with zeros, we can simply roll() 
+            # without worrying about the border values.
+            image_ext = torch.roll(image_ext, shifts=(dy, dx), dims=(1, 2))
+
+        # image_mask is a concatenation of image and mask, not a mask for the image.
+        image_mask  = image_ext[:4].permute(1, 2, 0).numpy().astype(np.uint8)
+        # aug_mask: [512, 512].
+        aug_mask    = image_ext[4].numpy().astype(np.uint8)
+
+        # Sanity check to make sure image_mask is a subset of aug_mask.
+        if np.any(image_mask * aug_mask[:, :, np.newaxis] != image_mask):
+            breakpoint()
 
         image       = image_mask[:, :, :3]
         # fg_mask is a 1-channel mask.

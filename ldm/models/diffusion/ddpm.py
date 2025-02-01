@@ -13,7 +13,7 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline, Autoencoder
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
-                        calc_recon_and_complem_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
+                        calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, save_grid, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
@@ -101,15 +101,15 @@ class DDPM(pl.LightningModule):
                  input_noise_perturb_std=0.05,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0.4,
+                 p_recon_on_comp_prompt=0.2,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=3,
+                 recon_with_adv_attack_iter_gap=-1,
                  recon_adv_mod_mag_range=[0.001, 0.005],
                  recon_bg_pixel_weights=[0.01, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
-                 arcface_align_loss_weight=1e-2,
+                 arcface_align_loss_weight=5e-3,
                  clip_align_loss_weight=0,          # Disabled. Cannot afford the extra RAM.
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
@@ -2062,8 +2062,9 @@ class LatentDiffusion(DDPM):
                                all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
         BLOCK_SIZE = x_start.shape[0]
-        # t sampled from the rear 50% of the timesteps.
-        t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), device=self.device).long()
+        # t are sampled from the 1/3 ~ 2/3 of the timesteps.
+        t = torch.randint(self.num_timesteps // 3, self.num_timesteps * 2 // 3, 
+                          (x_start.shape[0],), device=self.device).long()
         # LDM VAE uses fp32, and we can only afford a BS=1.
         if self.use_ldm_unet:
             FACELOSS_BS = 1
@@ -2125,8 +2126,8 @@ class LatentDiffusion(DDPM):
             # bg loss is given a tiny weight to suppress multi-face artifacts.
             # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
             # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
-            loss_recon_subj_mb_suppress, loss_recon, loss_pred_l2 = \
-                calc_recon_and_complem_losses(noise_pred, noise, ca_layers_activations,
+            loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
+                calc_recon_and_suppress_losses(noise_pred, noise, ca_layers_activations,
                                               all_subj_indices, img_mask, fg_mask,
                                               recon_bg_pixel_weight, x_start.shape[0])
             

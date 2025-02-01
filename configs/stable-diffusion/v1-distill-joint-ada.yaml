@@ -42,9 +42,6 @@ model:
     # should match the mixture of the two teachers' outputs.)
     p_gen_rand_id_for_id2img:         0
     p_perturb_face_id_embs:           0.2
-    # Recon on compositional prompts (but only recon the fg areas indicated by the masks). 
-    # This increases the orthogonality of face embeddings and other token embeddings.
-    p_recon_on_comp_prompt:           0.4
     # ** The perturbation here is not to make the img2ada encoder more robust to random perturbations,
     # ** but to find neighbors of the subject image embeddings for UNet distillation.
     # After perturbation, consistentID embeddings and arc2face embeddings are slightly inconsistent.
