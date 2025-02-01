@@ -160,9 +160,9 @@ class DDPM(pl.LightningModule):
             # Some compos iterations will take only 1 step to save RAM for the clip align loss.
             self.comp_distill_denoising_steps_range[0] = 1
 
-        # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+        # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
-        # never use the compositional prompts as the distillation target of arc2face.
+        # never use the compositional instances as the distillation target of arc2face.
         # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.
         # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.1.
         # NOTE: If compositional iterations are enabled, then we don't do unet distillation on the compositional prompts.
@@ -1166,9 +1166,9 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['recon_on_comp_prompt']:
             captions = subj_comp_prompts
         elif self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_unet_distill_uses_comp_prompt):
-            # Sometimes we use the subject compositional prompts as the distillation target on a UNet ensemble teacher.
+            # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
             # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
-            # never use the compositional prompts as the distillation target of arc2face.
+            # never use the compositional instances as the distillation target of arc2face.
             # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
             # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
             # NOTE: 'recon_on_comp_prompt' is applicable to all teachers.
@@ -1469,9 +1469,9 @@ class LatentDiffusion(DDPM):
         cond_context_ = (prompt_emb_, prompt_in_, extra_info)
         with torch.set_grad_enabled(enable_grad):
             # use_attn_lora and use_ffn_lora are set in apply_model().
-            model_output = self.apply_model(x_noisy_, t_, cond_context_, 
+            noise_pred = self.apply_model(x_noisy_, t_, cond_context_, 
                                             use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
-        return model_output
+        return noise_pred
 
     # do_pixel_recon: return denoised images for CLIP evaluation. 
     # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
@@ -1490,24 +1490,24 @@ class LatentDiffusion(DDPM):
         extra_info = cond_context[2]
         extra_info['capture_ca_activations'] = capture_ca_activations
         extra_info['img_mask']               = img_mask
-        extra_info['shrink_subj_attn']     = shrink_subj_attn
+        extra_info['shrink_subj_attn']       = shrink_subj_attn
         # subj_indices are not used if shrink_subj_attn is False.
         extra_info['subj_indices']           = subj_indices
 
-        # model_output is the predicted noise.
+        # noise_pred is the predicted noise.
         # if not batch_part_has_grad, we save RAM by not storing the computation graph.
         # if batch_part_has_grad, we don't have to take care of embedding_manager.force_grad.
         # Subject embeddings will naturally have gradients.
         if batch_part_has_grad == 'none':
             with torch.no_grad():
-                model_output = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
+                noise_pred = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
                                                 use_ffn_lora=use_ffn_lora)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'all':
-            model_output = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
+            noise_pred = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
                                             use_ffn_lora=use_ffn_lora)
 
             if capture_ca_activations:
@@ -1520,14 +1520,14 @@ class LatentDiffusion(DDPM):
             extra_info_ss['subj_indices']       = subj_indices
             extra_info_ss['shrink_subj_attn']   = shrink_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
-            model_output_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
+            noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
                                                       enable_grad=False, use_attn_lora=use_attn_lora,
                                                       use_ffn_lora=use_ffn_lora)
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_subj_attn']   = shrink_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
-            model_output_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
+            noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
                                                       enable_grad=True,  use_attn_lora=use_attn_lora,
                                                       use_ffn_lora=use_ffn_lora)
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
@@ -1550,7 +1550,7 @@ class LatentDiffusion(DDPM):
                 mc_uses_ffn_lora  = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
-            model_output_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
+            noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
                                                       enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
                                                       use_ffn_lora=mc_uses_ffn_lora)
             
@@ -1559,11 +1559,11 @@ class LatentDiffusion(DDPM):
             extra_info_mc['shrink_subj_attn']   = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
             # Never use attn LoRAs and ffn LoRAs on mc instances.
-            model_output_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
+            noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
                                                       enable_grad=False, use_attn_lora=False,
                                                       use_ffn_lora=False)
 
-            model_output = torch.cat([model_output_ss, model_output_sc, model_output_ms, model_output_mc], dim=0)
+            noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
             extra_info = cond_context[2]
             if capture_ca_activations:
                 # Collate three captured activation dicts into extra_info.
@@ -1589,14 +1589,14 @@ class LatentDiffusion(DDPM):
 
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
-                # model_output_uncond: [BS, 4, 64, 64]
-                model_output_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=False, 
+                # noise_pred_uncond: [BS, 4, 64, 64]
+                noise_pred_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=False, 
                                                        use_ffn_lora=use_ffn_lora)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
-            noise_pred = model_output * cfg_scale - model_output_uncond * (cfg_scale - 1)
+            noise_pred = noise_pred * cfg_scale - noise_pred_uncond * (cfg_scale - 1)
         else:
-            noise_pred = model_output
+            noise_pred = noise_pred
 
         if do_pixel_recon:
             x_recon = self.predict_start_from_noise(x_noisy, t=t, noise=noise_pred)
@@ -1637,7 +1637,7 @@ class LatentDiffusion(DDPM):
                                     use_ffn_lora=False)
             
             noise_preds.append(noise_pred)
-            # The predicted x0 is used as the x_start for the next denoising step.
+            # The predicted x0 is used as the x_start in the next denoising step.
             pred_x0 = x_recon
 
             x_starts.append(pred_x0)
@@ -1842,8 +1842,8 @@ class LatentDiffusion(DDPM):
             # and the bg mask area filled with noise. Returned only for logging.
             # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
             # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
-            # We return noise to make the gt_target up-to-date, which is the recon objective.
-            # But gt_target is probably not referred to in the following loss computations,
+            # We return noise to make the noise_gt up-to-date, which is the recon objective.
+            # But noise_gt is probably not referred to in the following loss computations,
             # since the current iteration is do_comp_feat_distill. We update it just in case.
             # masks will still be used in the loss computation. So we update them as well.
             # NOTE: x_start still contains valid face images, as it's unchanged after priming.
@@ -2294,14 +2294,14 @@ class LatentDiffusion(DDPM):
                                   num_denoising_steps=num_unet_denoising_steps)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
-        # targets: replaced as the reconstructed x0 by the teacher UNet.
+        # noise_gts: replaced as the reconstructed x0 by the teacher UNet.
         # If ND = num_unet_denoising_steps > 1, then unet_teacher_noise_preds contain ND 
         # unet_teacher predicted noises (of different ts).
-        # targets: [HALF_BS, 4, 64, 64] * num_unet_denoising_steps.
-        targets = unet_teacher_noise_preds
+        # noise_gts: [HALF_BS, 4, 64, 64] * num_unet_denoising_steps.
+        noise_gts = unet_teacher_noise_preds
 
-        # The outputs of the remaining denoising steps will be appended to model_outputs.
-        model_outputs = []
+        # The outputs of the remaining denoising steps will be appended to noise_preds.
+        noise_preds = []
         #all_recon_images = []
 
         uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
@@ -2324,7 +2324,7 @@ class LatentDiffusion(DDPM):
             # ca_layers_activations is not used in unet distillation.
             # We intentionally do not use img_mask in unet distillation. 
             # Otherwise the task will be too easy for the student.
-            model_output_s, x_recon_s, ca_layers_activations = \
+            noise_pred_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
                                     shrink_subj_attn=False,
@@ -2337,7 +2337,7 @@ class LatentDiffusion(DDPM):
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
                                     use_ffn_lora=self.unet_uses_ffn_lora)   
 
-            model_outputs.append(model_output_s)
+            noise_preds.append(noise_pred_s)
 
             recon_images_s = self.decode_first_stage(x_recon_s)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
@@ -2345,12 +2345,12 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * 2
             self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
-        print(f"Rank {self.trainer.global_rank} {len(model_outputs)}-step distillation:")
+        print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation:")
         losses_unet_distill = []
 
-        for s in range(len(model_outputs)):
+        for s in range(len(noise_preds)):
             try:
-                model_output, target = model_outputs[s], targets[s]
+                noise_pred, noise_gt = noise_preds[s], noise_gts[s]
             except:
                 breakpoint()
 
@@ -2366,7 +2366,7 @@ class LatentDiffusion(DDPM):
 
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
-                calc_recon_loss(F.mse_loss, model_output, target.to(model_output.dtype), 
+                calc_recon_loss(F.mse_loss, noise_pred, noise_gt.to(noise_pred.dtype), 
                                 img_mask, fg_mask, fg_pixel_weight=1,
                                 bg_pixel_weight=recon_bg_pixel_weight)
 
@@ -2376,7 +2376,7 @@ class LatentDiffusion(DDPM):
 
             # Try hard to release memory after each step. But since they are part of the computation graph,
             # doing so may not have any effect :(
-            model_outputs[s], targets[s] = None, None
+            noise_preds[s], noise_gts[s] = None, None
 
         # If num_unet_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
         # In order not to dilute the large loss_unet_distill, we don't divide by num_unet_denoising_steps.
@@ -2550,8 +2550,8 @@ class LatentDiffusion(DDPM):
         noise           = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
         x_start_primed  = x_start
         # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
-        # We return noise to make the gt_target up-to-date, which is the recon objective.
-        # But gt_target is probably not referred to in the following loss computations,
+        # We return noise to make the noise_gt up-to-date, which is the recon objective.
+        # But noise_gt is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_feat_distill. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps

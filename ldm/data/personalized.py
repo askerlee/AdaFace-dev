@@ -361,7 +361,10 @@ class PersonalizedBase(Dataset):
                                     transforms.Resize(size, interpolation=InterpolationMode.NEAREST),
                                     ])
             print(f"{set_name} images will be randomly scaled in range {rand_scale_range}")
-
+        else:
+            self.flip = None
+            self.random_scaler = None
+            
     def __len__(self):
         return self._length
 
