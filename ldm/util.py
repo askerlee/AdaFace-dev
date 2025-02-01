@@ -1790,9 +1790,9 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 
         # loss_comp_subj_bg_attn_suppress: 0.01~0.02 -> 0.0002~0.0004.
         comp_subj_bg_attn_suppress_loss_scale       = 0.02
-        # loss_sc_recon_ssfg_min: 0.01~0.02 -> 0.002~0.004.
+        # loss_sc_recon_ssfg_min: 0.0005~0.001 -> 0.0001~0.0002.
         sc_recon_ssfg_loss_scale                    = 0.2
-        # loss_sc_recon_mc: 0.03~0.05 -> 0.006~0.01.
+        # loss_sc_recon_mc: 0.05~0.08 -> 0.01~0.016.
         sc_recon_mc_loss_scale                      = 0.2
         # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
         sc_to_ssfg_sparse_attns_distill_loss_scale  = 20
@@ -2489,7 +2489,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_loss_discard_thres=0.3, 
                                num_flow_est_iters=12, do_feat_attn_pooling=True, 
-                               do_q_demean=True, do_outfeat_demean=False):
+                               do_q_demean=True, do_outfeat_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
     if ss_fg_mask_3d.sum() == 0:
         return None, None, None, None, None
@@ -2529,16 +2529,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # NOTE: take mean across 0 and 2, i.e., the instances and the spatial dims.
         # Mean across the instances (subjects) dim is to avoid the mean containing too much 
         # subject-specific features.
-        ca_q = ca_q - ca_q.mean(dim=(0,2), keepdim=True).detach()
-
-    if do_outfeat_demean:
-        # ca_outfeat: [4, 1280, 961].
-        # Don't include the subject-single instance when computing the mean.
-        # It has a different nature from the other instances. 
-        # All other 3 instances are compositional, while the subject-single instance is not.
-        # The mean is the compositional semantics. Therefore, subtracting the mean from 
-        # the subject-comp instances can improve its matching with the subject-single instance.
-        ca_outfeat[1:] = ca_outfeat[1:] - ca_outfeat[1:].mean(dim=(0,2), keepdim=True).detach()
+        ca_q_mean = ca_q[1:].mean(dim=(0,2), keepdim=True).detach()
+        ca_q = ca_q - ca_q_mean
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
@@ -2634,6 +2626,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             loss_scale = 0.5
         else:
             breakpoint()
+
+        if do_outfeat_demean:
+            # feat_obj: [4, 1280, 961].
+            # Don't include the subject-single instance when computing the mean.
+            # It has a different nature from the other instances. 
+            # All other 3 instances are compositional, while the subject-single instance is not.
+            # The mean is the compositional semantics. Therefore, subtracting the mean from 
+            # the subject-comp instances can improve its matching with the subject-single instance.
+            feat_obj_mean = feat_obj[1:].mean(dim=(0,2), keepdim=True).detach()
+            feat_obj = feat_obj - feat_obj_mean
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
         # Cut off the gradients into the subj single instance.

@@ -108,7 +108,7 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
-                 arcface_align_loss_weight=5e-2,
+                 arcface_align_loss_weight=1e-2,
                  clip_align_loss_weight=0,          # Disabled. Cannot afford the extra RAM.
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
@@ -2102,8 +2102,8 @@ class LatentDiffusion(DDPM):
             if loss_arcface_align_recon > 0:
                 loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
-                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.05 => 0.025-0.04.
-                # This loss is around 1/10 of recon/distill losses (0.03).
+                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
+                # This loss is around 1/5 of recon/distill losses (0.03).
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
 
         recon_images = self.decode_first_stage(x_recon)
