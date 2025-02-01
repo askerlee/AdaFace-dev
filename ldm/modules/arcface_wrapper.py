@@ -69,7 +69,7 @@ class ArcFaceWrapper(nn.Module):
         return faces_emb, failed_indices, face_coords
 
     # T: minimal face height/width to be detected.
-    # ref_images: the groundtruth images.
+    # ref_images:     the groundtruth images.
     # aligned_images: the generated   images.
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=2, use_whole_image_if_no_face=False):
         # face_coords: long tensor of [BS, 4], where BS is the batch size.
@@ -86,10 +86,13 @@ class ArcFaceWrapper(nn.Module):
             print(f"Failed to detect faces in aligned_images-{failed_indices2}")
             return torch.tensor(0.0, device=ref_images.device), None
 
-        # Repeat groundtruth embeddings to match the number of generated embeddings.
+        # If the numbers of instances in embs1 and embs2 are different, then there's only one ref image, 
+        # and multiple aligned images of the same person.
+        # We repeat groundtruth embeddings to match the number of generated embeddings.
         if len(embs1) < len(embs2):
             embs1 = embs1.repeat(len(embs2)//len(embs1), 1)
-            
+        
+        # labels = 1: align the embeddings of the same person.
         arcface_align_loss = F.cosine_embedding_loss(embs1, embs2, torch.ones(embs1.shape[0]).to(embs1.device))
         print(f"Arcface align loss: {arcface_align_loss.item():.2f}")
         return arcface_align_loss, face_coords

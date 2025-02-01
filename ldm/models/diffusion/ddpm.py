@@ -2104,6 +2104,8 @@ class LatentDiffusion(DDPM):
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
                 # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
                 # This loss is around 1/5 of recon/distill losses (0.03).
+                # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
+                # whole image, not just the face area. So we need to keep it small.
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
 
         recon_images = self.decode_first_stage(x_recon)
@@ -2541,9 +2543,11 @@ class LatentDiffusion(DDPM):
                 loss_arcface_align_comp, loss_comp_sc_subj_mb_suppress, sc_fg_mask = \
                     self.calc_comp_face_align_and_mb_suppress_losses(x_start, x_recons, ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix)
-                # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 0.1 => 0.05-0.08.
+                # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
                 # This loss is around 1/150 of recon/distill losses (0.1).
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
+                # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
+                # whole image, not just the face area. So we need to keep it small.
                 arcface_align_comp_loss_scale = self.comp_distill_iter_gap
                 loss_comp_feat_distill_loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
                 # loss_comp_sc_subj_mb_suppress: ~0.6, comp_sc_subj_mb_suppress_loss_weight: 0, DISABLED.
