@@ -1607,17 +1607,10 @@ class LatentDiffusion(DDPM):
 
     def recon_multistep_denoise(self, x_start, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, num_denoising_steps, 
-                                FACELOSS_BS, loss_dict, session_prefix):
+                                enable_unet_attn_lora, do_adv_attack, FACELOSS_BS, 
+                                loss_dict, session_prefix):
 
         assert num_denoising_steps <= 10
-
-        # Enable attn LoRAs on UNet 50% of the time during recon iterations.
-        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-        # recon_with_adv_attack_iter_gap = -1, adversarial attack on the input images is DISABLED.
-        # As doing adversarial attack on the input images seems to introduce high-frequency noise 
-        # to the whole image, not just the face area.
-        do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
-                        and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
 
         # Initially, x_starts only contains the original x_start.
         x_starts    = [ x_start ]
@@ -1674,8 +1667,9 @@ class LatentDiffusion(DDPM):
                 noise = torch.randn_like(x_start)
                 # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
                 # This way, we force the adaface encoders to better reconstruct the subject.
-                # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
-                # otherwise the face embeddings will be inaccurate.
+                # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 3 recon iterations.
+                # Doing adversarial attack on the input images seems to introduce high-frequency noise 
+                # to the whole image (not just the face area), so we only do it after the first denoise step.
                 if do_adv_attack:
                     adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=2)
                     self.adaface_adv_iters_count += 1
@@ -2094,12 +2088,21 @@ class LatentDiffusion(DDPM):
             cfg_scale  = -1
             recon_bg_pixel_weight = recon_bg_pixel_weights[0]
 
+        # Enable attn LoRAs on UNet 50% of the time during recon iterations.
+        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+        # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 3 recon iterations.
+        # Doing adversarial attack on the input images seems to introduce high-frequency noise 
+        # to the whole image (not just the face area), so we only do it after the first denoise step.
+        do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
+                        and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
         noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
-                                         cfg_scale, num_denoising_steps, FACELOSS_BS, loss_dict, session_prefix)
+                                         cfg_scale, num_denoising_steps, enable_unet_attn_lora, do_adv_attack,
+                                         FACELOSS_BS, loss_dict, session_prefix)
         
         losses_recon = []
         losses_recon_subj_mb_suppress = []
@@ -2163,14 +2166,8 @@ class LatentDiffusion(DDPM):
         loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
         ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
         print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
-        # loss_recon: 0.02~0.03.
-        # But occasionally, loss_recon could spike at 0.08~0.1 (if recon_on_comp_prompt), or 0.06~0.08 (if not), 
-        # which indicates the face is generated at a misaligned position. 
-        # the face positions, otherwise double faces may appear.
-        loss_recon_threses = [0.06, 0.08]
-        # If self.iter_flags['recon_on_comp_prompt'], loss_recon_thres is 0.08, otherwise 0.06.
-        if loss_recon < loss_recon_threses[self.iter_flags['recon_on_comp_prompt']]:
-            loss_normal_recon += loss_recon
+        # loss_recon: ~0.1
+        loss_normal_recon += loss_recon
 
         # loss_recon_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0.01 -> 5e-3, 1/20~1/30 of recon loss.
         loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
