@@ -913,7 +913,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # Use the fp trick all the time on compositional distillation iterations,
                 # so that class comp prompts will generate clear face areas.
-                p_use_fp_trick = 1
+                p_use_fp_trick = 0
             # recon_on_comp_prompt. So we add "portrait" to the prompts.
             # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
             # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
@@ -2075,18 +2075,18 @@ class LatentDiffusion(DDPM):
             # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
             # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
-            # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
-            # If cfg_scale == 2.5, result = 2.5 * noise_pred - 1.5 * noise_pred_cls.
-            cfg_scale  = np.random.uniform(1.5, 2.5)
-            print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
-            # recon_bg_pixel_weight == 0, no penalty on bg errors.
-            recon_bg_pixel_weight = recon_bg_pixel_weights[1]
+            # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
+            cfg_scale  = 2
+            # print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
         else:
             # Use the default negative prompts.
             # Don't do CFG. So uncond_emb is None.
             uncond_emb = None
             cfg_scale  = -1
-            recon_bg_pixel_weight = recon_bg_pixel_weights[0]
+
+        # if recon_on_comp_prompt, then recon_bg_pixel_weight == 0, no penalty on bg errors.
+        # otherwise, recon_bg_pixel_weight == 0.01, a tiny penalty on bg errors.
+        recon_bg_pixel_weight = recon_bg_pixel_weights[self.iter_flags['recon_on_comp_prompt']]
 
         # Enable attn LoRAs on UNet 50% of the time during recon iterations.
         enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
@@ -2095,6 +2095,12 @@ class LatentDiffusion(DDPM):
         # to the whole image (not just the face area), so we only do it after the first denoise step.
         do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
                         and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+
+        input_images = self.decode_first_stage(x_start)
+        # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
+        # All of them are 3, indicating purple.
+        log_image_colors = torch.ones(input_images.shape[0], dtype=int, device=x_start.device) * 3
+        self.cache_and_log_generations(input_images, log_image_colors, do_normalize=True)
 
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -2143,9 +2149,9 @@ class LatentDiffusion(DDPM):
                 losses_arcface_align_recon.append(torch.tensor(0.0, device=x_start.device))
 
             recon_images = self.decode_first_stage(x_recon)
-            # log_image_colors: a list of 3 or 4, indexing colors = [ None, 'green', 'red', 'purple', 'orange' ]
-            # 3 or 4: purple for the first denoising step, orange for the second denoising step.
-            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 + i
+            # log_image_colors: a list of 4 or 5, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
+            # 4 or 5: orange for the first denoising step, blue for the second denoising step.
+            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 + i + 1
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
         loss_recon = torch.stack(losses_recon).mean()
@@ -3189,6 +3195,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         prompt_emb, prompt_in, extra_info = cond_context
         # img_mask is only used in normal_recon iterations. Not in unet distillation or comp distillation.
+        # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+        # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+        # img_mask is not used in the prompt-image cross-attention layers.
         img_mask     = extra_info.get('img_mask', None) if extra_info is not None else None
         subj_indices = extra_info.get('subj_indices', None) if extra_info is not None else None
         # shrink_subj_attn is only set to the LoRA'ed attn layers, i.e., 

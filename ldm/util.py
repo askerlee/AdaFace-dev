@@ -891,7 +891,7 @@ async def save_grid(samples, img_flags, grid_filepath, nrow, async_mode=False):
     # img_box indicates the whole image region.
     img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
 
-    colors = [ None, 'green', 'red', 'purple', 'orange' ]
+    colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
     if img_flags is not None:
         # Highlight the teachable samples.
         for i, img_flag in enumerate(img_flags):
@@ -1525,19 +1525,19 @@ def init_x_with_fg_from_training_image(x_start, fg_mask,
 # pixel-wise recon loss, weighted by fg_pixel_weight and bg_pixel_weight separately.
 # fg_pixel_weight, bg_pixel_weight: could be 1D tensors of batch size, or scalars.
 # img_mask, fg_mask:    [BS, 1, 64, 64] or None.
-# model_output, target: [BS, 4, 64, 64].
-def calc_recon_loss(loss_func, model_output, target, img_mask, fg_mask, 
+# noise_pred, noise_gt: [BS, 4, 64, 64].
+def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask, 
                     fg_pixel_weight=1, bg_pixel_weight=1):
 
     if img_mask is None:
-        img_mask = torch.ones_like(model_output)
+        img_mask = torch.ones_like(noise_pred)
     if fg_mask is None:
-        fg_mask = torch.ones_like(model_output)
+        fg_mask  = torch.ones_like(noise_pred)
     
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-    model_output = model_output * img_mask
-    target       = target       * img_mask
-    loss_recon_pixels = loss_func(model_output, target, reduction='none')
+    noise_pred = noise_pred * img_mask
+    noise_gt   = noise_gt   * img_mask
+    loss_recon_pixels = loss_func(noise_pred, noise_gt, reduction='none')
 
     # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
     # bg_mask=(1-fg_mask),  weighted_fg_mask.sum(): 6445, 887
@@ -1547,26 +1547,27 @@ def calc_recon_loss(loss_func, model_output, target, img_mask, fg_mask,
     weighted_bg_mask = weighted_bg_mask.expand_as(loss_recon_pixels)
 
     loss_recon = (  (loss_recon_pixels * weighted_fg_mask).sum()     \
-                    + (loss_recon_pixels * weighted_bg_mask).sum() )   \
-                    / (weighted_fg_mask.sum() + weighted_bg_mask.sum() + 1e-6)
+                  + (loss_recon_pixels * weighted_bg_mask).sum() )   \
+                 / (weighted_fg_mask.sum() + weighted_bg_mask.sum() + 1e-6)
 
     return loss_recon, loss_recon_pixels
 
 # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
 # (But there are still other losses used after calling this function.)
-def calc_recon_and_complem_losses(model_output, target, ca_layers_activations,
+def calc_recon_and_complem_losses(noise_pred, noise_gt, ca_layers_activations,
                                   all_subj_indices, img_mask, fg_mask, 
                                   bg_pixel_weight, BLOCK_SIZE):
 
-    loss_recon_subj_mb_suppress = calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
-                                                              all_subj_indices, BLOCK_SIZE, fg_mask)
+    loss_recon_subj_mb_suppress = \
+        calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
+                                          all_subj_indices, BLOCK_SIZE, fg_mask)
 
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-    loss_recon, _ = calc_recon_loss(F.mse_loss, model_output, target, img_mask, fg_mask, 
+    loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, img_mask, fg_mask, 
                                     fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
 
-    # Calc the L2 norm of model_output.
-    loss_pred_l2 = (model_output ** 2).mean()
+    # Calc the L2 norm of noise_pred.
+    loss_pred_l2 = (noise_pred ** 2).mean()
     return loss_recon_subj_mb_suppress, loss_recon, loss_pred_l2
 
 # calc_attn_norm_loss() is used by LatentDiffusion::calc_comp_feat_distill_loss().
@@ -2529,7 +2530,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # NOTE: take mean across 0 and 2, i.e., the instances and the spatial dims.
         # Mean across the instances (subjects) dim is to avoid the mean containing too much 
         # subject-specific features.
-        ca_q_mean = ca_q[1:].mean(dim=(0,2), keepdim=True).detach()
+        ca_q_mean = ca_q.mean(dim=(0,2), keepdim=True).detach()
         ca_q = ca_q - ca_q_mean
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
@@ -2635,7 +2636,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # The mean is the compositional semantics. Therefore, subtracting the mean from 
             # the subject-comp instances can improve its matching with the subject-single instance.
             feat_obj_mean = feat_obj[1:].mean(dim=(0,2), keepdim=True).detach()
-            feat_obj = feat_obj - feat_obj_mean
+            feat_obj[1:] = feat_obj[1:] - feat_obj_mean
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
         # Cut off the gradients into the subj single instance.

@@ -539,10 +539,10 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             continue
         # cross_attention_dim: 768.
         cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-        # Self attention. Don't enable LoRA or capture activations.
         if cross_attention_dim is None or (name.startswith("up_blocks.3.attentions.0")):
+            # Self attention. Don't enable LoRA or capture activations.
             # We replace the default attn_proc with AttnProcessor_LoRA_Capture, 
-            # as it can handle img_mask.
+            # so that it can incorporate img_mask into self-attention.
             attn_procs[name] = AttnProcessor_LoRA_Capture(
                 capture_ca_activations=False, enable_lora=False)
             continue
