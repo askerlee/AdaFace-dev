@@ -891,7 +891,7 @@ async def save_grid(samples, img_flags, grid_filepath, nrow, async_mode=False):
     # img_box indicates the whole image region.
     img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
 
-    colors = [ None, 'green', 'red', 'purple' ]
+    colors = [ None, 'green', 'red', 'purple', 'orange' ]
     if img_flags is not None:
         # Highlight the teachable samples.
         for i, img_flag in enumerate(img_flags):

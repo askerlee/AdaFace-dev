@@ -2140,9 +2140,9 @@ class LatentDiffusion(DDPM):
                 losses_arcface_align_recon.append(torch.tensor(0.0, device=x_start.device))
 
             recon_images = self.decode_first_stage(x_recon)
-            # log_image_colors: a list of 2 or 3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # 2 or 3: red for the first denoising step, purple for the second denoising step.
-            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 2 + i
+            # log_image_colors: a list of 3 or 4, indexing colors = [ None, 'green', 'red', 'purple', 'orange' ]
+            # 3 or 4: purple for the first denoising step, orange for the second denoising step.
+            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 + i
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
         loss_recon = torch.stack(losses_recon).mean()
