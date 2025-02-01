@@ -93,6 +93,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
+                 recon_num_denoising_steps_range=[2, 2],
                  comp_distill_denoising_steps_range=[2, 2],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
@@ -102,7 +103,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.4,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=-1,     # Disabled
+                 recon_with_adv_attack_iter_gap=3,
                  recon_adv_mod_mag_range=[0.001, 0.005],
                  recon_bg_pixel_weights=[0.01, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -153,6 +154,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
+        self.recon_num_denoising_steps_range        = recon_num_denoising_steps_range
         self.comp_distill_denoising_steps_range     = comp_distill_denoising_steps_range
         if clip_align_loss_weight > 0:
             # Some compos iterations will take only 1 step to save RAM for the clip align loss.
@@ -1603,11 +1605,120 @@ class LatentDiffusion(DDPM):
         
         return noise_pred, x_recon, ca_layers_activations
 
+    def recon_multistep_denoise(self, x_start, noise, t, cond_context, 
+                                uncond_emb, img_mask, fg_mask, cfg_scale, num_denoising_steps, 
+                                FACELOSS_BS, loss_dict, session_prefix):
+
+        assert num_denoising_steps <= 10
+
+        # Enable attn LoRAs on UNet 50% of the time during recon iterations.
+        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+        # recon_with_adv_attack_iter_gap = -1, adversarial attack on the input images is DISABLED.
+        # As doing adversarial attack on the input images seems to introduce high-frequency noise 
+        # to the whole image, not just the face area.
+        do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
+                        and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+
+        # Initially, x_starts only contains the original x_start.
+        x_starts    = [ x_start ]
+        noises      = [ noise ]
+        ts          = [ t ]
+        noise_preds = []
+        x_recons    = []
+        ca_layers_activations_list = []
+
+        for i in range(num_denoising_steps):
+            x_start = x_starts[i]
+            t       = ts[i]
+            noise   = noises[i]
+
+            noise_pred, x_recon, ca_layers_activations = \
+                self.guided_denoise(x_start, noise, t, cond_context,
+                                    uncond_emb, img_mask, 
+                                    shrink_subj_attn=False,
+                                    subj_indices=None, 
+                                    batch_part_has_grad='all', 
+                                    do_pixel_recon=True, cfg_scale=cfg_scale, 
+                                    capture_ca_activations=True,
+                                    use_attn_lora=enable_unet_attn_lora,
+                                    use_ffn_lora=False)
+            
+            noise_preds.append(noise_pred)
+            # The predicted x0 is used as the x_start for the next denoising step.
+            pred_x0 = x_recon
+
+            x_starts.append(pred_x0)
+            x_recons.append(x_recon)
+            ca_layers_activations_list.append(ca_layers_activations)
+
+            # Sample an earlier timestep for the next denoising step.
+            if i < num_denoising_steps - 1:
+                t0 = t
+                # NOTE: rand_like() samples from U(0, 1), not like randn_like().
+                rand_ts = torch.rand_like(t0.float())
+                # Make sure at the middle step (i < num_denoising_steps - 1), the timestep 
+                # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
+                # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
+                # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
+                # of the current timestep.
+                # In general, the larger num_denoising_steps, the ratio between et and t0 is closer to 1.
+                t_lb = t0 * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
+                t_ub = t0 * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
+                # et: earlier timestep, ts[i+1] < ts[i].
+                # et is randomly sampled between [t_lb, t_ub].
+                et = (t_ub - t_lb) * rand_ts + t_lb
+                et = et.long()
+                earlier_timesteps = et
+                ts.append(earlier_timesteps)
+
+                noise = torch.randn_like(x_start)
+                # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
+                # This way, we force the adaface encoders to better reconstruct the subject.
+                # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
+                # otherwise the face embeddings will be inaccurate.
+                if do_adv_attack:
+                    adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=2)
+                    self.adaface_adv_iters_count += 1
+                    if adv_grad is not None:
+                        # adv_grad_max: 1e-3
+                        adv_grad_max = adv_grad.abs().max().item()
+                        loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
+                        # adv_grad_mean is always 4~5e-6.
+                        # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                        faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
+                        # adv_grad_fg_mean: 8~9e-6.
+                        adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().item()
+                        loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
+                        # adv_grad_mag: ~1e-4.
+                        adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
+                        # recon_adv_mod_mag_range: [0.001, 0.005].
+                        recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
+                        # recon_adv_mod_mag: 0.001~0.005. adv_grad_scale: 10~50.
+                        adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
+                        loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
+                        # Cap the adv_grad_scale to 100, as we observe most adv_grad_scale are below 250.
+                        # adv_grad mean at fg area after scaling: 1e-3.
+                        adv_grad = adv_grad * min(adv_grad_scale, 100)
+                        # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
+                        # We subtract adv_grad from noise, then after noise is mixed with x_start, 
+                        # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
+                        # We predict the updated noise to remain consistent with the training paradigm.
+                        # Q: should we subtract adv_grad from x_start instead of noise? I'm not sure.
+                        noise[:FACELOSS_BS] -= adv_grad
+
+                        self.adaface_adv_success_iters_count += 1
+                        # adaface_adv_success_rate is always close to 1, so we don't monitor it.
+                        # adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
+                        #loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
+
+                noises.append(noise)
+
+        return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list
+            
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, img_mask=None, 
                                        all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
-                                       cfg_scale=2.5, capture_ca_activations=False,
-                                       num_denoising_steps=1, subj_comp_distill_on_rep_prompts=True):
+                                       cfg_scale=2.5, num_denoising_steps=1, subj_comp_distill_on_rep_prompts=True):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1648,7 +1759,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='subject-compos', 
                                     subj_comp_distill_on_rep_prompts=subj_comp_distill_on_rep_prompts,
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                    capture_ca_activations=capture_ca_activations,
+                                    capture_ca_activations=True,
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
@@ -1685,27 +1796,8 @@ class LatentDiffusion(DDPM):
                 # et is randomly sampled between [t_lb, t_ub].
                 et = (t_ub - t_lb) * rand_ts + t_lb
                 et = et.long()
-
-                sc_rep_uses_larger_timestep = False
-                if subj_comp_distill_on_rep_prompts and sc_rep_uses_larger_timestep:
-                    # Make the ratio of et2/t0 closer to 1 than et/t0, to counter the double-face issue.
-                    # If num_denoising_steps = 5, we take timesteps within [0.6^0.66, 0.8^0.66] = [0.71, 0.86] 
-                    # of the current timestep.
-                    # If num_denoising_steps = 4, we take timesteps within [0.6^0.72, 0.8^0.72] = [0.69, 0.85]
-                    # of the current timestep.
-                    # In general we add more noise to the sc_rep instance, so after denoising, the second face
-                    # may be more effectively removed.
-                    t_lb2 = t0 * np.power(0.6, np.power(num_denoising_steps - 1, -0.3))
-                    t_ub2 = t0 * np.power(0.8, np.power(num_denoising_steps - 1, -0.3))
-                    # et2: earlier timestep for sc and sc_rep instances.
-                    # et2 is randomly sampled between [t_lb2, t_ub2].
-                    et2 = (t_ub2 - t_lb2) * rand_ts + t_lb2
-                    et2 = et2.long()
-                else:
-                    et2 = et
-
-                # Use the same t and noise for all instances except the sc_rep instance.
-                earlier_timesteps = torch.cat([et, et, et2, et], dim=0)
+                # Use the same t and noise for all instances.
+                earlier_timesteps = et.repeat(4)
                 ts.append(earlier_timesteps)
                 noises.append(noise)
 
@@ -1805,8 +1897,7 @@ class LatentDiffusion(DDPM):
                                                     uncond_emb=uncond_emb, img_mask=None, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     p_shrink_subj_attn=self.p_shrink_subj_attn,
-                                                    cfg_scale=2.5, capture_ca_activations=True,
-                                                    num_denoising_steps=num_comp_denoising_steps,
+                                                    cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
                                                     subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'])
 
             ts_1st = [ t[0].item() for t in ts ]
@@ -1863,8 +1954,15 @@ class LatentDiffusion(DDPM):
 
         ##### begin of do_normal_recon #####
         if self.iter_flags['do_normal_recon']:  
+            # recon_num_denoising_steps_range: [2, 2].
+            # num_recon_denoising_steps iterates among 2 ~ 2. We don't draw random numbers, 
+            # so that different ranks have the same num_denoising_steps,
+            # which might be faster for synchronization.
+            W = self.recon_num_denoising_steps_range[1] - self.recon_num_denoising_steps_range[0] + 1
+            num_recon_denoising_steps = self.normal_recon_iters_count % W + self.recon_num_denoising_steps_range[0]
+
             loss_normal_recon = \
-                self.calc_normal_recon_loss(x_start, noise, cond_context, img_mask, fg_mask, 
+                self.calc_normal_recon_loss(num_recon_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
                                             all_subj_indices, self.recon_bg_pixel_weights, loss_dict, session_prefix)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
@@ -1966,7 +2064,7 @@ class LatentDiffusion(DDPM):
 
         return adv_grad
 
-    def calc_normal_recon_loss(self, x_start, noise, cond_context, img_mask, fg_mask, 
+    def calc_normal_recon_loss(self, num_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
                                all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
         BLOCK_SIZE = x_start.shape[0]
@@ -1979,52 +2077,8 @@ class LatentDiffusion(DDPM):
             # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
             FACELOSS_BS = x_start.shape[0]
 
-        # recon_with_adv_attack_iter_gap = -1, adversarial attack on the input images is DISABLED.
-        # As doing adversarial attack on the input images seems to introduce high-frequency noise 
-        # to the whole image, not just the face area.
-        do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
-                          and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
-        # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
-        # This way, we force the adaface encoders to better reconstruct the subject.
-        # NOTE: do_adv_attack has to be done after extracting the face embeddings, 
-        # otherwise the face embeddings will be inaccurate.
-        if do_adv_attack:
-            adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=2)
-            self.adaface_adv_iters_count += 1
-            if adv_grad is not None:
-                # adv_grad_max: 1e-3
-                adv_grad_max = adv_grad.abs().max().item()
-                loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
-                # adv_grad_mean is always 4~5e-6.
-                # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
-                faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
-                # adv_grad_fg_mean: 8~9e-6.
-                adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().item()
-                loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
-                # adv_grad_mag: ~1e-4.
-                adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
-                # recon_adv_mod_mag_range: [0.001, 0.005].
-                recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
-                # recon_adv_mod_mag: 0.001~0.005. adv_grad_scale: 10~50.
-                adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
-                loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                # Cap the adv_grad_scale to 100, as we observe most adv_grad_scale are below 250.
-                # adv_grad mean at fg area after scaling: 1e-3.
-                adv_grad = adv_grad * min(adv_grad_scale, 100)
-                # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
-                # We subtract adv_grad from noise, then after noise is mixed with x_start, 
-                # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
-                # We predict the updated noise to remain consistent with the training paradigm.
-                # Q: should we subtract adv_grad from x_start instead of noise? I'm not sure.
-                noise[:FACELOSS_BS] -= adv_grad
-
-                self.adaface_adv_success_iters_count += 1
-                # adaface_adv_success_rate is always close to 1, so we don't monitor it.
-                # adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
-                #loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
-
-        if self.iter_flags['recon_on_comp_prompt']:
-            # When recon_on_comp_prompt is True, we apply CFG on the recon images.
+        if num_denoising_steps > 1 or self.iter_flags['recon_on_comp_prompt']:
+            # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
             # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 1.5, result = 1.5 * noise_pred - 0.5 * noise_pred_cls.
@@ -2035,6 +2089,7 @@ class LatentDiffusion(DDPM):
             recon_bg_pixel_weight = recon_bg_pixel_weights[1]
         else:
             # Use the default negative prompts.
+            # Don't do CFG. So uncond_emb is None.
             uncond_emb = None
             cfg_scale  = -1
             recon_bg_pixel_weight = recon_bg_pixel_weights[0]
@@ -2042,46 +2097,72 @@ class LatentDiffusion(DDPM):
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
-        # Don't do CFG. So uncond_emb is None.
-        # If unet_uses_attn_lora, then enable use_attn_lora at 50% chance during normal recon.
-        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-        model_output, x_recon, ca_layers_activations = \
-            self.guided_denoise(x_start, noise, t, cond_context, 
-                                uncond_emb=uncond_emb, img_mask=img_mask,
-                                shrink_subj_attn=False,
-                                subj_indices=all_subj_indices,
-                                batch_part_has_grad='all', 
-                                # Reconstruct the images at the pixel level for CLIP loss.
-                                do_pixel_recon=True,
-                                cfg_scale=cfg_scale, capture_ca_activations=True,
-                                use_attn_lora=enable_unet_attn_lora, use_ffn_lora=False)
+        noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
+            self.recon_multistep_denoise(x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
+                                         cfg_scale, num_denoising_steps, FACELOSS_BS, loss_dict, session_prefix)
+        
+        losses_recon = []
+        losses_recon_subj_mb_suppress = []
+        losses_arcface_align_recon = []
+        losses_pred_l2 = []
 
-        # If do_normal_recon, then there's only 1 objective:
-        # **Objective 1**: Align the student predicted noise with the ground truth noise.
+        for i in range(num_denoising_steps):
+            noise, noise_pred, x_recon, ca_layers_activations = \
+                noises[i], noise_preds[i], x_recons[i], ca_layers_activations_list[i]
 
-        # https://github.com/huggingface/diffusers/issues/3293
-        # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
-        # bg loss is given a tiny weight to suppress multi-face artifacts.
-        # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
-        # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
-        loss_recon_subj_mb_suppress, loss_recon, loss_pred_l2 = \
-            calc_recon_and_complem_losses(model_output, noise, ca_layers_activations,
-                                          all_subj_indices, img_mask, fg_mask,
-                                          recon_bg_pixel_weight, x_start.shape[0])
+            # **Objective 1**: Align the student predicted noise with the ground truth noise.
+
+            # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
+            # bg loss is given a tiny weight to suppress multi-face artifacts.
+            # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
+            # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
+            loss_recon_subj_mb_suppress, loss_recon, loss_pred_l2 = \
+                calc_recon_and_complem_losses(noise_pred, noise, ca_layers_activations,
+                                              all_subj_indices, img_mask, fg_mask,
+                                              recon_bg_pixel_weight, x_start.shape[0])
+            
+            losses_recon.append(loss_recon)
+            losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
+            losses_pred_l2.append(loss_pred_l2)
+
+            # Only do arcface_align_loss if i >= 1. 
+            # i >= 1 implies num_denoising_steps > 1, thus cfg_scale > 0. 
+            # Since x_recon has been done at least 2 denoising steps, with CFG enabled, 
+            # then the faces in x_recon are clearer, and the arcface_align_loss will add fewer artifacts.
+            if i >= 1 and self.arcface_align_loss_weight > 0 and (self.arcface is not None):
+                # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
+                # If no faces are detected in x_recon, loss_arcface_align is 0, and face_coords is None.
+                loss_arcface_align_recon, face_coords = \
+                    self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
+                
+                losses_arcface_align_recon.append(loss_arcface_align_recon)
+            else:
+                losses_arcface_align_recon.append(torch.tensor(0.0, device=x_start.device))
+
+            recon_images = self.decode_first_stage(x_recon)
+            # log_image_colors: a list of 2 or 3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # 2 or 3: red for the first denoising step, purple for the second denoising step.
+            log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 2 + i
+            self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+
+        loss_recon = torch.stack(losses_recon).mean()
+        loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
+        loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
+        loss_pred_l2 = torch.stack(losses_pred_l2).mean()
         v_loss_recon = loss_recon.mean().detach().item()
     
         # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
         if loss_recon_subj_mb_suppress > 0:
             loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
-
         if self.iter_flags['recon_on_comp_prompt']:
             loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
         else:
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
-            
+        
         # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
         loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
-        print(f"Rank {self.trainer.global_rank} single-step recon: {t.tolist()}, {v_loss_recon:.4f}")
+        ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
+        print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
         # loss_recon: 0.02~0.03.
         # But occasionally, loss_recon could spike at 0.08~0.1 (if recon_on_comp_prompt), or 0.06~0.08 (if not), 
         # which indicates the face is generated at a misaligned position. 
@@ -2094,28 +2175,15 @@ class LatentDiffusion(DDPM):
         # loss_recon_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0.01 -> 5e-3, 1/20~1/30 of recon loss.
         loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
-        if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
-            # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
-            # If no faces are detected in x_recon, loss_arcface_align is 0, and face_coords is None.
-            loss_arcface_align_recon, face_coords = \
-                self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
-            if loss_arcface_align_recon > 0:
-                loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
-                print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
-                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
-                # This loss is around 1/5 of recon/distill losses (0.03).
-                # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
-                # whole image, not just the face area. So we need to keep it small.
-                loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
-
-        recon_images = self.decode_first_stage(x_recon)
-        # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-        # all of them are 3, indicating purple.
-        log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3
-        self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
-
         v_loss_normal_recon = loss_normal_recon.mean().detach().item()
         loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
+
+        if loss_arcface_align_recon > 0:
+            loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
+            print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
+            # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
+            # This loss is around 1/5 of recon/distill losses (0.03).
+            # loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
 
         return loss_normal_recon
 
