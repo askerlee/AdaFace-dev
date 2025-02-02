@@ -970,12 +970,14 @@ class LatentDiffusion(DDPM):
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
-                # Always use the fp prompts as cls_comp prompts, to generate clear face areas in the cls comp instances.
+                # Always use the fp prompts as cls_comp prompts, no matter whether use_fp_trick is enabled.
+                # This generates clearer face areas in the cls comp instances.
                 # NOTE: the fp prompts are always aligned with non-fp prompts at most words. Therefore we can
                 # still use the prompt delta loss and k-alignment loss between fp and non-fp prompts.
                 CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
             else:
                 # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
+                # cls prompts are only used for delta loss, so they don't need to be fp prompts.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
                 CLS_SINGLE_PROMPT  = 'cls_single_prompt'
                 # If recon_on_comp_prompt, we still uses the subj comp prompts without styles, lighting, etc.
