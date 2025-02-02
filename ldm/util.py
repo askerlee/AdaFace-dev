@@ -15,7 +15,7 @@ from queue import Queue
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
-import math, sys, re, cv2
+import math, sys, re
 
 from safetensors.torch import load_file as safetensors_load_file
 import asyncio
@@ -788,7 +788,7 @@ def get_clip_tokens_for_string(clip_tokenizer, string, force_single_token=False)
         print("Added new token to tokenizer: {} -> {}".format(string, new_token_id))
     '''
     batch_encoding = clip_tokenizer(string, truncation=True, max_length=77, return_length=True,
-                               return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
+                                    return_overflowing_tokens=False, padding="max_length", return_tensors="pt")
     tokens = batch_encoding["input_ids"]
     # [49406, 11781,  4668, 49407, 49407...]. 49406: start of text, SOT, 49407: end of text, EOT
     # 11781,  4668: tokens of "stuffed animal".
@@ -887,7 +887,7 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
 # samples:   a (B, C, H, W) tensor.
 # img_flags: a tensor of (B,) ints.
 # samples should be between [0, 255] (uint8).
-async def save_grid(samples, img_flags, grid_filepath, nrow, async_mode=False):
+def save_grid_sync(samples, img_flags, grid_filepath, nrow):
     # img_box indicates the whole image region.
     img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
 
@@ -896,26 +896,19 @@ async def save_grid(samples, img_flags, grid_filepath, nrow, async_mode=False):
         # Highlight the teachable samples.
         for i, img_flag in enumerate(img_flags):
             if img_flag > 0:
-                # Draw a 4-pixel wide green bounding box around the image.
+                # Draw a 12-pixel wide bounding box around the image.
                 samples[i] = draw_bounding_boxes(samples[i], img_box, colors=colors[img_flag], width=12)
 
     # grid_samples is a 3D np array: (C, H2, W2)
     grid_samples = make_grid(samples, nrow=nrow).cpu().numpy()
-    # samples is transposed to: (H2, W2, C)
+    # Transpose to (H2, W2, C)
     grid_img = Image.fromarray(grid_samples.transpose([1, 2, 0]))
     if grid_filepath is not None:
-        if async_mode:
-            # Asynchronous saving
-            await asyncio.to_thread(grid_img.save, grid_filepath)
-        else:
-            # Synchronous saving
-            grid_img.save(grid_filepath)
-            
-    # return image to be shown on webui
+        grid_img.save(grid_filepath)
     return grid_img
 
-def save_grid_sync(*args, **kwargs):
-    asyncio.run(save_grid(*args, **kwargs, async_mode=False))
+async def save_grid(samples, img_flags, grid_filepath, nrow):
+    return await asyncio.to_thread(save_grid_sync, samples, img_flags, grid_filepath, nrow)
 
 def chunk_list(lst, num_chunks):
     chunk_size = int(np.ceil(len(lst) / num_chunks))

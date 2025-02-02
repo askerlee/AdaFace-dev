@@ -966,11 +966,14 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt'
+                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt'
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
-                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt'
-                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
+                # Always use the fp prompts as cls_comp prompts, to generate clear face areas in the cls comp instances.
+                # NOTE: the fp prompts are always aligned with non-fp prompts at most words. Therefore we can
+                # still use the prompt delta loss and k-alignment loss between fp and non-fp prompts.
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
             else:
                 # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt'
@@ -1640,7 +1643,8 @@ class LatentDiffusion(DDPM):
             # The predicted x0 is used as the x_start in the next denoising step.
             pred_x0 = x_recon
 
-            x_starts.append(pred_x0)
+            # NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
+            x_starts.append(pred_x0.detach())
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
@@ -2155,12 +2159,14 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 + i + 1
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
-        loss_recon = torch.stack(losses_recon).mean()
         loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
         loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
         loss_pred_l2 = torch.stack(losses_pred_l2).mean()
+
+        losses_recon = torch.stack(losses_recon)
+        loss_recon   = losses_recon[0]
         v_loss_recon = loss_recon.mean().detach().item()
-    
+
         # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
         if loss_recon_subj_mb_suppress > 0:
             loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
@@ -2168,16 +2174,30 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
         else:
             loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
-        
-        # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
-        loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
-        ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
-        print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
+
+        if num_denoising_steps > 1:
+            loss_recon2   = losses_recon[1:].mean()
+            v_loss_recon2 = loss_recon2.mean().detach().item()
+            if self.iter_flags['recon_on_comp_prompt']:
+                loss_dict.update({f'{session_prefix}/loss_recon_comp2': v_loss_recon2})
+            else:
+                loss_dict.update({f'{session_prefix}/loss_recon2': v_loss_recon2})
+        else:
+            loss_recon2 = 0
+
+        extra_recon_steps_discount = 0.05
+        # As the recon loss of the extra steps become much larger and less accurate, we discount them by 0.01.
+        loss_recon = (loss_recon + loss_recon2 * extra_recon_steps_discount) / (1 + extra_recon_steps_discount)
         # loss_recon: ~0.1
         loss_normal_recon += loss_recon
 
         # loss_recon_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0.01 -> 5e-3, 1/20~1/30 of recon loss.
         loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
+
+        # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
+        loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+        ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
+        print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
 
         v_loss_normal_recon = loss_normal_recon.mean().detach().item()
         loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
@@ -2879,6 +2899,8 @@ class LatentDiffusion(DDPM):
         self.generation_cache_img_colors.append(img_colors)
         self.num_cached_generations += len(samples)
 
+        # max_cache_size = 48, nrow=12, so we save a 4*12 grid of samples.
+        # Each sample is 512*512*3, so the grid is 512*512*3*4*12*4 bytes = 37.7M * 4 = 150M.
         if self.num_cached_generations >= max_cache_size:
             grid_folder = self.logger._save_dir + f'/samples'
             os.makedirs(grid_folder, exist_ok=True)
@@ -2888,7 +2910,7 @@ class LatentDiffusion(DDPM):
             # samples:    a (B, C, H, W) tensor.
             # img_colors: a tensor of (B,) ints.
             # samples should be between [0, 255] (uint8).
-            asyncio.run(save_grid(cached_images, cached_img_colors, grid_filename, nrow=12, async_mode=True))
+            asyncio.run(save_grid(cached_images, cached_img_colors, grid_filename, nrow=12))
             print(f"{self.num_cached_generations} generations saved to {grid_filename}")
             
             # Clear the cache. If num_cached_generations > max_cache_size,

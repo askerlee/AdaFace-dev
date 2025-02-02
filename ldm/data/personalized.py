@@ -12,6 +12,8 @@ import torch.distributed as dist
 from queue import Queue
 import json
 
+# We've made sure that for each template, the number of the words is the same as the number of the tokens.
+# So when we do prompt alignment, we can simply use the number of the words to align the tokens.
 base_templates = [
     'a photo of a {}',
     'a rendering of a {}',
@@ -22,13 +24,13 @@ base_templates = [
     'a dark photo of the {}',
     'a photo of my {}',
     'a photo of the cool {}',
-    'a close-up photo of a {}',
+    'a close up photo of a {}',
     'a bright photo of the {}',
     'a cropped photo of a {}',
     'a photo of the {}',
     'a good photo of the {}',
     'a photo of one {}',
-    'a close-up photo of the {}',
+    'a close up photo of the {}',
     'a rendition of the {}',
     'a photo of the clean {}',
     'a rendition of a {}',
@@ -41,26 +43,14 @@ base_templates = [
     'a photo of a cool {}',
     'a photo of a small {}',
     'an illustration of a {}',
-    'a rendering of a {}',
-    'a cropped photo of the {}',
-    'the photo of a {}',
     'an illustration of a clean {}',
     'an illustration of a dirty {}',
-    'a dark photo of the {}',
     'an illustration of my {}',
     'an illustration of the cool {}',
-    'a close-up photo of a {}',
-    'a bright photo of the {}',
-    'a cropped photo of a {}',
     'an illustration of the {}',
-    'a good photo of the {}',
     'an illustration of one {}',
-    'a close-up photo of the {}',
-    'a rendition of the {}',
     'an illustration of the clean {}',
-    'a rendition of a {}',
     'an illustration of a nice {}',
-    'a good photo of a {}',
     'an illustration of the nice {}',
     'an illustration of the small {}',
     'an illustration of the weird {}',
@@ -68,26 +58,14 @@ base_templates = [
     'an illustration of a cool {}',
     'an illustration of a small {}',
     'a depiction of a {}',
-    'a rendering of a {}',
-    'a cropped photo of the {}',
-    'the photo of a {}',
     'a depiction of a clean {}',
     'a depiction of a dirty {}',
-    'a dark photo of the {}',
     'a depiction of my {}',
     'a depiction of the cool {}',
-    'a close-up photo of a {}',
-    'a bright photo of the {}',
-    'a cropped photo of a {}',
     'a depiction of the {}',
-    'a good photo of the {}',
     'a depiction of one {}',
-    'a close-up photo of the {}',
-    'a rendition of the {}',
     'a depiction of the clean {}',
-    'a rendition of a {}',
     'a depiction of a nice {}',
-    'a good photo of a {}',
     'a depiction of the nice {}',
     'a depiction of the small {}',
     'a depiction of the weird {}',
@@ -597,49 +575,44 @@ class PersonalizedBase(Dataset):
         mod_compos_partial  = modifier + ", " + compos_partial
 
         base_template = random.choice(base_templates)
-        single_prompt_tmpl      = base_template
-        comp_prompt_tmpl        = base_template + ", " + compos_partial
-        # modifier starts with a ",", so no need to add ", " before it.
-        single_mod_prompt_tmpl  = base_template + ", " + modifier
-        # mod_compos_partial = modifier + ", " + compos_partial,
-        # so comp_mod_prompt_tmpl   = base_template + " " + modifier + ", " + compos_partial
-        #    single_mod_prompt_tmpl = base_template + " " + modifier.
-        comp_mod_prompt_tmpl    = base_template + ", " + mod_compos_partial
-
         # "face portrait" trick for humans/animals.
         # Note in subj_comp_fp_prompt_tmpl, "face portrait" is replaced by "a portrait",
         # to avoid the face being too dominant in the image.
         # In cls_comp_fp_prompt_tmpl, "face portrait" is kept, 
         # since the face tends to be small in class images without it.
-        single_fp_prompt_tmpl        = "face portrait of {}"
-        subj_comp_fp_prompt_tmpl     =    "a portrait of {}" + ", " + compos_partial
-        cls_comp_fp_prompt_tmpl      = "face portrait of {}" + ", " + compos_partial
+        # NOTE: We've made sure that the number of words in each base_template is the same as the number of tokens.
+        # So we can use the number of tokens to calculate the number of extra tokens in the base_template 
+        # than in single_fp_prompt_tmpl.
+        base_fp_template = "face portrait of {}"
+        base_tmpl_num_extra_tokens = len(base_template.split()) - len(base_fp_template.split())
+        # Append ", " to the base_template, so that compos_partial tokens are aligned between fp and non-fp prompts.
+        # We align fp prompts with non-fp prompts, because we always use fp prompts for the cls comp prompts,
+        # but sometimes we use non-fp prompts for the subj comp prompts.
+        cls_base_fp_template  = "face portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+        subj_base_fp_template =    "a portrait of {}" + ', ' * base_tmpl_num_extra_tokens
 
-        single_fp_mod_prompt_tmpl    = "face portrait of {}" + ", " + modifier
-        subj_comp_fp_mod_prompt_tmpl =    "a portrait of {}" + ", " + mod_compos_partial
-        cls_comp_fp_mod_prompt_tmpl  = "face portrait of {}" + ", " + mod_compos_partial
-
-        example["subj_single_prompt"]     = single_prompt_tmpl.format(subject_string)
-        example["cls_single_prompt"]      = single_prompt_tmpl.format(cls_delta_string)
-        example["subj_comp_prompt"]       = comp_prompt_tmpl.format(  subject_string) 
-        example["cls_comp_prompt"]        = comp_prompt_tmpl.format(  cls_delta_string)
+        example["subj_single_prompt"]       = base_template.format(subject_string)
+        example["subj_comp_prompt"]         = base_template.format(subject_string)   + ", " + compos_partial
+        example["cls_single_prompt"]        = base_template.format(cls_delta_string)
+        example["cls_comp_prompt"]          = base_template.format(cls_delta_string) + ", " + compos_partial
 
         # Prompt delta loss requires subj_single_prompt/cls_single_prompt to be token-wise aligned
         # with subj_comp_prompt/cls_comp_prompt, so we need to specify them in the dataloader as well.
-        example["subj_single_prompt_fp"]    = single_fp_prompt_tmpl.format(    subject_string)
-        example["cls_single_prompt_fp"]     = single_fp_prompt_tmpl.format(    cls_delta_string)
-        example["subj_comp_prompt_fp"]      = subj_comp_fp_prompt_tmpl.format( subject_string)
-        example["cls_comp_prompt_fp"]       = cls_comp_fp_prompt_tmpl.format(  cls_delta_string)
+        example["subj_single_prompt_fp"]    = subj_base_fp_template.format(subject_string)
+        example["subj_comp_prompt_fp"]      = subj_base_fp_template.format(subject_string)   + ", " + compos_partial
+        example["cls_single_prompt_fp"]     = cls_base_fp_template.format( cls_delta_string)
+        example["cls_comp_prompt_fp"]       = cls_base_fp_template.format( cls_delta_string) + ", " + compos_partial
 
-        example["subj_single_mod_prompt"]   = single_mod_prompt_tmpl.format(subject_string)
-        example["cls_single_mod_prompt"]    = single_mod_prompt_tmpl.format(cls_delta_string)
-        example["subj_comp_mod_prompt"]     = comp_mod_prompt_tmpl.format(  subject_string)
-        example["cls_comp_mod_prompt"]      = comp_mod_prompt_tmpl.format(  cls_delta_string)
+        example["subj_single_mod_prompt"]   = base_template.format(subject_string)     + ", " + modifier
+        example["cls_single_mod_prompt"]    = base_template.format(cls_delta_string)   + ", " + modifier
+        example["subj_comp_mod_prompt"]     = base_template.format(  subject_string)   + ", " + mod_compos_partial
+        example["cls_comp_mod_prompt"]      = base_template.format(  cls_delta_string) + ", " + mod_compos_partial
 
-        example["subj_single_mod_prompt_fp"] = single_fp_mod_prompt_tmpl.format(   subject_string)
-        example["cls_single_mod_prompt_fp"]  = single_fp_mod_prompt_tmpl.format(   cls_delta_string)
-        example["subj_comp_mod_prompt_fp"]   = subj_comp_fp_mod_prompt_tmpl.format(subject_string)
-        example["cls_comp_mod_prompt_fp"]    = cls_comp_fp_mod_prompt_tmpl.format( cls_delta_string)
+        example["subj_single_mod_prompt_fp"] = subj_base_fp_template.format(subject_string)   + ", " + modifier
+        example["cls_single_mod_prompt_fp"]  = cls_base_fp_template.format( cls_delta_string) + ", " + modifier
+        example["subj_comp_mod_prompt_fp"]   = subj_base_fp_template.format(subject_string)   + ", " + mod_compos_partial
+        example["cls_comp_mod_prompt_fp"]    = cls_base_fp_template.format( cls_delta_string) + ", " + mod_compos_partial
+        
         example["mod_compos_partial_prompt"] = mod_compos_partial
         example["compos_partial_prompt"]     = compos_partial
         example["prompt_modifier"]           = modifier
