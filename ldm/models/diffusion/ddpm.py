@@ -1773,7 +1773,7 @@ class LatentDiffusion(DDPM):
             else:
                 pred_x0 = x_recon
 
-            x_starts.append(pred_x0)
+            x_starts.append(pred_x0.detach())
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
