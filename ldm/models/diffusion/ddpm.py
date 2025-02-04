@@ -103,9 +103,9 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.2,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=-1,
+                 recon_with_adv_attack_iter_gap=4,
                  recon_adv_mod_mag_range=[0.001, 0.005],
-                 recon_bg_pixel_weights=[0.01, 0.0],
+                 recon_bg_pixel_weights=[0.05, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=False,
                  subj_attn_norm_distill_loss_weight=0,
@@ -970,11 +970,7 @@ class LatentDiffusion(DDPM):
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
-                # Always use the fp prompts as cls_comp prompts, no matter whether use_fp_trick is enabled.
-                # This generates clearer face areas in the cls comp instances.
-                # NOTE: the fp prompts are always aligned with non-fp prompts at most words. Therefore we can
-                # still use the prompt delta loss and k-alignment loss between fp and non-fp prompts.
-                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
             else:
                 # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                 # cls prompts are only used for delta loss, so they don't need to be fp prompts.
@@ -1673,7 +1669,7 @@ class LatentDiffusion(DDPM):
                 noise = torch.randn_like(x_start)
                 # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
                 # This way, we force the adaface encoders to better reconstruct the subject.
-                # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 3 recon iterations.
+                # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 4 recon iterations.
                 # Doing adversarial attack on the input images seems to introduce high-frequency noise 
                 # to the whole image (not just the face area), so we only do it after the first denoise step.
                 if do_adv_attack:
@@ -1766,13 +1762,15 @@ class LatentDiffusion(DDPM):
                                     use_ffn_lora=False)
             
             noise_preds.append(noise_pred)
+            '''
             # The predicted x0 is used as the x_start for the next denoising step.
             if subj_comp_distill_on_rep_prompts:
                 x0_ss, x0_sc, x0_sc_rep, x0_mc = x_recon.chunk(4)
                 pred_x0 = torch.cat([x0_ss, x0_sc_rep, x0_sc_rep, x0_mc], dim=0)
             else:
                 pred_x0 = x_recon
-
+            '''
+            pred_x0 = x_recon
             x_starts.append(pred_x0.detach())
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
@@ -2076,7 +2074,8 @@ class LatentDiffusion(DDPM):
             FACELOSS_BS = 1
         else:
             # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
-            FACELOSS_BS = x_start.shape[0]
+            # But we still only use half of the batch size for face loss computation.
+            FACELOSS_BS = (x_start.shape[0] + 1) // 2
 
         if num_denoising_steps > 1 or self.iter_flags['recon_on_comp_prompt']:
             # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
@@ -2187,8 +2186,8 @@ class LatentDiffusion(DDPM):
         else:
             loss_recon2 = 0
 
-        extra_recon_steps_discount = 0.05
-        # As the recon loss of the extra steps become much larger and less accurate, we discount them by 0.01.
+        extra_recon_steps_discount = 0.5
+        # As the recon loss of the extra steps become larger and slightly less accurate, we discount them by 0.5.
         loss_recon = (loss_recon + loss_recon2 * extra_recon_steps_discount) / (1 + extra_recon_steps_discount)
         # loss_recon: ~0.1
         loss_normal_recon += loss_recon

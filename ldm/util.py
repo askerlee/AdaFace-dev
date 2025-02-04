@@ -1639,9 +1639,11 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
     # and no face is detected in the subject-single instance.
     # During recon iterations, this calculates on the first instance only, 
     # which would be the same as calculating on the whole batch.
+    device = list(ca_attn.values())[0].device
+
     if (subj_indices is None) or (len(subj_indices) == 0) or (fg_mask is None) \
       or fg_mask.chunk(4)[0].float().mean() >= 0.998:
-        return torch.tensor(0.0, device=list(ca_attn.values())[0].device)
+        return torch.tensor(0.0, device=device)
 
     # Discard the first few bottom layers from alignment.
     # attn_align_layer_weights: relative weight of each layer. 
@@ -1659,7 +1661,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
     #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
     subj_indices = (subj_indices[0][:BLOCK_SIZE*K_subj], subj_indices[1][:BLOCK_SIZE*K_subj])
 
-    loss_layers_subj_mb_suppress    = []
+    loss_layers_subj_mb_suppress = []
 
     for unet_layer_idx, unet_attn in ca_attn.items():
         if (unet_layer_idx not in attn_align_layer_weights):
@@ -1727,8 +1729,11 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
         # so loss_subj_mb_suppress is much smaller than loss_bg_mf_suppress.
         # subj_mb_suppress_scale: 0.05.
         loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress * attn_align_layer_weight)
-        
-    loss_subj_mb_suppress = sum(loss_layers_subj_mb_suppress)
+    
+    if len(loss_layers_subj_mb_suppress) == 0:
+        return torch.tensor(0.0, device=device)
+    else:
+        loss_subj_mb_suppress = sum(loss_layers_subj_mb_suppress)
 
     return loss_subj_mb_suppress
 
