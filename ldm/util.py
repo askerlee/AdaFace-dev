@@ -777,6 +777,53 @@ def gen_gradient_scaler(alpha, debug=False):
         # Don't use lambda function here, otherwise the object can't be pickled.
         return torch.detach
 
+class MaskGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_, mask_, debug=False):
+        ctx.save_for_backward(mask_, debug)
+        output = input_
+        if debug:
+            print(f"input: {input_.abs().mean().item()}")
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):  # pragma: no cover
+        # saved_tensors returns a tuple of tensors.
+        mask_, debug = ctx.saved_tensors
+        if ctx.needs_input_grad[0]:
+            grad_output2 = grad_output * mask_
+            if debug:
+                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+        else:
+            grad_output2 = None
+        return grad_output2, None, None
+
+class MaskGradLayer(nn.Module):
+    def __init__(self, mask, debug=False, *args, **kwargs):
+        """
+        A gradient masking layer.
+        This layer has no parameters, and simply masks the gradient in the backward pass.
+        """
+        super().__init__(*args, **kwargs)
+
+        self._mask = mask
+        self._debug = torch.tensor(debug, requires_grad=False)
+
+    def forward(self, input_):
+        _debug = self._debug if hasattr(self, '_debug') else False
+        return MaskGrad.apply(input_, self._mask.to(input_.device), _debug)
+
+def gen_gradient_masker(mask, debug=False):
+    # If mask is not provided, or all elements are 1, then return an identity layer.
+    if mask is None or torch.all(mask == 1):
+        return nn.Identity()
+
+    # If mask is all 0, then return a detach layer, i.e., gradients are fully masked.
+    if mask.sum() == 0:
+        return torch.detach
+    
+    return MaskGradLayer(mask, debug=debug)
+
 def get_clip_tokens_for_string(clip_tokenizer, string, force_single_token=False):
     '''
     # If string is a new token, add it to the tokenizer.
