@@ -2570,6 +2570,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
 
+    # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
+    # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
+    ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
+
     if do_q_demean:
         # Demean the queries. Otherwise the similarities between any two token qs will always be huge (65~90),
         # preventing the optical flow model from estimating the flow.
@@ -2577,12 +2581,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # NOTE: take mean across 0 and 2, i.e., the instances and the spatial dims.
         # Mean across the instances (subjects) dim is to avoid the mean containing too much 
         # subject-specific features.
-        ca_q_mean = ca_q.mean(dim=(0,2), keepdim=True).detach()
+        ca_q_mean = torch.cat([ss_q, ms_q, mc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
         ca_q = ca_q - ca_q_mean
+        ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
 
-    # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
-    # ss_q, sc_q, ms_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
-    ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
     sc_q_grad_scaler = gen_gradient_scaler(sc_q_grad_scale)
     # Slowly update attn loras that influence sc_q.
     sc_q = sc_q_grad_scaler(sc_q)
@@ -2682,7 +2684,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             # All other 3 instances are compositional, while the subject-single instance is not.
             # The mean is the compositional semantics. Therefore, subtracting the mean from 
             # the subject-comp instances can improve its matching with the subject-single instance.
-            feat_obj_mean = feat_obj[1:].mean(dim=(0,2), keepdim=True).detach()
+            feat_obj_mean = feat_obj[2:].mean(dim=(0,2), keepdim=True).detach()
             feat_obj[1:] = feat_obj[1:] - feat_obj_mean
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
