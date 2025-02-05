@@ -1854,9 +1854,13 @@ class LatentDiffusion(DDPM):
             # masks will still be used in the loss computation. So we update them as well.
             # NOTE: x_start still contains valid face images, as it's unchanged after priming.
             # Later it will be used for loss computation.
-            x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
+            
+            # num_primed_denoising_steps iterates from 2 to 5, with equal probs.
+            num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 2
+
+            x_start_maskfilled, x_start_primed, noise, masks = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
-                                                    (img_mask, fg_mask), BLOCK_SIZE=BLOCK_SIZE)
+                                                    (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
             if self.iter_flags['subj_comp_distill_on_rep_prompts']:
@@ -2425,10 +2429,9 @@ class LatentDiffusion(DDPM):
     # Do denoising, collect the attention activations for computing the losses later.
     # masks: (img_mask, fg_mask). 
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
-    # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
-    # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
+    # On a 48GB GPU, we can only afford BLOCK_SIZE=1, otherwise OOM.
     def prime_x_start_for_comp_prompts(self, cond_context, x_start, noise,
-                                       masks, BLOCK_SIZE=1):
+                                       masks, num_primed_denoising_steps, BLOCK_SIZE=1):
         prompt_emb, prompt_in, extra_info = cond_context
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
@@ -2456,18 +2459,15 @@ class LatentDiffusion(DDPM):
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
 
-        # num_primed_denoising_steps iterates from 1 to 4, with equal probs.
-        num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 1
-
         # If num_primed_denoising_steps > 1, then we split the denoising steps into
         # shared denoising steps and separate denoising steps.
         # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
-        # num_primed_denoising_steps: 1 -> (0, 1). 2 -> (1, 1). 3 -> (1, 2). 4 -> (2, 2).
-        # MAX_N_SHARED is at most num_primed_denoising_steps / 3 + 1.
-        MAX_N_SHARED = math.ceil(num_primed_denoising_steps // 3)
+        # num_primed_denoising_steps: 2 -> (1, 1). 3 -> (1, 2). 4 -> (1, 3), 5 -> (2, 3).
+        # MAX_N_SHARED is at most num_primed_denoising_steps / 2.4.
+        MAX_N_SHARED = max(int(num_primed_denoising_steps / 2.4), 1)
         # The number of separate denoising steps is around 2/3 of num_primed_denoising_steps, and at least 1.
-        num_sep_denoising_steps     = num_primed_denoising_steps # max(num_primed_denoising_steps - MAX_N_SHARED, 1)
-        num_shared_denoising_steps  = 0                          # num_primed_denoising_steps - num_sep_denoising_steps
+        num_sep_denoising_steps     = max(num_primed_denoising_steps - MAX_N_SHARED, 1)
+        num_shared_denoising_steps  = num_primed_denoising_steps - num_sep_denoising_steps
         all_t_list = []
 
         uncond_emb = self.uncond_context[0]
@@ -2588,7 +2588,7 @@ class LatentDiffusion(DDPM):
         # But noise_gt is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_feat_distill. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps
+        return x_start_maskfilled, x_start_primed, noise, masks
 
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
@@ -2892,7 +2892,7 @@ class LatentDiffusion(DDPM):
     # For raw output from raw output from SD decode_first_stage(),
     # samples are be between [-1, 1], so we set do_normalize=True, which will convert and clamp to [0, 1].
     @rank_zero_only
-    def cache_and_log_generations(self, samples, img_colors, do_normalize=True, max_cache_size=48):
+    def cache_and_log_generations(self, samples, img_colors, do_normalize=True, max_cache_size=60):
         if isinstance(samples, np.ndarray):
             samples = torch.from_numpy(samples)
 
@@ -2914,7 +2914,7 @@ class LatentDiffusion(DDPM):
         self.generation_cache_img_colors.append(img_colors)
         self.num_cached_generations += len(samples)
 
-        # max_cache_size = 48, nrow=12, so we save a 4*12 grid of samples.
+        # max_cache_size = 60, nrow=12, so we save a 4*12 grid of samples.
         # Each sample is 512*512*3, so the grid is 512*512*3*4*12*4 bytes = 37.7M * 4 = 150M.
         if self.num_cached_generations >= max_cache_size:
             grid_folder = self.logger._save_dir + f'/samples'
