@@ -19,7 +19,6 @@ model:
     unfreeze_unet:                    False
     unet_lr:                          0.0
     use_fp_trick:                     True
-    comp_distill_iter_gap:            4
     unet_teacher_types:               ['consistentID'] #, 'arc2face']
     p_unet_teacher_uses_cfg:          0.6
     unet_teacher_cfg_scale_range:     [1.3, 2.0]

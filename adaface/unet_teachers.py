@@ -147,13 +147,14 @@ class UNetTeacher(nn.Module):
                     else:
                         # If negative_context is not None, then teacher_context is only pos_context.
                         pos_noise_pred = noise_pred
-                        if self.name == 'unet_ensemble':
-                            neg_noise_pred = self.unet.unets[0](sample=x_noisy, timestep=t, 
-                                                                encoder_hidden_states=negative_context, return_dict=False)[0]
-                        else:
-                            neg_noise_pred = self.unet(sample=x_noisy, timestep=t, 
-                                                       encoder_hidden_states=negative_context, return_dict=False)[0]
-                            
+                        with torch.no_grad():
+                            if self.name == 'unet_ensemble':
+                                neg_noise_pred = self.unet.unets[0](sample=x_noisy, timestep=t, 
+                                                                    encoder_hidden_states=negative_context, return_dict=False)[0]
+                            else:
+                                neg_noise_pred = self.unet(sample=x_noisy, timestep=t, 
+                                                           encoder_hidden_states=negative_context, return_dict=False)[0]
+                                
                     noise_pred = pos_noise_pred * self.cfg_scale - neg_noise_pred * (self.cfg_scale - 1)
 
                 noise_preds.append(noise_pred)

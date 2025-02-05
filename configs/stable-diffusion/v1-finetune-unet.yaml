@@ -21,7 +21,6 @@ model:
     # But Prodigy will ignore any unet_lr setting.
     unet_lr: 1e-6
     use_fp_trick:                     True
-    comp_distill_iter_gap:            3
     unet_teacher_types:               ['unet_ensemble']
     # extra_unet_dirpaths and unet_weights_in_ensemble may be overriden in main.py.
     extra_unet_dirpaths:                 ['models/ensemble/sd15-unet', 

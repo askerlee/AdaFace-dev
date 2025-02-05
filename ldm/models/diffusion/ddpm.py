@@ -79,7 +79,7 @@ class DDPM(pl.LightningModule):
                  grad_clip=0.5,
                  adam_config=None,
                  prodigy_config=None,
-                 comp_distill_iter_gap=-1,
+                 comp_distill_iter_gap=4,
                  cls_subj_mix_ratio=0.8,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
@@ -94,7 +94,7 @@ class DDPM(pl.LightningModule):
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
                  recon_num_denoising_steps_range=[2, 2],
-                 comp_distill_denoising_steps_range=[2, 2],
+                 comp_distill_denoising_steps_range=[3, 3],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0,
@@ -622,9 +622,10 @@ class LatentDiffusion(DDPM):
             self.num_reuse_teachable_iters = 0
             # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
             # uncond_context[0]: [1, 77, 768].
-            self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
-            # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
-            img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
+            with torch.no_grad():
+                self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
+                # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
+                img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
             # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
             self.img_prompt_prefix_embs = img_prompt_prefix_context[0][:1, :4]
 
@@ -1592,7 +1593,7 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 # noise_pred_uncond: [BS, 4, 64, 64]
                 noise_pred_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=False, 
-                                                       use_ffn_lora=use_ffn_lora)
+                                                     use_ffn_lora=use_ffn_lora)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             noise_pred = noise_pred * cfg_scale - noise_pred_uncond * (cfg_scale - 1)
@@ -1712,9 +1713,9 @@ class LatentDiffusion(DDPM):
         return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
-                                       uncond_emb=None, img_mask=None, 
-                                       all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
-                                       cfg_scale=2.5, num_denoising_steps=1, subj_comp_distill_on_rep_prompts=True):
+                                       uncond_emb=None, all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
+                                       cfg_scale=2.5, num_denoising_steps=3, num_nograd_steps=1, 
+                                       subj_comp_distill_on_rep_prompts=True):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1747,19 +1748,20 @@ class LatentDiffusion(DDPM):
             22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
             20, 21, 22, 23]))
             '''
-            noise_pred, x_recon, ca_layers_activations = \
-                self.guided_denoise(x_start, noise, t, cond_context,
-                                    uncond_emb, img_mask, 
-                                    shrink_subj_attn=shrink_subj_attn,
-                                    subj_indices=all_subj_indices_1b, 
-                                    batch_part_has_grad='subject-compos', 
-                                    subj_comp_distill_on_rep_prompts=subj_comp_distill_on_rep_prompts,
-                                    do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                    capture_ca_activations=True,
-                                    # Enable the attn lora in subject-compos batches, as long as 
-                                    # attn lora is globally enabled.
-                                    use_attn_lora=self.unet_uses_attn_lora,
-                                    use_ffn_lora=False)
+            with torch.set_grad_enabled(i >= num_nograd_steps):
+                noise_pred, x_recon, ca_layers_activations = \
+                    self.guided_denoise(x_start, noise, t, cond_context,
+                                        uncond_emb, img_mask=None, 
+                                        shrink_subj_attn=shrink_subj_attn,
+                                        subj_indices=all_subj_indices_1b, 
+                                        batch_part_has_grad='subject-compos', 
+                                        subj_comp_distill_on_rep_prompts=subj_comp_distill_on_rep_prompts,
+                                        do_pixel_recon=True, cfg_scale=cfg_scale, 
+                                        capture_ca_activations=True,
+                                        # Enable the attn lora in subject-compos batches, as long as 
+                                        # attn lora is globally enabled.
+                                        use_attn_lora=self.unet_uses_attn_lora,
+                                        use_ffn_lora=False)
             
             noise_preds.append(noise_pred)
             '''
@@ -1854,8 +1856,7 @@ class LatentDiffusion(DDPM):
             # Later it will be used for loss computation.
             x_start_maskfilled, x_start_primed, noise, masks, num_primed_denoising_steps = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
-                                                    (img_mask, fg_mask), fg_noise_amount=0.2,
-                                                    BLOCK_SIZE=BLOCK_SIZE)
+                                                    (img_mask, fg_mask), BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
             if self.iter_flags['subj_comp_distill_on_rep_prompts']:
@@ -1890,13 +1891,19 @@ class LatentDiffusion(DDPM):
             # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
             # noise_preds is not used for loss computation.
             # x_recons[-1] will be used for arcface align loss computation.
+            num_nograd_steps = 1
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
-                                                    uncond_emb=uncond_emb, img_mask=None, 
+                                                    uncond_emb=uncond_emb, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     p_shrink_subj_attn=self.p_shrink_subj_attn,
                                                     cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
+                                                    num_nograd_steps=num_nograd_steps, 
                                                     subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'])
+
+            # Skip results from the num_nograd_steps steps at the beginning of the compositional denoising iterations.
+            x_recons = x_recons[num_nograd_steps:]
+            ca_layers_activations_list = ca_layers_activations_list[num_nograd_steps:]
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
@@ -2421,7 +2428,7 @@ class LatentDiffusion(DDPM):
     # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
     # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.
     def prime_x_start_for_comp_prompts(self, cond_context, x_start, noise,
-                                       masks, fg_noise_amount=0.2, BLOCK_SIZE=1):
+                                       masks, BLOCK_SIZE=1):
         prompt_emb, prompt_in, extra_info = cond_context
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
