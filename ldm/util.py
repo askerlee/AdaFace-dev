@@ -777,53 +777,52 @@ def gen_gradient_scaler(alpha, debug=False):
         # Don't use lambda function here, otherwise the object can't be pickled.
         return torch.detach
 
-class MaskGrad(torch.autograd.Function):
+class SmoothGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input_, mask_, debug=False):
-        ctx.save_for_backward(mask_, debug)
+    def forward(ctx, input_, kernel_size=3, debug=False):
+        ctx.save_for_backward(kernel_size, debug)
         output = input_
         if debug:
             print(f"input: {input_.abs().mean().item()}")
         return output
-
+    
     @staticmethod
     def backward(ctx, grad_output):  # pragma: no cover
-        # saved_tensors returns a tuple of tensors.
-        mask_, debug = ctx.saved_tensors
+        kernel_size, debug = ctx.saved_tensors
         if ctx.needs_input_grad[0]:
-            grad_output2 = grad_output * mask_
+            grad_output2 = F.avg_pool2d(grad_output, kernel_size.item(), stride=1, 
+                                        padding=kernel_size.item() // 2)
             if debug:
                 print(f"grad_output2: {grad_output2.abs().mean().item()}")
         else:
             grad_output2 = None
         return grad_output2, None, None
-
-class MaskGradLayer(nn.Module):
-    def __init__(self, mask, debug=False, *args, **kwargs):
+    
+class SmoothGradLayer(nn.Module):
+    def __init__(self, kernel_size=3, debug=False, *args, **kwargs):
         """
-        A gradient masking layer.
-        This layer has no parameters, and simply masks the gradient in the backward pass.
+        A smooth gradient layer.
+        This layer has no parameters, and simply smooths the gradient in the backward pass.
         """
         super().__init__(*args, **kwargs)
 
-        self._mask = mask
+        self._kernel_size = torch.tensor(kernel_size, requires_grad=False)
         self._debug = torch.tensor(debug, requires_grad=False)
 
     def forward(self, input_):
         _debug = self._debug if hasattr(self, '_debug') else False
-        return MaskGrad.apply(input_, self._mask.to(input_.device), _debug)
-
-def gen_gradient_masker(mask, debug=False):
-    # If mask is not provided, or all elements are 1, then return an identity layer.
-    if mask is None or torch.all(mask == 1):
+        return SmoothGrad.apply(input_, self._kernel_size, _debug)
+    
+def gen_smooth_grad_layer(kernel_size=3, debug=False):
+    if kernel_size == 1:
         return nn.Identity()
-
-    # If mask is all 0, then return a detach layer, i.e., gradients are fully masked.
-    if mask.sum() == 0:
+    if kernel_size > 1:
+        return SmoothGradLayer(kernel_size, debug=debug)
+    else:
+        assert kernel_size == 0
+        # Don't use lambda function here, otherwise the object can't be pickled.
         return torch.detach
     
-    return MaskGradLayer(mask, debug=debug)
-
 def get_clip_tokens_for_string(clip_tokenizer, string, force_single_token=False):
     '''
     # If string is a new token, add it to the tokenizer.
@@ -2239,7 +2238,9 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ssfg_mc_prob):
     # sc_to_ss_mc_prob: [1, 961, N_fg + 961].
     # Weighted sum of the comp tokens (based on their matching probs) to reconstruct the single tokens.
     # sc_recon_ssfg_mc_feat: [1, 1280, 961] * [1, 961, N_fg] => [1, 1280, N_fg]
-    sc_recon_ssfg_mc_feat = torch.matmul(sc_feat, sc_to_ssfg_mc_prob)
+    # NOTE: detach sc_to_ssfg_mc_prob, since we will do attention alignment within calc_sc_recon_ssfg_mc_losses().
+    # Attention grad here might be the cause of degradation artifacts.
+    sc_recon_ssfg_mc_feat = torch.matmul(sc_feat, sc_to_ssfg_mc_prob.detach())
     # sc_recon_ssfg_mc_feat: [1, 1280, N_fg] => [1, N_fg, 1280]
     sc_recon_ssfg_mc_feat = sc_recon_ssfg_mc_feat.permute(0, 2, 1)
     # mc_recon_ms_feat = torch.matmul(mc_feat, mc_to_ms_prob)

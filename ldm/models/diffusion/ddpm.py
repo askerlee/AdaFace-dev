@@ -14,7 +14,7 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline, Autoencoder
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
-                        calc_subj_masked_bg_suppress_loss, save_grid, gen_gradient_masker, \
+                        calc_subj_masked_bg_suppress_loss, save_grid, gen_smooth_grad_layer, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
@@ -1673,7 +1673,7 @@ class LatentDiffusion(DDPM):
                 # Doing adversarial attack on the input images seems to introduce high-frequency noise 
                 # to the whole image (not just the face area), so we only do it after the first denoise step.
                 if do_adv_attack:
-                    adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], fg_mask[:FACELOSS_BS], bleed=2)
+                    adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=2)
                     self.adaface_adv_iters_count += 1
                     if adv_grad is not None:
                         # adv_grad_max: 1e-3
@@ -1692,9 +1692,9 @@ class LatentDiffusion(DDPM):
                         # recon_adv_mod_mag: 0.001~0.005. adv_grad_scale: 10~50.
                         adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
                         loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                        # Cap the adv_grad_scale to 100, as we observe most adv_grad_scale are below 250.
+                        # Cap the adv_grad_scale to 50, as we observe most adv_grad_scale are below 50.
                         # adv_grad mean at fg area after scaling: 1e-3.
-                        adv_grad = adv_grad * min(adv_grad_scale, 100)
+                        adv_grad = adv_grad * min(adv_grad_scale, 50)
                         # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
                         # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                         # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
@@ -2003,13 +2003,13 @@ class LatentDiffusion(DDPM):
         return loss, loss_dict
 
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_coords is None.
-    def calc_arcface_align_loss(self, x_start, x_recon, fg_mask, bleed=2):
+    def calc_arcface_align_loss(self, x_start, x_recon, bleed=2):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
-        grad_masker = gen_gradient_masker(fg_mask)
+        grad_smoother = gen_smooth_grad_layer()
         x_start_pixels = self.decode_first_stage(x_start)
         # subj-comp instance. 
-        x_recon_gm = grad_masker(x_recon)
+        x_recon_gm = grad_smoother(x_recon)
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon_gm)
 
@@ -2022,10 +2022,10 @@ class LatentDiffusion(DDPM):
         face_coords = pixel_bboxes_to_latent(face_coords, x_start_pixels.shape[-1], x_start.shape[-1])
         return loss_arcface_align, face_coords
 
-    def calc_arcface_adv_grad(self, x_start, fg_mask, bleed=2):
+    def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
-        grad_masker = gen_gradient_masker(fg_mask)
-        x_start_gm = grad_masker(x_start)
+        grad_smoother = gen_smooth_grad_layer()
+        x_start_gm = grad_smoother(x_start)
 
         # NOTE: To avoid horrible adv_grad artifacts in the background, we should use mask here to separate 
         # fg and bg when decode(). However, diffusers vae doesn't support mask, so we should avoid do_adv_attack. 
@@ -2154,7 +2154,7 @@ class LatentDiffusion(DDPM):
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
                 # If no faces are detected in x_recon, loss_arcface_align is 0, and face_coords is None.
                 loss_arcface_align_recon, face_coords = \
-                    self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS], fg_mask)
+                    self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
                 
                 losses_arcface_align_recon.append(loss_arcface_align_recon)
             else:
@@ -2214,7 +2214,7 @@ class LatentDiffusion(DDPM):
             print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
             # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
             # This loss is around 1/5 of recon/distill losses (0.03).
-            # loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
+            loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
 
         return loss_normal_recon
 
@@ -2832,7 +2832,7 @@ class LatentDiffusion(DDPM):
                 # and sc_face_coords is None.
                 # NOTE: In the first iteration, sc_fg_mask is None, and it's fine.
                 loss_arcface_align_comp_step, sc_face_coords = \
-                    self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, sc_fg_mask, bleed=2)
+                    self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                 if loss_arcface_align_comp_step > 0:
                     print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
