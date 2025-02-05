@@ -1788,7 +1788,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                   fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
-                                  recon_loss_discard_thres=0.3, do_feat_attn_pooling=True):
+                                  recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03}, do_feat_attn_pooling=True):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -1808,7 +1808,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                             fg_mask, is_sc_fg_mask_available, 
                                             all_subj_indices_1b, BLOCK_SIZE,
                                             recon_feat_objectives=recon_feat_objectives,
-                                            recon_loss_discard_thres=recon_loss_discard_thres,
+                                            recon_loss_discard_threses=recon_loss_discard_threses,
                                             do_feat_attn_pooling=do_feat_attn_pooling)
         
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
@@ -1869,7 +1869,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                     fg_mask, is_sc_fg_mask_available, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_loss_discard_thres=0.3, do_feat_attn_pooling=True):
+                                    recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03}, do_feat_attn_pooling=True):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
     if fg_mask is None or fg_mask.sum() == 0:
         return {}
@@ -1956,7 +1956,7 @@ def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_feat_h, ca_feat_w, 
                                        ss_fg_mask_3d, sc_fg_mask_3d, 
                                        recon_feat_objectives=recon_feat_objectives,
-                                       recon_loss_discard_thres=recon_loss_discard_thres,
+                                       recon_loss_discard_threses=recon_loss_discard_threses,
                                        num_flow_est_iters=12,
                                        do_feat_attn_pooling=do_feat_attn_pooling,
                                        do_outfeat_demean=do_outfeat_demean)
@@ -2240,7 +2240,7 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ssfg_mc_prob):
     # sc_recon_ssfg_mc_feat: [1, 1280, 961] * [1, 961, N_fg] => [1, 1280, N_fg]
     # NOTE: detach sc_to_ssfg_mc_prob, since we will do attention alignment within calc_sc_recon_ssfg_mc_losses().
     # Attention grad here might be the cause of degradation artifacts.
-    sc_recon_ssfg_mc_feat = torch.matmul(sc_feat, sc_to_ssfg_mc_prob.detach())
+    sc_recon_ssfg_mc_feat = torch.matmul(sc_feat, sc_to_ssfg_mc_prob)
     # sc_recon_ssfg_mc_feat: [1, 1280, N_fg] => [1, N_fg, 1280]
     sc_recon_ssfg_mc_feat = sc_recon_ssfg_mc_feat.permute(0, 2, 1)
     # mc_recon_ms_feat = torch.matmul(mc_feat, mc_to_ms_prob)
@@ -2535,7 +2535,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                ss_fg_mask_3d, sc_fg_mask_3d, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_loss_discard_thres=0.3, 
+                               recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03},
                                num_flow_est_iters=12, do_feat_attn_pooling=True, 
                                do_q_demean=True, do_outfeat_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
@@ -2726,7 +2726,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
-            to_discard = losses[-1] > recon_loss_discard_thres
+            to_discard = losses[-1] > recon_loss_discard_threses[feat_name]
             if to_discard:
                 print(f"Discard layer {layer_idx} {objective_name} {feat_name} loss: {losses[-1]}.")
                 continue

@@ -94,7 +94,7 @@ class DDPM(pl.LightningModule):
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
                  recon_num_denoising_steps_range=[2, 2],
-                 comp_distill_denoising_steps_range=[3, 3],
+                 comp_distill_denoising_steps_range=[2, 3],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0,
@@ -104,10 +104,10 @@ class DDPM(pl.LightningModule):
                  p_recon_on_comp_prompt=0.2,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=4,
-                 recon_adv_mod_mag_range=[0.001, 0.005],
+                 recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weights=[0.05, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
-                 use_face_flow_for_sc_matching_loss=False,
+                 use_face_flow_for_sc_matching_loss=True,
                  subj_attn_norm_distill_loss_weight=0,
                  arcface_align_loss_weight=5e-3,
                  clip_align_loss_weight=0,          # Disabled. Cannot afford the extra RAM.
@@ -1713,7 +1713,7 @@ class LatentDiffusion(DDPM):
         return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
-                                       uncond_emb=None, all_subj_indices_1b=None, p_shrink_subj_attn=0.5,
+                                       uncond_emb=None, all_subj_indices_1b=None, shrink_subj_attn=False,
                                        cfg_scale=2.5, num_denoising_steps=3, num_nograd_steps=1, 
                                        subj_comp_distill_on_rep_prompts=True):
         assert num_denoising_steps <= 10
@@ -1729,9 +1729,6 @@ class LatentDiffusion(DDPM):
         noise_preds = []
         x_recons    = []
         ca_layers_activations_list = []
-        # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
-        # Same shrink_subj_attn for all denoising steps in a comp_distill_multistep_denoise call.
-        shrink_subj_attn = torch.rand(1) < p_shrink_subj_attn
 
         for i in range(num_denoising_steps):
             x_start = x_starts[i]
@@ -1884,6 +1881,11 @@ class LatentDiffusion(DDPM):
             # which might be faster for synchronization.
             W = self.comp_distill_denoising_steps_range[1] - self.comp_distill_denoising_steps_range[0] + 1
             num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
+            # num_nograd_steps: 0 or 1, 50% each.
+            num_nograd_steps = self.comp_iters_count % W
+            # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
+            # Same shrink_subj_attn for all denoising steps in a comp_distill_multistep_denoise call.
+            shrink_subj_attn = torch.rand(1) < self.p_shrink_subj_attn
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -1895,17 +1897,16 @@ class LatentDiffusion(DDPM):
             # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
             # noise_preds is not used for loss computation.
             # x_recons[-1] will be used for arcface align loss computation.
-            num_nograd_steps = 1
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
-                                                    p_shrink_subj_attn=self.p_shrink_subj_attn,
+                                                    shrink_subj_attn=shrink_subj_attn,
                                                     cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
                                                     num_nograd_steps=num_nograd_steps, 
                                                     subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'])
 
-            # Skip results from the num_nograd_steps steps at the beginning of the compositional denoising iterations.
+            # Skip results of the num_nograd_steps steps at the beginning of the compositional denoising iterations.
             x_recons = x_recons[num_nograd_steps:]
             ca_layers_activations_list = ca_layers_activations_list[num_nograd_steps:]
 
@@ -2017,7 +2018,7 @@ class LatentDiffusion(DDPM):
     def calc_arcface_align_loss(self, x_start, x_recon, bleed=2):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
-        grad_smoother = gen_smooth_grad_layer()
+        grad_smoother = gen_smooth_grad_layer(kernel_size=1)
         x_start_pixels = self.decode_first_stage(x_start)
         # subj-comp instance. 
         x_recon_gm = grad_smoother(x_recon)
@@ -2035,7 +2036,7 @@ class LatentDiffusion(DDPM):
 
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
-        grad_smoother = gen_smooth_grad_layer()
+        grad_smoother = gen_smooth_grad_layer(kernel_size=1)
         x_start_gm = grad_smoother(x_start)
 
         # NOTE: To avoid horrible adv_grad artifacts in the background, we should use mask here to separate 
@@ -2690,9 +2691,6 @@ class LatentDiffusion(DDPM):
             sc_fg_mask_percent = 0
 
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
-            # Since we scaled down L2 outfeat recon loss, most recon losses will < 0.2.
-            # But we use a step-dependent recon_loss_discard_thres to keep most of the losses.
-            recon_loss_discard_thres = 0.2 + 0.05 * step_idx
             # Only ss_fg_mask in (resized) fg_mask is used for calc_elastic_matching_loss().
             loss_comp_fg_bg_preserve = \
                 calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
@@ -2701,7 +2699,7 @@ class LatentDiffusion(DDPM):
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
                                               recon_feat_objectives=['attn_out', 'outfeat'],
-                                              recon_loss_discard_thres=recon_loss_discard_thres,
+                                              recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03},
                                               do_feat_attn_pooling=False)
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
