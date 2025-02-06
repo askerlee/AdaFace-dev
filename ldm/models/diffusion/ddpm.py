@@ -2699,7 +2699,7 @@ class LatentDiffusion(DDPM):
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
                                               recon_feat_objectives=['attn_out', 'outfeat'],
-                                              recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03},
+                                              recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025},
                                               do_feat_attn_pooling=False)
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 

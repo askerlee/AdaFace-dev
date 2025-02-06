@@ -1788,7 +1788,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                   fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
-                                  recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03}, do_feat_attn_pooling=True):
+                                  recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025}, do_feat_attn_pooling=True):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -1869,7 +1869,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                     fg_mask, is_sc_fg_mask_available, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03}, do_feat_attn_pooling=True):
+                                    recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025}, do_feat_attn_pooling=True):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
     if fg_mask is None or fg_mask.sum() == 0:
         return {}
@@ -2535,7 +2535,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                ss_fg_mask_3d, sc_fg_mask_3d, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_loss_discard_threses={'mc': 0.09, 'ssfg': 0.03},
+                               recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025},
                                num_flow_est_iters=12, do_feat_attn_pooling=True, 
                                do_q_demean=True, do_outfeat_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
@@ -2731,7 +2731,6 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             to_discard = losses[-1] > recon_loss_discard_threses[feat_name]
             if to_discard:
                 print(f"Discard layer {layer_idx} {objective_name} {feat_name} loss: {losses[-1]}.")
-                continue
             else:
                 losses_sc_recons[feat_name].append(losses)
 
@@ -2750,7 +2749,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             losses_sc_recons[feat_name] = torch.stack(losses, dim=0).mean(dim=0)
         else:
             # If all losses are discarded, return 4 x 0s.
-            losses_sc_recons[feat_name] = torch.zeros(4, device=ss_feat.device)
+            feat_name2loss_num = { 'ssfg': 3, 'mc': 4 }
+            losses_sc_recons[feat_name] = torch.zeros(feat_name2loss_num[feat_name], device=ss_feat.device)
 
         loss_sparse_attns_distill[feat_name] = torch.stack(losses_flow_attns_distill[feat_name]).mean()
 
