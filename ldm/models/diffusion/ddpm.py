@@ -83,7 +83,7 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.8,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
-                 recon_subj_mb_suppress_loss_weight=0.01,
+                 recon_subj_mb_suppress_loss_weights=[0.02, 0],
                  comp_sc_subj_mb_suppress_loss_weight=0.01,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -138,7 +138,7 @@ class DDPM(pl.LightningModule):
 
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
-        self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
+        self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
@@ -2151,8 +2151,8 @@ class LatentDiffusion(DDPM):
             # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
             loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
                 calc_recon_and_suppress_losses(noise_pred, noise, ca_layers_activations,
-                                              all_subj_indices, img_mask, fg_mask,
-                                              recon_bg_pixel_weight, x_start.shape[0])
+                                               all_subj_indices, img_mask, fg_mask,
+                                               recon_bg_pixel_weight, x_start.shape[0])
             
             losses_recon.append(loss_recon)
             losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
@@ -2210,8 +2210,11 @@ class LatentDiffusion(DDPM):
         # loss_recon: ~0.1
         loss_normal_recon += loss_recon
 
-        # loss_recon_subj_mb_suppress: 0.5, recon_subj_mb_suppress_loss_weight: 0.01 -> 5e-3, 1/20~1/30 of recon loss.
-        loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
+        # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.01 -> 2e-3, 
+        # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/60 of recon loss.
+        # If recon_on_comp_prompt, recon_subj_mb_suppress_loss_weight = 0. Otherwise, 0.02.
+        recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[self.iter_flags['recon_on_comp_prompt']]
+        loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
 
         # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
         loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
@@ -2699,7 +2702,7 @@ class LatentDiffusion(DDPM):
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
                                               recon_feat_objectives=['attn_out', 'outfeat'],
-                                              recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025},
+                                              recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125},
                                               do_feat_attn_pooling=False)
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 

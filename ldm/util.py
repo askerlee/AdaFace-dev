@@ -1594,9 +1594,8 @@ def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask,
 # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
 # (But there are still other losses used after calling this function.)
 def calc_recon_and_suppress_losses(noise_pred, noise_gt, ca_layers_activations,
-                                  all_subj_indices, img_mask, fg_mask, 
-                                  bg_pixel_weight, BLOCK_SIZE):
-
+                                   all_subj_indices, img_mask, fg_mask, 
+                                   bg_pixel_weight, BLOCK_SIZE):
 
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
     loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, img_mask, fg_mask, 
@@ -1788,7 +1787,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                   fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
-                                  recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025}, do_feat_attn_pooling=True):
+                                  recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125}, do_feat_attn_pooling=True):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -1869,7 +1868,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                     fg_mask, is_sc_fg_mask_available, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025}, do_feat_attn_pooling=True):
+                                    recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125}, do_feat_attn_pooling=True):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
     if fg_mask is None or fg_mask.sum() == 0:
         return {}
@@ -2535,7 +2534,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                ss_fg_mask_3d, sc_fg_mask_3d, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_loss_discard_threses={'mc': 0.05, 'ssfg': 0.025},
+                               recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125},
                                num_flow_est_iters=12, do_feat_attn_pooling=True, 
                                do_q_demean=True, do_outfeat_demean=True):
     # ss_fg_mask_3d: [1, 1, 64*64]
