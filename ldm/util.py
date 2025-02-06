@@ -2578,9 +2578,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # preventing the optical flow model from estimating the flow.
         # ca_q: [4, 1280, 961]
         # NOTE: take mean across 0 and 2, i.e., the instances and the spatial dims.
-        # Mean across the instances (subjects) dim is to avoid the mean containing too much 
+        # Mean across the instances (subjects) dim, excluding sc_q, to avoid the mean containing too much 
         # subject-specific features.
-        ca_q_mean = torch.cat([ss_q, ms_q, mc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
+        # NOTE: Include two copies of mc_q, so that the mean contains more compositional features.
+        ca_q_mean = torch.cat([ss_q, ms_q, mc_q, mc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
         ca_q = ca_q - ca_q_mean
         ss_q, sc_q, ms_q, mc_q = ca_q.chunk(4)
 
@@ -2678,12 +2679,13 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
         if do_outfeat_demean:
             # feat_obj: [4, 1280, 961].
-            # Don't include the subject-single instance when computing the mean.
-            # It has a different nature from the other instances. 
-            # All other 3 instances are compositional, while the subject-single instance is not.
+            # Don't include the subj-single and subj-comp instance when computing the mean.
+            # It has a different nature from the cls-comp instances. 
+            # Cls-comp instances are compositional, while the subject-single and subj-comp instance are not.
             # The mean is the compositional semantics. Therefore, subtracting the mean from 
             # the subject-comp instances can improve its matching with the subject-single instance.
-            feat_obj_mean = feat_obj[2:].mean(dim=(0,2), keepdim=True).detach()
+            ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
+            feat_obj_mean = torch.cat([ms_feat, mc_feat, mc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
             feat_obj[1:] = feat_obj[1:] - feat_obj_mean
 
         ss_feat, sc_feat, ms_feat, mc_feat = feat_obj.chunk(4)
