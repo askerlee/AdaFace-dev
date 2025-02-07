@@ -167,7 +167,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
 
     prompt_keywords     = ['armor', 'beach', 'chef', 'dancing', 'iron man', 'jedi', 
-                           'street', 'guitar', 'reading', 'running', 'superman', 'new year']
+                           'street', 'guitar', 'reading', 'running', 'superman', 'new year', 'mars']
     keywords_reduction  = { 'iron man': 'ironman', 'dancing': 'dance', 
                             'running':  'run',     'reading': 'read', 'new year': 'newyear' }
 
@@ -337,6 +337,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
                                     "portrait, celebrating chinese new year, fireworks",
                                     "portrait, running pose in a park, eye level shot",
+                                    "portrait, in space suit, space helmet, walking on mars",
                                     "portrait, in superman costume, the sky ablaze with hues of orange and purple"
                             ])
             
