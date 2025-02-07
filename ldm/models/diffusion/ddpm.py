@@ -94,7 +94,7 @@ class DDPM(pl.LightningModule):
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
                  recon_num_denoising_steps_range=[2, 2],
-                 comp_distill_denoising_steps_range=[2, 3],
+                 comp_distill_denoising_steps_range=[3, 3],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0,
@@ -1861,14 +1861,14 @@ class LatentDiffusion(DDPM):
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
 
-            # comp_distill_denoising_steps_range: [2, 2].
+            # comp_distill_denoising_steps_range: [3, 3].
             # num_denoising_steps iterates among 2 ~ 3. We don't draw random numbers, 
             # so that different ranks have the same num_denoising_steps,
             # which might be faster for synchronization.
             W = self.comp_distill_denoising_steps_range[1] - self.comp_distill_denoising_steps_range[0] + 1
             num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
             # num_nograd_steps: 0 or 1, 50% each.
-            num_nograd_steps = self.comp_iters_count % W
+            num_nograd_steps = 0 #self.comp_iters_count % W
             # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
             # Same shrink_subj_attn for all denoising steps in a comp_distill_multistep_denoise call.
             shrink_subj_attn = torch.rand(1) < self.p_shrink_subj_attn
@@ -2799,6 +2799,8 @@ class LatentDiffusion(DDPM):
             # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
 
             for sel_step in range(len(x_recons)):
+                if sel_step == 0:
+                    continue
                 x_recon  = x_recons[sel_step]
                 # iter_flags['do_comp_feat_distill'] is True, which guarantees that 
                 # there are no faceless input images. Thus, x_start[0] is always a valid face image.
@@ -2811,6 +2813,7 @@ class LatentDiffusion(DDPM):
                 # If no faces are detected in x_recon, loss_arcface_align_comp_step is 0, 
                 # and sc_face_coords is None.
                 # NOTE: In the first iteration, sc_fg_mask is None, and it's fine.
+                
                 loss_arcface_align_comp_step, sc_face_coords = \
                     self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
