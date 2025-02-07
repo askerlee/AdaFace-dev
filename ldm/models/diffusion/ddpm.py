@@ -2465,9 +2465,6 @@ class LatentDiffusion(DDPM):
             x_start_1   = x_start.chunk(4)[0]
             noise_1     = noise.chunk(4)[0]
             t_1         = t.chunk(4)[0]
-            
-            subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb = \
-                [ emb.repeat(x_start_1.shape[0], 1, 1) for emb in [subj_single_prompt_emb, subj_comp_prompt_emb, cls_comp_prompt_emb] ]
 
             if self.cls_subj_mix_scheme == 'unet':
                 teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb]
@@ -2524,7 +2521,6 @@ class LatentDiffusion(DDPM):
         # will lead to multiple-face artifacts.
         noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
         subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
-        subj_single_prompt_emb = subj_double_prompt_emb.chunk(2)[0].repeat(2, 1, 1)
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
         # x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
