@@ -1304,8 +1304,8 @@ class LatentDiffusion(DDPM):
 
         # Add prompt_modifier only once.
         # Repeat compos_partial_prompt subj_rep_prompts_count = 2 times.
-        subj_comp_rep_prompts = [ subj_comp_prompts[i] + ", " + prompt_modifier[i] \
-                                    + ", " + ", ".join([ compos_partial_prompt[i] ] * self.subj_rep_prompts_count) \
+        subj_comp_rep_prompts = [ subj_comp_prompts[i] + \
+                                  ", ".join([ prompt_modifier[i] + ", " + compos_partial_prompt[i] ] * self.subj_rep_prompts_count) \
                                     for i in range(BLOCK_SIZE) ]
                     
         # We still compute the prompt embeddings of the first 4 types of prompts, 
@@ -2702,7 +2702,7 @@ class LatentDiffusion(DDPM):
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
                                               recon_feat_objectives=['attn_out', 'outfeat'],
-                                              recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125},
+                                              recon_loss_discard_threses={'mc': 0.4, 'ssfg': 0.25},
                                               do_feat_attn_pooling=False)
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
