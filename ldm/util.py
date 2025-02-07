@@ -319,7 +319,7 @@ def parse_subject_file(subject_file_path):
 
 # Orthogonal subtraction of b from a: the residual is orthogonal to b (on the last on_last_n_dims dims).
 # NOTE: ortho_subtract(a, b) is scale-invariant w.r.t. (b * b_discount),
-# but scales proportionally to the scale of a.
+# but scales proportionally with a.
 # a, b are n-dimensional tensors. Subtraction happens at the last on_last_n_dims dims.
 # ortho_subtract(a, b) is not symmetric w.r.t. a and b, nor is ortho_l2loss(a, b).
 # NOTE: always choose a to be something we care about, and b to be something as a reference.
@@ -328,7 +328,7 @@ def ortho_subtract(a, b, b_discount=1, on_last_n_dims=1, return_align_coeffs=Fal
     if on_last_n_dims > 1:
         for i in range(-on_last_n_dims, 0):
             assert a.shape[i] == b.shape[i] or a.shape[i] == 1 or b.shape[i] == 1, \
-              "Tensors a and b must have the same shape on non-singleton dims"
+              f"Tensors a and b must have the same shape or broadcastable on the last {on_last_n_dims} dims"
 
         # There could still be exceptions, if a and b have singleton dims at non-matching dims.
         # Leave the check to torch.
@@ -1787,7 +1787,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
                                   fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
                                   loss_dict, session_prefix,
                                   recon_feat_objectives=['attn_out', 'outfeat'],
-                                  recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125}, do_feat_attn_pooling=False):
+                                  recon_loss_discard_threses={'mc': 0.4, 'ssfg': 0.3}, do_feat_attn_pooling=False):
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
     # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
@@ -1868,7 +1868,7 @@ def calc_comp_prompt_distill_loss(flow_model, ca_layers_activations,
 def calc_comp_subj_bg_preserve_loss(flow_model, ca_outfeats, ca_attn_outs, ca_qs, ca_attns, 
                                     fg_mask, is_sc_fg_mask_available, subj_indices, BLOCK_SIZE,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125}, do_feat_attn_pooling=False):
+                                    recon_loss_discard_threses={'mc': 0.4, 'ssfg': 0.3}, do_feat_attn_pooling=False):
     # No masks are available. loss_comp_subj_fg_feat_preserve, loss_comp_subj_bg_attn_suppress are both 0.
     if fg_mask is None or fg_mask.sum() == 0:
         return {}
@@ -2427,14 +2427,14 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
             # are not worse beyond the margin.
             # sc_recon_mc_min: 0.03~0.04. sc_recon_ssfg_min: 0.04~0.05. 
             # So a margin of 30% is ~0.01.
-            # ** If mc, we also add a 5% margin to the flow loss, so that when flow loss and same loc loss
+            # ** If mc, we also add a 2% margin to the flow loss, so that when flow loss and same loc loss
             # are tie, same loc loss is preferred.
             # The relative margin of the flow loss over the attn loss is still around 25%.
             # Adding margin to attn loss increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
             # Adding margin to flow loss increases mc_sameloc_win_rate and decreases mc_flow_win_rate.
             if feat_name == 'mc':
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.5
-                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.05
+                all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.02
             else:
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.4
 
@@ -2542,7 +2542,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                ss_fg_mask_3d, sc_fg_mask_3d, 
                                sc_q_grad_scale=0.1, c_to_s_attn_norm_dims=(1,),
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_loss_discard_threses={'mc': 0.25, 'ssfg': 0.125},
+                               recon_loss_discard_threses={'mc': 0.4, 'ssfg': 0.3},
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12, do_feat_attn_pooling=False):
     # ss_fg_mask_3d: [1, 1, 64*64]
@@ -2591,8 +2591,13 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     s_q_mean = torch.cat([ss_q, sc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
     c_q_mean = torch.cat([sc_rep_q, mc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
 
-    sc_q_demean_s = sc_q - s_q_mean
-    sc_q_demean_c = sc_q - c_q_mean
+    # on_last_n_dims=2: demean on the last 2 dims, the token and feature dims.
+    sc_q_demean_s = ortho_subtract(sc_q, s_q_mean, on_last_n_dims=2)
+    sc_q_demean_c = ortho_subtract(sc_q, c_q_mean, on_last_n_dims=2)
+    # ss_q is cross-attn'ed with sc_q_demean_c, so we demean it with c_q_mean as well.
+    ss_q = ortho_subtract(ss_q, c_q_mean, on_last_n_dims=2)
+    # mc_q is cross-attn'ed with sc_q_demean_s, so we demean it with s_q_mean as well.
+    mc_q = ortho_subtract(mc_q, s_q_mean, on_last_n_dims=2)
 
     sc_q_grad_scaler = gen_gradient_scaler(sc_q_grad_scale)
     # Slowly update attn loras that influence sc_q.
@@ -2696,8 +2701,12 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         s_feat_mean = torch.cat([ss_feat, sc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
         c_feat_mean = torch.cat([sc_rep_feat, mc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
 
-        sc_feat_demean_s = sc_feat - s_feat_mean
-        sc_feat_demean_c = sc_feat - c_feat_mean
+        sc_feat_demean_s = ortho_subtract(sc_feat, s_feat_mean, on_last_n_dims=2)
+        sc_feat_demean_c = ortho_subtract(sc_feat, c_feat_mean, on_last_n_dims=2)
+        # ss_feat is reconstructed from sc_feat_demean_c, so we demean it with c_feat_mean as well.
+        ss_feat = ortho_subtract(ss_feat, c_feat_mean, on_last_n_dims=2)
+        # mc_feat is reconstructed from sc_feat_demean_s, so we demean it with s_feat_mean as well.
+        mc_feat = ortho_subtract(mc_feat, s_feat_mean, on_last_n_dims=2)
 
         # Cut off the gradients into the subj single instance.
         # In fact, We don't need to cut off sc_rep_feat, mc_feat, 

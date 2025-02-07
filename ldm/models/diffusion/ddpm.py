@@ -1383,35 +1383,27 @@ class LatentDiffusion(DDPM):
         extra_info['prompt_emb_4b_orig'] = prompt_emb_4b_orig
 
         if self.iter_flags['do_comp_feat_distill']:
-            # If subj_comp_distill_on_rep_prompts, then:
             # prompt_in: subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
-            # Otherwise:
-            # prompt_in: subj_single_prompts + subj_comp_prompts + cls_single_prompts + cls_comp_prompts
             # The cls_single_prompts/cls_comp_prompts within prompt_in will only be used to 
             # generate ordinary prompt embeddings, i.e., 
             # it doesn't contain subject tokens.
-            self.iter_flags['subj_comp_distill_on_rep_prompts'] = True
-            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
-                # *** subj_comp_prompts repeats the compositional part once,
-                # *** and subj_comp_rep_prompts repeats the compositional part twice.
-                prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
-                prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
-                
-                # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
-                prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
-                prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
-                prompt_emb_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_emb_mask']
-                prompt_pad_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_pad_mask']
-                extra_info['prompt_emb_mask_4b'] = prompt_emb_mask_4b
-                extra_info['prompt_pad_mask_4b'] = prompt_pad_mask_4b
-            else:
-                # Otherwise, the original cls_single_prompts is in the batch, 
-                # so we use prompt_emb_4b_orig.
-                prompt_in  = delta_prompts
-                prompt_emb = prompt_emb_4b_orig
-                extra_info['prompt_emb_mask_4b'] = extra_info['prompt_emb_mask_4b_orig']
-                extra_info['prompt_pad_mask_4b'] = extra_info['prompt_pad_mask_4b_orig']
+            # The 4 blocks of instances are (subj_single, subj_comp, subj_comp_rep, cls_comp).
+            # *** subj_comp_prompts repeats the compositional part once,
+            # *** and subj_comp_rep_prompts repeats the compositional part twice.
+            prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
+
+            # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings 
+            # as the new cls comp embeddings.
+            cls_comp_emb = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
+            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+            
+            # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
+            prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
+            prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
+            prompt_emb_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_emb_mask']
+            prompt_pad_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_pad_mask']
+            extra_info['prompt_emb_mask_4b'] = prompt_emb_mask_4b
+            extra_info['prompt_pad_mask_4b'] = prompt_pad_mask_4b
 
             # The prompts are either (subj single, subj comp, cls single, cls comp).
             # So the first 2 sub-blocks always contain the subject tokens, and we use *_2b.    
@@ -1435,6 +1427,7 @@ class LatentDiffusion(DDPM):
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
                             
         # extra_info['cls_single_emb'] and extra_info['cls_comp_emb'] are used in unet distillation.
+        # cls_comp_emb is only mixed in do_comp_feat_distill iterations, so it's fine.
         extra_info['cls_single_prompts']    = cls_single_prompts
         extra_info['cls_single_emb']        = cls_single_emb
         extra_info['cls_comp_prompts']      = cls_comp_prompts
@@ -1714,8 +1707,7 @@ class LatentDiffusion(DDPM):
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_subj_attn=False,
-                                       cfg_scale=2.5, num_denoising_steps=3, num_nograd_steps=1, 
-                                       subj_comp_distill_on_rep_prompts=True):
+                                       cfg_scale=2.5, num_denoising_steps=3, num_nograd_steps=1):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1752,7 +1744,7 @@ class LatentDiffusion(DDPM):
                                         shrink_subj_attn=shrink_subj_attn,
                                         subj_indices=all_subj_indices_1b, 
                                         batch_part_has_grad='subject-compos', 
-                                        subj_comp_distill_on_rep_prompts=subj_comp_distill_on_rep_prompts,
+                                        subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
                                         # Enable the attn lora in subject-compos batches, as long as 
@@ -1761,14 +1753,6 @@ class LatentDiffusion(DDPM):
                                         use_ffn_lora=False)
             
             noise_preds.append(noise_pred)
-            '''
-            # The predicted x0 is used as the x_start for the next denoising step.
-            if subj_comp_distill_on_rep_prompts:
-                x0_ss, x0_sc, x0_sc_rep, x0_mc = x_recon.chunk(4)
-                pred_x0 = torch.cat([x0_ss, x0_sc_rep, x0_sc_rep, x0_mc], dim=0)
-            else:
-                pred_x0 = x_recon
-            '''
             pred_x0 = x_recon
             x_starts.append(pred_x0.detach())
             x_recons.append(x_recon)
@@ -1835,7 +1819,7 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            # If we do subj_comp_distill_on_rep_prompts, cond_context contains 
+            # cond_context contains 
             #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
             # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
@@ -1860,12 +1844,11 @@ class LatentDiffusion(DDPM):
                                                     (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
-            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
-                # Block 2 is the subject comp repeat (sc-repeat) instance.
-                # Make the sc-repeat and sc blocks use the same x_start, so that their output features
-                # are more aligned, and more effective for distillation.
-                x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
+            x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
+            # Block 2 is the subject comp repeat (sc-repeat) instance.
+            # Make the sc-repeat and sc blocks use the same x_start, so that their output features
+            # are more aligned, and more effective for distillation.
+            x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
 
             uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
@@ -1903,8 +1886,7 @@ class LatentDiffusion(DDPM):
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     shrink_subj_attn=shrink_subj_attn,
                                                     cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
-                                                    num_nograd_steps=num_nograd_steps, 
-                                                    subj_comp_distill_on_rep_prompts=self.iter_flags['subj_comp_distill_on_rep_prompts'])
+                                                    num_nograd_steps=num_nograd_steps)
 
             # Skip results of the num_nograd_steps steps at the beginning of the compositional denoising iterations.
             x_recons = x_recons[num_nograd_steps:]
@@ -2490,9 +2472,7 @@ class LatentDiffusion(DDPM):
             if self.cls_subj_mix_scheme == 'unet':
                 teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb]
             else:
-                mix_comp_prompt_emb = (subj_comp_prompt_emb * (1 - self.cls_subj_mix_ratio) \
-                                      + cls_comp_prompt_emb * self.cls_subj_mix_ratio)
-                teacher_context=[mix_comp_prompt_emb]
+                teacher_context=[cls_comp_prompt_emb]
 
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
@@ -2539,9 +2519,8 @@ class LatentDiffusion(DDPM):
             t_2         = t.chunk(2)[1]
 
         # We've made sure they use the same x_start and t.
-        # Here we ensure the two instances (one single, one comp) use the same noise.
-        # This is necessary for subj_comp_distill_on_rep_prompts iterations,
-        # since the class-single instance is actually the subj-comp-rep instance, using different noise 
+        # Here we ensure the two instances (one single, one comp) use the same noise,
+        # since the third block is the subj-comp-rep instance, using different noise 
         # will lead to multiple-face artifacts.
         noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
         subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
@@ -2555,9 +2534,7 @@ class LatentDiffusion(DDPM):
         if self.cls_subj_mix_scheme == 'unet':
             teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb]
         else:
-            mix_double_prompt_emb = (subj_double_prompt_emb * (1 - self.cls_subj_mix_ratio) \
-                                    + cls_double_prompt_emb * self.cls_subj_mix_ratio)
-            teacher_context=[mix_double_prompt_emb]
+            teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb], dim=0) ]
 
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
@@ -2702,7 +2679,7 @@ class LatentDiffusion(DDPM):
                                               # If outfeat uses cosine loss, the subject authenticity will be higher,
                                               # but the composition will degrade. So we use L2 loss.
                                               recon_feat_objectives=['attn_out', 'outfeat'],
-                                              recon_loss_discard_threses={'mc': 0.4, 'ssfg': 0.25},
+                                              recon_loss_discard_threses={'mc': 0.4, 'ssfg': 0.3},
                                               do_feat_attn_pooling=False)
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
@@ -2725,15 +2702,11 @@ class LatentDiffusion(DDPM):
 
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
         
-            if self.iter_flags['subj_comp_distill_on_rep_prompts']:
-                loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
-                    calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
-                                                    prompt_emb_mask_4b,    prompt_pad_mask_4b,
-                                                    sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
-                if loss_comp_rep_distill_subj_attn == 0:
-                    loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
-                        torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
-            else:
+            loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
+                calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
+                                                prompt_emb_mask_4b,    prompt_pad_mask_4b,
+                                                sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
+            if loss_comp_rep_distill_subj_attn == 0:
                 loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
                     torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
 
