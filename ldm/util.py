@@ -2433,10 +2433,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
             # Adding margin to attn loss increases ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
             # Adding margin to flow loss increases mc_sameloc_win_rate and decreases mc_flow_win_rate.
             if feat_name == 'mc':
-                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
+                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.5
                 all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.05
             else:
-                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.3
+                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.4
 
             # Take the smaller loss tokenwise between attn and flow.
             min_token_losses_sc_recon = all_token_losses_sc_recon_2_3types.min(dim=0).values
@@ -2446,6 +2446,9 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
             # ss_tokens_sparse_attn_advantages: [1, 210=N_fg] or [2, 961]. How much the flow loss is smaller 
             # than the attn loss at each token. The larger the advantage, the better.
             ss_tokens_sparse_attn_advantages = all_token_losses_sc_recon_2_3types[:1] - all_token_losses_sc_recon_2_3types[1:]
+            # NOTE: ss_tokens_sparse_attn_advantage could be negative (attn loss is smaller than flow loss / same loc loss).
+            # In this case, we still teach the attn with the sparse attn (equivalent to the warping flow or same loc attn),
+            # but with smaller weights.
             ss_tokens_sparse_attn_advantage, max_sparse_attn_type_indices  = \
                 ss_tokens_sparse_attn_advantages.max(dim=0)
             ss_tokens_sparse_attn_advantage = ss_tokens_sparse_attn_advantage.unsqueeze(1)

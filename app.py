@@ -348,11 +348,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(
-                label="Nickname of Subject (optional for saving images)", 
+                label="Nickname of Subject (optional; for naming saved images)", 
                 value="",
             )
             subj_name_sig2 = gr.Textbox(
-                label="Nickname of 2nd Subject (optional for saving images)", 
+                label="Nickname of 2nd Subject (optional; for naming saved images)", 
                 value="",
                 visible=False,
             )
