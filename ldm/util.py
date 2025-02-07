@@ -2319,8 +2319,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
     sc_attns['ssfg'], sc_attns['mc'] = sc_to_ss_mc_prob[:, :, :N_fg], sc_to_ss_mc_prob[:, :, N_fg:]
     # sc_recon_ssfg_mc_feat_attn_agg: [1, 1280, N_fg + 961] 
     # sc_recon_feat*['ssfg']: [1, 1280, N_fg] => [1, N_fg, 1280]
-    sc_recon_feats_attn_agg['ssfg'] = reconstruct_feat_with_attn_aggregation(sc_feat_demean_s, sc_attns['ssfg'])
-    sc_recon_feats_attn_agg['mc']   = reconstruct_feat_with_attn_aggregation(sc_feat_demean_c, sc_attns['mc'])
+    sc_recon_feats_attn_agg['ssfg'] = reconstruct_feat_with_attn_aggregation(sc_feat_demean_c, sc_attns['ssfg'])
+    sc_recon_feats_attn_agg['mc']   = reconstruct_feat_with_attn_aggregation(sc_feat_demean_s, sc_attns['mc'])
     # Split sc_recon_ssfg_mc_feat_attn_agg into ssfg and mc parts.
     # ss_fg_mask_2d: [1, 961]. ss_fg_mask_N: [N_fg].
     ss_fg_mask_B, ss_fg_mask_N = ss_fg_mask_2d.nonzero(as_tuple=True)
@@ -2332,14 +2332,14 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # Otherwise ss2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
         # and return the newly estimated ss2sc_flow.     
         sc_recon_feats_flow['ssfg'], ss2sc_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q_demean_s, sc_feat_demean_s, 
+            reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q_demean_c, sc_feat_demean_c, 
                                                 H, W, ss_fg_mask_2d, sc_fg_mask_2d, 
                                                 small_motion_ignore_thres=small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W, mask_N=ss_fg_mask_N)
         '''
         if debug_flow_attn:
-            sc_recon_ssfg_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(sc_feat_demean_s, sc_recon_feats_flow_attn['ssfg'])
+            sc_recon_ssfg_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(sc_feat_demean_c, sc_recon_feats_flow_attn['ssfg'])
             diff1 = (sc_recon_ssfg_feat_attn_agg2 - sc_recon_feats_flow['ssfg']).abs().mean()
             if diff1 > 2e-4:
                 breakpoint()
@@ -2355,7 +2355,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # Otherwise mc2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q_demean_c, sc_feat_demean_c,
+            reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q_demean_s, sc_feat_demean_s,
                                                 H, W, None, None, small_motion_ignore_thres=small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
@@ -2393,8 +2393,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         sc_recon_feats_candidates = [ sc_recon_feats_avg[feat_name], sc_recon_feats_flow[feat_name] ]
         if feat_name == 'mc':
             # Do 'sameloc' matching on mc, i.e., in addition to matching sc_recon_feats_* with ssfg features, 
-            # we also match sc_feat_demean_c with ssfg features.
-            sc_recon_feats_candidates.append(sc_feat_demean_c.permute(0, 2, 1))
+            # we also match sc_feat_demean_s with ssfg features.
+            sc_recon_feats_candidates.append(sc_feat_demean_s.permute(0, 2, 1))
 
         for i, sc_recon_feat in enumerate(sc_recon_feats_candidates):
             if sc_recon_feat is None:
@@ -2588,8 +2588,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     s_q_mean = torch.cat([ss_q, sc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
     c_q_mean = torch.cat([sc_rep_q, mc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
 
-    ss_q, sc_q_demean_s = ss_q - s_q_mean, sc_q - s_q_mean
-    mc_q, sc_q_demean_c = mc_q - c_q_mean, sc_q - c_q_mean
+    sc_q_demean_s = sc_q - s_q_mean
+    sc_q_demean_c = sc_q - c_q_mean
 
     sc_q_grad_scaler = gen_gradient_scaler(sc_q_grad_scale)
     # Slowly update attn loras that influence sc_q.
@@ -2615,8 +2615,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single tokens + 961 cls comp tokens).
     # matmul() does multiplication on the last two dims.
     # sc_to_ss_prob: [1, 961, 1280] * [1, 1280, 1922] => [1, 961, 1922], (batch, sc, ss_mc).
-    sc_to_ss_score = torch.matmul(sc_q_demean_s.transpose(1, 2).contiguous(), fg_ss_q) * matching_score_scale
-    sc_to_mc_score = torch.matmul(sc_q_demean_c.transpose(1, 2).contiguous(), mc_q)    * matching_score_scale
+    sc_to_ss_score = torch.matmul(sc_q_demean_c.transpose(1, 2).contiguous(), fg_ss_q) * matching_score_scale
+    sc_to_mc_score = torch.matmul(sc_q_demean_s.transpose(1, 2).contiguous(), mc_q)    * matching_score_scale
     sc_to_ss_mc_score = torch.cat([sc_to_ss_score, sc_to_mc_score], dim=2)
     # NOTE: If sc_to_ss_prob is only normalized among the single tokens dim,
     # then each comp image token has a total contribution of 1 to all single tokens.
@@ -2692,8 +2692,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         ss_feat, sc_feat, sc_rep_feat, mc_feat = feat_obj.chunk(4)
         s_feat_mean = torch.cat([ss_feat, sc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
         c_feat_mean = torch.cat([sc_rep_feat, mc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
-        ss_feat, sc_feat_demean_s = ss_feat - s_feat_mean, sc_feat - s_feat_mean
-        mc_feat, sc_feat_demean_c = mc_feat - c_feat_mean, sc_feat - c_feat_mean
+
+        sc_feat_demean_s = sc_feat - s_feat_mean
+        sc_feat_demean_c = sc_feat - c_feat_mean
 
         # Cut off the gradients into the subj single instance.
         # In fact, We don't need to cut off sc_rep_feat, mc_feat, 
