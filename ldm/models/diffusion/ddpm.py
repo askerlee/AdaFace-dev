@@ -1392,10 +1392,13 @@ class LatentDiffusion(DDPM):
             # *** and subj_comp_rep_prompts repeats the compositional part twice.
             prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
 
-            # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings 
-            # as the new cls comp embeddings.
-            cls_comp_emb = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
-            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+            # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings as cls_comp_emb2.
+            cls_comp_emb2      = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb      * self.cls_subj_mix_ratio
+            # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp embeddings as subj_comp_emb2.
+            subj_comp_emb2     = cls_comp_emb  * (1 - self.cls_subj_mix_ratio) + subj_comp_emb     * self.cls_subj_mix_ratio
+            # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp rep embeddings as subj_comp_rep_emb2.
+            subj_comp_rep_emb2 = cls_comp_emb  * (1 - self.cls_subj_mix_ratio) + subj_comp_rep_emb * self.cls_subj_mix_ratio
+            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb2, subj_comp_rep_emb2, cls_comp_emb2], dim=0)
             
             # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
             prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
