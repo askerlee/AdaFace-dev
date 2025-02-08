@@ -2225,8 +2225,9 @@ def smooth_attn_mat(attn_mat, H, W, kernel_center_weight=2):
         attn_mat = attn_mat.reshape(*attn_mat_shape[:2], H, W)
     # Smooth the attention map using a 2D convolution.
     # The kernel size is fixed to 3. But the center weight can be adjusted.
-    smooth_kernel = smooth_kernel_3x3s[kernel_center_weight].unsqueeze(0).unsqueeze(0).to(attn_mat.device)
-    attn_mat = F.conv2d(attn_mat, smooth_kernel, padding=1)
+    smooth_kernel = smooth_kernel_3x3s[kernel_center_weight].reshape(1, 1, 3, 3).to(attn_mat.device)
+    smooth_kernel = smooth_kernel.repeat(attn_mat.shape[1], 1, 1, 1)
+    attn_mat = F.conv2d(attn_mat, smooth_kernel, padding=1, groups=attn_mat.shape[1])
     # attn_mat: [B, D, H, W] -> [B, D, H*W]. 
     # If the original attn_mat is 4D (e.g. the optical flow), then no change is made.
     attn_mat = attn_mat.reshape(*attn_mat_shape)
