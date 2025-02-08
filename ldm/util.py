@@ -2211,8 +2211,8 @@ def backward_warp_by_flow(image2, flow1to2):
     return image1_recovered
 
 smooth_kernel_3x3s = { 
-                        8: torch.tensor([[1, 1, 1], [1, 8, 1], [1, 1, 1]], dtype=torch.float32) / 16,
                         4: torch.tensor([[1, 1, 1], [1, 4, 1], [1, 1, 1]], dtype=torch.float32) / 12,
+                        3: torch.tensor([[1, 1, 1], [1, 3, 1], [1, 1, 1]], dtype=torch.float32) / 11,
                         2: torch.tensor([[1, 1, 1], [1, 2, 1], [1, 1, 1]], dtype=torch.float32) / 10,
                         1: torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype=torch.float32) / 9
                      }
@@ -2290,7 +2290,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 
             # Use a larger kernel center weight 4 to smooth the flow, 
             # so that the flow less smoothed.
-            ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=4)
+            ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=3)
             # ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0
 
     # Resize sc_feat to [1, *, H, W] and warp it using ss2sc_flow, 
@@ -2759,7 +2759,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         losses_sc_recons_obj, loss_sparse_attns_distill_obj, flow_distill_stats, ss2sc_flow, mc2sc_flow = \
             calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, 
                                          sc_feat_demean_s, sc_feat_demean_c,
-                                         ss2sc_flow, mc2sc_flow, 
+                                         None, None, 
                                          sc_to_ss_mc_prob, 
                                          sc_q_demean_s, sc_q_demean_c, ss_q, mc_q, 
                                          H, W, 
