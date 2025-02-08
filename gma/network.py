@@ -170,6 +170,7 @@ class GMA(nn.Module):
         return flow_predictions
 
     # ANCHOR[id=est_flow_from_feats]
+    @torch.compile
     def est_flow_from_feats(self, fmap1, fmap2, H, W, num_iters=12, flow_init=None,
                             corr_normalized_by_sqrt_dim=True):
         """ Estimate optical flow between a pair of frame features """
