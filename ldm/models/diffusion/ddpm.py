@@ -1394,10 +1394,12 @@ class LatentDiffusion(DDPM):
 
             # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings as cls_comp_emb2.
             cls_comp_emb2      = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb      * self.cls_subj_mix_ratio
+            # if cls_subj_mix_ratio == 0.8, then reverse_mix_ratio == 0.9.
+            reverse_mix_ratio  = 0.5 + self.cls_subj_mix_ratio / 2
             # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp embeddings as subj_comp_emb2.
-            subj_comp_emb2     = cls_comp_emb  * (1 - self.cls_subj_mix_ratio) + subj_comp_emb     * self.cls_subj_mix_ratio
+            subj_comp_emb2     = cls_comp_emb  * (1 - reverse_mix_ratio)       + subj_comp_emb     * reverse_mix_ratio
             # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp rep embeddings as subj_comp_rep_emb2.
-            subj_comp_rep_emb2 = cls_comp_emb  * (1 - self.cls_subj_mix_ratio) + subj_comp_rep_emb * self.cls_subj_mix_ratio
+            subj_comp_rep_emb2 = cls_comp_emb  * (1 - reverse_mix_ratio)       + subj_comp_rep_emb * reverse_mix_ratio
             prompt_emb = torch.cat([subj_single_emb, subj_comp_emb2, subj_comp_rep_emb2, cls_comp_emb2], dim=0)
             
             # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.

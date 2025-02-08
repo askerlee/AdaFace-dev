@@ -2210,6 +2210,28 @@ def backward_warp_by_flow(image2, flow1to2):
 
     return image1_recovered
 
+smooth_kernel_3x3s = { 
+                        8: torch.tensor([[1, 1, 1], [1, 8, 1], [1, 1, 1]], dtype=torch.float32) / 16,
+                        4: torch.tensor([[1, 1, 1], [1, 4, 1], [1, 1, 1]], dtype=torch.float32) / 12,
+                        2: torch.tensor([[1, 1, 1], [1, 2, 1], [1, 1, 1]], dtype=torch.float32) / 10,
+                        1: torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype=torch.float32) / 9
+                     }
+
+@conditional_compile(enable_compile=EnableCompile)
+def smooth_attn_mat(attn_mat, H, W, kernel_center_weight=2):
+    attn_mat_shape = attn_mat.shape
+    if attn_mat.ndim == 3:
+        # attn_mat: [B, D, H*W] -> [B, D, H, W]
+        attn_mat = attn_mat.reshape(*attn_mat_shape[:2], H, W)
+    # Smooth the attention map using a 2D convolution.
+    # The kernel size is fixed to 3. But the center weight can be adjusted.
+    smooth_kernel = smooth_kernel_3x3s[kernel_center_weight].unsqueeze(0).unsqueeze(0).to(attn_mat.device)
+    attn_mat = F.conv2d(attn_mat, smooth_kernel, padding=1)
+    # attn_mat: [B, D, H, W] -> [B, D, H*W]. 
+    # If the original attn_mat is 4D (e.g. the optical flow), then no change is made.
+    attn_mat = attn_mat.reshape(*attn_mat_shape)
+    return attn_mat
+
 # Convert an optical flow to an equivalent attention matrix.
 @conditional_compile(enable_compile=EnableCompile)
 def flow2attn(s2c_flow, H, W, mask_N=None):
@@ -2265,8 +2287,10 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
             ss2sc_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, num_iters=num_flow_est_iters, 
                                                         corr_normalized_by_sqrt_dim=False)
 
-        
-            ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0
+            # Use a larger kernel center weight 4 to smooth the flow, 
+            # so that the flow less smoothed.
+            ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=4)
+            # ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0
 
     # Resize sc_feat to [1, *, H, W] and warp it using ss2sc_flow, 
     # then collapse the spatial dimensions.
@@ -2553,20 +2577,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Pooling makes ca_outfeat spatially smoother, so that we'll get more continuous flow.
         # ca_attn_out, ca_outfeat, ca_q: [4, 1280, 64*64] -> [4, 1280, 31*31] = [4, 1280, 961].
         ca_attn_out  = pool_feat_or_attn_mat(ca_attn_out, (H, W))
-        # retain_spatial=True to get the resized spatial dims H2, W2.
+        # retain_spatial=True to get the resized spatial dims H, W.
         ca_outfeat   = pool_feat_or_attn_mat(ca_outfeat,  (H, W), retain_spatial=True)
         ca_q         = pool_feat_or_attn_mat(ca_q,        (H, W))
         # ss_fg_mask_3d: [1, 1, 64*64] -> [1, 1, 31*31] = [1, 1, 961]
         ss_fg_mask_3d = pool_feat_or_attn_mat(ss_fg_mask_3d,  (H, W))
         if sc_fg_mask_3d is not None:
             sc_fg_mask_3d = pool_feat_or_attn_mat(sc_fg_mask_3d, (H, W))
-        H2, W2       = ca_outfeat.shape[-2:]
+        H, W       = ca_outfeat.shape[-2:]
         # Flatten the spatial dims of ca_outfeat for reconstruction, 
         # to restore consistency with the input shape.
-        ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], H2*W2)
-    else:
-        # Do nothing.
-        H2, W2       = H, W
+        ca_outfeat   = ca_outfeat.reshape(*ca_outfeat.shape[:2], H*W)
 
     # ss_fg_mask_2d: [1, 961]
     ss_fg_mask_2d = ss_fg_mask_3d.bool().squeeze(1)
@@ -2612,7 +2633,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # probably due to the update of attn loras.
     # However, as training goes on, the composition seems to repair itself.
     # Maybe good compositions are a stable equilibrium for model params?
-    fg_ss_q = ss_q[:, :, ss_fg_mask_N]
+    # fg_ss_q = ss_q[:, :, ss_fg_mask_N]
 
     # Similar to the scale of the attention scores.
     # Disable matching_score_scale, since when we were caching q, we've scaled it by 1/sqrt(sqrt(dim)).
@@ -2620,12 +2641,15 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     # and disabling matching_score_scale can make sc_to_ss_prob more polarized.
     # num_heads = 8
     matching_score_scale = 1 #(ca_outfeat.shape[1] / num_heads) ** -0.5
-    # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single tokens + 961 cls comp tokens).
+    # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single tokens, or 961 cls comp tokens).
     # matmul() does multiplication on the last two dims.
-    # sc_to_ss_prob: [1, 961, 1280] * [1, 1280, 1922] => [1, 961, 1922], (batch, sc, ss_mc).
-    sc_to_ss_score = torch.matmul(sc_q_demean_c.transpose(1, 2).contiguous(), fg_ss_q) * matching_score_scale
-    sc_to_mc_score = torch.matmul(sc_q_demean_s.transpose(1, 2).contiguous(), mc_q)    * matching_score_scale
-    sc_to_ss_mc_score = torch.cat([sc_to_ss_score, sc_to_mc_score], dim=2)
+    sc_to_ss_score = torch.matmul(sc_q_demean_c.transpose(1, 2).contiguous(), ss_q) * matching_score_scale
+    sc_to_mc_score = torch.matmul(sc_q_demean_s.transpose(1, 2).contiguous(), mc_q) * matching_score_scale
+    sc_to_ss_score = smooth_attn_mat(sc_to_ss_score, H, W, kernel_center_weight=2)
+    sc_to_mc_score = smooth_attn_mat(sc_to_mc_score, H, W, kernel_center_weight=2)
+    sc_to_ssfg_score = sc_to_ss_score[:, :, ss_fg_mask_N]
+
+    sc_to_ss_mc_score = torch.cat([sc_to_ssfg_score, sc_to_mc_score], dim=2)
     # NOTE: If sc_to_ss_prob is only normalized among the single tokens dim,
     # then each comp image token has a total contribution of 1 to all single tokens.
     # But some comp tokens are backgrounds which don't appear in the single instance, 
@@ -2737,7 +2761,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                          ss2sc_flow, mc2sc_flow, 
                                          sc_to_ss_mc_prob, 
                                          sc_q_demean_s, sc_q_demean_c, ss_q, mc_q, 
-                                         H2, W2, 
+                                         H, W, 
                                          ss_fg_mask_2d, sc_fg_mask_2d, 
                                          small_motion_ignore_thres, num_flow_est_iters, 
                                          objective_name=objective_name)
