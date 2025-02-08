@@ -170,7 +170,7 @@ class GMA(nn.Module):
         return flow_predictions
 
     # ANCHOR[id=est_flow_from_feats]
-    @torch.compile
+    # @torch.compile
     def est_flow_from_feats(self, fmap1, fmap2, H, W, num_iters=12, flow_init=None,
                             corr_normalized_by_sqrt_dim=True):
         """ Estimate optical flow between a pair of frame features """
@@ -183,8 +183,10 @@ class GMA(nn.Module):
         fmap2 = fmap2.reshape(BS, -1, H, W)
 
         H0, W0 = H, W
+
         # After corr_levels -1 = 3 levels of pooling, the feature map size is 1/8 of the original image.
         # So the minimum size of the feature map is 1/8 of the original image.
+        '''
         # If the minimum size is < 8, the top level of the correlation pyramid will be 1x1.
         # In this case, we enlarge the feature map by 4x to make the top level of the pyramid at least 4x4.
         if min(H, W) < 8:
@@ -198,7 +200,8 @@ class GMA(nn.Module):
             H, W = H0 * 2, W0 * 2
             scale_factor = 16
         else:
-            scale_factor = 8
+        '''
+        scale_factor = 8
 
         # CorrBlock has no learnable parameters.
         self.corr_fn = CorrBlock(fmap1, fmap2, num_levels=self.config.corr_levels, 
@@ -208,9 +211,9 @@ class GMA(nn.Module):
         net_feat = torch.zeros(BS, hdim, H, W).to(fmap1.device)
         inp_feat = torch.zeros(BS, cdim, H, W).to(fmap1.device)
 
-        with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
+        #with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
             # attention is a uniform matrix, since inp_feat is all zeros.
-            attention = self.att(inp_feat)
+        attention = self.att(inp_feat)
                 
         # coords0 is always fixed as original coords.
         # coords1 is iteratively updated as coords0 + current estimated flow.
@@ -233,7 +236,7 @@ class GMA(nn.Module):
             corr = self.corr_fn(coords1)  
             flow = coords1 - coords0
             
-            with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
+            #with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
                 # net_feat: hidden features of SepConvGRU. 
                 # inp_feat: input  features to SepConvGRU.
                 # up_mask is scaled to 0.25 of original values.
@@ -241,7 +244,7 @@ class GMA(nn.Module):
                 # In the first few iterations, delta_flow.abs().max() could be 1.3 or 0.8. Later it becomes 0.2~0.3.
                 # attention is the intra-frame attention matrix of inp_feat. 
                 # It's only used to aggregate motion_features and form motion_features_global.
-                net_feat, up_mask, delta_flow = self.update_block(net_feat, inp_feat, corr, flow, attention)
+            net_feat, up_mask, delta_flow = self.update_block(net_feat, inp_feat, corr, flow, attention)
 
             # F(t+1) = F(t) + \Delta(t)
             coords1 = coords1 + delta_flow

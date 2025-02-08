@@ -2268,14 +2268,16 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ssfg_mc_prob):
 
 @torch.compiler.disable
 def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_feat, H, W, 
-                                        ss_fg_mask_2d, sc_fg_mask_2d, small_motion_ignore_thres, 
+                                        ss_fg_mask_2d, small_motion_ignore_thres, 
                                         num_flow_est_iters=12):
     # Set background features to 0s to reduce noisy matching.
     # ss_q, sc_q: [1, 1280, 961]. ss_fg_mask_2d, sc_fg_mask_2d: [1, 961] -> [1, 1, 961]
+    '''
     if ss_fg_mask_2d is not None:
         ss_q = ss_q * ss_fg_mask_2d.unsqueeze(1)
     if sc_fg_mask_2d is not None:
         sc_q = sc_q * sc_fg_mask_2d.unsqueeze(1)
+    '''
 
     # If ss2sc_flow is not provided, estimate it using the flow model.
     # Otherwise use the provided flow.
@@ -2329,8 +2331,8 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_demean_s, sc_feat_demean_c,
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
                                  sc_q_demean_s, sc_q_demean_c, ss_q, mc_q, 
-                                 H, W, ss_fg_mask_2d, sc_fg_mask_2d, 
-                                 small_motion_ignore_thres, num_flow_est_iters, objective_name):
+                                 H, W, ss_fg_mask_2d, small_motion_ignore_thres, 
+                                 num_flow_est_iters, objective_name):
     sc_attns                    = {}
     sc_recon_feats_attn_agg     = {}
     sc_recon_feats_flow         = {}
@@ -2359,8 +2361,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # and return the newly estimated ss2sc_flow.     
         sc_recon_feats_flow['ssfg'], ss2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q_demean_c, sc_feat_demean_c, 
-                                                H, W, ss_fg_mask_2d, sc_fg_mask_2d, 
-                                                small_motion_ignore_thres=small_motion_ignore_thres,
+                                                H, W, ss_fg_mask_2d, small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W, mask_N=ss_fg_mask_N)
         '''
@@ -2382,7 +2383,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q_demean_s, sc_feat_demean_s,
-                                                H, W, None, None, small_motion_ignore_thres=small_motion_ignore_thres,
+                                                H, W, None, small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
         '''        
@@ -2760,11 +2761,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         losses_sc_recons_obj, loss_sparse_attns_distill_obj, flow_distill_stats, ss2sc_flow, mc2sc_flow = \
             calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, 
                                          sc_feat_demean_s, sc_feat_demean_c,
-                                         None, None, 
+                                         ss2sc_flow, mc2sc_flow,
                                          sc_to_ss_mc_prob, 
                                          sc_q_demean_s, sc_q_demean_c, ss_q, mc_q, 
-                                         H, W, 
-                                         ss_fg_mask_2d, sc_fg_mask_2d, 
+                                         H, W, ss_fg_mask_2d, 
                                          small_motion_ignore_thres, num_flow_est_iters, 
                                          objective_name=objective_name)
         
