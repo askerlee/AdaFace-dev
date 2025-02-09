@@ -2286,9 +2286,8 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
             ss2sc_flow = flow_model.est_flow_from_feats(ss_q, sc_q, H, W, num_iters=num_flow_est_iters, 
                                                         corr_normalized_by_sqrt_dim=False)
 
-            # Use a larger kernel center weight 4 to smooth the flow, 
-            # so that the flow is not so smoothed.
-            ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=3)
+            # Use a smooth kernel center weight 2 to smooth the flow.
+            ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=2)
             # Ignore small motions which are noisy.
             if small_motion_ignore_thres > 0:
                 ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0
@@ -2390,7 +2389,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q_demean_s, sc_feat_demean_s,
-                                                H, W, None, small_motion_ignore_thres=0, #small_motion_ignore_thres,
+                                                H, W, None, small_motion_ignore_thres=small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
         '''        
@@ -2622,17 +2621,18 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     s_q_mean = torch.cat([ss_q, sc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
     c_q_mean = torch.cat([sc_rep_q, mc_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
 
+    sc_q_demean_s = sc_q_demean_c = sc_q
     # on_last_n_dims=2: demean on the last 2 dims, the token and feature dims.
-    sc_q_demean_s = ortho_subtract(sc_q, s_q_mean, on_last_n_dims=2)
-    sc_q_demean_c = ortho_subtract(sc_q, c_q_mean, on_last_n_dims=2)
+    #sc_q_demean_s = ortho_subtract(sc_q, s_q_mean, on_last_n_dims=2)
+    #sc_q_demean_c = ortho_subtract(sc_q, c_q_mean, on_last_n_dims=2)
     # ss_q is cross-attn'ed with sc_q_demean_c, so we demean it with c_q_mean as well.
-    ss_q = ortho_subtract(ss_q, c_q_mean, on_last_n_dims=2)
+    #ss_q = ortho_subtract(ss_q, c_q_mean, on_last_n_dims=2)
     # mc_q is cross-attn'ed with sc_q_demean_s, so we demean it with s_q_mean as well.
-    mc_q = ortho_subtract(mc_q, s_q_mean, on_last_n_dims=2)
+    #mc_q = ortho_subtract(mc_q, s_q_mean, on_last_n_dims=2)
 
-    sc_q_grad_scaler = gen_gradient_scaler(sc_q_grad_scale)
+    # sc_q_grad_scaler = gen_gradient_scaler(sc_q_grad_scale)
     # Slowly update attn loras that influence sc_q.
-    sc_q = sc_q_grad_scaler(sc_q)
+    #sc_q = sc_q_grad_scaler(sc_q)
 
     # fg_ss_q: [1, 961, 961] => [1, 961, N_fg]
     # filter with ss_fg_mask_N, so that we only care about 
@@ -2735,12 +2735,13 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         s_feat_mean = torch.cat([ss_feat, sc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
         c_feat_mean = torch.cat([sc_rep_feat, mc_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
 
-        sc_feat_demean_s = ortho_subtract(sc_feat, s_feat_mean, on_last_n_dims=2)
-        sc_feat_demean_c = ortho_subtract(sc_feat, c_feat_mean, on_last_n_dims=2)
+        sc_feat_demean_s = sc_feat_demean_c = sc_feat
+        #sc_feat_demean_s = ortho_subtract(sc_feat, s_feat_mean, on_last_n_dims=2)
+        #sc_feat_demean_c = ortho_subtract(sc_feat, c_feat_mean, on_last_n_dims=2)
         # ss_feat is reconstructed from sc_feat_demean_c, so we demean it with c_feat_mean as well.
-        ss_feat = ortho_subtract(ss_feat, c_feat_mean, on_last_n_dims=2)
+        #ss_feat = ortho_subtract(ss_feat, c_feat_mean, on_last_n_dims=2)
         # mc_feat is reconstructed from sc_feat_demean_s, so we demean it with s_feat_mean as well.
-        mc_feat = ortho_subtract(mc_feat, s_feat_mean, on_last_n_dims=2)
+        #mc_feat = ortho_subtract(mc_feat, s_feat_mean, on_last_n_dims=2)
 
         # Cut off the gradients into the subj single instance.
         # In fact, We don't need to cut off sc_rep_feat, mc_feat, 

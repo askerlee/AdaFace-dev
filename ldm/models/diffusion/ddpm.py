@@ -83,8 +83,8 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.8,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
-                 recon_subj_mb_suppress_loss_weights=[0.02, 0],
-                 comp_sc_subj_mb_suppress_loss_weight=0.01,
+                 recon_subj_mb_suppress_loss_weights=[0.2, 0.2],
+                 comp_sc_subj_mb_suppress_loss_weight=0.2,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -1980,14 +1980,14 @@ class LatentDiffusion(DDPM):
         ###### begin of do_comp_feat_distill ######
         elif self.iter_flags['do_comp_feat_distill']:
             # if clip_align_loss_weight > 0, compos_partial_prompt is used for CLIP guidance loss.
-            loss_comp_feat_distill_loss = \
+            loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
                                                  extra_info['compos_partial_prompt'],
                                                  fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
                                                  BLOCK_SIZE, loss_dict, session_prefix)
-            loss += loss_comp_feat_distill_loss
+            loss += loss_comp_feat_distill
         ##### end of do_comp_feat_distill #####
 
         else:
@@ -2197,9 +2197,8 @@ class LatentDiffusion(DDPM):
         # loss_recon: ~0.1
         loss_normal_recon += loss_recon
 
-        # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.01 -> 2e-3, 
-        # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/60 of recon loss.
-        # If recon_on_comp_prompt, recon_subj_mb_suppress_loss_weight = 0. Otherwise, 0.02.
+        # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.2 -> 0.04, 
+        # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/3 of recon loss.
         recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[self.iter_flags['recon_on_comp_prompt']]
         loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
 
@@ -2590,8 +2589,8 @@ class LatentDiffusion(DDPM):
         # do subj_comp_rep_distill to discourage it.
         # 0.22 is borderline large, and 0.25 is too large.
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
-        rep_dist_fg_bounds              = (0.19, 0.22, 0.25)
-        loss_comp_feat_distill_loss     = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
+        rep_dist_fg_bounds      = (0.19, 0.22, 0.25)
+        loss_comp_feat_distill  = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
@@ -2639,10 +2638,10 @@ class LatentDiffusion(DDPM):
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
                 arcface_align_comp_loss_scale = self.comp_distill_iter_gap
-                loss_comp_feat_distill_loss += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
-                # loss_comp_sc_subj_mb_suppress: ~0.6, comp_sc_subj_mb_suppress_loss_weight: 0, DISABLED.
-                # loss_comp_feat_distill_loss: 0.16, 0.75% of comp distillation loss.
-                loss_comp_feat_distill_loss += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
+                loss_comp_feat_distill += loss_arcface_align_comp * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
+                # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
+                # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
+                loss_comp_feat_distill += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
                 if sc_fg_mask is not None:
                     # chunk() returns 4 views of fg_mask, so we can copy_ to update the original fg_mask.
                     fg_mask.chunk(4)[1].copy_(sc_fg_mask)
@@ -2748,13 +2747,13 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
             # loss_comp_fg_bg_preserve: 2~3.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
-            loss_comp_feat_distill_loss += loss_comp_fg_bg_preserve
+            loss_comp_feat_distill += loss_comp_fg_bg_preserve
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
         # #subj_attn_norm_distill_loss_weight: 0.1 -> 0.001~0.003.
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
-            loss_comp_feat_distill_loss += loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
+            loss_comp_feat_distill += loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
 
         if loss_comp_rep_distill_subj_attn > 0:
             loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
@@ -2775,7 +2774,7 @@ class LatentDiffusion(DDPM):
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
-            loss_comp_feat_distill_loss += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
+            loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
                                             loss_comp_rep_distill_nonsubj_k) * loss_subj_comp_rep_distill_scale
             
         # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
@@ -2785,20 +2784,20 @@ class LatentDiffusion(DDPM):
             # Currently the compos_partial_prompt only contains one prompt, i.e., BLOCK_SIZE = 1.
             loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(compos_partial_prompt[0], sc_x_recon_pixels)
             loss_dict.update({f'{session_prefix}/clip_align': loss_clip_align.item() })
-            loss_comp_feat_distill_loss += loss_clip_align * self.clip_align_loss_weight
+            loss_comp_feat_distill += loss_clip_align * self.clip_align_loss_weight
             print(f"Rank {self.trainer.global_rank} clip_align: {loss_clip_align.item():.3f}")
 
-        v_loss_comp_feat_distill_loss = loss_comp_feat_distill_loss.mean().detach().item()
-        if v_loss_comp_feat_distill_loss > 0:
-            loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill_loss})
-        # loss_comp_feat_distill_loss could be 0 when:
+        v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
+        if v_loss_comp_feat_distill > 0:
+            loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
+        # loss_comp_feat_distill could be 0 when:
         # 1. the original fg_mask is full of 1s, and 
         # 2. no face is detected in the subject-single or subject-comp instances.
         # Therefore, fg_mask is not updated with the detected face area => fg_mask is still full of 1s.
         # On one hand,       fg_mask is full of 1s -> loss_comp_fg_bg_preserve = 0.
         # On the other hand, sc_fg_mask is None    -> loss_subj_comp_rep_distill = 0.
 
-        return loss_comp_feat_distill_loss            
+        return loss_comp_feat_distill            
 
     def calc_comp_face_align_and_mb_suppress_losses(self, x_start, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
