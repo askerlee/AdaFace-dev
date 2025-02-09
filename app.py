@@ -323,22 +323,22 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 with gr.Column(scale=100):                
                     prompt = gr.Dropdown(label="Prompt",
                             info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
-                            value="portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
+                            value="highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
                             allow_custom_value=True,
                             choices=[
-                                    "portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                                    "portrait, walking on the beach, sunset, orange sky",
-                                    "portrait, in a white apron and chef hat, garnishing a gourmet dish",
-                                    "portrait, dancing pose among folks in a park, waving hands",
-                                    "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
-                                    "portrait, jedi wielding a lightsaber, star wars, eye level shot",
-                                    "portrait, night view of tokyo street, neon light",
-                                    "portrait, playing guitar on a boat, ocean waves",
-                                    "portrait, with a passion for reading, curled up with a book in a cozy nook near a window",
-                                    "portrait, celebrating chinese new year, fireworks",
-                                    "portrait, running pose in a park, eye level shot",
-                                    "portrait, in space suit, space helmet, walking on mars",
-                                    "portrait, in superman costume, the sky ablaze with hues of orange and purple"
+                                    "highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
+                                    "walking on the beach, sunset, orange sky",
+                                    "in a white apron and chef hat, garnishing a gourmet dish",
+                                    "dancing pose among folks in a park, waving hands",
+                                    "in iron man costume, the sky ablaze with hues of orange and purple",
+                                    "jedi wielding a lightsaber, star wars, eye level shot",
+                                    "night view of tokyo street, neon light",
+                                    "playing guitar on a boat, ocean waves",
+                                    "with a passion for reading, curled up with a book in a cozy nook near a window",
+                                    "celebrating chinese new year, fireworks",
+                                    "running pose in a park, eye level shot",
+                                    "in space suit, space helmet, walking on mars",
+                                    "in superman costume, the sky ablaze with hues of orange and purple"
                             ])
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
@@ -348,11 +348,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(
-                label="Nickname of Subject (optional; for naming saved images)", 
+                label="Nickname of Subject (optional; used to name saved images)", 
                 value="",
             )
             subj_name_sig2 = gr.Textbox(
-                label="Nickname of 2nd Subject (optional; for naming saved images)", 
+                label="Nickname of 2nd Subject (optional; used to name saved images)", 
                 value="",
                 visible=False,
             )
