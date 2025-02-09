@@ -2346,9 +2346,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
     # Set background features in sc_q_* and sc_feat_* to 0s to reduce noisy matching.
     # sc_q: [1, 1280, 961]. sc_fg_mask_2d: [1, 961] -> [1, 1, 961]
     if sc_fg_mask_2d is not None:
-        sc_q_demean_s    = sc_q_demean_s    * sc_fg_mask_2d.unsqueeze(1)
+        sc_bg_mask_2d    = 1 - sc_fg_mask_2d
+        sc_q_demean_s    = sc_q_demean_s    * sc_bg_mask_2d.unsqueeze(1)
+        sc_feat_demean_s = sc_feat_demean_s * sc_bg_mask_2d.unsqueeze(1)
         sc_q_demean_c    = sc_q_demean_c    * sc_fg_mask_2d.unsqueeze(1)
-        sc_feat_demean_s = sc_feat_demean_s * sc_fg_mask_2d.unsqueeze(1)
         sc_feat_demean_c = sc_feat_demean_c * sc_fg_mask_2d.unsqueeze(1)
 
     # sc_recon_ssfg_mc_feat_attn_agg: [1, 1280, N_fg + 961] 
@@ -2425,8 +2426,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # sc_feat_demean_c: [1, 1280, 961] -> [1, 961, 1280]
         sc_recon_feats_candidates = [ sc_recon_feats_avg[feat_name], sc_recon_feats_flow[feat_name] ]
         if feat_name == 'mc':
-            # Do 'sameloc' matching on mc, i.e., in addition to matching sc_recon_feats_* with ssfg features, 
-            # we also match sc_feat_demean_s with ssfg features.
+            # Do 'sameloc' matching on mc, i.e., in addition to matching sc_recon_feats_* with mc features, 
+            # we also match sc_feat_demean_s with mc features.
             sc_recon_feats_candidates.append(sc_feat_demean_s.permute(0, 2, 1))
 
         for i, sc_recon_feat in enumerate(sc_recon_feats_candidates):
