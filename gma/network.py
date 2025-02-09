@@ -211,9 +211,9 @@ class GMA(nn.Module):
         net_feat = torch.zeros(BS, hdim, H, W).to(fmap1.device)
         inp_feat = torch.zeros(BS, cdim, H, W).to(fmap1.device)
 
-        #with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
+        with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
             # attention is a uniform matrix, since inp_feat is all zeros.
-        attention = self.att(inp_feat)
+            attention = self.att(inp_feat)
                 
         # coords0 is always fixed as original coords.
         # coords1 is iteratively updated as coords0 + current estimated flow.
@@ -236,7 +236,7 @@ class GMA(nn.Module):
             corr = self.corr_fn(coords1)  
             flow = coords1 - coords0
             
-            #with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
+            with torch.amp.autocast('cuda', enabled=self.config.mixed_precision):
                 # net_feat: hidden features of SepConvGRU. 
                 # inp_feat: input  features to SepConvGRU.
                 # up_mask is scaled to 0.25 of original values.
@@ -244,7 +244,7 @@ class GMA(nn.Module):
                 # In the first few iterations, delta_flow.abs().max() could be 1.3 or 0.8. Later it becomes 0.2~0.3.
                 # attention is the intra-frame attention matrix of inp_feat. 
                 # It's only used to aggregate motion_features and form motion_features_global.
-            net_feat, up_mask, delta_flow = self.update_block(net_feat, inp_feat, corr, flow, attention)
+                net_feat, up_mask, delta_flow = self.update_block(net_feat, inp_feat, corr, flow, attention)
 
             # F(t+1) = F(t) + \Delta(t)
             coords1 = coords1 + delta_flow

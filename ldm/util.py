@@ -2270,13 +2270,9 @@ def reconstruct_feat_with_attn_aggregation(sc_feat, sc_to_ssfg_mc_prob):
 def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_feat, H, W, 
                                         ss_fg_mask_2d, small_motion_ignore_thres, 
                                         num_flow_est_iters=12):
-    # Set background features to 0s to reduce noisy matching.
-    # ss_q, sc_q: [1, 1280, 961]. ss_fg_mask_2d, sc_fg_mask_2d: [1, 961] -> [1, 1, 961]
     '''
     if ss_fg_mask_2d is not None:
         ss_q = ss_q * ss_fg_mask_2d.unsqueeze(1)
-    if sc_fg_mask_2d is not None:
-        sc_q = sc_q * sc_fg_mask_2d.unsqueeze(1)
     '''
 
     # If ss2sc_flow is not provided, estimate it using the flow model.
@@ -2294,7 +2290,8 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
             # so that the flow is not so smoothed.
             ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=3)
             # Ignore small motions which are noisy.
-            ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0
+            if small_motion_ignore_thres > 0:
+                ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0
 
     # Resize sc_feat to [1, *, H, W] and warp it using ss2sc_flow, 
     # then collapse the spatial dimensions.
@@ -2331,7 +2328,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
 def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_demean_s, sc_feat_demean_c,
                                  ss2sc_flow, mc2sc_flow, sc_to_ss_mc_prob, 
                                  sc_q_demean_s, sc_q_demean_c, ss_q, mc_q, 
-                                 H, W, ss_fg_mask_2d, small_motion_ignore_thres, 
+                                 H, W, ss_fg_mask_2d, sc_fg_mask_2d, small_motion_ignore_thres, 
                                  num_flow_est_iters, objective_name):
     sc_attns                    = {}
     sc_recon_feats_attn_agg     = {}
@@ -2345,6 +2342,15 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
     # sc_attns['ssfg'], sc_attns['mc'] are normalized across the sc-token dim, i.e., dim 1.
     # sc_attns['ssfg'].sum(dim=1) == [[1, 1, ..., 1]].
     sc_attns['ssfg'], sc_attns['mc'] = sc_to_ss_mc_prob[:, :, :N_fg], sc_to_ss_mc_prob[:, :, N_fg:]
+
+    # Set background features in sc_q_* and sc_feat_* to 0s to reduce noisy matching.
+    # sc_q: [1, 1280, 961]. sc_fg_mask_2d: [1, 961] -> [1, 1, 961]
+    if sc_fg_mask_2d is not None:
+        sc_q_demean_s    = sc_q_demean_s    * sc_fg_mask_2d.unsqueeze(1)
+        sc_q_demean_c    = sc_q_demean_c    * sc_fg_mask_2d.unsqueeze(1)
+        sc_feat_demean_s = sc_feat_demean_s * sc_fg_mask_2d.unsqueeze(1)
+        sc_feat_demean_c = sc_feat_demean_c * sc_fg_mask_2d.unsqueeze(1)
+
     # sc_recon_ssfg_mc_feat_attn_agg: [1, 1280, N_fg + 961] 
     # sc_recon_feat*['ssfg']: [1, 1280, N_fg] => [1, N_fg, 1280]
     sc_recon_feats_attn_agg['ssfg'] = reconstruct_feat_with_attn_aggregation(sc_feat_demean_c, sc_attns['ssfg'])
@@ -2361,7 +2367,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # and return the newly estimated ss2sc_flow.     
         sc_recon_feats_flow['ssfg'], ss2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q_demean_c, sc_feat_demean_c, 
-                                                H, W, ss_fg_mask_2d, small_motion_ignore_thres,
+                                                H, W, ss_fg_mask_2d, small_motion_ignore_thres=0,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W, mask_N=ss_fg_mask_N)
         '''
@@ -2383,7 +2389,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q_demean_s, sc_feat_demean_s,
-                                                H, W, None, small_motion_ignore_thres,
+                                                H, W, None, small_motion_ignore_thres=small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
         '''        
@@ -2764,7 +2770,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                          ss2sc_flow, mc2sc_flow,
                                          sc_to_ss_mc_prob, 
                                          sc_q_demean_s, sc_q_demean_c, ss_q, mc_q, 
-                                         H, W, ss_fg_mask_2d, 
+                                         H, W, ss_fg_mask_2d, sc_fg_mask_2d, 
                                          small_motion_ignore_thres, num_flow_est_iters, 
                                          objective_name=objective_name)
         

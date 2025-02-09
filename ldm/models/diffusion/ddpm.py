@@ -2613,6 +2613,7 @@ class LatentDiffusion(DDPM):
                 # However, fg_mask is on the latents, 64*64. 
                 # Therefore, we need to scale them down by 8.
                 ss_face_coords = pixel_bboxes_to_latent(ss_face_coords, ss_x_recon_pixels.shape[-1], fg_mask.shape[-1])
+                # Assign ss_fg_mask to a zero-initialized fg_mask.
                 # fg_mask is for the whole batch, and ss_face_coords is for the first block. 
                 # Therefore, the i index for fg_mask is zero-based, and we don't need to add an offset to it.
                 # len(ss_face_coords) == BLOCK_SIZE == len(fg_mask) // 4, usually 1.
@@ -2672,7 +2673,7 @@ class LatentDiffusion(DDPM):
             sc_fg_mask_percent = 0
 
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
-            # Only ss_fg_mask in (resized) fg_mask is used for calc_elastic_matching_loss().
+            # ss_fg_mask and sc_fg_mask are assigned into fg_mask, and are used for calc_elastic_matching_loss().
             loss_comp_fg_bg_preserve = \
                 calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
                                               fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
