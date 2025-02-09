@@ -2390,7 +2390,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, sc_feat_de
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
             reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, sc_q_demean_s, sc_feat_demean_s,
-                                                H, W, None, small_motion_ignore_thres=small_motion_ignore_thres,
+                                                H, W, None, small_motion_ignore_thres=0, #small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W, mask_N=None)
         '''        
