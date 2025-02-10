@@ -122,6 +122,7 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=3.,
+                 res_hidden_states_stopgrad=True,
                 ):
         
         super().__init__()
@@ -204,6 +205,7 @@ class DDPM(pl.LightningModule):
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
+        self.res_hidden_states_stopgrad = res_hidden_states_stopgrad
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -222,7 +224,8 @@ class DDPM(pl.LightningModule):
                                               subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
                                               # q_lora_updates_query = True: q is updated by the LoRA layer.
                                               # False: q is not updated, and an additional q2 is updated and returned.
-                                              q_lora_updates_query=self.q_lora_updates_query
+                                              q_lora_updates_query=self.q_lora_updates_query,
+                                              res_hidden_states_stopgrad=self.res_hidden_states_stopgrad
                                              )
             self.vae = self.model.pipeline.vae
 
@@ -3138,7 +3141,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                  use_ffn_lora=False, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 subj_attn_var_shrink_factor=2., q_lora_updates_query=True):
+                 subj_attn_var_shrink_factor=2., q_lora_updates_query=True,
+                 res_hidden_states_stopgrad=True):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         # diffusion_model is actually a UNet. Use this variable name to be 
@@ -3167,7 +3171,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Intercept the forward() method of the last 3 CA layers.
         for block in self.outfeat_capture_blocks:
             block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
-            block.res_hidden_states_stopgrad = True
+            block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
         
         for param in self.diffusion_model.parameters():
             param.requires_grad = False

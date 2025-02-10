@@ -449,6 +449,7 @@ def CrossAttnUpBlock2D_forward_capture(
 
         if res_hidden_states_stopgrad:
             res_hidden_states = res_hidden_states.detach()
+            
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
         if self.training and self.gradient_checkpointing:
