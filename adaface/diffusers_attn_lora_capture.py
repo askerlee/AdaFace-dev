@@ -433,6 +433,8 @@ def CrossAttnUpBlock2D_forward_capture(
             logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
 
     self.cached_outfeats = {}
+    res_hidden_states_stopgrad = getattr(self, "res_hidden_states_stopgrad", False)
+
     if hasattr(self, "capture_outfeats"):
         capture_outfeats = self.capture_outfeats
     else:
@@ -445,6 +447,8 @@ def CrossAttnUpBlock2D_forward_capture(
         res_hidden_states = res_hidden_states_tuple[-1]
         res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
+        if res_hidden_states_stopgrad:
+            res_hidden_states = res_hidden_states.detach()
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
         if self.training and self.gradient_checkpointing:
@@ -493,27 +497,6 @@ def CrossAttnUpBlock2D_forward_capture(
     if self.upsamplers is not None:
         for upsampler in self.upsamplers:
             hidden_states = upsampler(hidden_states, upsample_size)
-
-    return hidden_states
-
-
-def UNetMidBlock2D_forward_capture(self, hidden_states: torch.Tensor, temb: Optional[torch.Tensor] = None) -> torch.Tensor:
-    hidden_states = self.resnets[0](hidden_states, temb)
-
-    attn_i = 0
-    self.hidden_states = []
-    for attn, resnet in zip(self.attentions, self.resnets[1:]):
-        if attn is not None:
-            # self.hidden_states stores the pre-attention hidden states,
-            # which will be used in cross-attentions.
-            self.hidden_states.append(hidden_states)
-            # encoder_hidden_states = all_encoder_hidden_states[attn_i]
-            #cross_hidden_states = attn(hidden_states, encoder_hidden_states=encoder_hidden_states, 
-            #                           temb=temb)
-            hidden_states = attn(hidden_states, encoder_hidden_states=None, temb=temb)
-
-        hidden_states = resnet(hidden_states, temb)
-        attn_i += 1
 
     return hidden_states
 

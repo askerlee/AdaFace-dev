@@ -3167,6 +3167,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Intercept the forward() method of the last 3 CA layers.
         for block in self.outfeat_capture_blocks:
             block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
+            block.res_hidden_states_stopgrad = True
         
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
