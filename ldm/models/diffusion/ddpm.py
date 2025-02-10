@@ -83,7 +83,7 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.8,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
-                 recon_subj_mb_suppress_loss_weights=[0.2, 0.2],
+                 recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
