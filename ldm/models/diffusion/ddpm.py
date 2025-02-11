@@ -12,7 +12,7 @@ from ldm.c_adamw import AdamW as CAdamW
 from diffusers import UNet2DConditionModel, StableDiffusionPipeline, AutoencoderKL
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
-                        calc_prompt_emb_delta_loss, calc_comp_prompt_distill_loss, calc_recon_loss, \
+                        calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, save_grid, gen_smooth_grad_layer, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
@@ -108,9 +108,7 @@ class DDPM(pl.LightningModule):
                  recon_bg_pixel_weights=[0.05, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
-                 subj_attn_norm_distill_loss_weight=0,
                  arcface_align_loss_weight=5e-3,
-                 clip_align_loss_weight=0,          # Disabled. Cannot afford the extra RAM.
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  unet_uses_ffn_lora=True,
@@ -157,9 +155,6 @@ class DDPM(pl.LightningModule):
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
         self.recon_num_denoising_steps_range        = recon_num_denoising_steps_range
         self.comp_distill_denoising_steps_range     = comp_distill_denoising_steps_range
-        if clip_align_loss_weight > 0:
-            # Some compos iterations will take only 1 step to save RAM for the clip align loss.
-            self.comp_distill_denoising_steps_range[0] = 1
 
         # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
@@ -235,9 +230,7 @@ class DDPM(pl.LightningModule):
         self.adam_config = adam_config
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
-        self.subj_attn_norm_distill_loss_weight = subj_attn_norm_distill_loss_weight
         self.arcface_align_loss_weight = arcface_align_loss_weight
-        self.clip_align_loss_weight = clip_align_loss_weight
 
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
@@ -605,10 +598,6 @@ class LatentDiffusion(DDPM):
             self.arcface.train = disabled_train
         else:
             self.arcface = None
-
-        if self.clip_align_loss_weight > 0:
-            # clip_evator will be moved to GPU automatically.
-            self.clip_evator = CLIPEvaluator('cpu', torch.float16)
 
         self.generation_cache = []
         self.generation_cache_img_colors = []
@@ -1814,7 +1803,6 @@ class LatentDiffusion(DDPM):
             all_subj_indices_2b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_2b'],
                                                      self.embedding_manager.subject_string_dict)
-            # all_subj_indices_1b is used in calc_comp_subj_bg_preserve_loss() in calc_comp_prompt_distill_loss().
             all_subj_indices_1b = \
                 join_dict_of_indices_with_key_filter(extra_info['placeholder2indices_1b'],
                                                      self.embedding_manager.subject_string_dict)
@@ -1982,11 +1970,9 @@ class LatentDiffusion(DDPM):
 
         ###### begin of do_comp_feat_distill ######
         elif self.iter_flags['do_comp_feat_distill']:
-            # if clip_align_loss_weight > 0, compos_partial_prompt is used for CLIP guidance loss.
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
-                                                 extra_info['compos_partial_prompt'],
-                                                 fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+                                                 all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
                                                  BLOCK_SIZE, loss_dict, session_prefix)
@@ -2576,8 +2562,8 @@ class LatentDiffusion(DDPM):
 
     # x_start is the original input latent, without mask filling or priming denoising.
     # x_start is used to calculate the arcface loss.
-    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, compos_partial_prompt,
-                                    fg_mask, all_subj_indices_1b, all_subj_indices_2b, 
+    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, 
+                                    all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     BLOCK_SIZE, loss_dict, session_prefix):
         losses_comp_fg_bg_preserve          = []
@@ -2585,9 +2571,9 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_subj_attn   = []
         losses_comp_rep_distill_subj_k      = []
         losses_comp_rep_distill_nonsubj_k   = []
-        sc_fg_mask                      = None
-        is_sc_fg_mask_available         = False
-        sc_face_detected_at_step        = -1
+
+        ss_fg_mask, sc_fg_mask, ss_face_bboxes, sc_face_bboxes = None, None, None, None
+        sc_face_detected_at_step = -1
         # When sc_fg_mask_percent >= 0.19, we think the face is close to be too large and 
         # do subj_comp_rep_distill to discourage it.
         # 0.22 is borderline large, and 0.25 is too large.
@@ -2604,35 +2590,25 @@ class LatentDiffusion(DDPM):
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
             # bleed=4: remove 4 pixels from each side of the detected face area.
-            faces, failed_indices, ss_face_coords = \
+            faces, failed_indices, ss_face_bboxes = \
                 self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, bleed=4,
                                                    use_whole_image_if_no_face=False)
             if len(failed_indices) == 0:
-                # If there are no failed indices, then we replace fg_mask 
-                # with the detected face mask.
-                orig_mask = fg_mask
-                fg_mask = torch.zeros_like(fg_mask)
-                # ss_face_coords are coords on ss_x_recon_pixels, 512*512.
-                # However, fg_mask is on the latents, 64*64. 
-                # Therefore, we need to scale them down by 8.
-                ss_face_coords = pixel_bboxes_to_latent(ss_face_coords, ss_x_recon_pixels.shape[-1], fg_mask.shape[-1])
-                # Assign ss_fg_mask to a zero-initialized fg_mask.
-                # fg_mask is for the whole batch, and ss_face_coords is for the first block. 
-                # Therefore, the i index for fg_mask is zero-based, and we don't need to add an offset to it.
-                # len(ss_face_coords) == BLOCK_SIZE == len(fg_mask) // 4, usually 1.
-                for i in range(len(ss_face_coords)):
-                    x1, y1, x2, y2 = ss_face_coords[i]
-                    fg_mask[i, :, y1:y2, x1:x2] = 1
-                    print(f"Rank {self.trainer.global_rank} SS face coords {i}: {ss_face_coords[i]}.", end=' ')
-
-                overlap_mask = torch.logical_and(orig_mask, fg_mask).chunk(4)[0]
-                mask_overlap_ratio = overlap_mask.sum() / orig_mask.chunk(4)[0].sum()
-                print(f"Overlap ratio: {mask_overlap_ratio.item():.2f}")
-                loss_dict.update({f'{session_prefix}/mask_overlap_ratio': mask_overlap_ratio.item()})
+                # If there are no failed indices, then we get ss_fg_mask.
+                # NOTE: ss_face_bboxes are coords on ss_x_recon_pixels, 512*512.
+                # ss_fg_mask is on the latents, 64*64. So we scale ss_face_bboxes down by 8.
+                ss_face_bboxes = pixel_bboxes_to_latent(ss_face_bboxes, ss_x_recon_pixels.shape[-1], x_start.shape[-1])
+                ss_fg_mask = torch.zeros(BLOCK_SIZE, 1, x_start.shape[-2], x_start.shape[-1], device=x_start.device)
+                # ss_fg_mask is zero-initialized.
+                # len(ss_face_bboxes) == BLOCK_SIZE == len(sg_fg_mask), usually 1.
+                for i in range(len(ss_face_bboxes)):
+                    x1, y1, x2, y2 = ss_face_bboxes[i]
+                    ss_fg_mask[i, :, y1:y2, x1:x2] = 1
+                    print(f"Rank {self.trainer.global_rank} SS face coords {i}: {ss_face_bboxes[i]}.", end=' ')
 
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
-                loss_arcface_align_comp, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_face_detected_at_step = \
+                loss_arcface_align_comp, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_face_bboxes, sc_face_detected_at_step = \
                     self.calc_comp_face_align_and_mb_suppress_losses(x_start, x_recons, ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix)
                 # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
@@ -2645,22 +2621,11 @@ class LatentDiffusion(DDPM):
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
                 loss_comp_feat_distill += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
-                if sc_fg_mask is not None:
-                    # chunk() returns 4 views of fg_mask, so we can copy_ to update the original fg_mask.
-                    fg_mask.chunk(4)[1].copy_(sc_fg_mask)
-                    is_sc_fg_mask_available = True
-                # Otherwise, sc_fg_mask is None, fg_mask[1] is all 0s (initialized above before assigning the sc fg mask),
-                # and apparently we cannot use it as the face mask, so is_sc_fg_mask_available is False.
-                # NOTE: we have assigned the face mask of the subject-single instance to be the detected face area.
-                # So fg_mask[0] is still meaningful.
 
-        # Otherwise, the input fg_mask only contains the subject face area of the subject-single instance.
-        # We can still calc_comp_prompt_distill_loss(), but loss_comp_fg_bg_preserve is less accurate.
-    
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
                        'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
-                       'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 
+                       'loss_comp_subj_bg_attn_suppress', 
                        'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
                        'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight' ]
         
@@ -2706,19 +2671,21 @@ class LatentDiffusion(DDPM):
             # NOTE: Skip computing loss_comp_fg_bg_preserve before sc_face is detected.
             # If sc_face_detected_at_step == -1, then in all steps, sc_face is not detected.
             # So we skip all the steps.
-            if sc_face_detected_at_step == -1 or step_idx < sc_face_detected_at_step:
+            # We also skip loss_comp_fg_bg_preserve on all steps if ss_fg_mask is None, 
+            # i.e., no faces are detected in the subject-single instance. But this should be very rare.
+            if ss_fg_mask is None or sc_face_detected_at_step == -1 or step_idx < sc_face_detected_at_step:
                 continue
             
-            # ss_fg_mask and sc_fg_mask are assigned into fg_mask, and are used for calc_elastic_matching_loss().
+            # sc_fg_mask should always be available if step_idx >= sc_face_detected_at_step.
+            if sc_fg_mask is None:
+                continue
+
             loss_comp_fg_bg_preserve = \
-                calc_comp_prompt_distill_loss(self.flow_model, ca_layers_activations, 
-                                              fg_mask, is_sc_fg_mask_available, all_subj_indices_1b, BLOCK_SIZE, 
-                                              loss_dict, session_prefix,
-                                              # If outfeat uses cosine loss, the subject authenticity will be higher,
-                                              # but the composition will degrade. So we use L2 loss.
-                                              recon_feat_objectives=['attn_out', 'outfeat'],
-                                              recon_loss_discard_threses={'mc': 0.5, 'ssfg': 0.4},
-                                              do_feat_attn_pooling=False)
+                calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
+                                                self.flow_model, ca_layers_activations, 
+                                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                                                recon_feat_objectives=['attn_out', 'outfeat'],
+                                                recon_loss_discard_threses={'mc': 0.5, 'ssfg': 0.4})
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
             # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
@@ -2753,10 +2720,8 @@ class LatentDiffusion(DDPM):
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
-        # #subj_attn_norm_distill_loss_weight: 0.1 -> 0.001~0.003.
         if loss_subj_attn_norm_distill > 0:
             loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
-            loss_comp_feat_distill += loss_subj_attn_norm_distill * self.subj_attn_norm_distill_loss_weight
 
         if loss_comp_rep_distill_subj_attn > 0:
             loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
@@ -2780,35 +2745,19 @@ class LatentDiffusion(DDPM):
             loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
                                             loss_comp_rep_distill_nonsubj_k) * loss_subj_comp_rep_distill_scale
             
-        # We only apply clip align loss when there's only one step of denoising. Otherwise there'll be OOM.
-        if self.clip_align_loss_weight > 0 and self.clip_evator is not None and len(x_recons) == 1:
-            sc_x_recon = x_recons[-1].chunk(4)[1]
-            sc_x_recon_pixels = self.decode_first_stage_with_grad(sc_x_recon)
-            # Currently the compos_partial_prompt only contains one prompt, i.e., BLOCK_SIZE = 1.
-            loss_clip_align = 0.4 - self.clip_evator.txt_to_img_similarity(compos_partial_prompt[0], sc_x_recon_pixels)
-            loss_dict.update({f'{session_prefix}/clip_align': loss_clip_align.item() })
-            loss_comp_feat_distill += loss_clip_align * self.clip_align_loss_weight
-            print(f"Rank {self.trainer.global_rank} clip_align: {loss_clip_align.item():.3f}")
-
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
         if v_loss_comp_feat_distill > 0:
             loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
-        # loss_comp_feat_distill could be 0 when:
-        # 1. the original fg_mask is full of 1s, and 
-        # 2. no face is detected in the subject-single or subject-comp instances.
-        # Therefore, fg_mask is not updated with the detected face area => fg_mask is still full of 1s.
-        # On one hand,       fg_mask is full of 1s -> loss_comp_fg_bg_preserve = 0.
-        # On the other hand, sc_fg_mask is None    -> loss_subj_comp_rep_distill = 0.
-
         return loss_comp_feat_distill            
 
     def calc_comp_face_align_and_mb_suppress_losses(self, x_start, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
         # We cannot afford calculating loss_arcface_align_comp for > 1 steps. Otherwise, OOM.
         max_arcface_loss_calc_count = 1
-        arcface_loss_calc_count = 0
-        sc_face_detected_at_step = -1
-        sc_fg_mask = None
+        arcface_loss_calc_count     = 0
+        sc_fg_mask, sc_face_bboxes  = None, None
+        sc_face_detected_at_step    = -1
+
         loss_comp_sc_subj_mb_suppress = torch.tensor(0, device=x_start.device, dtype=x_start.dtype)
         loss_arcface_align_comp       = torch.tensor(0, device=x_start.device, dtype=x_start.dtype)
 
@@ -2829,10 +2778,10 @@ class LatentDiffusion(DDPM):
                 # x_start_ss and subj_comp_recon are latent images, [1, 4, 64, 64]. 
                 # They need to be decoded first.
                 # If no faces are detected in x_recon, loss_arcface_align_comp_step is 0, 
-                # and sc_face_coords is None.
+                # and sc_face_bboxes is None.
                 # NOTE: In the first iteration, sc_fg_mask is None, and it's fine.
                 
-                loss_arcface_align_comp_step, sc_face_coords = \
+                loss_arcface_align_comp_step, sc_face_bboxes = \
                     self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                 if loss_arcface_align_comp_step > 0:
@@ -2847,11 +2796,11 @@ class LatentDiffusion(DDPM):
                     if sc_fg_mask is None:
                         # sc_fg_mask: [1, 1, 64, 64].
                         sc_fg_mask = torch.zeros_like(x_start_ss[:, :1])
-                        # When loss_arcface_align_comp > 0, sc_face_coords is always not None.
-                        # sc_face_coords: [[22, 15, 36, 33]], already scaled down to 64*64.
+                        # When loss_arcface_align_comp > 0, sc_face_bboxes is always not None.
+                        # sc_face_bboxes: [[22, 15, 36, 33]], already scaled down to 64*64.
                         PAD = 1
-                        for i in range(len(sc_face_coords)):
-                            x1, y1, x2, y2 = sc_face_coords[i]
+                        for i in range(len(sc_face_bboxes)):
+                            x1, y1, x2, y2 = sc_face_bboxes[i]
                             H, W = x_start_ss.shape[-2:]
                             x1, y1, x2, y2 = max(x1-PAD, 0), max(y1-PAD, 0), min(x2+PAD, W), min(y2+PAD, H)
                             # Add 4 pixels (2*bleed that undoes the bleed and adds 2 extra pixels) to each side of 
@@ -2878,7 +2827,8 @@ class LatentDiffusion(DDPM):
                 loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / arcface_loss_calc_count
                 loss_dict.update({f'{session_prefix}/comp_sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
 
-        return loss_arcface_align_comp, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_face_detected_at_step
+        return loss_arcface_align_comp, loss_comp_sc_subj_mb_suppress, \
+               sc_fg_mask, sc_face_bboxes, sc_face_detected_at_step
     
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
