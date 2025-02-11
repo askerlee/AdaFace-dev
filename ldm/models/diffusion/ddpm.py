@@ -89,7 +89,7 @@ class DDPM(pl.LightningModule):
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
                  unet_distill_iter_gap=2,
-                 unet_distill_weight=8,
+                 unet_distill_weight=8, # Boost up the unet distillation loss by 8 times.
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
@@ -2037,7 +2037,10 @@ class LatentDiffusion(DDPM):
         # and less artificial.
         embs = F.dropout(embs, p=0.3, training=True)
         self_align_loss = (embs * embs).mean()
+        # self_align_loss.backward() won't cause gradient syncing between GPUs, 
+        # so we don't need to add self.trainer.model.no_sync() context here.
         self_align_loss.backward()
+            
         adv_grad = x_start.grad
         x_start.grad = None
         x_start.requires_grad = False
