@@ -129,12 +129,14 @@ class RetinaFaceClient(nn.Module):
 
     # Find facial areas of given image tensors and crop them.
     # images_ts: typically [BS, 3, 512, 512] from diffusion (could be any sizes).
-    # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), failed_indices, face_coords
+    # image_ts: [3, 512, 512].
+    # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), failed_inst_indices, face_bboxes
     def crop_faces(self, images_ts, out_size=(128, 128), T=20, bleed=0, 
                    use_whole_image_if_no_face=False):
-        face_crops      = []
-        failed_indices  = []
-        face_coords     = []
+        failed_inst_indices = []
+        fg_face_bboxes      = []
+        fg_face_crops       = []
+        bg_face_crops_flat  = []
     
         for i, image_ts in enumerate(images_ts):
             # [3, H, W] -> [H, W, 3]
@@ -147,16 +149,15 @@ class RetinaFaceClient(nn.Module):
             if len(faces) == 0:
                 if use_whole_image_if_no_face:
                     face_crop = image_ts
-                    face_coords.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
+                    face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
+                    fg_face_crops.append(face_crop)
+                    fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
                 else:
                     # No face detected
-                    failed_indices.append(i)
-                    face_coords.append((0, 0, 0, 0))
+                    failed_inst_indices.append(i)
                     continue
             else:
-                max_facial_area = 0
-                x_start_max = x_end_max = y_start_max = y_end_max = 0
-
+                face_bboxes = []
                 # Find the largest facial area
                 for face in faces:
                     x = face.x
@@ -169,35 +170,56 @@ class RetinaFaceClient(nn.Module):
                     x_start = max(0, int(x + bleed))
                     x_end   = min(image_ts.shape[2], int(x + w - bleed))
 
-                    if (y_end - y_start) * (x_end - x_start) > max_facial_area:
-                        max_facial_area = (y_end - y_start) * (x_end - x_start)
-                        y_start_max = y_start
-                        y_end_max   = y_end
-                        x_start_max = x_start
-                        x_end_max   = x_end
+                    if y_start + T >= y_end or x_start + T >= x_end:
+                        continue
+                    
+                    facial_area = (y_end - y_start) * (x_end - x_start)
+                    face_bboxes.append((facial_area, x_start, y_start, x_end, y_end))
 
-                if y_start_max + T >= y_end_max or x_start_max + T >= x_end_max:
-                    # After trimming bleed pixels, the face is < T, too small.
-                    failed_indices.append(i)
-                    face_coords.append((0, 0, 0, 0))
+                if len(face_bboxes) == 0:
+                    # After trimming bleed pixels, no faces are >= T. So this instance is failed.
+                    failed_inst_indices.append(i)
+                    face_bboxes.append((0, 0, 0, 0))
                     continue
 
-                # Extract detected face without alignment
-                # Crop on the input tensor, so that computation graph is preserved.
-                face_crop = image_ts[:, y_start_max:y_end_max, x_start_max:x_end_max]
-                face_coords.append((x_start_max, y_start_max, x_end_max, y_end_max))
+                # Sort face_bboxes by the facial area in descending order
+                face_bboxes = sorted(face_bboxes, key=lambda x: x[0], reverse=True)
+                # Remove the facial area from the tuple
+                face_bboxes = [x[1:] for x in face_bboxes]
 
-            # resize to (1, 3, 128, 128)
-            face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
-            face_crops.append(face_crop)
+                face_crops = []
+                for x_start, y_start, x_end, y_end in face_bboxes:
+                    # Extract detected face
+                    # Crop on the input tensor, so that computation graph is preserved.
+                    face_crop = image_ts[:, y_start:y_end, x_start:x_end]
+                    # resize to (1, 3, 128, 128)
+                    face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
+                    face_crops.append(face_crop)
+
+                # Only keep the coords of the largest face of each instance in fg_face_bboxes.
+                # We don't care about the coords of the bg faces, so don't store them.
+                fg_face_bboxes.append(face_bboxes[0])
+                # Keep all face crops in fg_face_crops.
+                fg_face_crops.append(face_crops[0])
+                bg_face_crops_flat.extend(face_crops[1:])
+
+        # BS = BS1 + BS2
+        # fg_face_bboxes: long tensor of [BS1, 4], BS1 <= BS
+        fg_face_bboxes      = torch.tensor(fg_face_bboxes, device=images_ts.device)
+        # failed_inst_indices: long tensor of [BS2], BS2 <= BS
+        failed_inst_indices = torch.tensor(failed_inst_indices, device=images_ts.device)
+
+        if len(fg_face_crops) == 0:
+            fg_face_crops = None
+        else:
+            # fg_face_crops: [BS1, 3, 128, 128], BS1 <= BS
+            fg_face_crops       = torch.cat(fg_face_crops, dim=0)
+
+        if len(bg_face_crops_flat) == 0:
+            bg_face_crops_flat = None
+        else:
+            # bg_face_crops_flat: [N, 3, 128, 128], N is the total number of bg face crops.
+            bg_face_crops_flat  = torch.cat(bg_face_crops_flat, dim=0)
         
-        # face_coords: long tensor of [BS, 4]
-        face_coords    = torch.tensor(face_coords,    device=images_ts.device)
-        failed_indices = torch.tensor(failed_indices, device=images_ts.device)
-        
-        if len(face_crops) == 0:
-            return None, failed_indices, face_coords
-        
-        face_crops = torch.cat(face_crops, dim=0)
-        return face_crops, failed_indices, face_coords
+        return fg_face_crops, bg_face_crops_flat, fg_face_bboxes, failed_inst_indices
 
