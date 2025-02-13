@@ -2617,13 +2617,15 @@ class LatentDiffusion(DDPM):
                 loss_comp_arcface_align, loss_comp_bg_faces_suppress, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
                     self.calc_comp_face_align_and_mb_suppress_losses(x_start, x_recons, ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix)
-                # loss_comp_arcface_align: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
-                # This loss is around 1/150 of recon/distill losses (0.1).
+                # loss_comp_arcface_align: 0.5-0.8. arcface_align_loss_weight: 5e-3 => 0.0025-0.004.
+                # This loss is around 1/300 of recon/distill losses (0.1).
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_comp_arcface_align.
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
                 arcface_align_comp_loss_scale = self.comp_distill_iter_gap
-                loss_comp_feat_distill += (loss_comp_arcface_align + loss_comp_bg_faces_suppress) \
+                # loss_comp_bg_faces_suppress is a mean L2 loss, only 0.01-0.02. *100 * 5e-3 => 0.005-0.01.
+                comp_bg_faces_suppress_scale  = 100
+                loss_comp_feat_distill += (loss_comp_arcface_align + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_scale) \
                                           * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
