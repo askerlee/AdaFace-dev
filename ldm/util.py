@@ -585,14 +585,14 @@ def distribute_embedding_to_M_tokens(prompt_embeddings, uncond_prompt_embeddings
     elif divide_scheme == 'none' or divide_scheme is None:
         D = 1
 
-
+    # Use only the first embedding of the multi-embedding token, and distribute it to the rest M-1 embeddings.
+    # The first embedding should be the sum of a multi-token cls embeddings.
     cls_embeddings = prompt_embeddings[:, placeholder_indices_N0]
     if emb_cfg > 1:
         uncond_embeddings = uncond_prompt_embeddings[:, placeholder_indices_N0]
+        # compel style CFG for cls_embeddings
         cls_embeddings = cls_embeddings * emb_cfg - uncond_embeddings * (emb_cfg - 1)
 
-    # Use only the first embedding of the multi-embedding token, and distribute it to the rest M-1 embeddings.
-    # The first embedding should be the sum of a multi-token cls embeddings.
     # Multiply the magnitude of the class embedding by emb_extra_boost to make the class better expressed.
     repl_prompt_embeddings[:, placeholder_indices_N] = cls_embeddings.repeat(1, M, 1) * emb_extra_boost / D
 
