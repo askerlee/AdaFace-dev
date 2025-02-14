@@ -63,19 +63,18 @@ all_composition_regexs    = all_action_regexs    + all_dress_regexs
 static_composition_regexs = static_action_regexs + static_appearances
 
 # Removed "eye level shot", "close-up view", "zoomed-in view"; sometimes it generates a huge eye.
-all_shots = [ "front view", "side view", "zoomed-out view", "full body view", "middle shot", "long shot", "wide shot" ]
+all_shots = [ "side view", "zoomed-out view", "full body view", "middle shot", "long shot", "wide shot" ]
 
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
                "sci-fi movie", "sculpture", "bronze sculpture", "abyss art", "blade runner style", "cyberpunk art",
                "synthwave", "pencil sketch", "pastel colors", "childrens book's illustration", "pixar movie",
-               "as a crochet figure", "as a 3d model", "closeup shot", "close view", "D&D sci-fi",
+               "as a crochet figure", "as a 3d model", "D&D sci-fi",
                "pop art", "portrait art", "watercolour painting", "chalk art", "concepture art", "bauhaus style", 
                "photorealistic painting", "surrealism painting", "impressionism", "expressionism", "abstract art", "minimalism",
                "low poly", "cubism style", "funko pop",
                "concept art", "realistic painting", "character design", "anime sketch", 
-               "trending in artstation", "vivid colors", "clear face", 
-               "semirealism", "octane render",
+               "trending in artstation", "vivid colors", "semirealism", "octane render",
                "unreal 5", "digital painting", "illustration",  "volumetric lighting", "dreamy", 
                "cinematic", "surreal", "pixelate", "macabre"
             ]
