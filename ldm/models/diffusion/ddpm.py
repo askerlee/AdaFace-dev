@@ -120,6 +120,7 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=3.,
+                 enable_freeu=True,
                  res_hidden_states_stopgrad=True,
                 ):
         
@@ -200,6 +201,7 @@ class DDPM(pl.LightningModule):
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
+        self.enable_freeu           = enable_freeu
         self.res_hidden_states_stopgrad = res_hidden_states_stopgrad
 
         if self.use_ldm_unet:
@@ -220,6 +222,7 @@ class DDPM(pl.LightningModule):
                                               # q_lora_updates_query = True: q is updated by the LoRA layer.
                                               # False: q is not updated, and an additional q2 is updated and returned.
                                               q_lora_updates_query=self.q_lora_updates_query,
+                                              enable_freeu=self.enable_freeu,
                                               res_hidden_states_stopgrad=self.res_hidden_states_stopgrad
                                              )
             self.vae = self.model.pipeline.vae
@@ -3124,9 +3127,14 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_ffn_lora=False, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
                  subj_attn_var_shrink_factor=2., q_lora_updates_query=True,
+                 enable_freeu=True,
                  res_hidden_states_stopgrad=True):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
+        if enable_freeu:
+            # Recommended settings on https://github.com/ChenyangSi/FreeU.
+            self.pipeline.enable_freeu(s1=0.9, s2=0.2, b1=1.5, b2=1.6)
+
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
         # By default, .eval() is called in the constructor to deactivate DropOut modules.

@@ -327,18 +327,18 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             allow_custom_value=True,
                             choices=[
                                     "highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                                    "walking on the beach, sunset, orange sky",
+                                    "walking on the beach, sunset, orange sky, full body view",
                                     "in a white apron and chef hat, garnishing a gourmet dish",
                                     "dancing pose among folks in a park, waving hands",
-                                    "in iron man costume, the sky ablaze with hues of orange and purple",
-                                    "jedi wielding a lightsaber, star wars, eye level shot",
-                                    "night view of tokyo street, neon light",
-                                    "playing guitar on a boat, ocean waves",
+                                    "in iron man costume, the sky ablaze with hues of orange and purple, full body view",
+                                    "jedi wielding a lightsaber, star wars, eye level shot, full body view",
+                                    "night view of tokyo street, neon light, full body view",
+                                    "playing guitar on a boat, ocean waves, full body view",
                                     "with a passion for reading, curled up with a book in a cozy nook near a window",
-                                    "celebrating chinese new year, fireworks",
-                                    "running pose in a park, eye level shot",
-                                    "in space suit, space helmet, walking on mars",
-                                    "in superman costume, the sky ablaze with hues of orange and purple"
+                                    "celebrating chinese new year, fireworks, full body view",
+                                    "running pose in a park, full body view",
+                                    "in space suit, space helmet, walking on mars, full body view",
+                                    "in superman costume, the sky ablaze with hues of orange and purple, full body view"
                             ])
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 

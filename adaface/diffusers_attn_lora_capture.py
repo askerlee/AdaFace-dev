@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from typing import Callable, List, Optional, Tuple, Union, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
+from diffusers.utils.torch_utils import apply_freeu
 from peft import LoraConfig, get_peft_model
 import peft.tuners.lora as peft_lora
 from peft.tuners.lora.dora import DoraLinearLayer
@@ -432,6 +433,13 @@ def CrossAttnUpBlock2D_forward_capture(
         if cross_attention_kwargs.get("scale", None) is not None:
             logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
 
+    is_freeu_enabled = (
+        getattr(self, "s1", None)
+        and getattr(self, "s2", None)
+        and getattr(self, "b1", None)
+        and getattr(self, "b2", None)
+    )
+
     self.cached_outfeats = {}
     res_hidden_states_stopgrad = getattr(self, "res_hidden_states_stopgrad", False)
 
@@ -449,7 +457,19 @@ def CrossAttnUpBlock2D_forward_capture(
 
         if res_hidden_states_stopgrad:
             res_hidden_states = res_hidden_states.detach()
-            
+
+        # FreeU: Only operate on the first two stages
+        if is_freeu_enabled:
+            hidden_states, res_hidden_states = apply_freeu(
+                self.resolution_idx,
+                hidden_states,
+                res_hidden_states,
+                s1=self.s1,
+                s2=self.s2,
+                b1=self.b1,
+                b2=self.b2,
+            )
+
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
         if self.training and self.gradient_checkpointing:
