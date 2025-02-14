@@ -1355,12 +1355,25 @@ class LatentDiffusion(DDPM):
             if placeholder2indices_1b[k] is None:
                 continue
 
+        # uncond_prompt_embeddings: [1, 77, 768].
+        uncond_prompt_embeddings = self.uncond_context[0]
         # NOTE: if there are multiple subject tokens (e.g., 28 tokens), then only the first subject token
         # is aligned with the "class-token , , , ...". 
         # The rest 27 tokens are aligned with the embeddings of ", ".
-        # This misalignment is patched below by distributing the class embeddings to the consecutive 28 tokens.
-        cls_single_emb = distribute_embedding_to_M_tokens_by_dict(cls_single_emb, placeholder2indices_1b)
-        cls_comp_emb   = distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,   placeholder2indices_1b)
+        # So we patch this misalignment by distributing the class embeddings of one token 
+        # evenly to the 28 tokens.
+        # After patching, often the class "person" is not fully expressed in the intermediate latent images.
+        # Therefore we use two tricks to enhance its expression:
+        # emb_cfg = 2:         compel style CFG for embeddings, i.e., cond_emb * 2 - uncond_emb.
+        # emb_extra_boost = 2: increasing the embedding magnitude after distribution by 2.
+        cls_single_emb = \
+            distribute_embedding_to_M_tokens_by_dict(cls_single_emb, uncond_prompt_embeddings, 
+                                                     placeholder2indices_1b, divide_scheme='sqrt_M', 
+                                                     emb_cfg=2, emb_extra_boost=2)
+        cls_comp_emb   = \
+            distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,   uncond_prompt_embeddings, 
+                                                     placeholder2indices_1b, divide_scheme='sqrt_M', 
+                                                     emb_cfg=2, emb_extra_boost=2)
         
         extra_info['placeholder2indices_1b'] = placeholder2indices_1b
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b

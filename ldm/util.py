@@ -552,10 +552,11 @@ def rand_dropout(x, p=0.5):
         return x
     
 # Distribute an embedding to M positions, each with sqrt(M) fraction of the original embedding.
-# text_embedding: [B, N, D]
-def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divide_scheme='sqrt_M'):
+# prompt_embeddings: [B, N, D]
+def distribute_embedding_to_M_tokens(prompt_embeddings, uncond_prompt_embeddings, placeholder_indices_N, 
+                                     divide_scheme='sqrt_M', emb_cfg=2, emb_extra_boost=2):
     if placeholder_indices_N is None:
-        return text_embedding
+        return prompt_embeddings
     
     # In a do_teacher_filter iteration, placeholder_indices_N may consist of the indices of 2 instances.
     # So we need to deduplicate them first.
@@ -563,16 +564,16 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     M = len(placeholder_indices_N)
     # num_vectors_per_subj_token = 1. No patching is needed.
     if M == 1:
-        return text_embedding
+        return prompt_embeddings
     
     # Location of the first embedding in a multi-embedding token.
     placeholder_indices_N0 = placeholder_indices_N[:1]
-    # text_embedding, repl_text_embedding: [16, 77, 768].
+    # prompt_embeddings, repl_prompt_embeddings: [16, 77, 768].
     # Use (:, placeholder_indices_N) as index, so that we can index all 16 embeddings at the same time.
-    repl_mask = torch.zeros_like(text_embedding)
+    repl_mask = torch.zeros_like(prompt_embeddings)
     # Almost 0 everywhere, except those corresponding to the multi-embedding token.
     repl_mask[:, placeholder_indices_N] = 1
-    repl_text_embedding = torch.zeros_like(text_embedding)
+    repl_prompt_embeddings = torch.zeros_like(prompt_embeddings)
     # Almost 0 everywhere, except being the class embedding at locations of the multi-embedding token.
     # Repeat M times the class embedding (corresponding to the subject embedding 
     # "z" at placeholder_indices_N0); 
@@ -584,18 +585,26 @@ def distribute_embedding_to_M_tokens(text_embedding, placeholder_indices_N, divi
     elif divide_scheme == 'none' or divide_scheme is None:
         D = 1
 
+
+    cls_embeddings = prompt_embeddings[:, placeholder_indices_N0]
+    if emb_cfg > 1:
+        uncond_embeddings = uncond_prompt_embeddings[:, placeholder_indices_N0]
+        cls_embeddings = cls_embeddings * emb_cfg - uncond_embeddings * (emb_cfg - 1)
+
     # Use only the first embedding of the multi-embedding token, and distribute it to the rest M-1 embeddings.
     # The first embedding should be the sum of a multi-token cls embeddings.
-    repl_text_embedding[:, placeholder_indices_N] = text_embedding[:, placeholder_indices_N0].repeat(1, M, 1) / D
+    # Multiply the magnitude of the class embedding by emb_extra_boost to make the class better expressed.
+    repl_prompt_embeddings[:, placeholder_indices_N] = cls_embeddings.repeat(1, M, 1) * emb_extra_boost / D
 
     # Keep the embeddings at almost everywhere, but only replace the embeddings at placeholder_indices_N.
     # Directly replacing by slicing with placeholder_indices_N will cause errors.
-    patched_text_embedding = text_embedding * (1 - repl_mask) + repl_text_embedding * repl_mask
-    return patched_text_embedding
+    patched_prompt_embeddings = prompt_embeddings * (1 - repl_mask) + repl_prompt_embeddings * repl_mask
+    return patched_prompt_embeddings
 
-def distribute_embedding_to_M_tokens_by_dict(text_embedding, placeholder_indices_dict, divide_scheme='sqrt_M'):
+def distribute_embedding_to_M_tokens_by_dict(prompt_embeddings, uncond_prompt_embeddings, placeholder_indices_dict, 
+                                             divide_scheme='sqrt_M', emb_cfg=2, emb_extra_boost=2):
     if placeholder_indices_dict is None:
-        return text_embedding
+        return prompt_embeddings
     
     for k in placeholder_indices_dict:
         if placeholder_indices_dict[k] is None:
@@ -603,9 +612,12 @@ def distribute_embedding_to_M_tokens_by_dict(text_embedding, placeholder_indices
 
         ph_indices_N  = placeholder_indices_dict[k][1]
         if len(ph_indices_N) > 1:
-            text_embedding = distribute_embedding_to_M_tokens(text_embedding, ph_indices_N, divide_scheme=divide_scheme)
+            prompt_embeddings = \
+                distribute_embedding_to_M_tokens(prompt_embeddings, uncond_prompt_embeddings, ph_indices_N, 
+                                                 divide_scheme=divide_scheme,
+                                                 emb_cfg=emb_cfg, emb_extra_boost=emb_extra_boost)
 
-    return text_embedding
+    return prompt_embeddings
 
 def scan_cls_delta_strings(tokenized_text, placeholder_indices_1st,
                            subj_name_to_cls_delta_tokens, MAX_SEARCH_SPAN=5):
