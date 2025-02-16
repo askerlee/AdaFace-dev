@@ -439,14 +439,13 @@ def CrossAttnUpBlock2D_forward_capture(
         and getattr(self, "b1", None)
         and getattr(self, "b2", None)
     )
+    # By default, disable freeu on the last few CrossAttnUpBlock2D layers, 
+    # unless explicitly enabled during comp distill iterations.
+    is_freeu_enabled = getattr(self, 'enable_freeu', False) and is_freeu_enabled
 
     self.cached_outfeats = {}
-    res_hidden_states_stopgrad = getattr(self, "res_hidden_states_stopgrad", False)
-
-    if hasattr(self, "capture_outfeats"):
-        capture_outfeats = self.capture_outfeats
-    else:
-        capture_outfeats = False
+    res_hidden_states_stopgrad  = getattr(self, "res_hidden_states_stopgrad", False)
+    capture_outfeats            = getattr(self, "capture_outfeats",           False)
 
     layer_idx = 0
 
@@ -635,14 +634,16 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     return unet, ffn_lora_layers, ffn_opt_modules
 
 def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
-                               use_attn_lora, use_ffn_lora, capture_ca_activations, shrink_subj_attn=False):
+                               use_attn_lora, use_ffn_lora, capture_ca_activations, 
+                               outfeat_capture_blocks_enable_freeu, shrink_subj_attn=False):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
         attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_subj_attn, enable_lora=use_attn_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
     for block in outfeat_capture_blocks:
-        block.capture_outfeats = capture_ca_activations
+        block.capture_outfeats  = capture_ca_activations
+        block.enable_freeu      = outfeat_capture_blocks_enable_freeu
     # We no longer manipulate the lora_layer.scaling to disable a LoRA.
     # That method is slow and seems LoRA params are still optimized.
     # Instead we directly set the disable_adapters_ flag in the LoRA layers.

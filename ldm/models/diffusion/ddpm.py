@@ -98,14 +98,13 @@ class DDPM(pl.LightningModule):
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0,
-                 input_noise_perturb_std=0.05,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.2,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=4,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weights=[0.05, 0.0],
+                 recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
@@ -169,7 +168,6 @@ class DDPM(pl.LightningModule):
             self.p_unet_distill_uses_comp_prompt = 0
 
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
-        self.input_noise_perturb_std                = input_noise_perturb_std
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
@@ -794,9 +792,10 @@ class LatentDiffusion(DDPM):
                         'prompt_emb_mask':          copy.copy(self.embedding_manager.prompt_emb_mask),
                         'prompt_pad_mask':      copy.copy(self.embedding_manager.prompt_pad_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
-                        'capture_ca_activations':   False,
-                        'use_attn_lora':            False,
-                        'use_ffn_lora':             False,
+                        'capture_ca_activations':               False,
+                        'outfeat_capture_blocks_enable_freeu':  False,
+                        'use_attn_lora':                        False,
+                        'use_ffn_lora':                         False,
                      }
 
         c = (prompt_embeddings, cond_in, extra_info)
@@ -1028,6 +1027,7 @@ class LatentDiffusion(DDPM):
         # If do_comp_feat_distill, we repeat the instances in the batch, 
         # so that all instances are the same.
         if self.iter_flags['do_comp_feat_distill']:
+            self.iter_flags['same_subject_in_batch'] = True
             # Change the batch to have the (1 subject image) * BS strcture.
             # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
@@ -1035,9 +1035,13 @@ class LatentDiffusion(DDPM):
             batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask = \
                 select_and_repeat_instances(slice(0, 1), BS, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
                                             x_start, img_mask, fg_mask)
-            self.iter_flags['same_subject_in_batch'] = True
         else:
             self.iter_flags['same_subject_in_batch'] = False
+            if self.iter_flags['do_normal_recon']:
+                # Reduce the batch size to have only 2 instances.
+                batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask = \
+                    select_and_repeat_instances(slice(0, 2), 1, batch['subject_name'], batch["image_path"], batch["image_unnorm"], 
+                                                x_start, img_mask, fg_mask)
 
         # do_unet_distill and random() < unet_distill_iter_gap.
         # p_gen_rand_id_for_id2img: 0.4 if distilling on arc2face. 0.2 if distilling on consistentID,
@@ -1292,17 +1296,18 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_comp_feat_distill']:                        
             # For simplicity, BLOCK_SIZE is fixed at 1. So if ORIG_BS == 2, then BLOCK_SIZE = 1.
             BLOCK_SIZE = 1
-            # Only keep the first half of batched prompts to save RAM.
-            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, \
-            compos_partial_prompt, prompt_modifier = \
-                subj_single_prompts[:BLOCK_SIZE],   subj_comp_prompts[:BLOCK_SIZE], \
-                cls_single_prompts[:BLOCK_SIZE],    cls_comp_prompts[:BLOCK_SIZE], \
-                compos_partial_prompt[:BLOCK_SIZE], prompt_modifier[:BLOCK_SIZE]
         else:
             # Otherwise, do_prompt_emb_delta_reg.
             # Do not halve the batch. BLOCK_SIZE = ORIG_BS = 12.
             # 12 prompts will be fed into get_text_conditioning().
             BLOCK_SIZE = ORIG_BS
+
+        # Only keep the first BLOCK_SIZE of batched prompts.
+        subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, \
+        compos_partial_prompt, prompt_modifier, captions = \
+            select_and_repeat_instances(slice(0, BLOCK_SIZE), 1, 
+            subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts,
+            compos_partial_prompt, prompt_modifier, captions)
 
         # Repeat the compositional prompts, to further highlight the compositional features.
         # NOTE: the prompt_modifier is repeated at most once, no matter subj_rep_prompts_count.
@@ -1504,17 +1509,19 @@ class LatentDiffusion(DDPM):
                        shrink_subj_attn=False, subj_indices=None, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
-                       capture_ca_activations=False, use_attn_lora=False, use_ffn_lora=False):
+                       capture_ca_activations=False, outfeat_capture_blocks_enable_freeu=False,
+                       use_attn_lora=False, use_ffn_lora=False):
         
         x_noisy = self.q_sample(x_start, t, noise)
         ca_layers_activations = None
 
         extra_info = cond_context[2]
-        extra_info['capture_ca_activations'] = capture_ca_activations
-        extra_info['img_mask']               = img_mask
-        extra_info['shrink_subj_attn']       = shrink_subj_attn
+        extra_info['capture_ca_activations']              = capture_ca_activations
+        extra_info['outfeat_capture_blocks_enable_freeu'] = outfeat_capture_blocks_enable_freeu
+        extra_info['img_mask']                            = img_mask
+        extra_info['shrink_subj_attn']                    = shrink_subj_attn
         # subj_indices are not used if shrink_subj_attn is False.
-        extra_info['subj_indices']           = subj_indices
+        extra_info['subj_indices']                        = subj_indices
 
         # noise_pred is the predicted noise.
         # if not batch_part_has_grad, we save RAM by not storing the computation graph.
@@ -1543,15 +1550,15 @@ class LatentDiffusion(DDPM):
             extra_info_ss['shrink_subj_attn']   = shrink_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
-                                                      enable_grad=False, use_attn_lora=use_attn_lora,
-                                                      use_ffn_lora=use_ffn_lora)
+                                                    enable_grad=False, use_attn_lora=use_attn_lora,
+                                                    use_ffn_lora=use_ffn_lora)
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_subj_attn']   = shrink_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
-                                                      enable_grad=True,  use_attn_lora=use_attn_lora,
-                                                      use_ffn_lora=use_ffn_lora)
+                                                    enable_grad=True,  use_attn_lora=use_attn_lora,
+                                                    use_ffn_lora=use_ffn_lora)
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
             extra_info_ms = copy.copy(extra_info)
@@ -1573,8 +1580,8 @@ class LatentDiffusion(DDPM):
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
             noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
-                                                      enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
-                                                      use_ffn_lora=mc_uses_ffn_lora)
+                                                    enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
+                                                    use_ffn_lora=mc_uses_ffn_lora)
             
             extra_info_mc = copy.copy(extra_info)
             extra_info_mc['subj_indices']       = None
@@ -1582,8 +1589,8 @@ class LatentDiffusion(DDPM):
             cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
             # Never use attn LoRAs and ffn LoRAs on mc instances.
             noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
-                                                      enable_grad=False, use_attn_lora=False,
-                                                      use_ffn_lora=False)
+                                                    enable_grad=False, use_attn_lora=False,
+                                                    use_ffn_lora=False)
 
             noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
             extra_info = cond_context[2]
@@ -1607,7 +1614,9 @@ class LatentDiffusion(DDPM):
                 uncond_emb  = self.uncond_context[0].repeat(x_noisy.shape[0], 1, 1)
 
             uncond_prompt_in = self.uncond_context[1] * x_noisy.shape[0]
-            uncond_context = (uncond_emb, uncond_prompt_in, self.uncond_context[2])
+            uncond_extra_info = copy.copy(self.uncond_context[2])
+            uncond_extra_info['outfeat_capture_blocks_enable_freeu'] = outfeat_capture_blocks_enable_freeu
+            uncond_context = (uncond_emb, uncond_prompt_in, uncond_extra_info)
 
             # We never needs gradients on unconditional generation.
             with torch.no_grad():
@@ -1629,7 +1638,7 @@ class LatentDiffusion(DDPM):
 
     def recon_multistep_denoise(self, x_start, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, num_denoising_steps, 
-                                enable_unet_attn_lora, do_adv_attack, FACELOSS_BS, 
+                                enable_unet_attn_lora, do_adv_attack, DO_ADV_BS, 
                                 loss_dict, session_prefix):
 
         assert num_denoising_steps <= 10
@@ -1655,6 +1664,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=False)
             
@@ -1694,7 +1704,7 @@ class LatentDiffusion(DDPM):
                 # Doing adversarial attack on the input images seems to introduce high-frequency noise 
                 # to the whole image (not just the face area), so we only do it after the first denoise step.
                 if do_adv_attack:
-                    adv_grad = self.calc_arcface_adv_grad(x_start[:FACELOSS_BS], bleed=2)
+                    adv_grad = self.calc_arcface_adv_grad(x_start[:DO_ADV_BS], bleed=2)
                     self.adaface_adv_iters_count += 1
                     if adv_grad is not None:
                         # adv_grad_max: 1e-3
@@ -1702,26 +1712,26 @@ class LatentDiffusion(DDPM):
                         loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
                         # adv_grad_mean is always 4~5e-6.
                         # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
-                        faceloss_fg_mask = fg_mask[:FACELOSS_BS].repeat(1, 4, 1, 1)
+                        faceloss_fg_mask = fg_mask[:DO_ADV_BS].repeat(1, 4, 1, 1)
                         # adv_grad_fg_mean: 8~9e-6.
                         adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().item()
                         loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                         # adv_grad_mag: ~1e-4.
                         adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
-                        # recon_adv_mod_mag_range: [0.001, 0.005].
+                        # recon_adv_mod_mag_range: [0.001, 0.003].
                         recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
-                        # recon_adv_mod_mag: 0.001~0.005. adv_grad_scale: 10~50.
+                        # recon_adv_mod_mag: 0.001~0.003. adv_grad_scale: 4~10.
                         adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
                         loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
-                        # Cap the adv_grad_scale to 50, as we observe most adv_grad_scale are below 50.
+                        # Cap the adv_grad_scale to 10, as we observe most adv_grad_scale are below 10.
                         # adv_grad mean at fg area after scaling: 1e-3.
-                        adv_grad = adv_grad * min(adv_grad_scale, 50)
+                        adv_grad = adv_grad * min(adv_grad_scale, 10)
                         # x_start - lambda * adv_grad minimizes the face embedding magnitudes.
                         # We subtract adv_grad from noise, then after noise is mixed with x_start, 
                         # adv_grad is effectively subtracted from x_start, minimizing the face embedding magnitudes.
                         # We predict the updated noise to remain consistent with the training paradigm.
                         # Q: should we subtract adv_grad from x_start instead of noise? I'm not sure.
-                        noise[:FACELOSS_BS] -= adv_grad
+                        noise[:DO_ADV_BS] -= adv_grad
 
                         self.adaface_adv_success_iters_count += 1
                         # adaface_adv_success_rate is always close to 1, so we don't monitor it.
@@ -1734,7 +1744,7 @@ class LatentDiffusion(DDPM):
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_subj_attn=False,
-                                       cfg_scale=2.5, num_denoising_steps=3, num_nograd_steps=1):
+                                       cfg_scale=2.5, num_denoising_steps=3):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1764,24 +1774,23 @@ class LatentDiffusion(DDPM):
             22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
             20, 21, 22, 23]))
             '''
-            with torch.set_grad_enabled(i >= num_nograd_steps):
-                noise_pred, x_recon, ca_layers_activations = \
-                    self.guided_denoise(x_start, noise, t, cond_context,
-                                        uncond_emb, img_mask=None, 
-                                        shrink_subj_attn=shrink_subj_attn,
-                                        subj_indices=all_subj_indices_1b, 
-                                        batch_part_has_grad='subject-compos', 
-                                        subj_comp_distill_on_rep_prompts=True,
-                                        do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                        capture_ca_activations=True,
-                                        # Enable the attn lora in subject-compos batches, as long as 
-                                        # attn lora is globally enabled.
-                                        use_attn_lora=self.unet_uses_attn_lora,
-                                        use_ffn_lora=False)
-            
+            noise_pred, x_recon, ca_layers_activations = \
+                self.guided_denoise(x_start, noise, t, cond_context,
+                                    uncond_emb, img_mask=None, 
+                                    shrink_subj_attn=shrink_subj_attn,
+                                    subj_indices=all_subj_indices_1b, 
+                                    batch_part_has_grad='subject-compos', 
+                                    subj_comp_distill_on_rep_prompts=True,
+                                    do_pixel_recon=True, cfg_scale=cfg_scale, 
+                                    capture_ca_activations=True,
+                                    outfeat_capture_blocks_enable_freeu=True,
+                                    # Enable the attn lora in subject-compos batches, as long as 
+                                    # attn lora is globally enabled.
+                                    use_attn_lora=self.unet_uses_attn_lora,
+                                    use_ffn_lora=False)
+        
             noise_preds.append(noise_pred)
-            pred_x0 = x_recon
-            x_starts.append(pred_x0.detach())
+            x_starts.append(x_recon.detach())
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
@@ -1839,120 +1848,7 @@ class LatentDiffusion(DDPM):
 
         noise = torch.randn_like(x_start) 
 
-        # If do_comp_feat_distill, we prepare the attention activations 
-        # for computing distillation losses.
-        if self.iter_flags['do_comp_feat_distill']:
-            # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
-            # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
-            BLOCK_SIZE = 1
-            # cond_context contains 
-            #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
-            # But in order to do priming, we need cond_context_orig which contains
-            # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
-            # Therefore, we use extra_info['prompt_emb_4b_orig'] to get the old context.
-            cond_context_orig = (extra_info['prompt_emb_4b_orig'], cond_context[1], cond_context[2])
-            # x_start_maskfilled: transformed x_start, in which the fg area is scaled down from the input image,
-            # and the bg mask area filled with noise. Returned only for logging.
-            # x_start_primed: the primed (denoised) x_start_maskfilled, ready for denoising.
-            # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
-            # We return noise to make the noise_gt up-to-date, which is the recon objective.
-            # But noise_gt is probably not referred to in the following loss computations,
-            # since the current iteration is do_comp_feat_distill. We update it just in case.
-            # masks will still be used in the loss computation. So we update them as well.
-            # NOTE: x_start still contains valid face images, as it's unchanged after priming.
-            # Later it will be used for loss computation.
-            
-            # num_primed_denoising_steps iterates from 2 to 5, with equal probs.
-            num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 2
-
-            x_start_maskfilled, x_start_primed, noise, masks = \
-                self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
-                                                    (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
-            # Update masks.
-            img_mask, fg_mask = masks
-            x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
-            # Block 2 is the subject comp repeat (sc-repeat) instance.
-            # Make the sc-repeat and sc blocks use the same x_start, so that their output features
-            # are more aligned, and more effective for distillation.
-            x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
-
-            uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
-
-            # t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
-            t_midrear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
-                                      (BLOCK_SIZE,), device=x_start.device)
-            # Same t_mid for all instances.
-            t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
-
-            # comp_distill_denoising_steps_range: [3, 3].
-            # num_denoising_steps iterates among 2 ~ 3. We don't draw random numbers, 
-            # so that different ranks have the same num_denoising_steps,
-            # which might be faster for synchronization.
-            W = self.comp_distill_denoising_steps_range[1] - self.comp_distill_denoising_steps_range[0] + 1
-            num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
-            # num_nograd_steps: 0 or 1, 50% each.
-            num_nograd_steps = 0 #self.comp_iters_count % W
-            # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
-            # Same shrink_subj_attn for all denoising steps in a comp_distill_multistep_denoise call.
-            shrink_subj_attn = torch.rand(1) < self.p_shrink_subj_attn
-
-            # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
-            # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
-            # (img_mask is not used in the prompt-guided cross-attention layers).
-            # NOTE: We don't use img_mask in compositional iterations. Because in compositional iterations,
-            # the original images don't play a role, and the unet is supposed to generate the face from scratch.
-            # so img_mask doesn't match the generated face and is set to None).
-
-            # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
-            # noise_preds is not used for loss computation.
-            # x_recons[-1] will be used for arcface align loss computation.
-            noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-                self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
-                                                    uncond_emb=uncond_emb, 
-                                                    all_subj_indices_1b=all_subj_indices_1b,
-                                                    shrink_subj_attn=shrink_subj_attn,
-                                                    cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
-                                                    num_nograd_steps=num_nograd_steps)
-
-            # Skip results of the num_nograd_steps steps at the beginning of the compositional denoising iterations.
-            x_recons = x_recons[num_nograd_steps:]
-            ca_layers_activations_list = ca_layers_activations_list[num_nograd_steps:]
-
-            ts_1st = [ t[0].item() for t in ts ]
-            print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
-
-            # Log x_start, x_start_maskfilled (noisy and scaled version of the first image in the batch),
-            # x_start_primed (x_start_maskfilled denoised for a few steps), and the denoised images for diagnosis.
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # All of them are 1, indicating green.
-            x_start_ss = x_start[:1]
-            input_image = self.decode_first_stage(x_start_ss)
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # All of them are 1, indicating green.
-            log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
-            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=True)
-
-            x_start_maskfilled = x_start_maskfilled[[0]]
-            log_image_colors = torch.ones(x_start_maskfilled.shape[0], dtype=int, device=x_start.device)
-            x_start_maskfilled_decoded = self.decode_first_stage(x_start_maskfilled)
-            self.cache_and_log_generations(x_start_maskfilled_decoded, log_image_colors, do_normalize=True)
-
-            # NOTE: x_start_primed is primed with 0.3 subj embeddings and 0.7 cls embeddings. Therefore,
-            # the faces still don't look like the subject. What matters is that the background is compositional.
-            x_start_primed = x_start_primed.chunk(2)[0]
-            log_image_colors = torch.ones(x_start_primed.shape[0], dtype=int, device=x_start.device)
-            x_start_primed_decoded = self.decode_first_stage(x_start_primed)
-            self.cache_and_log_generations(x_start_primed_decoded, log_image_colors, do_normalize=True)
-            
-            for i, x_recon in enumerate(x_recons):
-                recon_images = self.decode_first_stage(x_recon)
-                # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-                # If there are multiple denoising steps, the output images are assigned different colors.
-                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * (i % 4)
-
-                self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
-
-        ###### Begin of loss computation. ######
+        ###### Begin of loss computation of the 3 types of iterations ######
         loss_dict = {}
         session_prefix = 'train' if self.training else 'val'
         loss = 0
@@ -2000,8 +1896,107 @@ class LatentDiffusion(DDPM):
 
         ###### begin of do_comp_feat_distill ######
         elif self.iter_flags['do_comp_feat_distill']:
+            # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
+            # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
+            BLOCK_SIZE = 1
+            # cond_context contains 
+            #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
+            # But in order to do priming, we need cond_context_orig which contains
+            # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
+            # Therefore, we use extra_info['prompt_emb_4b_orig'] to get the old context.
+            cond_context_orig = (extra_info['prompt_emb_4b_orig'], cond_context[1], cond_context[2])
+            # x_start_primed: the primed (denoised) x_start, ready for denoising.
+            # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
+            # We return noise to make the noise_gt up-to-date, which is the recon objective.
+            # But noise_gt is probably not referred to in the following loss computations,
+            # since the current iteration is do_comp_feat_distill. We update it just in case.
+            # masks will still be used in the loss computation. So we update them as well.
+            # NOTE: x_start still contains valid face images, as it's unchanged after priming.
+            # Later it will be used for loss computation.
+            
+            # num_primed_denoising_steps iterates from 2 to 5, with equal probs.
+            num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 2
+
+            x_start0 = x_start
+            x_start_primed, noise, masks = \
+                self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
+                                                    (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
+            # Update masks.
+            img_mask, fg_mask = masks
+            x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
+            # Block 2 is the subject comp repeat (sc-repeat) instance.
+            # Make the sc-repeat and sc blocks use the same x_start, so that their output features
+            # are more aligned, and more effective for distillation.
+            x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
+
+            uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
+
+            # t is randomly drawn from the middle rear 30% segment of the timesteps (noisy but not too noisy).
+            t_midrear = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+                                      (BLOCK_SIZE,), device=x_start.device)
+            # Same t_mid for all instances.
+            t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
+
+            # comp_distill_denoising_steps_range: [3, 3].
+            # num_denoising_steps iterates among 2 ~ 3. We don't draw random numbers, 
+            # so that different ranks have the same num_denoising_steps,
+            # which might be faster for synchronization.
+            W = self.comp_distill_denoising_steps_range[1] - self.comp_distill_denoising_steps_range[0] + 1
+            num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
+            # Enable shrink_subj_attn 50% of the time during comp distillation iterations.
+            # Same shrink_subj_attn for all denoising steps in a comp_distill_multistep_denoise call.
+            shrink_subj_attn = torch.rand(1) < self.p_shrink_subj_attn
+
+            # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
+            # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
+            # (img_mask is not used in the prompt-guided cross-attention layers).
+            # NOTE: We don't use img_mask in compositional iterations. Because in compositional iterations,
+            # the original images don't play a role, and the unet is supposed to generate the face from scratch.
+            # so img_mask doesn't match the generated face and is set to None).
+
+            # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
+            # noise_preds is not used for loss computation.
+            # x_recons[-1] will be used to detect faces.
+            # All x_recons with faces detected will be used for arcface align loss computation.
+            noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
+                self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
+                                                    uncond_emb=uncond_emb, 
+                                                    all_subj_indices_1b=all_subj_indices_1b,
+                                                    shrink_subj_attn=shrink_subj_attn,
+                                                    cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps)
+
+            ts_1st = [ t[0].item() for t in ts ]
+            print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
+
+            # Log x_start0 (augmented version of the input images),
+            # x_start_primed (pure noise denoised for a few steps), and the denoised images for diagnosis.
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # All of them are 1, indicating green.
+            x_start0_ss = x_start0[:BLOCK_SIZE]
+            input_image = self.decode_first_stage(x_start0_ss)
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # All of them are 1, indicating green.
+            log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
+            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=True)
+
+            # NOTE: x_start_primed is primed with 0.3 subj embeddings and 0.7 cls embeddings. Therefore,
+            # the faces still don't look like the subject. What matters is that the background is compositional.
+            x_start_primed = x_start_primed.chunk(2)[0]
+            log_image_colors = torch.ones(x_start_primed.shape[0], dtype=int, device=x_start.device)
+            x_start_primed_decoded = self.decode_first_stage(x_start_primed)
+            self.cache_and_log_generations(x_start_primed_decoded, log_image_colors, do_normalize=True)
+            
+            for i, x_recon in enumerate(x_recons):
+                recon_images = self.decode_first_stage(x_recon)
+                # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+                # If there are multiple denoising steps, the output images are assigned different colors.
+                log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * (i % 4)
+
+                self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+
+            # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
-                self.calc_comp_feat_distill_loss(x_start, x_recons, ca_layers_activations_list,
+                self.calc_comp_feat_distill_loss(x_start0_ss, x_recons, ca_layers_activations_list,
                                                  all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
@@ -2012,8 +2007,8 @@ class LatentDiffusion(DDPM):
         else:
             breakpoint()
 
-        if torch.isnan(loss) and self.trainer.global_rank == 0:
-            print('NaN loss detected.')
+        if (torch.isnan(loss) or torch.isinf(loss)) and self.trainer.global_rank == 0:
+            print('NaN/inf loss detected.')
             breakpoint()
 
         loss_dict.update({f'{session_prefix}/loss': loss.mean().detach().item() })
@@ -2031,16 +2026,16 @@ class LatentDiffusion(DDPM):
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon_gm)
 
-        # fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
-        loss_arcface_align, loss_bg_faces_suppress, fg_face_bboxes = \
+        # recon_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
+        loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, bleed=bleed,
                                                  suppress_bg_faces=True)
         loss_arcface_align      = loss_arcface_align.to(x_start.dtype)
         loss_bg_faces_suppress  = loss_bg_faces_suppress.to(x_start.dtype)
-        # Map the fg_face_bboxes from the pixel space to latent space (scale down by 8x).
-        # fg_face_bboxes is None if there are no faces detected in x_recon.
-        fg_face_bboxes = pixel_bboxes_to_latent(fg_face_bboxes, x_start_pixels.shape[-1], x_start.shape[-1])
-        return loss_arcface_align, loss_bg_faces_suppress, fg_face_bboxes
+        # Map the recon_fg_face_bboxes from the pixel space to latent space (scale down by 8x).
+        # recon_fg_face_bboxes is None if there are no faces detected in x_recon.
+        recon_fg_face_bboxes = pixel_bboxes_to_latent(recon_fg_face_bboxes, x_start_pixels.shape[-1], x_start.shape[-1])
+        return loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes
 
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
@@ -2094,17 +2089,18 @@ class LatentDiffusion(DDPM):
     def calc_normal_recon_loss(self, num_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
                                all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
+
         BLOCK_SIZE = x_start.shape[0]
-        # t are sampled from the 1/3 ~ 2/3 of the timesteps.
-        t = torch.randint(self.num_timesteps // 3, self.num_timesteps * 2 // 3, 
+        # The t at the first denoising step are sampled from the middle 0.5 ~ 0.8 of the timesteps.
+        # In the subsequent denoising steps, the timesteps become gradually earlier.
+        t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
                           (x_start.shape[0],), device=self.device).long()
-        # LDM VAE uses fp32, and we can only afford a BS=1.
+        # LDM VAE uses fp32, and we can only afford a DO_ADV_BS=1.
         if self.use_ldm_unet:
-            FACELOSS_BS = 1
+            DO_ADV_BS = 1
         else:
-            # diffusers VAE is fp16, more memory efficient. So we can afford a BS=3 or 4.
-            # But we still only use half of the batch size for face loss computation.
-            FACELOSS_BS = (x_start.shape[0] + 1) // 2
+            # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
+            DO_ADV_BS = min(x_start.shape[0], 2)
 
         if num_denoising_steps > 1 or self.iter_flags['recon_on_comp_prompt']:
             # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
@@ -2125,7 +2121,7 @@ class LatentDiffusion(DDPM):
 
         # Enable attn LoRAs on UNet 50% of the time during recon iterations.
         enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-        # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 3 recon iterations.
+        # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 3 recon iterations.
         # Doing adversarial attack on the input images seems to introduce high-frequency noise 
         # to the whole image (not just the face area), so we only do it after the first denoise step.
         do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
@@ -2142,8 +2138,8 @@ class LatentDiffusion(DDPM):
         # (img_mask is not used in the prompt-guided cross-attention layers).
         noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
-                                         cfg_scale, num_denoising_steps, enable_unet_attn_lora, do_adv_attack,
-                                         FACELOSS_BS, loss_dict, session_prefix)
+                                         cfg_scale, num_denoising_steps, enable_unet_attn_lora, 
+                                         do_adv_attack, DO_ADV_BS, loss_dict, session_prefix)
         
         losses_recon = []
         losses_recon_subj_mb_suppress = []
@@ -2154,35 +2150,33 @@ class LatentDiffusion(DDPM):
             noise, noise_pred, x_recon, ca_layers_activations = \
                 noises[i], noise_preds[i], x_recons[i], ca_layers_activations_list[i]
 
-            # **Objective 1**: Align the student predicted noise with the ground truth noise.
-
-            # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
-            # bg loss is given a tiny weight to suppress multi-face artifacts.
-            # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
-            # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
-            loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
-                calc_recon_and_suppress_losses(noise_pred, noise, ca_layers_activations,
-                                               all_subj_indices, img_mask, fg_mask,
-                                               recon_bg_pixel_weight, x_start.shape[0])
-            
-            losses_recon.append(loss_recon)
-            losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
-            losses_pred_l2.append(loss_pred_l2)
-
-            # Only do arcface_align_loss if i >= 1. 
-            # i >= 1 implies num_denoising_steps > 1, thus cfg_scale > 0. 
-            # Since x_recon has been done at least 2 denoising steps, with CFG enabled, 
-            # then the faces in x_recon are clearer, and the arcface_align_loss will add fewer artifacts.
-            if i >= 1 and self.arcface_align_loss_weight > 0 and (self.arcface is not None):
+            # Only compute loss_recon and loss_recon_subj_mb_suppress when faces are detected in x_recon.
+            # loss_arcface_align_recon > 0 implies there's a face detected in each instances in x_recon.
+            if self.arcface is not None:
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
                 # If no faces are detected in x_recon, loss_arcface_align is 0, and fg_face_bboxes is None.
                 # NOTE: In normal recon iters, we ignore loss_bg_faces_suppress, since bg faces are rare.
                 loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes = \
-                    self.calc_arcface_align_loss(x_start[:FACELOSS_BS], x_recon[:FACELOSS_BS])
+                    self.calc_arcface_align_loss(x_start, x_recon)
                 
-                losses_arcface_align_recon.append(loss_arcface_align_recon)
-            else:
-                losses_arcface_align_recon.append(torch.tensor(0.0, device=x_start.device))
+                if loss_arcface_align_recon > 0:
+                    losses_arcface_align_recon.append(loss_arcface_align_recon)
+
+                    # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
+                    # bg loss is given a tiny weight to suppress multi-face artifacts.
+                    # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
+                    # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
+                    # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
+                    # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
+                    # If img_mask = None, then blank pixels are regularized as bg pixels.
+                    loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
+                        calc_recon_and_suppress_losses(noise_pred, noise, ca_layers_activations,
+                                                       all_subj_indices, None, fg_mask,
+                                                       recon_bg_pixel_weight, x_start.shape[0])
+                    
+                    losses_recon.append(loss_recon)
+                    losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
+                    losses_pred_l2.append(loss_pred_l2)
 
             recon_images = self.decode_first_stage(x_recon)
             # log_image_colors: a list of 4 or 5, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
@@ -2190,57 +2184,48 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 + i + 1
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
-        loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
-        loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
-        loss_pred_l2 = torch.stack(losses_pred_l2).mean()
+        if len(losses_arcface_align_recon) > 0:
+            loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
+            loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
+            loss_pred_l2 = torch.stack(losses_pred_l2).mean()
 
-        losses_recon = torch.stack(losses_recon)
-        loss_recon   = losses_recon[0]
-        v_loss_recon = loss_recon.mean().detach().item()
+            losses_recon = torch.stack(losses_recon)
+            loss_recon   = losses_recon.mean()
+            v_loss_recon = loss_recon.detach().item()
 
-        # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
-        if loss_recon_subj_mb_suppress > 0:
-            loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
-        if self.iter_flags['recon_on_comp_prompt']:
-            loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
-        else:
-            loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
-
-        if num_denoising_steps > 1:
-            loss_recon2   = losses_recon[1:].mean()
-            v_loss_recon2 = loss_recon2.mean().detach().item()
+            # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
+            if loss_recon_subj_mb_suppress > 0:
+                loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
             if self.iter_flags['recon_on_comp_prompt']:
-                loss_dict.update({f'{session_prefix}/loss_recon_comp2': v_loss_recon2})
+                loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
             else:
-                loss_dict.update({f'{session_prefix}/loss_recon2': v_loss_recon2})
+                loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+
+            ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
+            print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
+            # loss_recon: ~0.1
+            loss_normal_recon += loss_recon
+
+            if loss_arcface_align_recon > 0:
+                loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
+                print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
+                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.005 => 0.0025 - 0.004.
+                # This loss is around 1/30 of recon/distill losses (0.1).
+                loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
+
+            # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.2 -> 0.04, 
+            # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/3 of recon loss.
+            recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[self.iter_flags['recon_on_comp_prompt']]
+            loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
+
+            # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
+            loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+
+            v_loss_normal_recon = loss_normal_recon.mean().detach().item()
+            loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
+
         else:
-            loss_recon2 = 0
-
-        extra_recon_steps_discount = 0.5
-        # As the recon loss of the extra steps become larger and slightly less accurate, we discount them by 0.5.
-        loss_recon = (loss_recon + loss_recon2 * extra_recon_steps_discount) / (1 + extra_recon_steps_discount)
-        # loss_recon: ~0.1
-        loss_normal_recon += loss_recon
-
-        # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.2 -> 0.04, 
-        # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/3 of recon loss.
-        recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[self.iter_flags['recon_on_comp_prompt']]
-        loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
-
-        # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
-        loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
-        ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
-        print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
-
-        v_loss_normal_recon = loss_normal_recon.mean().detach().item()
-        loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
-
-        if loss_arcface_align_recon > 0:
-            loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
-            print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
-            # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
-            # This loss is around 1/5 of recon/distill losses (0.03).
-            loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
+            loss_normal_recon = torch.tensor(0.0, device=x_start.device)
 
         return loss_normal_recon
 
@@ -2385,6 +2370,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
+                                    outfeat_capture_blocks_enable_freeu=True,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -2402,10 +2388,7 @@ class LatentDiffusion(DDPM):
         losses_unet_distill = []
 
         for s in range(len(noise_preds)):
-            try:
-                noise_pred, noise_gt = noise_preds[s], noise_gts[s]
-            except:
-                breakpoint()
+            noise_pred, noise_gt = noise_preds[s], noise_gts[s]
 
             # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
@@ -2462,12 +2445,12 @@ class LatentDiffusion(DDPM):
         # Make the 4 instances in x_start, noise and t the same.
         x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
         noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        # In priming denoising steps, t is randomly drawn from the terminal 25% segment of the timesteps (very noisy).
-        t_rear = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 1), 
+        # In priming denoising steps, t is randomly drawn from the tail 20% segment of the timesteps 
+        # (highly noisy).
+        t_rear = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
                                 (BLOCK_SIZE,), device=x_start.device)
         t      = t_rear.repeat(4)
 
-        x_start_maskfilled = x_start
         subj_single_prompt_emb, subj_comp_prompt_emb, _, cls_comp_prompt_emb = prompt_emb.chunk(4)
         
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
@@ -2578,27 +2561,25 @@ class LatentDiffusion(DDPM):
         print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
                 f"subj-cls ensemble prime denoising {num_primed_denoising_steps} steps {all_t_list}")
         
-        # The last primed_x_start is the final denoised image (with the smallest t).
-        # So we use it as the x_start to be denoised by the 4-type prompt set.
-        # We need to let the subject and class instances use the same x_start. 
-        # Therefore, we repeat primed_x_starts[-1] twice.
-        x_start = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
 
         # Regenerate the noise, since the noise has been used above.
         # Ensure the two types of instances (single, comp) use different noise.
         # ** But subj and cls instances use the same noise.
         noise           = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
-        x_start_primed  = x_start
+        # The last primed_x_start is the final denoised image (with the smallest t).
+        # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
+        # We need to let the subject and class instances use the same x_start. 
+        # Therefore, we repeat primed_x_starts[-1] twice.
+        x_start_primed  = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
         # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
         # We return noise to make the noise_gt up-to-date, which is the recon objective.
         # But noise_gt is probably not referred to in the following loss computations,
         # since the current iteration is do_comp_feat_distill. We update it just in case.
         # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_start_maskfilled, x_start_primed, noise, masks
+        return x_start_primed, noise, masks
 
-    # x_start is the original input latent, without mask filling or priming denoising.
-    # x_start is used to calculate the arcface loss.
-    def calc_comp_feat_distill_loss(self, x_start, x_recons, ca_layers_activations_list, 
+    # x_start: the latent of the input image, without priming.
+    def calc_comp_feat_distill_loss(self, x_start_ss, x_recons, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     BLOCK_SIZE, loss_dict, session_prefix):
@@ -2607,6 +2588,9 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_subj_attn   = []
         losses_comp_rep_distill_subj_k      = []
         losses_comp_rep_distill_nonsubj_k   = []
+        device = x_start_ss.device
+        dtype  = x_start_ss.dtype
+        latent_shape = x_start_ss.shape
 
         ss_fg_mask, sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes = None, None, None, None
         sc_face_detected_at_step = -1
@@ -2615,7 +2599,7 @@ class LatentDiffusion(DDPM):
         # 0.22 is borderline large, and 0.25 is too large.
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
         rep_dist_fg_bounds      = (0.19, 0.22, 0.25)
-        loss_comp_feat_distill  = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
+        loss_comp_feat_distill  = torch.tensor(0., device=device, dtype=dtype)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
@@ -2633,8 +2617,8 @@ class LatentDiffusion(DDPM):
                 # If there are no failed indices, then we get ss_fg_mask.
                 # NOTE: ss_fg_face_bboxes are coords on ss_x_recon_pixels, 512*512.
                 # ss_fg_mask is on the latents, 64*64. So we scale ss_fg_face_bboxes down by 8.
-                ss_fg_face_bboxes = pixel_bboxes_to_latent(ss_fg_face_bboxes, ss_x_recon_pixels.shape[-1], x_start.shape[-1])
-                ss_fg_mask = torch.zeros(BLOCK_SIZE, 1, x_start.shape[-2], x_start.shape[-1], device=x_start.device)
+                ss_fg_face_bboxes = pixel_bboxes_to_latent(ss_fg_face_bboxes, ss_x_recon_pixels.shape[-1], latent_shape[-1])
+                ss_fg_mask = torch.zeros(BLOCK_SIZE, 1, latent_shape[-2], latent_shape[-1], device=device)
                 # ss_fg_mask is zero-initialized.
                 # len(ss_fg_face_bboxes) == BLOCK_SIZE == len(sg_fg_mask), usually 1.
                 for i in range(len(ss_fg_face_bboxes)):
@@ -2645,18 +2629,17 @@ class LatentDiffusion(DDPM):
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
                 loss_comp_arcface_align, loss_comp_bg_faces_suppress, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
-                    self.calc_comp_face_align_and_mb_suppress_losses(x_start, x_recons, ca_layers_activations_list,
+                    self.calc_comp_face_align_and_mb_suppress_losses(x_start_ss, x_recons, ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix)
                 # loss_comp_arcface_align: 0.5-0.8. arcface_align_loss_weight: 5e-3 => 0.0025-0.004.
                 # This loss is around 1/300 of recon/distill losses (0.1).
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_comp_arcface_align.
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
-                arcface_align_comp_loss_scale = self.comp_distill_iter_gap
-                # loss_comp_bg_faces_suppress is a mean L2 loss, only 0.01-0.02. *100 * 5e-3 => 0.005-0.01.
-                comp_bg_faces_suppress_scale  = 100
+                # loss_comp_bg_faces_suppress is a mean L2 loss, only 0.01-0.02. *20 * 5e-3 => 0.001-0.002.
+                comp_bg_faces_suppress_scale = 20
                 loss_comp_feat_distill += (loss_comp_arcface_align + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_scale) \
-                                          * self.arcface_align_loss_weight * arcface_align_comp_loss_scale
+                                          * self.arcface_align_loss_weight
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
                 loss_comp_feat_distill += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
@@ -2699,9 +2682,10 @@ class LatentDiffusion(DDPM):
                 calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                 prompt_emb_mask_4b,    prompt_pad_mask_4b,
                                                 sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
+            
             if loss_comp_rep_distill_subj_attn == 0:
                 loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
-                    torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
+                    torch.tensor(0., device=device, dtype=dtype)
 
             losses_comp_rep_distill_subj_attn.append(loss_comp_rep_distill_subj_attn)
             losses_comp_rep_distill_subj_k.append(loss_comp_rep_distill_subj_k)
@@ -2750,7 +2734,7 @@ class LatentDiffusion(DDPM):
             loss_comp_fg_bg_preserve = torch.stack(losses_comp_fg_bg_preserve).mean()
         else:
             # Set all the losses to 0 if there's no step to calculate the losses.
-            loss_comp_fg_bg_preserve = torch.tensor(0., device=x_start.device, dtype=x_start.dtype)
+            loss_comp_fg_bg_preserve = torch.tensor(0., device=device, dtype=dtype)
             
         if loss_comp_fg_bg_preserve > 0:
             loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
@@ -2789,7 +2773,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
         return loss_comp_feat_distill            
 
-    def calc_comp_face_align_and_mb_suppress_losses(self, x_start, x_recons, ca_layers_activations_list,
+    def calc_comp_face_align_and_mb_suppress_losses(self, x_start_ss, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
         # We cannot afford calculating loss_comp_arcface_align for > 1 steps. Otherwise, OOM.
         max_arcface_align_loss_count = 1
@@ -2798,9 +2782,11 @@ class LatentDiffusion(DDPM):
         sc_fg_mask, sc_fg_face_bboxes  = None, None
         sc_face_detected_at_step     = -1
 
-        loss_comp_sc_subj_mb_suppress = torch.tensor(0, device=x_start.device, dtype=x_start.dtype)
-        loss_comp_arcface_align       = torch.tensor(0, device=x_start.device, dtype=x_start.dtype)
-        loss_comp_bg_faces_suppress   = torch.tensor(0, device=x_start.device, dtype=x_start.dtype)
+        # Don't initialize zero_losses as torch.zeros(3), otherwise the losses cannot do inplace addition.
+        zero_losses = [ torch.tensor(0., device=x_start_ss.device, dtype=x_start_ss.dtype) for _ in range(3) ]
+        loss_comp_sc_subj_mb_suppress = zero_losses[0]
+        loss_comp_arcface_align       = zero_losses[1]
+        loss_comp_bg_faces_suppress   = zero_losses[2]
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # Trying to calc arcface_align_loss from difficult to easy steps.
@@ -2810,11 +2796,11 @@ class LatentDiffusion(DDPM):
                 if sel_step == 0:
                     continue
                 x_recon  = x_recons[sel_step]
-                # iter_flags['do_comp_feat_distill'] is True, which guarantees that 
-                # there are no faceless input images. Thus, x_start[0] is always a valid face image.
-                x_start_ss       = x_start.chunk(4)[0]
-                # Only compute arcface_align_loss on the subj comp block, as 
-                # the subj single block was generated without gradient.
+                # We have checked that x_start_ss is always a valid face image.
+                # Align subj_comp_recon to x_start_ss.
+                # Only optimize subj comp instances w.r.t. arcface_align_loss. 
+                # Since the subj single instances were generated without gradient, 
+                # we cannot optimize them.
                 subj_comp_recon  = x_recon.chunk(4)[1]
                 # x_start_ss and subj_comp_recon are latent images, [1, 4, 64, 64]. 
                 # They need to be decoded first.
@@ -2836,13 +2822,13 @@ class LatentDiffusion(DDPM):
                     # Generate sc_fg_mask for the first time, based on the detected face area.
                     if sc_fg_mask is None:
                         # sc_fg_mask: [1, 1, 64, 64].
-                        sc_fg_mask = torch.zeros_like(x_start_ss[:, :1])
+                        sc_fg_mask = torch.zeros_like(subj_comp_recon[:, :1])
                         # When loss_comp_arcface_align > 0, sc_fg_face_bboxes is always not None.
                         # sc_fg_face_bboxes: [[22, 15, 36, 33]], already scaled down to 64*64.
                         PAD = 1
                         for i in range(len(sc_fg_face_bboxes)):
                             x1, y1, x2, y2 = sc_fg_face_bboxes[i]
-                            H, W = x_start_ss.shape[-2:]
+                            H, W = subj_comp_recon.shape[-2:]
                             x1, y1, x2, y2 = max(x1-PAD, 0), max(y1-PAD, 0), min(x2+PAD, W), min(y2+PAD, H)
                             # Add 4 pixels (2*bleed that undoes the bleed and adds 2 extra pixels) to each side of 
                             # the detected face area, to protect it from being suppressed.
@@ -3147,7 +3133,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
         if enable_freeu:
             # Recommended settings on https://github.com/ChenyangSi/FreeU.
-            self.pipeline.enable_freeu(s1=0.9, s2=0.2, b1=1.5, b2=1.6)
+            self.pipeline.enable_freeu(s1=0.6, s2=0.2, b1=1.5, b2=1.6)
 
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -3158,9 +3144,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # _DeviceDtypeModuleMixin class sets self.dtype = torch_dtype.
         self.to(torch_dtype)
 
-        self.use_attn_lora = use_attn_lora
-        self.use_ffn_lora  = use_ffn_lora
-        self.lora_rank = lora_rank
+        self.use_attn_lora  = use_attn_lora
+        self.use_ffn_lora   = use_ffn_lora
+        self.lora_rank      = lora_rank
 
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs, attn_opt_modules = \
@@ -3170,12 +3156,17 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                    subj_attn_var_shrink_factor=subj_attn_var_shrink_factor,
                                    q_lora_updates_query=q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
+
+        self.res_hidden_states_stopgrad_blocks = self.diffusion_model.up_blocks[1:]
+        for block in self.res_hidden_states_stopgrad_blocks:
+            block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
+            block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
+
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
         # Intercept the forward() method of the last 3 CA layers.
         for block in self.outfeat_capture_blocks:
             block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
-            block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
         
         for param in self.diffusion_model.parameters():
             param.requires_grad = False
@@ -3252,6 +3243,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # If use_attn_lora is set to False globally, then disable it in this call.
         use_attn_lora = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
         use_ffn_lora  = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
+        outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.
@@ -3263,7 +3255,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # in self.attn_capture_procs.
         # use_ffn_lora is only applied to layers in self.ffn_lora_layers.
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   use_attn_lora, use_ffn_lora, capture_ca_activations, shrink_subj_attn)
+                                   use_attn_lora, use_ffn_lora, capture_ca_activations, 
+                                   outfeat_capture_blocks_enable_freeu, shrink_subj_attn)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3291,7 +3284,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.        
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   False, False, False)
+                                   False, False, False, False)
 
         out = out.to(out_dtype)
         return out

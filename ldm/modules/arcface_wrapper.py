@@ -96,13 +96,13 @@ class ArcFaceWrapper(nn.Module):
                                     use_whole_image_if_no_face=use_whole_image_if_no_face, 
                                     enable_grad=True)
         
-        zero_loss = torch.tensor(0.0, device=ref_images.device)
+        zero_losses = [ torch.tensor(0., dtype=ref_images.dtype, device=ref_images.device) for _ in range(2) ]
         if len(ref_failed_inst_indices) > 0:
             print(f"Failed to detect faces in ref_images-{ref_failed_inst_indices}")
-            return zero_loss, zero_loss, None
+            return zero_losses[0], zero_losses[1], None
         if len(aligned_failed_inst_indices) > 0:
             print(f"Failed to detect faces in aligned_images-{aligned_failed_inst_indices}")
-            return zero_loss, zero_loss, None
+            return zero_losses[0], zero_losses[1], None
 
         # If the numbers of instances in ref_fg_faces_emb and aligned_fg_faces_emb are different, then there's only one ref image, 
         # and multiple aligned images of the same person.
@@ -122,6 +122,6 @@ class ArcFaceWrapper(nn.Module):
             if suppress_bg_faces and aligned_bg_faces_emb is None:
                 print("loss_bg_faces_suppress = 0. No background faces detected in aligned_images. ")
 
-            loss_bg_faces_suppress = zero_loss
+            loss_bg_faces_suppress = zero_losses[0]
 
         return loss_arcface_align, loss_bg_faces_suppress, aligned_fg_face_bboxes
