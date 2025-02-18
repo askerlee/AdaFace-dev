@@ -181,6 +181,7 @@ class DDPM(pl.LightningModule):
         self.normal_recon_iters_count                = 0
         self.unet_distill_iters_count                = 0
         self.comp_iters_face_detected_count          = 0
+        self.comp_iters_bg_has_face_count       = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
         self.adaface_adv_success_iters_count         = 0
@@ -2017,12 +2018,9 @@ class LatentDiffusion(DDPM):
     def calc_arcface_align_loss(self, x_start, x_recon, bleed=2):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
-        grad_smoother = gen_smooth_grad_layer(kernel_size=1)
         x_start_pixels = self.decode_first_stage(x_start)
-        # subj-comp instance. 
-        x_recon_gm = grad_smoother(x_recon)
         # NOTE: use the with_grad version of decode_first_stage. Otherwise no effect.
-        subj_recon_pixels = self.decode_first_stage_with_grad(x_recon_gm)
+        subj_recon_pixels = self.decode_first_stage_with_grad(x_recon)
 
         # recon_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
         loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes = \
@@ -2037,12 +2035,9 @@ class LatentDiffusion(DDPM):
 
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
-        grad_smoother = gen_smooth_grad_layer(kernel_size=1)
-        x_start_gm = grad_smoother(x_start)
-
         # NOTE: To avoid horrible adv_grad artifacts in the background, we should use mask here to separate 
         # fg and bg when decode(). However, diffusers vae doesn't support mask, so we should avoid do_adv_attack. 
-        orig_image = self.decode_first_stage_with_grad(x_start_gm)
+        orig_image = self.decode_first_stage_with_grad(x_start)
         # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
         # so such faces are really small.
         face_embs, _, fg_face_bboxes, failed_inst_indices = \
@@ -2153,7 +2148,12 @@ class LatentDiffusion(DDPM):
             if self.arcface is not None:
                 # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
                 # If no faces are detected in x_recon, loss_arcface_align is 0, and fg_face_bboxes is None.
-                # NOTE: In normal recon iters, we ignore loss_bg_faces_suppress, since bg faces are rare.
+                # NOTE: In normal recon iters, we ignore loss_bg_faces_suppress, 
+                # since bg faces in recon iters are rare.
+                # If there is no face detected in any of the instances, then loss_arcface_align_recon is 0,
+                # and recon loss is skipped. 
+                # TODO: Ideally, we should still compute the recon loss on the "good" instances 
+                # with face detected. But it's a bit tricky to implement.
                 loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes = \
                     self.calc_arcface_align_loss(x_start, x_recon)
                 
@@ -2642,6 +2642,11 @@ class LatentDiffusion(DDPM):
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
                 loss_comp_feat_distill += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
+
+                if loss_comp_bg_faces_suppress > 0:
+                    self.comp_iters_bg_has_face_count += 1
+                    comp_iters_bg_has_face_frac = self.comp_iters_bg_has_face_count / self.comp_iters_count
+                    loss_dict.update({f'{session_prefix}/comp_iters_bg_has_face_frac': comp_iters_bg_has_face_frac})
 
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
