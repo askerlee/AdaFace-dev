@@ -135,12 +135,8 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
-    if enhance_face and "face portrait" not in prompt:
-        if "portrait" in prompt:
-            # Enhance the face features by replacing "portrait" with "face portrait".
-            prompt = prompt.replace("portrait", "face portrait")
-        else:
-            prompt = "face portrait, " + prompt
+    if enhance_face and "clear face" not in prompt:
+        prompt = "clear face, " + prompt
 
     if gender != "(none)":
         if "portrait" in prompt:
@@ -342,7 +338,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             ])
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
-                                       info="Enhance the facial features by prepending 'face portrait' to the prompt")
+                                       info="Enhance the facial features by prepending 'clear face' to the prompt")
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
