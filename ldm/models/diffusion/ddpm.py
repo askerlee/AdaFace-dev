@@ -985,20 +985,18 @@ class LatentDiffusion(DDPM):
         subj_comp_prompts   = batch[SUBJ_COMP_PROMPT]
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
 
+        # Don't use fp trick and the 'clear face' suffix at the same time.
         if not self.iter_flags['use_fp_trick'] and self.iter_flags['do_comp_feat_distill']:
             p_clear_face = 0.5
         else:
             p_clear_face = 0
 
         if torch.rand(1) < p_clear_face:
-            # Add 'clear face' to class prompts. Its effect is weaker than the fp trick.
-            cls_single_prompts  = [ p + ', clear face' for p in cls_single_prompts ]
-            cls_comp_prompts    = [ p + ', clear face' for p in cls_comp_prompts ]
-            # No need to add 'clear face' to subj_single_prompts and subj_comp_prompts, as the face areas are already clear.
-            # We just add ', , ,' to keep the length of the prompts the same.
-            subj_single_prompts = [ p + ', , ,' for p in subj_single_prompts ]
-            subj_comp_prompts   = [ p + ', , ,' for p in subj_comp_prompts ]
-
+            # Add 'clear face' to the 4 types of prompts. Its effect is weaker than the fp trick.
+            cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts = \
+                [ [ p + ', clear face' for p in prompts ] for prompts in \
+                    (cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts) ]
+            
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         if 'aug_mask' in batch:
