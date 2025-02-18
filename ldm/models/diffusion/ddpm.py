@@ -2638,8 +2638,9 @@ class LatentDiffusion(DDPM):
                 # whole image, not just the face area. So we need to keep it small.
                 # loss_comp_bg_faces_suppress is a mean L2 loss, only 0.01-0.02. *20 * 5e-3 => 0.001-0.002.
                 comp_bg_faces_suppress_scale = 20
+                arcface_comp_loss_scale = self.comp_distill_iter_gap
                 loss_comp_feat_distill += (loss_comp_arcface_align + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_scale) \
-                                          * self.arcface_align_loss_weight
+                                          * self.arcface_align_loss_weight * arcface_comp_loss_scale
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
                 loss_comp_feat_distill += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
