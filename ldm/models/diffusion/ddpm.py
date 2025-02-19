@@ -2634,8 +2634,9 @@ class LatentDiffusion(DDPM):
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_comp_arcface_align.
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
-                # loss_comp_bg_faces_suppress is a mean L2 loss, only 0.01-0.02. *20 * 5e-3 => 0.001-0.002.
-                comp_bg_faces_suppress_scale = 20
+                # loss_comp_bg_faces_suppress is a mean L2 loss, only ~0.02. * 50 * 4 * 5e-3 => 0.02.
+                # Although this is 15x~20x of loss_comp_arcface_align, it's very infraquently triggered.
+                comp_bg_faces_suppress_scale = 50
                 arcface_comp_loss_scale = self.comp_distill_iter_gap
                 loss_comp_feat_distill += (loss_comp_arcface_align + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_scale) \
                                           * self.arcface_align_loss_weight * arcface_comp_loss_scale
