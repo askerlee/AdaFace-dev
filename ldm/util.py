@@ -1795,7 +1795,8 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
                                     flow_model, ca_layers_activations,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_loss_discard_threses={'mc': 0.5, 'ssfg': 0.4}):
+                                    recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
+                                    recon_max_scale_of_threses=1000):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -1848,7 +1849,8 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_q_h, ca_q_w, 
                                        sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                        recon_feat_objectives=recon_feat_objectives,
-                                       recon_loss_discard_threses=recon_loss_discard_threses,
+                                       recon_scaled_loss_threses=recon_scaled_loss_threses,
+                                       recon_max_scale_of_threses=recon_max_scale_of_threses,
                                        small_motion_ignore_thres=0.3,
                                        num_flow_est_iters=12)
 
@@ -2428,7 +2430,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_loss_discard_threses={'mc': 0.5, 'ssfg': 0.4},
+                               recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
+                               recon_max_scale_of_threses=1000,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 
@@ -2552,6 +2555,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                          objective_name=objective_name)
         
         # Collect various losses.
+        # feat_name: 'ssfg', 'mc'.
         for feat_name, losses in losses_sc_recons_obj.items():
             if feat_name not in losses_sc_recons:
                 losses_sc_recons[feat_name] = []
@@ -2560,10 +2564,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
-            to_discard = losses[-1] > recon_loss_discard_threses[feat_name]
+            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 10.
+            to_discard = (losses[-1] >= recon_scaled_loss_threses[feat_name] * recon_max_scale_of_threses)
             if to_discard:
                 print(f"Discard layer {layer_idx} {objective_name} {feat_name} loss: {losses[-1]}.")
             else:
+                # loss_scale: the scale of the loss. If the loss is too large, scale it down.
+                # Always 1 >= loss_scale > 0.1 = 1 / recon_max_scale_of_threses.
+                loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1] + 1e-6)
+                loss_scale = torch.clamp(loss_scale, max=1).detach()
+                losses = losses * loss_scale
                 losses_sc_recons[feat_name].append(losses)
 
             if feat_name not in losses_flow_attns_distill:
