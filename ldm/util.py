@@ -1052,9 +1052,13 @@ def normalize_dict_values(d):
     d2 = { k: v / value_sum for k, v in d.items() }
     return d2
 
-def add_dict_to_dict(d1, d2):
+def add_dict_to_dict(d1, d2, weight=1, session_prefix=None):
     for k, v in d2.items():
-        d1[k] = d1.get(k, 0) + v
+        if session_prefix is not None:
+            k2 = f'{session_prefix}/{k}'
+        else:
+            k2 = k
+        d1[k2] = d1.get(k2, 0) + v * weight
     return d1
 
 def filter_dict_by_key(d, key_container):
@@ -1791,12 +1795,12 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
 
     return loss_subj_mb_suppress
 
-def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix, 
+def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     flow_model, ca_layers_activations,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
                                     recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
-                                    recon_max_scale_of_threses=1000):
+                                    recon_max_scale_of_threses=10000):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -1812,6 +1816,14 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
     
     # Normalize the weights above so that each set sum to 1.
     elastic_matching_layer_weights  = normalize_dict_values(elastic_matching_layer_weights)
+    # local_loss_dict contains actuall BP-able losses. mon_loss_dict contains 
+    # loss values that are only for monitoring and not for BP.
+    local_loss_dict = {}
+    
+    effective_loss_names = [ 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc_min', 'loss_sc_to_ssfg_sparse_attns_distill',
+                             'loss_sc_to_mc_sparse_attns_distill' ]
+    for loss_name in effective_loss_names:
+        local_loss_dict[loss_name] = torch.tensor(0.0, device=device)
 
     for unet_layer_idx, ca_outfeat in ca_outfeats.items():
         if unet_layer_idx not in elastic_matching_layer_weights:
@@ -1862,59 +1874,35 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
         loss_sc_to_ssfg_sparse_attns_distill, loss_sc_to_mc_sparse_attns_distill = \
             loss_sparse_attns_distill['ssfg'], loss_sparse_attns_distill['mc']
         
-        add_dict_to_dict(loss_dict, 
-                         { 'loss_sc_recon_ssfg_attn_agg':   loss_sc_recon_ssfg_attn_agg * LAYER_W,
-                           'loss_sc_recon_ssfg_flow':       loss_sc_recon_ssfg_flow * LAYER_W,
-                           'loss_sc_recon_ssfg_min':        loss_sc_recon_ssfg_min * LAYER_W,
-                           'loss_sc_recon_mc_attn_agg':     loss_sc_recon_mc_attn_agg * LAYER_W,
-                           'loss_sc_recon_mc_flow':         loss_sc_recon_mc_flow * LAYER_W,
-                           'loss_sc_recon_mc_sameloc':      loss_sc_recon_mc_sameloc * LAYER_W,
-                           'loss_sc_recon_mc_min':          loss_sc_recon_mc_min * LAYER_W,
-                           'loss_sc_to_ssfg_sparse_attns_distill': loss_sc_to_ssfg_sparse_attns_distill * LAYER_W,
-                           'loss_sc_to_mc_sparse_attns_distill':   loss_sc_to_mc_sparse_attns_distill * LAYER_W,
-                           'discarded_loss_ratio':          discarded_loss_ratio * LAYER_W
-                         })
+        # local_loss_dict doesn't append session_prefix to the keys.
+        add_dict_to_dict(local_loss_dict, 
+                         { 'loss_sc_recon_ssfg_min':        loss_sc_recon_ssfg_min,
+                           'loss_sc_recon_mc_min':          loss_sc_recon_mc_min,
+                           'loss_sc_to_ssfg_sparse_attns_distill': loss_sc_to_ssfg_sparse_attns_distill,
+                           'loss_sc_to_mc_sparse_attns_distill':   loss_sc_to_mc_sparse_attns_distill,
+                         }, LAYER_W, None)
         
-        # sc_to_whole_mc_prob.mean() = 1, but sc_to_ss_fg_prob.mean() = N_fg / 961 = 210 / 961 = 0.2185.
-        # So we normalize sc_to_ss_fg_prob first, before comparing it with sc_to_whole_mc_prob.
-        # 0.001 is a small margin to classify fg/bg.
-        ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate = \
-            flow_distill_stats['ssfg_flow_win_rate'], flow_distill_stats['mc_flow_win_rate'], flow_distill_stats['mc_sameloc_win_rate']
-        ssfg_avg_sparse_distill_weight, mc_avg_sparse_distill_weight = \
-            flow_distill_stats['ssfg_avg_sparse_distill_weight'], flow_distill_stats['mc_avg_sparse_distill_weight']
-        add_dict_to_dict(loss_dict,
-                            { 'ssfg_flow_win_rate':              ssfg_flow_win_rate * LAYER_W,
-                              'mc_flow_win_rate':                mc_flow_win_rate * LAYER_W,
-                              'mc_sameloc_win_rate':             mc_sameloc_win_rate * LAYER_W,
-                              'ssfg_avg_sparse_distill_weight':  ssfg_avg_sparse_distill_weight * LAYER_W,
-                              'mc_avg_sparse_distill_weight':    mc_avg_sparse_distill_weight * LAYER_W
-                            })
+        # mon_loss_dict appends session_prefix to the keys.
+        add_dict_to_dict(mon_loss_dict, 
+                         { 'loss_sc_recon_ssfg_attn_agg':   loss_sc_recon_ssfg_attn_agg,
+                           'loss_sc_recon_ssfg_flow':       loss_sc_recon_ssfg_flow,
+                           'loss_sc_recon_ssfg_min':        loss_sc_recon_ssfg_min,
+                           'loss_sc_recon_mc_attn_agg':     loss_sc_recon_mc_attn_agg,
+                           'loss_sc_recon_mc_flow':         loss_sc_recon_mc_flow,
+                           'loss_sc_recon_mc_sameloc':      loss_sc_recon_mc_sameloc,
+                           'loss_sc_recon_mc_min':          loss_sc_recon_mc_min,
+                           'loss_sc_to_ssfg_sparse_attns_distill': loss_sc_to_ssfg_sparse_attns_distill,
+                           'loss_sc_to_mc_sparse_attns_distill':   loss_sc_to_mc_sparse_attns_distill,
+                           'discarded_loss_ratio':          discarded_loss_ratio
+                         }, LAYER_W, session_prefix)
+        
+        add_dict_to_dict(mon_loss_dict, flow_distill_stats, LAYER_W, session_prefix)
 
-    loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
-                    'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
-                    'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
-                    'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 
-                    'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
-                    'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 'discarded_loss_ratio' ]
-    
-    effective_loss_names = [ 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc_min', 'loss_sc_to_ssfg_sparse_attns_distill',
-                             'loss_sc_to_mc_sparse_attns_distill', 'loss_comp_subj_bg_attn_suppress' ]
-    # loss_sc_recon_ssfg_attn_agg and loss_sc_recon_ssfg_flow, 
-    # are returned to be monitored, not to be optimized.
-    # Only their counterparts -- loss_sc_recon_ssfg_min, loss_comp_subj_bg_attn_suppress 
-    # are optimized.
-    loss_sc_recon_ssfg_min, loss_sc_recon_mc_min, loss_sc_to_ssfg_sparse_attns_distill, \
-    loss_sc_to_mc_sparse_attns_distill, loss_comp_subj_bg_attn_suppress \
-        = [ loss_dict.get(loss_name, 0) for loss_name in effective_loss_names ] 
+    # Below are 4 losses to be optimized.
+    loss_sc_recon_ssfg_min, loss_sc_recon_mc_min, \
+      loss_sc_to_ssfg_sparse_attns_distill, loss_sc_to_mc_sparse_attns_distill = \
+        [ local_loss_dict[loss_name] for loss_name in effective_loss_names ] 
 
-    for loss_name in loss_names:
-        if loss_name in loss_dict and loss_dict[loss_name] > 0:
-            loss_name2 = loss_name.replace('loss_', '')
-            # Accumulate the loss values to loss_dict when there are multiple denoising steps.
-            add_dict_to_dict(loss_dict, {f'{session_prefix}/{loss_name2}': loss_dict[loss_name].mean().detach().item() })
-
-    # loss_comp_subj_bg_attn_suppress: 0.01~0.02 -> 0.0002~0.0004.
-    comp_subj_bg_attn_suppress_loss_scale       = 0.02
     # loss_sc_recon_ssfg_min: 0.0005~0.001 -> 0.0001~0.0002.
     sc_recon_ssfg_loss_scale                    = 0.2
     # loss_sc_recon_mc: 0.05~0.08 -> 0.01~0.016.
@@ -1923,12 +1911,9 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
     sc_to_ssfg_sparse_attns_distill_loss_scale  = 20
     # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.008~0.01.
     sc_to_mc_sparse_attns_distill_loss_scale    = 20
-    
-    # loss_sc_recon_mc_min has similar effects to suppress the subject attn values in the background tokens.
-    # Therefore, loss_comp_subj_bg_attn_suppress is given a very small comp_subj_bg_attn_suppress_loss_scale = 0.02.
+
     loss_comp_fg_bg_preserve =  loss_sc_recon_ssfg_min                * sc_recon_ssfg_loss_scale \
                                 + loss_sc_recon_mc_min                 * sc_recon_mc_loss_scale \
-                                + loss_comp_subj_bg_attn_suppress      * comp_subj_bg_attn_suppress_loss_scale \
                                 + loss_sc_to_ssfg_sparse_attns_distill * sc_to_ssfg_sparse_attns_distill_loss_scale \
                                 + loss_sc_to_mc_sparse_attns_distill   * sc_to_mc_sparse_attns_distill_loss_scale
 
@@ -2432,7 +2417,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
-                               recon_max_scale_of_threses=1000,
+                               recon_max_scale_of_threses=10000,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 

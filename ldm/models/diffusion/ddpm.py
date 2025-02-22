@@ -407,8 +407,8 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
                 self.normal_recon_iters_count += 1
 
-        loss, loss_dict = self.shared_step(batch)
-        self.log_dict(loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        loss, mon_loss_dict = self.shared_step(batch)
+        self.log_dict(mon_loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
 
         self.log("global_step", self.global_step, prog_bar=True, logger=True, on_step=True, on_epoch=False)
 
@@ -1638,7 +1638,7 @@ class LatentDiffusion(DDPM):
     def recon_multistep_denoise(self, x_start, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, num_denoising_steps, 
                                 enable_unet_attn_lora, do_adv_attack, DO_ADV_BS, 
-                                loss_dict, session_prefix):
+                                mon_loss_dict, session_prefix):
 
         assert num_denoising_steps <= 10
 
@@ -1708,20 +1708,20 @@ class LatentDiffusion(DDPM):
                     if adv_grad is not None:
                         # adv_grad_max: 1e-3
                         adv_grad_max = adv_grad.abs().max().item()
-                        loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
+                        mon_loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
                         # adv_grad_mean is always 4~5e-6.
-                        # loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                        # mon_loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
                         faceloss_fg_mask = fg_mask[:DO_ADV_BS].repeat(1, 4, 1, 1)
                         # adv_grad_fg_mean: 8~9e-6.
                         adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().item()
-                        loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
+                        mon_loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                         # adv_grad_mag: ~1e-4.
                         adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
                         # recon_adv_mod_mag_range: [0.001, 0.003].
                         recon_adv_mod_mag = torch_uniform(*self.recon_adv_mod_mag_range).item()
                         # recon_adv_mod_mag: 0.001~0.003. adv_grad_scale: 4~10.
                         adv_grad_scale = recon_adv_mod_mag / (adv_grad_mag + 1e-6)
-                        loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
+                        mon_loss_dict.update({f'{session_prefix}/adv_grad_scale': adv_grad_scale})
                         # Cap the adv_grad_scale to 10, as we observe most adv_grad_scale are below 10.
                         # adv_grad mean at fg area after scaling: 1e-3.
                         adv_grad = adv_grad * min(adv_grad_scale, 10)
@@ -1735,7 +1735,7 @@ class LatentDiffusion(DDPM):
                         self.adaface_adv_success_iters_count += 1
                         # adaface_adv_success_rate is always close to 1, so we don't monitor it.
                         # adaface_adv_success_rate = self.adaface_adv_success_iters_count / self.adaface_adv_iters_count
-                        #loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
+                        #mon_loss_dict.update({f'{session_prefix}/adaface_adv_success_rate': adaface_adv_success_rate})
 
                 noises.append(noise)
 
@@ -1848,7 +1848,7 @@ class LatentDiffusion(DDPM):
         noise = torch.randn_like(x_start) 
 
         ###### Begin of loss computation of the 3 types of iterations ######
-        loss_dict = {}
+        mon_loss_dict = {}
         session_prefix = 'train' if self.training else 'val'
         loss = 0
 
@@ -1857,7 +1857,7 @@ class LatentDiffusion(DDPM):
             loss_prompt_emb_delta = \
                 calc_prompt_emb_delta_loss(extra_info['prompt_emb_4b_orig'], extra_info['prompt_emb_mask_4b_orig'])
 
-            loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
             # The Prodigy optimizer seems to suppress the embeddings too much, 
             # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
@@ -1876,7 +1876,7 @@ class LatentDiffusion(DDPM):
 
             loss_normal_recon = \
                 self.calc_normal_recon_loss(num_recon_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
-                                            all_subj_indices, self.recon_bg_pixel_weights, loss_dict, session_prefix)
+                                            all_subj_indices, self.recon_bg_pixel_weights, mon_loss_dict, session_prefix)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
@@ -1886,7 +1886,7 @@ class LatentDiffusion(DDPM):
             loss_unet_distill = \
                 self.calc_unet_distill_loss(x_start, noise, cond_context, extra_info, 
                                             img_mask, fg_mask, all_subj_indices, 
-                                            loss_dict, session_prefix)
+                                            mon_loss_dict, session_prefix)
             # loss_unet_distill: < 0.01, so we use a very large unet_distill_weight==8 to
             # make it comparable to the recon loss. Otherwise, loss_unet_distill will 
             # be dominated by the recon loss.
@@ -1999,7 +1999,7 @@ class LatentDiffusion(DDPM):
                                                  all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
-                                                 BLOCK_SIZE, loss_dict, session_prefix)
+                                                 BLOCK_SIZE, mon_loss_dict, session_prefix)
             loss += loss_comp_feat_distill
         ##### end of do_comp_feat_distill #####
 
@@ -2010,9 +2010,9 @@ class LatentDiffusion(DDPM):
             print('NaN/inf loss detected.')
             breakpoint()
 
-        loss_dict.update({f'{session_prefix}/loss': loss.mean().detach().item() })
+        mon_loss_dict.update({f'{session_prefix}/loss': loss.mean().detach().item() })
 
-        return loss, loss_dict
+        return loss, mon_loss_dict
 
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_bboxes is None.
     def calc_arcface_align_loss(self, x_start, x_recon, bleed=2):
@@ -2080,7 +2080,7 @@ class LatentDiffusion(DDPM):
         return adv_grad
 
     def calc_normal_recon_loss(self, num_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
-                               all_subj_indices, recon_bg_pixel_weights, loss_dict, session_prefix):
+                               all_subj_indices, recon_bg_pixel_weights, mon_loss_dict, session_prefix):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
 
         BLOCK_SIZE = x_start.shape[0]
@@ -2132,7 +2132,7 @@ class LatentDiffusion(DDPM):
         noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, enable_unet_attn_lora, 
-                                         do_adv_attack, DO_ADV_BS, loss_dict, session_prefix)
+                                         do_adv_attack, DO_ADV_BS, mon_loss_dict, session_prefix)
         
         losses_recon = []
         losses_recon_subj_mb_suppress = []
@@ -2193,11 +2193,11 @@ class LatentDiffusion(DDPM):
 
             # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
             if loss_recon_subj_mb_suppress > 0:
-                loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
+                mon_loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
             if self.iter_flags['recon_on_comp_prompt']:
-                loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
+                mon_loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
             else:
-                loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+                mon_loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
 
             ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
             print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
@@ -2205,7 +2205,7 @@ class LatentDiffusion(DDPM):
             loss_normal_recon += loss_recon
 
             if loss_arcface_align_recon > 0:
-                loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
+                mon_loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
                 # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.005 => 0.0025 - 0.004.
                 # This loss is around 1/30 of recon/distill losses (0.1).
@@ -2217,10 +2217,10 @@ class LatentDiffusion(DDPM):
             loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
 
             # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
-            loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+            mon_loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
 
             v_loss_normal_recon = loss_normal_recon.mean().detach().item()
-            loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
+            mon_loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
 
         else:
             loss_normal_recon = torch.tensor(0.0, device=x_start.device)
@@ -2228,7 +2228,7 @@ class LatentDiffusion(DDPM):
         return loss_normal_recon
 
     def calc_unet_distill_loss(self, x_start, noise, cond_context, extra_info, 
-                               img_mask, fg_mask, subj_indices, loss_dict, session_prefix):
+                               img_mask, fg_mask, subj_indices, mon_loss_dict, session_prefix):
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), 
                           device=self.device).long()
         prompt_emb, prompt_in, extra_info = cond_context
@@ -2418,7 +2418,7 @@ class LatentDiffusion(DDPM):
         loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_unet_denoising_steps)
 
         v_loss_unet_distill = loss_unet_distill.mean().detach().item()
-        loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
+        mon_loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
 
         return loss_unet_distill
 
@@ -2580,7 +2580,7 @@ class LatentDiffusion(DDPM):
     def calc_comp_feat_distill_loss(self, x_start_ss, x_recons, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                    BLOCK_SIZE, loss_dict, session_prefix):
+                                    BLOCK_SIZE, mon_loss_dict, session_prefix):
         losses_comp_fg_bg_preserve          = []
         losses_subj_attn_norm_distill       = []
         losses_comp_rep_distill_subj_attn   = []
@@ -2628,7 +2628,7 @@ class LatentDiffusion(DDPM):
                 # won't be detected in the subject-compositional instance either.
                 loss_comp_arcface_align, loss_comp_bg_faces_suppress, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
                     self.calc_comp_face_align_and_mb_suppress_losses(x_start_ss, x_recons, ca_layers_activations_list,
-                                                                     all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix)
+                                                                     all_subj_indices_1b, BLOCK_SIZE, mon_loss_dict, session_prefix)
                 # loss_comp_arcface_align: 0.5-0.8. arcface_align_loss_weight: 5e-3 => 0.0025-0.004.
                 # This loss is around 1/300 of recon/distill losses (0.1).
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_comp_arcface_align.
@@ -2647,23 +2647,23 @@ class LatentDiffusion(DDPM):
                 if loss_comp_bg_faces_suppress > 0:
                     self.comp_iters_bg_has_face_count += 1
                     comp_iters_bg_has_face_frac = self.comp_iters_bg_has_face_count / self.comp_iters_count
-                    loss_dict.update({f'{session_prefix}/comp_iters_bg_has_face_frac': comp_iters_bg_has_face_frac})
+                    mon_loss_dict.update({f'{session_prefix}/comp_iters_bg_has_face_frac': comp_iters_bg_has_face_frac})
 
-        loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
-                       'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
-                       'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
-                       'loss_comp_subj_bg_attn_suppress',  'sc_bg_percent', 
-                       'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
-                       'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 'discarded_loss_ratio' ]
+        mon_loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
+                           'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
+                           'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
+                           'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
+                           'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 
+                           'sc_bg_percent', 'discarded_loss_ratio' ]
         
-        for loss_name in loss_names:
+        for loss_name in mon_loss_names:
             loss_name2 = loss_name.replace('loss_', '')
             loss_name2 = f'{session_prefix}/{loss_name2}'
-            loss_dict[loss_name2] = 0
+            mon_loss_dict[loss_name2] = 0
 
         if sc_fg_mask is not None:
             sc_fg_mask_percent = sc_fg_mask.float().mean().item()
-            loss_dict.update({f'{session_prefix}/sc_fg_mask_percent': sc_fg_mask_percent })
+            mon_loss_dict.update({f'{session_prefix}/sc_fg_mask_percent': sc_fg_mask_percent })
         else:
             sc_fg_mask_percent = 0
         
@@ -2709,12 +2709,12 @@ class LatentDiffusion(DDPM):
                 continue
 
             loss_comp_fg_bg_preserve = \
-                calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
+                calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
                                                 recon_feat_objectives=['attn_out', 'outfeat'],
                                                 recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
-                                                recon_max_scale_of_threses=1000
+                                                recon_max_scale_of_threses=10000
                                                 )
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
@@ -2723,15 +2723,15 @@ class LatentDiffusion(DDPM):
             # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
 
         comp_fg_bg_preserve_loss_count = len(losses_comp_fg_bg_preserve) + 1e-6
-        for loss_name in loss_names:
+        for loss_name in mon_loss_names:
             loss_name2 = loss_name.replace('loss_', '')
             loss_name2 = f'{session_prefix}/{loss_name2}'
-            if loss_name2 in loss_dict:
-                if loss_dict[loss_name2] > 0:
-                    loss_dict[loss_name2] = loss_dict[loss_name2] / comp_fg_bg_preserve_loss_count
+            if loss_name2 in mon_loss_dict:
+                if mon_loss_dict[loss_name2] > 0:
+                    mon_loss_dict[loss_name2] = mon_loss_dict[loss_name2] / comp_fg_bg_preserve_loss_count
                 else:
-                    # Remove 0 losses from the loss_dict.
-                    del loss_dict[loss_name2]
+                    # Remove 0 losses from the mon_loss_dict.
+                    del mon_loss_dict[loss_name2]
 
         # These 4 losses_* are always non-empty.
         loss_comp_rep_distill_subj_attn  = torch.stack(losses_comp_rep_distill_subj_attn).mean()
@@ -2747,19 +2747,19 @@ class LatentDiffusion(DDPM):
             loss_comp_fg_bg_preserve = torch.tensor(0., device=device, dtype=dtype)
             
         if loss_comp_fg_bg_preserve > 0:
-            loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
             # loss_comp_fg_bg_preserve: 2~3.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
         if loss_subj_attn_norm_distill > 0:
-            loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
 
         if loss_comp_rep_distill_subj_attn > 0:
-            loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
-            loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_k':     loss_comp_rep_distill_subj_k.item() })
-            loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_k':     loss_comp_rep_distill_subj_k.item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.item() })
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
             # valid_scale_range=(0.02, 1): If sc_fg_mask_percent = 0.19, then fg_percent_rep_distill_scale = 0.02.
@@ -2780,11 +2780,11 @@ class LatentDiffusion(DDPM):
             
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
         if v_loss_comp_feat_distill > 0:
-            loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
+            mon_loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
         return loss_comp_feat_distill            
 
     def calc_comp_face_align_and_mb_suppress_losses(self, x_start_ss, x_recons, ca_layers_activations_list,
-                                                    all_subj_indices_1b, BLOCK_SIZE, loss_dict, session_prefix):
+                                                    all_subj_indices_1b, BLOCK_SIZE, mon_loss_dict, session_prefix):
         # We cannot afford calculating loss_comp_arcface_align for > 1 steps. Otherwise, OOM.
         max_arcface_align_loss_count = 1
         arcface_align_loss_count     = 0
@@ -2860,17 +2860,17 @@ class LatentDiffusion(DDPM):
 
             if arcface_align_loss_count > 0:
                 loss_comp_arcface_align = loss_comp_arcface_align / arcface_align_loss_count
-                loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_comp_arcface_align.mean().detach().item() })
+                mon_loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_comp_arcface_align.mean().detach().item() })
                 self.comp_iters_face_detected_count += 1
                 comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
-                loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+                mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
                 loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / arcface_align_loss_count
-                loss_dict.update({f'{session_prefix}/comp_sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
+                mon_loss_dict.update({f'{session_prefix}/comp_sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
 
             if loss_comp_bg_faces_suppress > 0:
                 loss_comp_bg_faces_suppress = loss_comp_bg_faces_suppress / bg_faces_suppress_loss_count
-                loss_dict.update({f'{session_prefix}/comp_bg_faces_suppress': loss_comp_bg_faces_suppress.mean().detach().item() })
+                mon_loss_dict.update({f'{session_prefix}/comp_bg_faces_suppress': loss_comp_bg_faces_suppress.mean().detach().item() })
 
         return loss_comp_arcface_align, loss_comp_bg_faces_suppress, loss_comp_sc_subj_mb_suppress, \
                sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step
