@@ -1799,8 +1799,8 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     flow_model, ca_layers_activations,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
-                                    recon_max_scale_of_threses=10000):
+                                    recon_scaled_loss_threses={'mc': 0.1, 'ssfg': 0.1},
+                                    recon_max_scale_of_threses=50000):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -1903,9 +1903,9 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
       loss_sc_to_ssfg_sparse_attns_distill, loss_sc_to_mc_sparse_attns_distill = \
         [ local_loss_dict[loss_name] for loss_name in effective_loss_names ] 
 
-    # loss_sc_recon_ssfg_min: 0.0005~0.001 -> 0.0001~0.0002.
+    # loss_sc_recon_ssfg_min: 0.2  -> 0.04
     sc_recon_ssfg_loss_scale                    = 0.2
-    # loss_sc_recon_mc: 0.05~0.08 -> 0.01~0.016.
+    # loss_sc_recon_mc:       0.25 -> 0.05
     sc_recon_mc_loss_scale                      = 0.2
     # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
     sc_to_ssfg_sparse_attns_distill_loss_scale  = 20
@@ -2416,8 +2416,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
-                               recon_max_scale_of_threses=10000,
+                               recon_scaled_loss_threses={'mc': 0.1, 'ssfg': 0.1},
+                               recon_max_scale_of_threses=50000,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 

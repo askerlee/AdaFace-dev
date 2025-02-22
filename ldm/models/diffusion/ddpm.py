@@ -2719,9 +2719,9 @@ class LatentDiffusion(DDPM):
                                                 self.flow_model, ca_layers_activations, 
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
                                                 recon_feat_objectives=['attn_out', 'outfeat'],
-                                                recon_scaled_loss_threses={'mc': 0.5, 'ssfg': 0.4},
-                                                recon_max_scale_of_threses=10000
-                                                )
+                                                recon_scaled_loss_threses={'mc': 0.1, 'ssfg': 0.1},
+                                                recon_max_scale_of_threses=50000
+                                               )
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
             # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
