@@ -2562,6 +2562,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             if feat_name not in losses_sc_recons:
                 losses_sc_recons[feat_name] = []
 
+            losses = torch.stack(losses, dim=0)
+
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
             # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 1000.
@@ -2574,9 +2576,9 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             else:
                 # loss_scale: the scale of the loss. If the loss is too large, scale it down.
                 # Always 1 >= loss_scale > 0.1 = 1 / recon_max_scale_of_threses.
-                loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1] + 1e-6)
+                loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1].item() + 1e-6)
                 # If the original loss is already <= recon_scaled_loss_threses[feat_name], we set loss_scale = 1.
-                loss_scale = torch.clamp(loss_scale, max=1).detach()
+                loss_scale = min(loss_scale, 1)
                 losses = losses * loss_scale
                 losses_sc_recons[feat_name].append(losses)
 
@@ -2590,10 +2592,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                 all_flow_distill_stats[stat_name] = []
             all_flow_distill_stats[stat_name].append(flow_distill_stats[stat_name])
 
-    # Average the collected losses.
-    for feat_name, losses in losses_sc_recons.items():
-        if len(losses) > 0:
-            losses_sc_recons[feat_name] = torch.stack(losses, dim=0).mean(dim=0)
+    # Average the collected losses across two feat types, attn_out and outfeat.
+    for feat_name, feat_types_losses in losses_sc_recons.items():
+        if len(feat_types_losses) > 0:
+            losses_sc_recons[feat_name] = torch.stack(feat_types_losses, dim=0).mean(dim=0)
         else:
             # If all losses are discarded, return 4 x 0s.
             feat_name2loss_num = { 'ssfg': 3, 'mc': 4 }
