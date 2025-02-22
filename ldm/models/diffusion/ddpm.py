@@ -2652,9 +2652,9 @@ class LatentDiffusion(DDPM):
         loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
                        'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
                        'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
-                       'loss_comp_subj_bg_attn_suppress', 
+                       'loss_comp_subj_bg_attn_suppress',  'sc_bg_percent', 
                        'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
-                       'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight' ]
+                       'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 'discarded_loss_ratio' ]
         
         for loss_name in loss_names:
             loss_name2 = loss_name.replace('loss_', '')
@@ -2666,7 +2666,7 @@ class LatentDiffusion(DDPM):
             loss_dict.update({f'{session_prefix}/sc_fg_mask_percent': sc_fg_mask_percent })
         else:
             sc_fg_mask_percent = 0
-
+        
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
             # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_recon_mc,
             # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
@@ -2722,21 +2722,24 @@ class LatentDiffusion(DDPM):
             # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
             # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
 
+        comp_fg_bg_preserve_loss_count = len(losses_comp_fg_bg_preserve) + 1e-6
         for loss_name in loss_names:
             loss_name2 = loss_name.replace('loss_', '')
             loss_name2 = f'{session_prefix}/{loss_name2}'
             if loss_name2 in loss_dict:
                 if loss_dict[loss_name2] > 0:
-                    loss_dict[loss_name2] = loss_dict[loss_name2] / len(ca_layers_activations_list)
+                    loss_dict[loss_name2] = loss_dict[loss_name2] / comp_fg_bg_preserve_loss_count
                 else:
                     # Remove 0 losses from the loss_dict.
                     del loss_dict[loss_name2]
 
+        # These 4 losses_* are always non-empty.
         loss_comp_rep_distill_subj_attn  = torch.stack(losses_comp_rep_distill_subj_attn).mean()
         loss_comp_rep_distill_subj_k     = torch.stack(losses_comp_rep_distill_subj_k).mean()
         loss_comp_rep_distill_nonsubj_k  = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
         loss_subj_attn_norm_distill      = torch.stack(losses_subj_attn_norm_distill).mean()
 
+        # Chance is we may skip all the steps for computing loss_comp_fg_bg_preserve. Therefore we need to check.
         if len(losses_comp_fg_bg_preserve) > 0:
             loss_comp_fg_bg_preserve = torch.stack(losses_comp_fg_bg_preserve).mean()
         else:
@@ -2773,7 +2776,7 @@ class LatentDiffusion(DDPM):
             loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
             loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
-                                            loss_comp_rep_distill_nonsubj_k) * loss_subj_comp_rep_distill_scale
+                                       loss_comp_rep_distill_nonsubj_k) * loss_subj_comp_rep_distill_scale
             
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
         if v_loss_comp_feat_distill > 0:

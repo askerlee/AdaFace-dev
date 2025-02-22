@@ -1844,7 +1844,7 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
         # loss_layer_subj_comp_map_single_align_with_cls: loss of alignment between two soft mappings: sc_to_ss_prob and mc_to_ms_prob.
         # sc_to_ss_fg_prob_below_mean is used as fg/bg soft masks of comp instances
         # to suppress the activations on background areas.
-        losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats = \
+        losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats, discarded_loss_ratio = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_q_h, ca_q_w, 
                                        sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
@@ -1871,7 +1871,8 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
                            'loss_sc_recon_mc_sameloc':      loss_sc_recon_mc_sameloc * LAYER_W,
                            'loss_sc_recon_mc_min':          loss_sc_recon_mc_min * LAYER_W,
                            'loss_sc_to_ssfg_sparse_attns_distill': loss_sc_to_ssfg_sparse_attns_distill * LAYER_W,
-                           'loss_sc_to_mc_sparse_attns_distill':   loss_sc_to_mc_sparse_attns_distill * LAYER_W
+                           'loss_sc_to_mc_sparse_attns_distill':   loss_sc_to_mc_sparse_attns_distill * LAYER_W,
+                           'discarded_loss_ratio':          discarded_loss_ratio * LAYER_W
                          })
         
         # sc_to_whole_mc_prob.mean() = 1, but sc_to_ss_fg_prob.mean() = N_fg / 961 = 210 / 961 = 0.2185.
@@ -1894,7 +1895,7 @@ def calc_comp_subj_bg_preserve_loss(loss_dict, session_prefix,
                     'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
                     'loss_comp_subj_bg_attn_suppress', 'sc_bg_percent', 
                     'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
-                    'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight' ]
+                    'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 'discarded_loss_ratio' ]
     
     effective_loss_names = [ 'loss_sc_recon_ssfg_min', 'loss_sc_recon_mc_min', 'loss_sc_to_ssfg_sparse_attns_distill',
                              'loss_sc_to_mc_sparse_attns_distill', 'loss_comp_subj_bg_attn_suppress' ]
@@ -2489,12 +2490,10 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         if feat_type == 'attn_out':
             # ca_attn_out: output of the CA layer, i.e., attention-aggregated v.
             feat_obj = ca_attn_out
-            loss_scale = 1
         elif feat_type == 'outfeat':
             # outfeat: output of the transformer layer, i.e., attn_out transformed by a FFN.
             feat_obj = ca_outfeat
             # outfeat on L2 loss scheme incurs large loss values, so we scale it down.
-            loss_scale = 0.5
         else:
             breakpoint()
 
@@ -2556,22 +2555,27 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         
         # Collect various losses.
         # feat_name: 'ssfg', 'mc'.
+        total_loss_count     = 0
+        discarded_loss_count = 0
+
         for feat_name, losses in losses_sc_recons_obj.items():
             if feat_name not in losses_sc_recons:
                 losses_sc_recons[feat_name] = []
 
-            losses = torch.tensor(losses) * loss_scale
-            
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
-            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 10.
+            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 1000.
+            # ssfg: 0.4 * 1000 = 400. mc: 0.5 * 1000 = 500.
+            total_loss_count += 1
             to_discard = (losses[-1] >= recon_scaled_loss_threses[feat_name] * recon_max_scale_of_threses)
             if to_discard:
                 print(f"Discard layer {layer_idx} {objective_name} {feat_name} loss: {losses[-1]}.")
+                discarded_loss_count += 1
             else:
                 # loss_scale: the scale of the loss. If the loss is too large, scale it down.
                 # Always 1 >= loss_scale > 0.1 = 1 / recon_max_scale_of_threses.
                 loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1] + 1e-6)
+                # If the original loss is already <= recon_scaled_loss_threses[feat_name], we set loss_scale = 1.
                 loss_scale = torch.clamp(loss_scale, max=1).detach()
                 losses = losses * loss_scale
                 losses_sc_recons[feat_name].append(losses)
@@ -2600,5 +2604,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     for stat_name in all_flow_distill_stats:
         flow_distill_stats[stat_name] = torch.stack(all_flow_distill_stats[stat_name]).mean()
 
-    return losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats
+    discarded_loss_ratio = torch.tensor(discarded_loss_count / (total_loss_count + 1e-6))
+
+    return losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats, discarded_loss_ratio
 
