@@ -1635,10 +1635,10 @@ class LatentDiffusion(DDPM):
         
         return noise_pred, x_recon, ca_layers_activations
 
-    def recon_multistep_denoise(self, x_start, noise, t, cond_context, 
+    def recon_multistep_denoise(self, mon_loss_dict, session_prefix,
+                                x_start, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, num_denoising_steps, 
-                                enable_unet_attn_lora, do_adv_attack, DO_ADV_BS, 
-                                mon_loss_dict, session_prefix):
+                                enable_unet_attn_lora, do_adv_attack, DO_ADV_BS):
 
         assert num_denoising_steps <= 10
 
@@ -1875,8 +1875,9 @@ class LatentDiffusion(DDPM):
             num_recon_denoising_steps = self.normal_recon_iters_count % W + self.recon_num_denoising_steps_range[0]
 
             loss_normal_recon = \
-                self.calc_normal_recon_loss(num_recon_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
-                                            all_subj_indices, self.recon_bg_pixel_weights, mon_loss_dict, session_prefix)
+                self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
+                                            num_recon_denoising_steps, x_start, noise, cond_context, 
+                                            img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
@@ -1884,9 +1885,9 @@ class LatentDiffusion(DDPM):
         elif self.iter_flags['do_unet_distill']:
             # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
-                self.calc_unet_distill_loss(x_start, noise, cond_context, extra_info, 
-                                            img_mask, fg_mask, all_subj_indices, 
-                                            mon_loss_dict, session_prefix)
+                self.calc_unet_distill_loss(mon_loss_dict, session_prefix,
+                                            x_start, noise, cond_context, extra_info, 
+                                            img_mask, fg_mask, all_subj_indices)
             # loss_unet_distill: < 0.01, so we use a very large unet_distill_weight==8 to
             # make it comparable to the recon loss. Otherwise, loss_unet_distill will 
             # be dominated by the recon loss.
@@ -1995,11 +1996,12 @@ class LatentDiffusion(DDPM):
 
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
-                self.calc_comp_feat_distill_loss(x_start0_ss, x_recons, ca_layers_activations_list,
+                self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
+                                                 x_start0_ss, x_recons, ca_layers_activations_list,
                                                  all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
-                                                 BLOCK_SIZE, mon_loss_dict, session_prefix)
+                                                 BLOCK_SIZE)
             loss += loss_comp_feat_distill
         ##### end of do_comp_feat_distill #####
 
@@ -2079,8 +2081,9 @@ class LatentDiffusion(DDPM):
 
         return adv_grad
 
-    def calc_normal_recon_loss(self, num_denoising_steps, x_start, noise, cond_context, img_mask, fg_mask, 
-                               all_subj_indices, recon_bg_pixel_weights, mon_loss_dict, session_prefix):
+    def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
+                               num_denoising_steps, x_start, noise, cond_context, 
+                               img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
 
         BLOCK_SIZE = x_start.shape[0]
@@ -2130,9 +2133,10 @@ class LatentDiffusion(DDPM):
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
         noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-            self.recon_multistep_denoise(x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
+            self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
+                                         x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, enable_unet_attn_lora, 
-                                         do_adv_attack, DO_ADV_BS, mon_loss_dict, session_prefix)
+                                         do_adv_attack, DO_ADV_BS)
         
         losses_recon = []
         losses_recon_subj_mb_suppress = []
@@ -2227,8 +2231,9 @@ class LatentDiffusion(DDPM):
 
         return loss_normal_recon
 
-    def calc_unet_distill_loss(self, x_start, noise, cond_context, extra_info, 
-                               img_mask, fg_mask, subj_indices, mon_loss_dict, session_prefix):
+    def calc_unet_distill_loss(self, mon_loss_dict, session_prefix, 
+                               x_start, noise, cond_context, extra_info, 
+                               img_mask, fg_mask, subj_indices):
         t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), 
                           device=self.device).long()
         prompt_emb, prompt_in, extra_info = cond_context
@@ -2577,10 +2582,11 @@ class LatentDiffusion(DDPM):
         return x_start_primed, noise, masks
 
     # x_start: the latent of the input image, without priming.
-    def calc_comp_feat_distill_loss(self, x_start_ss, x_recons, ca_layers_activations_list, 
+    def calc_comp_feat_distill_loss(self, mon_loss_dict, session_prefix,
+                                    x_start_ss, x_recons, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                    BLOCK_SIZE, mon_loss_dict, session_prefix):
+                                    BLOCK_SIZE):
         losses_comp_fg_bg_preserve          = []
         losses_subj_attn_norm_distill       = []
         losses_comp_rep_distill_subj_attn   = []
@@ -2627,8 +2633,9 @@ class LatentDiffusion(DDPM):
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
                 loss_comp_arcface_align, loss_comp_bg_faces_suppress, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
-                    self.calc_comp_face_align_and_mb_suppress_losses(x_start_ss, x_recons, ca_layers_activations_list,
-                                                                     all_subj_indices_1b, BLOCK_SIZE, mon_loss_dict, session_prefix)
+                    self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
+                                                                     ca_layers_activations_list,
+                                                                     all_subj_indices_1b, BLOCK_SIZE)
                 # loss_comp_arcface_align: 0.5-0.8. arcface_align_loss_weight: 5e-3 => 0.0025-0.004.
                 # This loss is around 1/300 of recon/distill losses (0.1).
                 # If do_comp_feat_distill is less frequent, then increase the weight of loss_comp_arcface_align.
@@ -2657,8 +2664,7 @@ class LatentDiffusion(DDPM):
                            'sc_bg_percent', 'discarded_loss_ratio' ]
         
         for loss_name in mon_loss_names:
-            loss_name2 = loss_name.replace('loss_', '')
-            loss_name2 = f'{session_prefix}/{loss_name2}'
+            loss_name2 = f'{session_prefix}/{loss_name}'
             mon_loss_dict[loss_name2] = 0
 
         if sc_fg_mask is not None:
@@ -2724,11 +2730,13 @@ class LatentDiffusion(DDPM):
 
         comp_fg_bg_preserve_loss_count = len(losses_comp_fg_bg_preserve) + 1e-6
         for loss_name in mon_loss_names:
-            loss_name2 = loss_name.replace('loss_', '')
-            loss_name2 = f'{session_prefix}/{loss_name2}'
+            loss_name2 = f'{session_prefix}/{loss_name}'
             if loss_name2 in mon_loss_dict:
                 if mon_loss_dict[loss_name2] > 0:
                     mon_loss_dict[loss_name2] = mon_loss_dict[loss_name2] / comp_fg_bg_preserve_loss_count
+                    loss_name3 = loss_name2.replace('loss_', '')
+                    # Rename the losses to more concise names by removing the 'loss_' prefix.
+                    mon_loss_dict[loss_name3] = mon_loss_dict.pop(loss_name2)
                 else:
                     # Remove 0 losses from the mon_loss_dict.
                     del mon_loss_dict[loss_name2]
@@ -2783,8 +2791,9 @@ class LatentDiffusion(DDPM):
             mon_loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
         return loss_comp_feat_distill            
 
-    def calc_comp_face_align_and_mb_suppress_losses(self, x_start_ss, x_recons, ca_layers_activations_list,
-                                                    all_subj_indices_1b, BLOCK_SIZE, mon_loss_dict, session_prefix):
+    def calc_comp_face_align_and_mb_suppress_losses(self, mon_loss_dict, session_prefix, 
+                                                    x_start_ss, x_recons, ca_layers_activations_list,
+                                                    all_subj_indices_1b, BLOCK_SIZE):
         # We cannot afford calculating loss_comp_arcface_align for > 1 steps. Otherwise, OOM.
         max_arcface_align_loss_count = 1
         arcface_align_loss_count     = 0
