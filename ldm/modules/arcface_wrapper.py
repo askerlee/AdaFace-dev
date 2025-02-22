@@ -120,7 +120,9 @@ class ArcFaceWrapper(nn.Module):
             print(f"loss_bg_faces_suppress: {loss_bg_faces_suppress.item():.2f}")
         else:
             if suppress_bg_faces and aligned_bg_faces_emb is None:
-                print("loss_bg_faces_suppress = 0. No background faces detected in aligned_images. ")
+                pass
+                # Don't flood the log file with this message.
+                #print("loss_bg_faces_suppress = 0. No background faces detected in aligned_images. ")
 
             loss_bg_faces_suppress = zero_losses[0]
 
