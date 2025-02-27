@@ -13,8 +13,13 @@ from peft.tuners.lora.dora import DoraLinearLayer
 from einops import rearrange
 import math, re
 import numpy as np
+from peft.tuners.tuners_utils import BaseTunerLayer
+
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
+
+def dummy_func(*args, **kwargs):
+    pass
 
 def split_indices_by_instance(indices, as_dict=False):
     indices_B, indices_N = indices
@@ -594,6 +599,14 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
                     attn_opt_modules[lora_path + "_lora_B"] = module.lora_B
                     # lora_uses_dora is always True, so we don't check it here.
                     attn_opt_modules[lora_path + "_lora_magnitude_vector"] = module.lora_magnitude_vector
+                    # We will manage attn adapters directly. By default, LoraLayer is an instance of BaseTunerLayer,
+                    # so according to the code logic in diffusers/loaders/peft.py,
+                    # they will be managed by the diffusers PeftAdapterMixin instance, through the
+                    # disable_adapters(), enable_adapters(), and set_adapter() methods.
+                    # Therefore, we disable these calls on module.
+                    module.enable_adapters  = dummy_func
+                    module.disable_adapters = dummy_func
+                    module.set_adapter      = dummy_func
 
     unet.set_attn_processor(attn_procs)
     print(f"Set up {len(attn_capture_procs)} CrossAttn processors on {attn_capture_procs.keys()}.")
@@ -611,7 +624,6 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
                                  lora_alpha=lora_alpha, lora_dropout=0.1,
                                  target_modules=target_modules_pat)
 
-        #unet = get_peft_model(unet, peft_config, adapter_name='unet_distill')
         # UNet is a diffusers PeftAdapterMixin instance. Using get_peft_model on it will
         # cause weird errors. Instead, we directly use diffusers peft adapter methods.
         unet.add_adapter(peft_config, "recon_loss")
