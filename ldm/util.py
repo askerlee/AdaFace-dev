@@ -2183,7 +2183,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     sc_attns                    = {}
     sc_recon_feats_attn_agg     = {}
     sc_recon_feats_flow         = {}
-    sc_recon_feats_avg          = {}
+    sc_recon_feats_agg          = {}
     sc_recon_feats_flow_attn    = {}
 
     device = scbg_feat.device
@@ -2197,13 +2197,11 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single tokens, or 961 cls comp tokens).
     # matmul() does multiplication on the last two dims.
     scfg_to_ssfg_score = torch.matmul(scfg_q.transpose(1, 2).contiguous(), ssfg_q) * matching_score_scale
-    scfg_to_ssfg_score = smooth_attn_mat(scfg_to_ssfg_score, H, W, kernel_center_weight=2)
+    #scfg_to_ssfg_score = smooth_attn_mat(scfg_to_ssfg_score, H, W, kernel_center_weight=2)
     sc_attns['ssfg']   = F.softmax(scfg_to_ssfg_score, dim=1)
-
     sc_to_mc_score = torch.matmul(scbg_q.transpose(1, 2).contiguous(), mc_q) * matching_score_scale
-    sc_to_mc_score = smooth_attn_mat(sc_to_mc_score, H, W, kernel_center_weight=2)
+    #sc_to_mc_score = smooth_attn_mat(sc_to_mc_score, H, W, kernel_center_weight=2)
     sc_attns['mc'] = F.softmax(sc_to_mc_score, dim=1)
-
     # sc_attns['ssfg'], sc_attns['mc'] are normalized across the sc-token dim, i.e., dim 1.
     # sc_attns['ssfg'].sum(dim=1) == [[1, 1, ..., 1]].
     # sc_recon_feat*['ssfg']: [1, 1280, 961] => [1, 961, 1280]
@@ -2271,9 +2269,9 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
         losses_sc_recons[feat_name] = [] 
         all_token_losses_sc_recon[feat_name] = []
 
-        sc_recon_feats_avg[feat_name] = (sc_recon_feats_attn_agg[feat_name] + sc_recon_feats_flow[feat_name]) / 2
+        sc_recon_feats_agg[feat_name] = (sc_recon_feats_attn_agg[feat_name] + sc_recon_feats_flow[feat_name]) / 2
 
-        sc_recon_feats_candidates = [ sc_recon_feats_avg[feat_name], sc_recon_feats_flow[feat_name] ]
+        sc_recon_feats_candidates = [ sc_recon_feats_agg[feat_name], sc_recon_feats_flow[feat_name] ]
         if feat_name == 'mc':
             # Do 'sameloc' matching on mc, i.e., in addition to matching sc_recon_feats_* with mc features, 
             # we also match scbg_feat with mc features.
@@ -2288,6 +2286,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                 # target_feat has no grad. So no need to cut off the gradients of target_feat.
                 # sc_recon_feat, target_feat, token_losses_sc_recon: [1, N_fg, 1280] or [1, 961, 1280].
                 token_losses_sc_recon = F.mse_loss(sc_recon_feat, target_feat, reduction='none')
+                # Calculate the mean loss at each token by averaging across the feature dim.
+                # [1, 210, 320] -> [1, 210].
+                token_losses_sc_recon = token_losses_sc_recon.mean(dim=2)
+
                 # We compute the tokenwise losses of the 2 or 3 losses,
                 # prepared for the computation of the min loss at each token.
                 loss_sc_recon = token_losses_sc_recon.mean()
@@ -2298,11 +2300,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 
         # We have both attn and flow token losses, and if mc, also sameloc token losses.
         if len(all_token_losses_sc_recon[feat_name]) > 1:
-            # all_token_losses_sc_recon_2_3types: [2 or 3, 1, 210, 320]. 210: number of fg tokens. 320: feature dim.
+            # all_token_losses_sc_recon_2_3types: [2 or 3, 1, 210]. 210: number of fg tokens. 
             all_token_losses_sc_recon_2_3types = torch.stack(all_token_losses_sc_recon[feat_name], dim=0)
-            # Calculate the mean loss at each token by averaging across the feature dim.
-            # [2 or 3, 1, 210, 320] -> [2 or 3, 1, 210].
-            all_token_losses_sc_recon_2_3types = all_token_losses_sc_recon_2_3types.mean(dim=3)
 
             # *** Compute sc recon feat-obj min loss among the 2 or 3 losses. ***
             # token_losses[0] * 1.3: Add a small margin to the losses of the attn scheme 
@@ -2320,7 +2319,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.5
                 all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.02
             else:
-                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.4
+                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 5
 
             # Take the smaller loss tokenwise between attn and flow.
             min_token_losses_sc_recon = all_token_losses_sc_recon_2_3types.min(dim=0).values
@@ -2384,6 +2383,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
             # sc_recon_feats_sparse_attn is selected between the two tokenwise.
             # There's no computation graph associated with sc_recon_feats_sparse_attn, so we don't need to detach it.
             loss_sparse_attn_distill = ((sc_recon_feats_sparse_attn - sc_attns[feat_name]).abs() * sc_tokens_sparse_attn_weights).mean()
+
             avg_sparse_distill_weight = sc_tokens_sparse_attn_weights.mean()
             # sparse_win_rates = (ss_tokens_sparse_attn_advantages > 0).float().mean(dim=1)
             sparse_win_rates   = [ torch.logical_and((ss_tokens_sparse_attn_advantages[i] > 0), 
@@ -2392,6 +2392,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
             sparse_win_rates   = torch.stack(sparse_win_rates, dim=0)
                                                        
         else:
+            # As long as the flow model is available, this shouldn't be reached.
+            breakpoint()
             loss_sc_recon_min = [ loss for loss in losses_sc_recons[feat_name] if loss != 0 ][0]
             loss_sparse_attn_distill = torch.tensor(0., device=device)
             sparse_win_rates   = torch.zeros(len(sc_recon_feats_candidates) - 1, device=device)
