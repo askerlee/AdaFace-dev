@@ -3218,7 +3218,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                 target_modules_pat = DUMMY_TARGET_MODULES
 
             # By default, ffn_lora_scale_down = 16, i.e., the impact of LoRA is 1/16.
-            self.diffusion_model, ffn_lora_layers, ffn_opt_modules = \
+            ffn_lora_layers, ffn_opt_modules = \
                 set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
                                  lora_uses_dora=True, lora_rank=lora_rank, 
                                  lora_alpha=lora_rank // ffn_lora_scale_down,
@@ -3233,11 +3233,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_subj_attn_var_shrink_factor,
             # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_to_q_lora_lora_A, ...
             # ffn_opt_modules:
-            # base_model_model_up_blocks_3_resnets_1_conv1_lora_A, ...
-            # with the prefix 'base_model_model_'. Because ffn_opt_modules are extracted from the peft-wrapped model,
-            # and attn_opt_modules are extracted from the original unet model.
-            # To be compatible with old param keys, we append 'base_model_model_' to the keys of attn_opt_modules.
-            unet_lora_modules.update({ f'base_model_model_{k}': v for k, v in attn_opt_modules.items() })
+            # up_blocks_3_resnets_1_conv1_lora_A, ...
+            unet_lora_modules.update(attn_opt_modules)
             unet_lora_modules.update(ffn_opt_modules)
             # ParameterDict can contain both Parameter and nn.Module.
             # TODO: maybe in the future, we couldn't put nn.Module in nn.ParameterDict.
@@ -3272,9 +3269,14 @@ class DiffusersUNetWrapper(pl.LightningModule):
         ffn_lora_adapter_name = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
         outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
 
-        # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
-        if use_ffn_lora and (ffn_lora_adapter_name is not None):
-            self.diffusion_model.set_adapter(ffn_lora_adapter_name)
+        if not use_ffn_lora:
+            self.diffusion_model.disable_adapters()
+        else:
+            # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
+            if ffn_lora_adapter_name is not None:
+                self.diffusion_model.set_adapter(ffn_lora_adapter_name)
+            else:
+                breakpoint()
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.
@@ -3285,8 +3287,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # use_attn_lora, capture_ca_activations, shrink_subj_attn are only applied to layers 
         # in self.attn_capture_procs.
         # use_ffn_lora is only applied to layers in self.ffn_lora_layers.
-        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   use_attn_lora, use_ffn_lora, capture_ca_activations, 
+        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, 
+                                   use_attn_lora, capture_ca_activations, 
                                    outfeat_capture_blocks_enable_freeu, shrink_subj_attn)
 
         # x: x_noisy from LatentDiffusion.apply_model().
@@ -3312,10 +3314,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                      captured_layer_indices = [23, 24],
                                      out_dtype=out_dtype)
 
-        # Restore capture_ca_activations to False, and disable all loras.
-        # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
-        # and self.outfeat_capture_blocks.        
-        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
+        # Restore capture_ca_activations to False, and disable all attn loras. 
+        # NOTE: FFN loras has been disabled above.
+        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, 
                                    False, False, False, False)
 
         out = out.to(out_dtype)

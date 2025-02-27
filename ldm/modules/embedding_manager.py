@@ -651,6 +651,15 @@ class EmbeddingManager(nn.Module):
                     # Filter out the FFN LoRA modules.
                     unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
 
+
+                total_num_fix_key_prefixes = 0
+                for key in list(unet_lora_modules_sd.keys()):
+                    if key.startswith("base_model_model_"):
+                        new_key = key.replace("base_model_model_", "")
+                        unet_lora_modules_sd[new_key] = unet_lora_modules_sd.pop(key)
+                        total_num_fix_key_prefixes += 1
+                print(f"Fixed {total_num_fix_key_prefixes} key prefixes in {adaface_ckpt_path}")
+
                 total_num_default_renamed_keys = 0
                 total_num_adapter_renamed_keys = 0
                 
@@ -679,7 +688,7 @@ class EmbeddingManager(nn.Module):
                     print(f"Missing keys: {ret.missing_keys}")
                 if ret is not None and len(ret.unexpected_keys) > 0:
                     print(f"Unexpected keys: {ret.unexpected_keys}")
-
+                
             elif self.unet_lora_modules is None:
                 # unet unet_lora_modules are not enabled.
                 continue

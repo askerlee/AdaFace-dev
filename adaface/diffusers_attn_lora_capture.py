@@ -5,6 +5,8 @@ from typing import Optional, Tuple, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
+# UNet is a diffusers PeftAdapterMixin instance.
+from diffusers.loaders.peft import PeftAdapterMixin
 from peft import LoraConfig, get_peft_model
 import peft.tuners.lora as peft_lora
 from peft.tuners.lora.dora import DoraLinearLayer
@@ -609,12 +611,16 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
                                  lora_alpha=lora_alpha, lora_dropout=0.1,
                                  target_modules=target_modules_pat)
 
-        unet_lora = get_peft_model(unet, peft_config, adapter_name='unet_distill')
-        unet_lora.add_adapter("recon_loss", peft_config)
+        #unet = get_peft_model(unet, peft_config, adapter_name='unet_distill')
+        # UNet is a diffusers PeftAdapterMixin instance. Using get_peft_model on it will
+        # cause weird errors. Instead, we directly use diffusers peft adapter methods.
+        unet.add_adapter(peft_config, "recon_loss")
+        unet.add_adapter(peft_config, "unet_distill")
+        unet.enable_adapters()
         # We can switch between the two adapters:
         ''' 
-        unet_lora.set_adapter("recon_loss")
-        unet_lora.set_adapter("unet_distill")
+        unet.set_adapter("recon_loss")
+        unet.set_adapter("unet_distill")
         '''
 
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
@@ -623,7 +629,7 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     # NOTE: lora_modules contain both ffn and cross-attn lora modules.
     ffn_lora_layers = {}
     ffn_opt_modules = {}
-    for name, module in unet_lora.named_modules():
+    for name, module in unet.named_modules():
         if isinstance(module, peft_lora.LoraLayer):
             # We don't want to include cross-attn layers in ffn_lora_layers.
             if target_modules_pat is not None and re.search(target_modules_pat, name):
@@ -636,7 +642,7 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
                 # as base_layer is also a sub-module of module, which we shouldn't optimize.
                 # Each value in ffn_opt_modules is a ModuleDict:
                 '''
-                    (Pdb) ffn_opt_modules['base_model_model_up_blocks_3_resnets_1_conv1_lora_A']
+                    (Pdb) ffn_opt_modules['up_blocks_3_resnets_1_conv1_lora_A']
                     ModuleDict(
                     (unet_distill): Conv2d(640, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
                     (recon_loss): Conv2d(640, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
@@ -649,12 +655,11 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
 
     print(f"Set up {len(ffn_lora_layers)} FFN LoRA layers: {ffn_lora_layers.keys()}.")
     print(f"Set up {len(ffn_opt_modules)} FFN LoRA params: {ffn_opt_modules.keys()}.")
-    if target_modules_pat is not None:
-        unet_lora.print_trainable_parameters()
-    return unet_lora, ffn_lora_layers, ffn_opt_modules
 
-def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
-                               use_attn_lora, use_ffn_lora, capture_ca_activations, 
+    return ffn_lora_layers, ffn_opt_modules
+
+def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, 
+                               use_attn_lora, capture_ca_activations, 
                                outfeat_capture_blocks_enable_freeu, shrink_subj_attn=False):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
@@ -664,12 +669,6 @@ def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_l
     for block in outfeat_capture_blocks:
         block.capture_outfeats  = capture_ca_activations
         block.enable_freeu      = outfeat_capture_blocks_enable_freeu
-    # We no longer manipulate the lora_layer.scaling to disable a LoRA.
-    # That method is slow and seems LoRA params are still optimized.
-    # Instead we directly set the disable_adapters_ flag in the LoRA layers.
-    # If not use_ffn_lora, ffn_lora_layers is an empty ModuleDict.
-    for lora_layer in ffn_lora_layers:
-        lora_layer.disable_adapters_ = not use_ffn_lora
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[23, 24], out_dtype=torch.float32):
