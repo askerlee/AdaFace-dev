@@ -135,8 +135,8 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
-    if enhance_face and "clear face" not in prompt:
-        prompt = "clear face, " + prompt
+    if enhance_face and "portrait" not in prompt:
+        prompt = "face portrait, " + prompt
 
     if gender != "(none)":
         if "portrait" in prompt:
@@ -314,7 +314,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                     gender = gr.Dropdown(label="Gender", value="(none)",
                                         info="Gender prefix. Select only when the model errs.",
                                         container=False,
-                                        choices=[ "(none)", "man", "woman", "girl", "boy" ])
+                                        choices=[ "(none)", "person", "man", "woman", "girl", "boy" ])
 
                 with gr.Column(scale=100):                
                     prompt = gr.Dropdown(label="Prompt",
@@ -323,13 +323,13 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             allow_custom_value=True,
                             choices=[
                                     "highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                                    "walking on the beach, sunset, orange sky, full body view",
+                                    "walking on the beach, sunset, orange sky",
                                     "in a white apron and chef hat, garnishing a gourmet dish",
                                     "dancing pose among folks in a park, waving hands",
                                     "in iron man costume, the sky ablaze with hues of orange and purple, full body view",
                                     "jedi wielding a lightsaber, star wars, eye level shot, full body view",
                                     "night view of tokyo street, neon light, full body view",
-                                    "playing guitar on a boat, ocean waves, full body view",
+                                    "playing guitar on a boat, ocean waves",
                                     "with a passion for reading, curled up with a book in a cozy nook near a window",
                                     "celebrating chinese new year, fireworks, full body view",
                                     "running pose in a park, full body view",
@@ -338,7 +338,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             ])
             
             enhance_face = gr.Checkbox(label="Enhance face", value=False, 
-                                       info="Enhance the facial features by prepending 'clear face' to the prompt")
+                                       info="Enhance the facial features by prepending 'face portrait' to the prompt")
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
