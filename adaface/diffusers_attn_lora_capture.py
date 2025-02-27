@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Callable, List, Optional, Tuple, Union, Dict, Any
+from typing import Optional, Tuple, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
 from diffusers.utils.torch_utils import apply_freeu
@@ -500,6 +500,8 @@ def CrossAttnUpBlock2D_forward_capture(
         else:
             # resnet: ResnetBlock2D instance.
             #LINK diffusers.models.resnet.ResnetBlock2D
+            # up_blocks.3.resnets.2.conv_shortcut is a module within ResnetBlock2D,
+            # it's not transforming the UNet shortcut features.
             hidden_states = resnet(hidden_states, temb)
             hidden_states = attn(
                 hidden_states,
@@ -598,12 +600,22 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
 
 # NOTE: cross-attn layers are included in the returned lora_modules.
 def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=192, lora_alpha=16):
+    # target_modules_pat = 'up_blocks.3.resnets.[12].conv[a-z0-9_]+'
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
+    # Cannot set to conv.+ as it will match added adapter module names, including
+    # up_blocks.3.resnets.1.conv1.base_layer, up_blocks.3.resnets.1.conv1.lora_dropout
     if target_modules_pat is not None:
         peft_config = LoraConfig(use_dora=lora_uses_dora, inference_mode=False, r=lora_rank, 
                                  lora_alpha=lora_alpha, lora_dropout=0.1,
                                  target_modules=target_modules_pat)
-        unet = get_peft_model(unet, peft_config)
+
+        unet_lora = get_peft_model(unet, peft_config, adapter_name='unet_distill')
+        unet_lora.add_adapter("recon_loss", peft_config)
+        # We can switch between the two adapters:
+        ''' 
+        unet_lora.set_adapter("recon_loss")
+        unet_lora.set_adapter("unet_distill")
+        '''
 
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
     # lora_layers are used to set the flag, not used for optimization.
@@ -611,7 +623,7 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     # NOTE: lora_modules contain both ffn and cross-attn lora modules.
     ffn_lora_layers = {}
     ffn_opt_modules = {}
-    for name, module in unet.named_modules():
+    for name, module in unet_lora.named_modules():
         if isinstance(module, peft_lora.LoraLayer):
             # We don't want to include cross-attn layers in ffn_lora_layers.
             if target_modules_pat is not None and re.search(target_modules_pat, name):
@@ -622,6 +634,14 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
                 # the LoRA matrices in each module.
                 # NOTE: We cannot put every sub-module of module into lora_modules,
                 # as base_layer is also a sub-module of module, which we shouldn't optimize.
+                # Each value in ffn_opt_modules is a ModuleDict:
+                '''
+                    (Pdb) ffn_opt_modules['base_model_model_up_blocks_3_resnets_1_conv1_lora_A']
+                    ModuleDict(
+                    (unet_distill): Conv2d(640, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                    (recon_loss): Conv2d(640, 192, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False)
+                    )                
+                '''
                 ffn_opt_modules[name + "_lora_A"] = module.lora_A
                 ffn_opt_modules[name + "_lora_B"] = module.lora_B
                 if lora_uses_dora:
@@ -630,8 +650,8 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     print(f"Set up {len(ffn_lora_layers)} FFN LoRA layers: {ffn_lora_layers.keys()}.")
     print(f"Set up {len(ffn_opt_modules)} FFN LoRA params: {ffn_opt_modules.keys()}.")
     if target_modules_pat is not None:
-        unet.print_trainable_parameters()
-    return unet, ffn_lora_layers, ffn_opt_modules
+        unet_lora.print_trainable_parameters()
+    return unet_lora, ffn_lora_layers, ffn_opt_modules
 
 def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, ffn_lora_layers, 
                                use_attn_lora, use_ffn_lora, capture_ca_activations, 

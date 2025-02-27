@@ -516,6 +516,7 @@ class LatentDiffusion(DDPM):
             # So float16 is sufficient.
             if self.cls_subj_mix_scheme == 'unet':
                 unets = [unet, unet]
+                # ensemble weights: [0.2, 0.8]
                 unet_weights_in_ensemble = [1 - self.cls_subj_mix_ratio, self.cls_subj_mix_ratio]
             else:
                 unets = [unet]
@@ -1420,6 +1421,8 @@ class LatentDiffusion(DDPM):
 
             # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings as cls_comp_emb2.
             cls_comp_emb2      = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb      * self.cls_subj_mix_ratio
+            # Mix 0.9 of the subject comp embeddings with 0.1 of the cls comp embeddings 
+            # as subj_comp_emb2 and subj_comp_rep_emb2.
             # if cls_subj_mix_ratio == 0.8, then reverse_mix_ratio == 0.9.
             reverse_mix_ratio  = 0.5 + self.cls_subj_mix_ratio / 2
             # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp embeddings as subj_comp_emb2.
@@ -1475,18 +1478,21 @@ class LatentDiffusion(DDPM):
 
     # apply_model() is called both during training and inference.
     # apply_model() is called in sliced_apply_model() and guided_denoise().
-    def apply_model(self, x_noisy, t, cond_context, use_attn_lora=False, use_ffn_lora=False):
+    def apply_model(self, x_noisy, t, cond_context, use_attn_lora=False, 
+                    use_ffn_lora=False, ffn_lora_adapter_name=None):
         # self.model: DiffusionWrapper -> 
         # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
         # cond_context[2]: extra_info.
         cond_context[2]['use_attn_lora'] = use_attn_lora
         cond_context[2]['use_ffn_lora']  = use_ffn_lora
+        cond_context[2]['ffn_lora_adapter_name'] = ffn_lora_adapter_name
         x_recon = self.model(x_noisy, t, cond_context)
         return x_recon
 
     # sliced_apply_model() is only called within guided_denoise().
     def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, 
-                           enable_grad, use_attn_lora=False, use_ffn_lora=False):
+                           enable_grad, use_attn_lora=False, 
+                           use_ffn_lora=False, ffn_lora_adapter_name=None):
         x_noisy_ = x_noisy[slice_inst]
         t_       = t[slice_inst]
         prompt_emb, prompt_in, extra_info = cond_context
@@ -1494,9 +1500,11 @@ class LatentDiffusion(DDPM):
         prompt_in_  = prompt_in[slice_inst]
         cond_context_ = (prompt_emb_, prompt_in_, extra_info)
         with torch.set_grad_enabled(enable_grad):
-            # use_attn_lora and use_ffn_lora are set in apply_model().
+            # use_attn_lora, use_ffn_lora, and ffn_lora_adapter_name are set in apply_model().
             noise_pred = self.apply_model(x_noisy_, t_, cond_context_, 
-                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora)
+                                          use_attn_lora=use_attn_lora, 
+                                          use_ffn_lora=use_ffn_lora, 
+                                          ffn_lora_adapter_name=ffn_lora_adapter_name)
         return noise_pred
 
     # do_pixel_recon: return denoised images for CLIP evaluation. 
@@ -1509,7 +1517,7 @@ class LatentDiffusion(DDPM):
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, outfeat_capture_blocks_enable_freeu=False,
-                       use_attn_lora=False, use_ffn_lora=False):
+                       use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         
         x_noisy = self.q_sample(x_start, t, noise)
         ca_layers_activations = None
@@ -1529,14 +1537,14 @@ class LatentDiffusion(DDPM):
         if batch_part_has_grad == 'none':
             with torch.no_grad():
                 noise_pred = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
-                                                use_ffn_lora=use_ffn_lora)
+                                              use_ffn_lora=use_ffn_lora, ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'all':
             noise_pred = self.apply_model(x_noisy, t, cond_context, use_attn_lora=use_attn_lora,
-                                            use_ffn_lora=use_ffn_lora)
+                                          use_ffn_lora=use_ffn_lora, ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
@@ -1550,14 +1558,14 @@ class LatentDiffusion(DDPM):
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
                                                     enable_grad=False, use_attn_lora=use_attn_lora,
-                                                    use_ffn_lora=use_ffn_lora)
+                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_subj_attn']   = shrink_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
-                                                    use_ffn_lora=use_ffn_lora)
+                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
             extra_info_ms = copy.copy(extra_info)
@@ -1567,7 +1575,6 @@ class LatentDiffusion(DDPM):
                 extra_info_ms['subj_indices']       = subj_indices
                 extra_info_ms['shrink_subj_attn']   = shrink_subj_attn
                 mc_uses_attn_lora = use_attn_lora
-                mc_uses_ffn_lora  = use_ffn_lora
             else:
                 # The mc instance is indeed mc.
                 # We never need to suppress the subject attention in the mc instances, nor do we apply LoRAs.
@@ -1575,12 +1582,11 @@ class LatentDiffusion(DDPM):
                 extra_info_ms['subj_indices']       = None
                 extra_info_ms['shrink_subj_attn']   = False
                 mc_uses_attn_lora = False
-                mc_uses_ffn_lora  = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
             noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
                                                     enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
-                                                    use_ffn_lora=mc_uses_ffn_lora)
+                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
             
             extra_info_mc = copy.copy(extra_info)
             extra_info_mc['subj_indices']       = None
@@ -1589,7 +1595,7 @@ class LatentDiffusion(DDPM):
             # Never use attn LoRAs and ffn LoRAs on mc instances.
             noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
                                                     enable_grad=False, use_attn_lora=False,
-                                                    use_ffn_lora=False)
+                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
 
             noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
             extra_info = cond_context[2]
@@ -1621,7 +1627,7 @@ class LatentDiffusion(DDPM):
             with torch.no_grad():
                 # noise_pred_uncond: [BS, 4, 64, 64]
                 noise_pred_uncond = self.apply_model(x_noisy, t, uncond_context, use_attn_lora=False, 
-                                                     use_ffn_lora=use_ffn_lora)
+                                                     use_ffn_lora=use_ffn_lora, ffn_lora_adapter_name=ffn_lora_adapter_name)
             # If do clip filtering, CFG makes the contents in the 
             # generated images more pronounced => smaller CLIP loss.
             noise_pred = noise_pred * cfg_scale - noise_pred_uncond * (cfg_scale - 1)
@@ -1665,7 +1671,7 @@ class LatentDiffusion(DDPM):
                                     capture_ca_activations=True,
                                     outfeat_capture_blocks_enable_freeu=False,
                                     use_attn_lora=enable_unet_attn_lora,
-                                    use_ffn_lora=False)
+                                    use_ffn_lora=True, ffn_lora_adapter_name='recon_loss')
             
             noise_preds.append(noise_pred)
             # The predicted x0 is used as the x_start in the next denoising step.
@@ -1786,7 +1792,7 @@ class LatentDiffusion(DDPM):
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
-                                    use_ffn_lora=False)
+                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
         
             noise_preds.append(noise_pred)
             x_starts.append(x_recon.detach())
@@ -2377,7 +2383,8 @@ class LatentDiffusion(DDPM):
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
-                                    use_ffn_lora=self.unet_uses_ffn_lora)   
+                                    use_ffn_lora=self.unet_uses_ffn_lora, 
+                                    ffn_lora_adapter_name='unet_distill')
 
             noise_preds.append(noise_pred_s)
 
@@ -3203,7 +3210,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # We'll always disable them in set_lora_and_capture_flags().
             # This is to convert the unet to a PEFT model, which can handle fp16 well.
             if self.use_ffn_lora:
-                target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
+                target_modules_pat = 'up_blocks.3.resnets.[12].conv[a-z0-9_]+'
             else:
                 # A special pattern, "dummy-target-modules" tells PEFT to add loras on NONE of the layers.
                 # We couldn't simply skip PEFT initialization (converting unet to a PEFT model),
@@ -3262,7 +3269,12 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # If use_attn_lora is set to False globally, then disable it in this call.
         use_attn_lora = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
         use_ffn_lora  = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
+        ffn_lora_adapter_name = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
         outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
+
+        # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
+        if use_ffn_lora and (ffn_lora_adapter_name is not None):
+            self.diffusion_model.set_adapter(ffn_lora_adapter_name)
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
         # and self.outfeat_capture_blocks.
@@ -3281,10 +3293,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
                                        for ts in (x, prompt_emb, img_mask) ]
         
-        out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=prompt_emb, 
-                                   cross_attention_kwargs={'img_mask': img_mask, 
-                                                           'subj_indices': subj_indices},
-                                   return_dict=False)[0]
+        with torch.amp.autocast("cuda", enabled=(self.dtype == torch.float16)):
+            out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=prompt_emb, 
+                                    cross_attention_kwargs={'img_mask': img_mask, 
+                                                            'subj_indices': subj_indices},
+                                    return_dict=False)[0]
 
         # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
         # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.

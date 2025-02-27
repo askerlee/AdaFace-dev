@@ -643,17 +643,37 @@ class EmbeddingManager(nn.Module):
                 
             if self.unet_lora_modules is not None and 'unet_lora_modules' in ckpt \
               and (load_unet_attn_lora_from_ckpt or load_unet_ffn_lora_from_ckpt):
-                unet_lora_modules = ckpt['unet_lora_modules']
+                unet_lora_modules_sd = ckpt['unet_lora_modules']
                 if not load_unet_attn_lora_from_ckpt:
                     # Filter out the attention LoRA modules.
-                    unet_lora_modules = { k: v for k, v in unet_lora_modules.items() if 'attn2_processor' not in k }
+                    unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'attn2_processor' not in k }
                 if not load_unet_ffn_lora_from_ckpt:
                     # Filter out the FFN LoRA modules.
-                    unet_lora_modules = { k: v for k, v in unet_lora_modules.items() if 'resnets' not in k }
+                    unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
+
+                total_num_default_renamed_keys = 0
+                total_num_adapter_renamed_keys = 0
+                
+                for key in list(unet_lora_modules_sd.keys()):
+                    # Copy the missing keys from the default weight.
+                    key_renamed = False
+                    for adapter_name in ('recon_loss', 'unet_distill'):
+                        adapter_key = key.replace('default.weight', f'{adapter_name}.weight')
+                        if adapter_key in self.unet_lora_modules.state_dict().keys() \
+                          and (adapter_key not in unet_lora_modules_sd):
+                            unet_lora_modules_sd[adapter_key] = unet_lora_modules_sd[key]
+                            # print(f"Adapter key {adapter_key} copied from {key}")                    
+                            key_renamed = True
+                            total_num_adapter_renamed_keys += 1
+                    if key_renamed:
+                        total_num_default_renamed_keys += 1
+                        del unet_lora_modules_sd[key]
+
+                print(f"Renamed {total_num_default_renamed_keys} default keys to {total_num_adapter_renamed_keys} adapter keys in {adaface_ckpt_path}")
 
                 # NOTE: if ddpm.unet_lora_rank is different from the rank in the ckpt, these lora modules won't be loaded.
-                ret = self.unet_lora_modules.load_state_dict(unet_lora_modules, strict=False)
-                print(f"Loaded {len(unet_lora_modules)} LoRA weights")
+                ret = self.unet_lora_modules.load_state_dict(unet_lora_modules_sd, strict=False)
+                print(f"Loaded {len(unet_lora_modules_sd)} LoRA weights")
 
                 if ret is not None and len(ret.missing_keys) > 0:
                     print(f"Missing keys: {ret.missing_keys}")
