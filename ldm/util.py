@@ -1799,8 +1799,8 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     flow_model, ca_layers_activations,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
-                                    recon_scaled_loss_threses={'mc': 0.1, 'ssfg': 0.1},
-                                    recon_max_scale_of_threses=50000):
+                                    recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
+                                    recon_max_scale_of_threses=10):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -2416,8 +2416,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                recon_feat_objectives=['attn_out', 'outfeat'], 
-                               recon_scaled_loss_threses={'mc': 0.1, 'ssfg': 0.1},
-                               recon_max_scale_of_threses=50000,
+                               recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
+                               recon_max_scale_of_threses=10,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 
@@ -2551,8 +2551,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
-            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 1000.
-            # ssfg: 0.4 * 1000 = 400. mc: 0.5 * 1000 = 500.
+            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 10.
+            # max loss 0.4 * 10 = 4.
             total_loss_count += 1
             to_discard = (losses[-1] >= recon_scaled_loss_threses[feat_name] * recon_max_scale_of_threses)
             if to_discard:
