@@ -3278,15 +3278,11 @@ class DiffusersUNetWrapper(pl.LightningModule):
             else:
                 breakpoint()
 
-        # set_lora_and_capture_flags() accesses self.attn_capture_procs, self.ffn_lora_layers, 
-        # and self.outfeat_capture_blocks.
+        # set_lora_and_capture_flags() accesses self.attn_capture_procs and self.outfeat_capture_blocks.
         # The activation capture flags and caches in attn_capture_procs and outfeat_capture_blocks are set differently.
         # So we keep them in different lists.
-        # The scaling factors of attn_capture_procs and ffn_lora_layers are also set differently.
-        # (They can be unified, but currently it's more convenient to keep them separate.)
         # use_attn_lora, capture_ca_activations, shrink_subj_attn are only applied to layers 
         # in self.attn_capture_procs.
-        # use_ffn_lora is only applied to layers in self.ffn_lora_layers.
         set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, 
                                    use_attn_lora, capture_ca_activations, 
                                    outfeat_capture_blocks_enable_freeu, shrink_subj_attn)
