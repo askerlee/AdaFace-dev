@@ -1788,7 +1788,7 @@ class LatentDiffusion(DDPM):
                                     subj_comp_distill_on_rep_prompts=True,
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    outfeat_capture_blocks_enable_freeu=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
@@ -2379,7 +2379,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    outfeat_capture_blocks_enable_freeu=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
