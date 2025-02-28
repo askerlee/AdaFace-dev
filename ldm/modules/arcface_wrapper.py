@@ -47,18 +47,19 @@ class ArcFaceWrapper(nn.Module):
     # Suppose images_ts has been normalized to [-1, 1].
     # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
     def embed_image_tensor(self, images_ts, T=20, bleed=0, embed_bg_faces=True,
-                           use_whole_image_if_no_face=False, enable_grad=True):
+                           enable_grad=True):
         # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
         # the input tensor is preserved.
         # But the cropping operation is wrapped with torch.no_grad().
-        # fg_face_bboxes: long tensor of [BS1, 4], BS1: the number of successful instances in the batch.
-        fg_face_crops, bg_face_crops_flat, fg_face_bboxes, failed_inst_indices = \
-            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, bleed=bleed,
-                                       use_whole_image_if_no_face=use_whole_image_if_no_face)
+        # fg_face_bboxes: long tensor of [BS, 4].
+        fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_detected_inst_mask = \
+            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, bleed=bleed)
         
-        # No face detected in any instances in the batch. fg_face_bboxes is an empty tensor.
-        if fg_face_crops is None:
-            return None, None, None, failed_inst_indices
+        # No face detected in any instances in the batch. 
+        # fg_face_bboxes is a tensor of the full image size, 
+        # and doesn't indicate the face locations.
+        if face_detected_inst_mask.sum() == 0:
+            return None, None, None, face_detected_inst_mask
         
         # Arcface takes grayscale images as input
         rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
@@ -67,6 +68,9 @@ class ArcFaceWrapper(nn.Module):
         # Resize to (128, 128); arcface takes 128x128 images as input.
         fg_faces_gray = F.interpolate(fg_faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
         with torch.set_grad_enabled(enable_grad):
+            # If some instances have no face detected, we still compute their face embeddings,
+            # but such face embeddings shouldn't be used for loss computation, instead,
+            # they should be filtered out by face_detected_inst_mask.
             fg_faces_emb = self.arcface(fg_faces_gray.to(self.dtype))
 
         if embed_bg_faces and bg_face_crops_flat is not None:
@@ -77,32 +81,33 @@ class ArcFaceWrapper(nn.Module):
         else:
             bg_faces_emb = None
 
-        return fg_faces_emb, bg_faces_emb, fg_face_bboxes, failed_inst_indices
+        return fg_faces_emb, bg_faces_emb, fg_face_bboxes, face_detected_inst_mask
 
     # T: minimal face height/width to be detected.
     # ref_images:     the groundtruth images.
     # aligned_images: the generated   images.
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=2, 
-                                suppress_bg_faces=True,
-                                use_whole_image_if_no_face=False):
+                                suppress_bg_faces=True):
         # ref_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
-        ref_fg_faces_emb, _, ref_fg_face_bboxes, ref_failed_inst_indices = \
+        ref_fg_faces_emb, _, ref_fg_face_bboxes, ref_face_detected_inst_mask = \
             self.embed_image_tensor(ref_images, T, bleed, embed_bg_faces=False,
-                                    use_whole_image_if_no_face=False, enable_grad=False)
+                                    enable_grad=False)
         # bg_embs are not separated by instances, but flattened. 
         # We don't align them, just suppress them. So we don't need the batch dimension.
-        aligned_fg_faces_emb, aligned_bg_faces_emb, aligned_fg_face_bboxes, aligned_failed_inst_indices = \
+        aligned_fg_faces_emb, aligned_bg_faces_emb, aligned_fg_face_bboxes, aligned_face_detected_inst_mask = \
             self.embed_image_tensor(aligned_images, T, bleed, embed_bg_faces=suppress_bg_faces,
-                                    use_whole_image_if_no_face=use_whole_image_if_no_face, 
                                     enable_grad=True)
         
         zero_losses = [ torch.tensor(0., dtype=ref_images.dtype, device=ref_images.device) for _ in range(2) ]
-        if len(ref_failed_inst_indices) > 0:
-            print(f"Failed to detect faces in ref_images-{ref_failed_inst_indices}")
-            return zero_losses[0], zero_losses[1], None
-        if len(aligned_failed_inst_indices) > 0:
-            print(f"Failed to detect faces in aligned_images-{aligned_failed_inst_indices}")
-            return zero_losses[0], zero_losses[1], None
+        # As long as there's one instance in the reference batch that has no face detected, 
+        # we don't compute the loss and return zero losses.
+        # But only if all instances in the aligned batch have no face detected, we return zero losses.
+        if (1 - ref_face_detected_inst_mask).sum() > 0:
+            print(f"Failed to detect faces in some ref_images. Cannot compute arcface align loss")
+            return zero_losses[0], zero_losses[1], None, aligned_face_detected_inst_mask
+        if aligned_face_detected_inst_mask.sum() == 0:
+            print(f"Failed to detect faces in any aligned_images. Cannot compute arcface align loss")
+            return zero_losses[0], zero_losses[1], None, aligned_face_detected_inst_mask
 
         # If the numbers of instances in ref_fg_faces_emb and aligned_fg_faces_emb are different, then there's only one ref image, 
         # and multiple aligned images of the same person.
@@ -111,7 +116,11 @@ class ArcFaceWrapper(nn.Module):
             ref_fg_faces_emb = ref_fg_faces_emb.repeat(len(aligned_fg_faces_emb)//len(ref_fg_faces_emb), 1)
         
         # labels = 1: align the embeddings of the same person.
-        loss_arcface_align = F.cosine_embedding_loss(ref_fg_faces_emb, aligned_fg_faces_emb, torch.ones(ref_fg_faces_emb.shape[0]).to(ref_fg_faces_emb.device))
+        losses_arcface_align = F.cosine_embedding_loss(ref_fg_faces_emb, aligned_fg_faces_emb, 
+                                                       torch.ones(ref_fg_faces_emb.shape[0]).to(ref_fg_faces_emb.device),
+                                                       reduction='none')
+        # Mask out the losses of instances that have no face detected.
+        loss_arcface_align = (losses_arcface_align * aligned_face_detected_inst_mask).sum() / aligned_face_detected_inst_mask.sum()
         print(f"loss_arcface_align: {loss_arcface_align.item():.2f}")
 
         if suppress_bg_faces and aligned_bg_faces_emb is not None:
@@ -126,4 +135,4 @@ class ArcFaceWrapper(nn.Module):
 
             loss_bg_faces_suppress = zero_losses[0]
 
-        return loss_arcface_align, loss_bg_faces_suppress, aligned_fg_face_bboxes
+        return loss_arcface_align, loss_bg_faces_suppress, aligned_fg_face_bboxes, aligned_face_detected_inst_mask

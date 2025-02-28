@@ -178,6 +178,8 @@ class DDPM(pl.LightningModule):
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
         self.normal_recon_iters_count                = 0
+        self.normal_recon_images_count               = 0
+        self.normal_recon_face_images_count          = 0
         self.unet_distill_iters_count                = 0
         self.comp_iters_face_detected_count          = 0
         self.comp_iters_bg_has_face_count       = 0
@@ -1641,7 +1643,7 @@ class LatentDiffusion(DDPM):
     def recon_multistep_denoise(self, mon_loss_dict, session_prefix,
                                 x_start, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, num_denoising_steps, 
-                                enable_unet_attn_lora, do_adv_attack, DO_ADV_BS):
+                                enable_unet_attn_lora, enable_unet_ffn_lora, do_adv_attack, DO_ADV_BS):
 
         assert num_denoising_steps <= 10
 
@@ -1668,7 +1670,8 @@ class LatentDiffusion(DDPM):
                                     capture_ca_activations=True,
                                     outfeat_capture_blocks_enable_freeu=False,
                                     use_attn_lora=enable_unet_attn_lora,
-                                    use_ffn_lora=True, ffn_lora_adapter_name='recon_loss')
+                                    use_ffn_lora=enable_unet_ffn_lora, 
+                                    ffn_lora_adapter_name='recon_loss')
             
             noise_preds.append(noise_pred)
             # The predicted x0 is used as the x_start in the next denoising step.
@@ -1877,10 +1880,27 @@ class LatentDiffusion(DDPM):
             W = self.recon_num_denoising_steps_range[1] - self.recon_num_denoising_steps_range[0] + 1
             num_recon_denoising_steps = self.normal_recon_iters_count % W + self.recon_num_denoising_steps_range[0]
 
+
+            # Enable attn LoRAs on UNet 50% of the time during recon iterations.
+            enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+            enable_unet_ffn_lora  = False
+            # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 3 recon iterations.
+            # Doing adversarial attack on the input images seems to introduce high-frequency noise 
+            # to the whole image (not just the face area), so we only do it after the first denoise step.
+            do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
+                            and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+            # LDM VAE uses fp32, and we can only afford a DO_ADV_BS=1.
+            if self.use_ldm_unet:
+                DO_ADV_BS = 1
+            else:
+                # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
+                DO_ADV_BS = min(x_start.shape[0], 2)
+
             loss_normal_recon = \
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
                                             num_recon_denoising_steps, x_start, noise, cond_context, 
-                                            img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights)
+                                            img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights,
+                                            enable_unet_attn_lora, enable_unet_ffn_lora, do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
@@ -1921,6 +1941,8 @@ class LatentDiffusion(DDPM):
             num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 2
 
             x_start0 = x_start
+            # Only the first 1/4 of the batch (actually 1 image), i.e., x_start0_ss, is used for priming.
+            # They are repeated 4 times to form a primed batch.
             x_start_primed, noise, masks = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
                                                     (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
@@ -2028,7 +2050,7 @@ class LatentDiffusion(DDPM):
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon)
 
         # recon_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
-        loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes = \
+        loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes, recon_fg_face_detected_inst_mask = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, bleed=bleed,
                                                  suppress_bg_faces=True)
         loss_arcface_align      = loss_arcface_align.to(x_start.dtype)
@@ -2036,7 +2058,7 @@ class LatentDiffusion(DDPM):
         # Map the recon_fg_face_bboxes from the pixel space to latent space (scale down by 8x).
         # recon_fg_face_bboxes is None if there are no faces detected in x_recon.
         recon_fg_face_bboxes = pixel_bboxes_to_latent(recon_fg_face_bboxes, x_start_pixels.shape[-1], x_start.shape[-1])
-        return loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes
+        return loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes, recon_fg_face_detected_inst_mask
 
     def calc_arcface_adv_grad(self, x_start, bleed=2):
         x_start.requires_grad = True
@@ -2045,12 +2067,13 @@ class LatentDiffusion(DDPM):
         orig_image = self.decode_first_stage_with_grad(x_start)
         # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
         # so such faces are really small.
-        face_embs, _, fg_face_bboxes, failed_inst_indices = \
-            self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, 
-                                            use_whole_image_if_no_face=False, enable_grad=True)
-        if len(failed_inst_indices) > 0:
-            print(f"Failed to detect faces in image-{failed_inst_indices}")
+        face_embs, _, fg_face_bboxes, face_detected_inst_mask = \
+            self.arcface.embed_image_tensor(orig_image, T=20, bleed=bleed, enable_grad=True)
+        no_face_img_num = (1 - face_detected_inst_mask).sum()
+        if no_face_img_num.sum() > 0:
+            print(f"Failed to detect faces in {no_face_img_num} image, unable to compute adv_grad.")
             return None
+        
         # NOTE: We want to push face_embs towards the negative direction, 
         # which is equivalent to push face_embs towards 0 == minimize (face_embs*face_embs).mean().
         # It's not simply reduce the magnitude of the face embedding. Since we add noise to the face image,
@@ -2086,7 +2109,9 @@ class LatentDiffusion(DDPM):
 
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, cond_context, 
-                               img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights):
+                               img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
+                               enable_unet_attn_lora, enable_unet_ffn_lora, 
+                               do_adv_attack, DO_ADV_BS):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
 
         BLOCK_SIZE = x_start.shape[0]
@@ -2094,12 +2119,6 @@ class LatentDiffusion(DDPM):
         # In the subsequent denoising steps, the timesteps become gradually earlier.
         t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
                           (x_start.shape[0],), device=self.device).long()
-        # LDM VAE uses fp32, and we can only afford a DO_ADV_BS=1.
-        if self.use_ldm_unet:
-            DO_ADV_BS = 1
-        else:
-            # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
-            DO_ADV_BS = min(x_start.shape[0], 2)
 
         if num_denoising_steps > 1 or self.iter_flags['recon_on_comp_prompt']:
             # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
@@ -2118,14 +2137,6 @@ class LatentDiffusion(DDPM):
         # otherwise, recon_bg_pixel_weight == 0.01, a tiny penalty on bg errors.
         recon_bg_pixel_weight = recon_bg_pixel_weights[self.iter_flags['recon_on_comp_prompt']]
 
-        # Enable attn LoRAs on UNet 50% of the time during recon iterations.
-        enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-        # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 3 recon iterations.
-        # Doing adversarial attack on the input images seems to introduce high-frequency noise 
-        # to the whole image (not just the face area), so we only do it after the first denoise step.
-        do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
-                        and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
-
         input_images = self.decode_first_stage(x_start)
         # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
         # All of them are 3, indicating purple.
@@ -2138,7 +2149,8 @@ class LatentDiffusion(DDPM):
         noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
                                          x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
-                                         cfg_scale, num_denoising_steps, enable_unet_attn_lora, 
+                                         cfg_scale, num_denoising_steps, 
+                                         enable_unet_attn_lora, enable_unet_ffn_lora,
                                          do_adv_attack, DO_ADV_BS)
         
         losses_recon = []
@@ -2161,21 +2173,25 @@ class LatentDiffusion(DDPM):
                 # and recon loss is skipped. 
                 # TODO: Ideally, we should still compute the recon loss on the "good" instances 
                 # with face detected. But it's a bit tricky to implement.
-                loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes = \
+                loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start, x_recon)
                 
+                self.normal_recon_images_count += BLOCK_SIZE
+
                 if loss_arcface_align_recon > 0:
                     losses_arcface_align_recon.append(loss_arcface_align_recon)
+                    self.normal_recon_face_images_count += face_detected_inst_mask.sum().item()
 
                     # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
                     # bg loss is given a tiny weight to suppress multi-face artifacts.
-                    # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0.01, i.e., 
-                    # we only penalize the bg errors slightly to allow the bg to be compositional patterns.
+                    # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0, i.e., 
+                    # we don't penalize the bg errors to allow the bg to be compositional patterns.
                     # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
                     # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
                     # If img_mask = None, then blank pixels are regularized as bg pixels.
                     loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
-                        calc_recon_and_suppress_losses(noise_pred, noise, ca_layers_activations,
+                        calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_mask, 
+                                                       ca_layers_activations,
                                                        all_subj_indices, None, fg_mask,
                                                        recon_bg_pixel_weight, x_start.shape[0])
                     
@@ -2212,6 +2228,9 @@ class LatentDiffusion(DDPM):
             loss_normal_recon += loss_recon
 
             if loss_arcface_align_recon > 0:
+                recon_face_image_ratio = self.normal_recon_face_images_count / (self.normal_recon_images_count + 1e-6)
+                mon_loss_dict.update({f'{session_prefix}/recon_face_image_ratio': recon_face_image_ratio})
+
                 mon_loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
                 # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.005 => 0.0025 - 0.004.
@@ -2376,7 +2395,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    outfeat_capture_blocks_enable_freeu=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -2410,8 +2429,8 @@ class LatentDiffusion(DDPM):
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
                 calc_recon_loss(F.mse_loss, noise_pred, noise_gt.to(noise_pred.dtype), 
-                                img_mask, fg_mask, fg_pixel_weight=1,
-                                bg_pixel_weight=recon_bg_pixel_weight)
+                                img_mask, fg_mask, instance_mask=None, 
+                                fg_pixel_weight=1, bg_pixel_weight=recon_bg_pixel_weight)
 
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
             
@@ -2585,7 +2604,8 @@ class LatentDiffusion(DDPM):
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_start_primed, noise, masks
 
-    # x_start: the latent of the input image, without priming.
+    # x_start_ss: the latent of the first 1/4 batch of input images (actually only 1 image), 
+    # ** without priming.
     def calc_comp_feat_distill_loss(self, mon_loss_dict, session_prefix,
                                     x_start_ss, x_recons, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
@@ -2618,10 +2638,10 @@ class LatentDiffusion(DDPM):
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
             # bleed=4: remove 4 pixels from each side of the detected face area.
-            fg_face_crops, bg_face_crops_flat, ss_fg_face_bboxes, failed_inst_indices = \
-                self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, bleed=4,
-                                                   use_whole_image_if_no_face=False)
-            if len(failed_inst_indices) == 0:
+            fg_face_crops, bg_face_crops_flat, ss_fg_face_bboxes, face_detected_inst_mask = \
+                self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, bleed=4)
+            # Only compute losses when all instances have faces detected.
+            if (1 - face_detected_inst_mask).sum() == 0:
                 # If there are no failed indices, then we get ss_fg_mask.
                 # NOTE: ss_fg_face_bboxes are coords on ss_x_recon_pixels, 512*512.
                 # ss_fg_mask is on the latents, 64*64. So we scale ss_fg_face_bboxes down by 8.
@@ -2831,7 +2851,10 @@ class LatentDiffusion(DDPM):
                 # and sc_fg_face_bboxes is None.
                 # NOTE: In the first iteration, sc_fg_mask is None, and it's fine.
                 
-                loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, sc_fg_face_bboxes = \
+                # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
+                # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
+                loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, \
+                  sc_fg_face_bboxes, sc_fg_face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
                 # Found valid face images. Stop trying, since we cannot afford calculating loss_comp_arcface_align for > 1 steps.
                 if loss_arcface_align_comp_step > 0:

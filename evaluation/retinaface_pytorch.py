@@ -130,10 +130,9 @@ class RetinaFaceClient(nn.Module):
     # Find facial areas of given image tensors and crop them.
     # images_ts: typically [BS, 3, 512, 512] from diffusion (could be any sizes).
     # image_ts: [3, 512, 512].
-    # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), failed_inst_indices, face_bboxes
-    def crop_faces(self, images_ts, out_size=(128, 128), T=20, bleed=0, 
-                   use_whole_image_if_no_face=False):
-        failed_inst_indices = []
+    # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), face_detected_inst_mask, face_bboxes
+    def crop_faces(self, images_ts, out_size=(128, 128), T=20, bleed=0):
+        face_detected_inst_mask = []
         fg_face_bboxes      = []
         fg_face_crops       = []
         bg_face_crops_flat  = []
@@ -147,15 +146,13 @@ class RetinaFaceClient(nn.Module):
             # .detect_faces() doesn't require grad. So we convert the image tensor to numpy.
             faces = self.detect_faces(image_np, T=T)
             if len(faces) == 0:
-                if use_whole_image_if_no_face:
-                    face_crop = image_ts
-                    face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
-                    fg_face_crops.append(face_crop)
-                    fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
-                else:
-                    # No face detected
-                    failed_inst_indices.append(i)
-                    continue
+                face_crop = image_ts
+                face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
+                fg_face_crops.append(face_crop)
+                fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
+                # No face detected
+                face_detected_inst_mask.append(0)
+                continue
             else:
                 face_bboxes = []
                 # Find the largest facial area
@@ -178,8 +175,12 @@ class RetinaFaceClient(nn.Module):
 
                 if len(face_bboxes) == 0:
                     # After trimming bleed pixels, no faces are >= T. So this instance is failed.
-                    failed_inst_indices.append(i)
-                    face_bboxes.append((0, 0, 0, 0))
+                    face_crop = image_ts
+                    face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
+                    fg_face_crops.append(face_crop)
+                    fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
+                    # No face detected
+                    face_detected_inst_mask.append(0)
                     continue
 
                 # Sort face_bboxes by the facial area in descending order
@@ -201,19 +202,16 @@ class RetinaFaceClient(nn.Module):
                 fg_face_bboxes.append(face_bboxes[0])
                 # Keep all face crops in fg_face_crops.
                 fg_face_crops.append(face_crops[0])
+                face_detected_inst_mask.append(1)
                 bg_face_crops_flat.extend(face_crops[1:])
 
-        # BS = BS1 + BS2
-        # fg_face_bboxes: long tensor of [BS1, 4], BS1 <= BS
+        # fg_face_bboxes: long tensor of [BS, 4].
         fg_face_bboxes      = torch.tensor(fg_face_bboxes, device=images_ts.device)
-        # failed_inst_indices: long tensor of [BS2], BS2 <= BS
-        failed_inst_indices = torch.tensor(failed_inst_indices, device=images_ts.device)
+        # face_detected_inst_mask: binary tensor of [BS]
+        face_detected_inst_mask = torch.tensor(face_detected_inst_mask, device=images_ts.device)
 
-        if len(fg_face_crops) == 0:
-            fg_face_crops = None
-        else:
-            # fg_face_crops: [BS1, 3, 128, 128], BS1 <= BS
-            fg_face_crops       = torch.cat(fg_face_crops, dim=0)
+        # fg_face_crops: [BS, 3, 128, 128], BS1 <= BS
+        fg_face_crops = torch.cat(fg_face_crops, dim=0)
 
         if len(bg_face_crops_flat) == 0:
             bg_face_crops_flat = None
@@ -221,5 +219,5 @@ class RetinaFaceClient(nn.Module):
             # bg_face_crops_flat: [N, 3, 128, 128], N is the total number of bg face crops.
             bg_face_crops_flat  = torch.cat(bg_face_crops_flat, dim=0)
         
-        return fg_face_crops, bg_face_crops_flat, fg_face_bboxes, failed_inst_indices
+        return fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_detected_inst_mask
 

@@ -1582,16 +1582,25 @@ def init_x_with_fg_from_training_image(x_start, fg_mask,
 # img_mask, fg_mask:    [BS, 1, 64, 64] or None.
 # noise_pred, noise_gt: [BS, 4, 64, 64].
 def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask, 
-                    fg_pixel_weight=1, bg_pixel_weight=1):
+                    instance_mask=None, fg_pixel_weight=1, bg_pixel_weight=1):
 
     if img_mask is None:
         img_mask = torch.ones_like(noise_pred)
     if fg_mask is None:
         fg_mask  = torch.ones_like(noise_pred)
-    
+    if instance_mask is None:
+        instance_mask = torch.ones_like(noise_pred)
+    else:
+        if instance_mask.sum() == 0:
+            return torch.tensor(0., device=noise_pred.device), \
+                   torch.tensor(0., device=noise_pred.device)
+        instance_mask = instance_mask.float().reshape(-1, 1, 1, 1)
+
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-    noise_pred = noise_pred * img_mask
-    noise_gt   = noise_gt   * img_mask
+    fg_mask     = fg_mask  * instance_mask
+    img_mask    = img_mask * instance_mask
+    noise_pred  = noise_pred * img_mask
+    noise_gt    = noise_gt   * img_mask
     loss_recon_pixels = loss_func(noise_pred, noise_gt, reduction='none')
 
     # fg_mask,              weighted_fg_mask.sum(): 1747, 1747
@@ -1609,12 +1618,14 @@ def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask,
 
 # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
 # (But there are still other losses used after calling this function.)
-def calc_recon_and_suppress_losses(noise_pred, noise_gt, ca_layers_activations,
+def calc_recon_and_suppress_losses(noise_pred, noise_gt, face_detected_inst_mask,
+                                   ca_layers_activations,
                                    all_subj_indices, img_mask, fg_mask, 
                                    bg_pixel_weight, BLOCK_SIZE):
 
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-    loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, img_mask, fg_mask, 
+    loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, 
+                                    img_mask, fg_mask, face_detected_inst_mask,
                                     fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
 
     loss_recon_subj_mb_suppress = \
