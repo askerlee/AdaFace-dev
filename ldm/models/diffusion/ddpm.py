@@ -3299,6 +3299,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
             if ffn_lora_adapter_name is not None:
                 self.diffusion_model.set_adapter(ffn_lora_adapter_name)
+                # NOTE: Don't forget to enable_adapters(). 
+                # The adapters are not enabled by default after set_adapter().
                 self.diffusion_model.enable_adapters()
             else:
                 breakpoint()
