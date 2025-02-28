@@ -2319,7 +2319,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                 all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 1.5
                 all_token_losses_sc_recon_2_3types[1] = all_token_losses_sc_recon_2_3types[1] * 1.02
             else:
-                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 5
+                all_token_losses_sc_recon_2_3types[0] = all_token_losses_sc_recon_2_3types[0] * 2
 
             # Take the smaller loss tokenwise between attn and flow.
             min_token_losses_sc_recon = all_token_losses_sc_recon_2_3types.min(dim=0).values

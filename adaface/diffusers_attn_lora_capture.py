@@ -605,10 +605,10 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
                     # disable_adapters(), enable_adapters(), and set_adapter() methods.
                     # Therefore, we disable these calls on module.
                     module.enable_adapters  = dummy_func
-                    module.disable_adapters = dummy_func
                     module.set_adapter      = dummy_func
 
     unet.set_attn_processor(attn_procs)
+
     print(f"Set up {len(attn_capture_procs)} CrossAttn processors on {attn_capture_procs.keys()}.")
     print(f"Set up {len(attn_opt_modules)} attn LoRA params: {attn_opt_modules.keys()}.")
     return attn_capture_procs, attn_opt_modules
