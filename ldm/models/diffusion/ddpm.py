@@ -2744,7 +2744,7 @@ class LatentDiffusion(DDPM):
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
                                                 recon_feat_objectives=['attn_out', 'outfeat'],
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                                recon_max_scale_of_threses=10
+                                                recon_max_scale_of_threses=20000
                                                )
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
 
@@ -3298,6 +3298,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
             if ffn_lora_adapter_name is not None:
                 self.diffusion_model.set_adapter(ffn_lora_adapter_name)
+                self.diffusion_model.enable_adapters()
             else:
                 breakpoint()
 

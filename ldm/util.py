@@ -1811,7 +1811,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     recon_feat_objectives=['attn_out', 'outfeat'], 
                                     recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                    recon_max_scale_of_threses=10):
+                                    recon_max_scale_of_threses=20000):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -2430,7 +2430,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                               recon_max_scale_of_threses=10,
+                               recon_max_scale_of_threses=20000,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 
@@ -2573,7 +2573,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                 discarded_loss_count += 1
             else:
                 # loss_scale: the scale of the loss. If the loss is too large, scale it down.
-                # Always 1 >= loss_scale > 0.1 = 1 / recon_max_scale_of_threses.
+                # Always 1 >= loss_scale > 0.0001 = 1 / recon_max_scale_of_threses.
                 loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1].item() + 1e-6)
                 # If the original loss is already <= recon_scaled_loss_threses[feat_name], we set loss_scale = 1.
                 loss_scale = min(loss_scale, 1)
