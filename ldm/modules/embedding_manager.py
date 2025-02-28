@@ -645,12 +645,17 @@ class EmbeddingManager(nn.Module):
               and (load_unet_attn_lora_from_ckpt or load_unet_ffn_lora_from_ckpt):
                 unet_lora_modules_sd = ckpt['unet_lora_modules']
                 if not load_unet_attn_lora_from_ckpt:
+                    pre_filter_len = len(unet_lora_modules_sd)
                     # Filter out the attention LoRA modules.
                     unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'attn2_processor' not in k }
+                    if len(unet_lora_modules_sd) < pre_filter_len:
+                        print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} attn LoRA modules in {adaface_ckpt_path}")
                 if not load_unet_ffn_lora_from_ckpt:
+                    pre_filter_len = len(unet_lora_modules_sd)
                     # Filter out the FFN LoRA modules.
                     unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
-
+                    if len(unet_lora_modules_sd) < pre_filter_len:
+                        print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
 
                 total_num_fix_key_prefixes = 0
                 for key in list(unet_lora_modules_sd.keys()):
