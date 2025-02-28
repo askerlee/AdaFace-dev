@@ -119,7 +119,7 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=3.,
-                 enable_freeu=False,
+                 enable_freeu=True,
                  res_hidden_states_stopgrad=True,
                 ):
         
@@ -3242,6 +3242,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             self.unet_lora_modules  = torch.nn.ParameterDict(unet_lora_modules)
             for param in self.unet_lora_modules.parameters():
                 param.requires_grad = True
+                param.data = param.data.to(torch.float32)
+
             print(f"Set up LoRAs with {len(self.unet_lora_modules)} modules: {self.unet_lora_modules.keys()}")
         else:
             self.ffn_lora_layers    = []
@@ -3294,9 +3296,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         
         with torch.amp.autocast("cuda", enabled=(self.dtype == torch.float16)):
             out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=prompt_emb, 
-                                    cross_attention_kwargs={'img_mask': img_mask, 
-                                                            'subj_indices': subj_indices},
-                                    return_dict=False)[0]
+                                       cross_attention_kwargs={'img_mask': img_mask, 
+                                                               'subj_indices': subj_indices},
+                                       return_dict=False)[0]
 
         # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
         # Each (resnet, attn) pair corresponds to a TimestepEmbedSequential layer in the LDM implementation.

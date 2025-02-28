@@ -388,6 +388,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
 
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
+        if torch.isnan(hidden_states).any():
+            breakpoint()
 
         # linear proj
         if self.enable_lora and self.to_out_lora is not None:
@@ -480,7 +482,6 @@ def CrossAttnUpBlock2D_forward_capture(
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
         if self.training and self.gradient_checkpointing:
-
             def create_custom_forward(module, return_dict=None):
                 def custom_forward(*inputs):
                     if return_dict is not None:
@@ -519,6 +520,10 @@ def CrossAttnUpBlock2D_forward_capture(
                 encoder_attention_mask=encoder_attention_mask,
                 return_dict=False,
             )[0]
+
+
+        if torch.isnan(hidden_states).any():
+            breakpoint()
 
         if capture_outfeats:
             self.cached_outfeats[layer_idx] = hidden_states
