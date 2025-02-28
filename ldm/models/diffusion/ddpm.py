@@ -119,7 +119,7 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=3.,
-                 enable_freeu=True,
+                 enable_freeu=False,
                  res_hidden_states_stopgrad=True,
                 ):
         
@@ -3153,7 +3153,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_ffn_lora=False, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
                  subj_attn_var_shrink_factor=2., q_lora_updates_query=False,
-                 enable_freeu=True,
+                 enable_freeu=False,
                  res_hidden_states_stopgrad=True):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
@@ -3173,6 +3173,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         self.use_attn_lora  = use_attn_lora
         self.use_ffn_lora   = use_ffn_lora
         self.lora_rank      = lora_rank
+        self.attn_lora_layer_names = attn_lora_layer_names
 
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs, attn_opt_modules = \

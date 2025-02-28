@@ -220,10 +220,11 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                  lora_uses_dora=True, lora_proj_layers=None, 
                  lora_rank: int = 192, lora_alpha: float = 16,
                  subj_attn_var_shrink_factor: float = 2.,
-                 q_lora_updates_query=True):
+                 q_lora_updates_query=False, attn_proc_idx=-1):
         super().__init__()
 
         self.global_enable_lora = enable_lora
+        self.attn_proc_idx = attn_proc_idx
         # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
         # By default, shrink_subj_attn is False. Later in layers 22, 23, 24 it will be set to True.
         self.reset_attn_cache_and_flags(capture_ca_activations, False, enable_lora)
@@ -534,11 +535,13 @@ def CrossAttnUpBlock2D_forward_capture(
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
 def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                            lora_rank=192, lora_scale_down=8, subj_attn_var_shrink_factor=2.,
-                           q_lora_updates_query=True):
+                           q_lora_updates_query=False):
     attn_procs = {}
     attn_capture_procs = {}
     unet_modules = dict(unet.named_modules())
     attn_opt_modules = {}
+
+    attn_proc_idx = 0
 
     for name, attn_proc in unet.attn_processors.items():
         # Only capture the activations of the last 3 CA layers.
@@ -547,7 +550,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             # Then the layer falls back to the original attention mechanism.
             # We still use AttnProcessor_LoRA_Capture, as it can handle img_mask.
             attn_procs[name] = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=False, enable_lora=False)
+                capture_ca_activations=False, enable_lora=False, attn_proc_idx=-1)
             continue
         # cross_attention_dim: 768.
         cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
@@ -556,7 +559,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             # We replace the default attn_proc with AttnProcessor_LoRA_Capture, 
             # so that it can incorporate img_mask into self-attention.
             attn_procs[name] = AttnProcessor_LoRA_Capture(
-                capture_ca_activations=False, enable_lora=False)
+                capture_ca_activations=False, enable_lora=False, attn_proc_idx=-1)            
             continue
 
         # block_id = 3
@@ -582,8 +585,9 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
             subj_attn_var_shrink_factor=subj_attn_var_shrink_factor,
-            q_lora_updates_query=q_lora_updates_query)
+            q_lora_updates_query=q_lora_updates_query, attn_proc_idx=attn_proc_idx)
         
+        attn_proc_idx += 1
         # attn_procs has to use the original names.
         attn_procs[name] = attn_capture_proc
         # ModuleDict doesn't allow "." in the key.

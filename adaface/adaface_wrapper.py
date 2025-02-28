@@ -30,7 +30,7 @@ class AdaFaceWrapper(nn.Module):
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None,
                  enable_static_img_suffix_embs=None, unet_uses_attn_lora=False,
-                 attn_lora_layer_names=['q', 'k', 'v', 'out'], shrink_subj_attn=False, q_lora_updates_query=True,
+                 attn_lora_layer_names=['q', 'k', 'v', 'out'], shrink_subj_attn=False, q_lora_updates_query=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -289,7 +289,7 @@ class AdaFaceWrapper(nn.Module):
                         use_attn_lora=True, use_ffn_lora=False, 
                         attn_lora_layer_names=['q', 'k', 'v', 'out'],
                         shrink_subj_attn=False, subj_attn_var_shrink_factor=2,
-                        q_lora_updates_query=True):
+                        q_lora_updates_query=False):
         attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(unet, use_attn_lora=True, attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=192, lora_scale_down=8, 
@@ -346,7 +346,7 @@ class AdaFaceWrapper(nn.Module):
         return unet
 
     def load_unet_lora_weights(self, unet, use_attn_lora=True, attn_lora_layer_names=['q', 'k', 'v', 'out'],
-                               shrink_subj_attn=False, q_lora_updates_query=True):
+                               shrink_subj_attn=False, q_lora_updates_query=False):
         unet_lora_weight_found = False
         if isinstance(self.adaface_ckpt_paths, str):
             adaface_ckpt_paths = [self.adaface_ckpt_paths]

@@ -236,7 +236,7 @@ def get_parser(**parser_kwargs):
                         help="Shrink factor of the standard deviation of the subject attention")
     parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q', 'k', 'v', 'out'],
                         choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
-    parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                              "If False, the q lora only updates query2.")
     parser.add_argument("--cls_subj_mix_scheme", type=str, default=argparse.SUPPRESS,
