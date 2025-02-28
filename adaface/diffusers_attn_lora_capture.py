@@ -602,8 +602,9 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
                     # We will manage attn adapters directly. By default, LoraLayer is an instance of BaseTunerLayer,
                     # so according to the code logic in diffusers/loaders/peft.py,
                     # they will be managed by the diffusers PeftAdapterMixin instance, through the
-                    # disable_adapters(), enable_adapters(), and set_adapter() methods.
-                    # Therefore, we disable these calls on module.
+                    # enable_adapters(), and set_adapter() methods.
+                    # Therefore, we disable these calls on module. 
+                    # disable_adapters() is a property and changing it will cause exceptions.
                     module.enable_adapters  = dummy_func
                     module.set_adapter      = dummy_func
 
