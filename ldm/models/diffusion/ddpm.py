@@ -110,6 +110,7 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=5e-3,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
+                 recon_uses_attn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -194,6 +195,7 @@ class DDPM(pl.LightningModule):
 
         self.use_ldm_unet           = use_ldm_unet
         self.unet_uses_attn_lora    = unet_uses_attn_lora
+        self.recon_uses_attn_lora   = recon_uses_attn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
@@ -1883,7 +1885,6 @@ class LatentDiffusion(DDPM):
 
             # Enable attn LoRAs on UNet 50% of the time during recon iterations.
             enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-            enable_unet_ffn_lora  = False
             # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 3 recon iterations.
             # Doing adversarial attack on the input images seems to introduce high-frequency noise 
             # to the whole image (not just the face area), so we only do it after the first denoise step.
@@ -1900,7 +1901,7 @@ class LatentDiffusion(DDPM):
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
                                             num_recon_denoising_steps, x_start, noise, cond_context, 
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights,
-                                            enable_unet_attn_lora, enable_unet_ffn_lora, do_adv_attack, DO_ADV_BS)
+                                            enable_unet_attn_lora, self.recon_uses_attn_lora, do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
