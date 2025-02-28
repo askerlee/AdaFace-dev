@@ -110,7 +110,6 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=5e-3,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
-                 unet_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -193,7 +192,6 @@ class DDPM(pl.LightningModule):
 
         self.use_ldm_unet           = use_ldm_unet
         self.unet_uses_attn_lora    = unet_uses_attn_lora
-        self.unet_uses_ffn_lora     = unet_uses_ffn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
@@ -212,7 +210,7 @@ class DDPM(pl.LightningModule):
                                               # attn_lora_layer_names: ['q', 'k', 'v', 'out'], 
                                               # add lora layers to all components in the designated cross-attn layers.
                                               attn_lora_layer_names=self.attn_lora_layer_names,
-                                              use_ffn_lora=self.unet_uses_ffn_lora,
+                                              use_ffn_lora=True,
                                               # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
                                               lora_rank=self.unet_lora_rank, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
@@ -660,7 +658,6 @@ class LatentDiffusion(DDPM):
         
     def instantiate_embedding_manager(self, config, text_embedder):
         if not self.use_ldm_unet:
-            # If not unet_uses_attn_lora or unet_uses_ffn_lora, then unet_lora_modules is None.
             unet_lora_modules = self.model.unet_lora_modules
         else:
             unet_lora_modules = None
@@ -2383,7 +2380,7 @@ class LatentDiffusion(DDPM):
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
-                                    use_ffn_lora=self.unet_uses_ffn_lora, 
+                                    use_ffn_lora=True, 
                                     ffn_lora_adapter_name='unet_distill')
 
             noise_preds.append(noise_pred_s)
@@ -3150,7 +3147,7 @@ class DiffusionWrapper(pl.LightningModule):
 class DiffusersUNetWrapper(pl.LightningModule):
     def __init__(self, base_model_path, torch_dtype=torch.float16,
                  use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
-                 use_ffn_lora=False, lora_rank=192, 
+                 use_ffn_lora=True, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
                  subj_attn_var_shrink_factor=2., q_lora_updates_query=False,
                  enable_freeu=False,

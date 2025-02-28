@@ -220,8 +220,6 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the LDM UNet implementation as the base UNet")
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use LoRA in the cross-attn layers of the Diffusers UNet model")
-    parser.add_argument("--unet_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use LoRA in the FFNs of the Diffusers UNet model")
     parser.add_argument("--unet_lora_rank", type=int, default=argparse.SUPPRESS,
                         help="Rank of the LoRA in the Diffusers UNet model")    
     parser.add_argument("--unet_lora_scale_down", type=float, default=8,
@@ -745,7 +743,6 @@ if __name__ == "__main__":
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
         config.model.params.use_ldm_unet            = opt.use_ldm_unet
         config.model.params.unet_uses_attn_lora     = opt.unet_uses_attn_lora
-        config.model.params.unet_uses_ffn_lora      = opt.unet_uses_ffn_lora
         config.model.params.unet_lora_scale_down    = opt.unet_lora_scale_down
         if hasattr(opt, 'unet_lora_rank'):
             config.model.params.unet_lora_rank = opt.unet_lora_rank
