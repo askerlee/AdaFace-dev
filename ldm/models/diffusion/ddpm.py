@@ -2872,14 +2872,10 @@ class LatentDiffusion(DDPM):
                         sc_fg_mask = torch.zeros_like(subj_comp_recon[:, :1])
                         # When loss_comp_arcface_align > 0, sc_fg_face_bboxes is always not None.
                         # sc_fg_face_bboxes: [[22, 15, 36, 33]], already scaled down to 64*64.
-                        PAD = 1
                         for i in range(len(sc_fg_face_bboxes)):
                             x1, y1, x2, y2 = sc_fg_face_bboxes[i]
-                            H, W = subj_comp_recon.shape[-2:]
-                            x1, y1, x2, y2 = max(x1-PAD, 0), max(y1-PAD, 0), min(x2+PAD, W), min(y2+PAD, H)
-                            # Add 4 pixels (2*bleed that undoes the bleed and adds 2 extra pixels) to each side of 
-                            # the detected face area, to protect it from being suppressed.
                             sc_fg_mask[i, :, y1:y2, x1:x2] = 1
+                            
                     # ca_layers_activations['attn']: { 22 -> [4, 8, 4096, 77], 23 -> [4, 8, 4096, 77], 24 -> [4, 8, 4096, 77] }.
                     # sc_attn_dict: { 22 -> [1, 8, 64, 64], 23 -> [1, 8, 64, 64], 24 -> [1, 8, 64, 64] }.
                     sc_attn_dict = { layer_idx: attn.chunk(4)[1] for layer_idx, attn in ca_layers_activations['attn'].items() }

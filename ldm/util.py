@@ -2219,7 +2219,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     sc_feats_sameloc['ssfg'] = scfg_feat
     sc_feats_sameloc['mc']   = scbg_feat
 
-    if flow_model is not None or ss2sc_flow is not None:
+    if flow_model is not None:
         # ss2sc_flow: [1, 2, H, W]
         # If ss2sc_flow is not provided, estimate it using the flow model.
         # Otherwise ss2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
