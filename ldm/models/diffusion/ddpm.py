@@ -2629,7 +2629,7 @@ class LatentDiffusion(DDPM):
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
         rep_dist_fg_bounds      = (0.19, 0.22, 0.25)
         loss_comp_feat_distill  = torch.tensor(0., device=device, dtype=dtype)
-
+        
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
             # we use the reconstructed images of the subject-single block in the last step
@@ -2744,7 +2744,6 @@ class LatentDiffusion(DDPM):
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
-                                                recon_feat_objectives=['attn_out', 'outfeat'],
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                                 recon_max_scale_of_threses=20000
                                                )
@@ -3289,9 +3288,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # self.use_attn_lora and self.use_ffn_lora are the global flag. 
         # We can override them by setting extra_info['use_attn_lora'] and extra_info['use_ffn_lora'].
         # If use_attn_lora is set to False globally, then disable it in this call.
-        use_attn_lora = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
-        use_ffn_lora  = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
-        ffn_lora_adapter_name = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
+        use_attn_lora          = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
+        use_ffn_lora           = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
+        ffn_lora_adapter_name  = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
         outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs and self.outfeat_capture_blocks.

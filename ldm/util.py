@@ -1809,7 +1809,6 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
 def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     flow_model, ca_layers_activations,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
-                                    recon_feat_objectives=['attn_out', 'outfeat'], 
                                     recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                     recon_max_scale_of_threses=20000):
 
@@ -1871,7 +1870,6 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_q_h, ca_q_w, 
                                        sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
-                                       recon_feat_objectives=recon_feat_objectives,
                                        recon_scaled_loss_threses=recon_scaled_loss_threses,
                                        recon_max_scale_of_threses=recon_max_scale_of_threses,
                                        small_motion_ignore_thres=0.3,
@@ -2217,6 +2215,9 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     # sc_recon_feat*['ssfg']: [1, 1280, 961] => [1, 961, 1280]
     sc_recon_feats_attn_agg['ssfg'] = reconstruct_feat_with_attn_aggregation(scfg_feat, sc_attns['ssfg'])
     sc_recon_feats_attn_agg['mc']   = reconstruct_feat_with_attn_aggregation(scbg_feat, sc_attns['mc'])
+    
+    sc_feats_sameloc['ssfg'] = scfg_feat
+    sc_feats_sameloc['mc']   = scbg_feat
 
     if flow_model is not None or ss2sc_flow is not None:
         # ss2sc_flow: [1, 2, H, W]
@@ -2224,7 +2225,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
         # Otherwise ss2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
         # and return the newly estimated ss2sc_flow.     
         sc_recon_feats_flow['ssfg'], ss2sc_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ssfg_q, scfg_q, scfg_feat, 
+            reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, target_feats['ssfg'], scfg_feat, scfg_feat, 
                                                 H, W, small_motion_ignore_thres=0,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W)
@@ -2236,21 +2237,13 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
             if diff1 > 2e-4:
                 breakpoint()
         '''
-    else:
-        ss2sc_flow                       = None
-        sc_recon_feats_flow['ssfg']      = None
-        sc_recon_feats_flow_attn['ssfg'] = None
-    
-    sc_feats_sameloc['ssfg'] = scfg_feat
-    sc_feats_sameloc['mc']   = scbg_feat
 
-    if flow_model is not None or mc2sc_flow is not None:
         # mc2sc_flow: [1, 2, H, W]
         # If mc2sc_flow is not provided, estimate it using the flow model.
         # Otherwise mc2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, scbg_q, scbg_feat,
+            reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, target_feats['mc'], scbg_feat, scbg_feat,
                                                 H, W, small_motion_ignore_thres=small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W)
@@ -2260,11 +2253,15 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
             diff2 = (sc_recon_mc_feat_attn_agg2 - sc_recon_feats_flow['mc']).abs().mean()
             if diff2 > 2e-4:
                 breakpoint()
-        '''
+        '''        
     else:
-        mc2sc_flow                      = None
-        sc_recon_feats_flow['mc']       = None
-        sc_recon_feats_flow_attn['mc']  = None
+        ss2sc_flow                       = None
+        sc_recon_feats_flow['ssfg']      = None
+        sc_recon_feats_flow_attn['ssfg'] = None
+
+        mc2sc_flow                       = None
+        sc_recon_feats_flow['mc']        = None
+        sc_recon_feats_flow_attn['mc']   = None
 
     losses_sc_recons          = {}
     all_token_losses_sc_recon = {}
@@ -2416,7 +2413,6 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 
     return losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats, ss2sc_flow, mc2sc_flow
 
-# recon_feat_objectives: ['attn_out', 'outfeat'], a list of feature names to be reconstructed.
 # We adopt L2 loss for attn_out and outfeat. After training, the loss on attn_out is usually much smaller than
 # that on outfeat. Note attn_out is a feature map aggregated from the attention maps,
 # so it's not probs, but similar to outfeat. So the small magnitude of the loss on attn_out indicates good matching,
@@ -2424,7 +2420,6 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 @conditional_compile(enable_compile=EnableCompile)
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
-                               recon_feat_objectives=['attn_out', 'outfeat'], 
                                recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                recon_max_scale_of_threses=20000,
                                small_motion_ignore_thres=0.3, 
@@ -2480,7 +2475,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     mc_q   =  mc_q   - q_bg_mean
     scbg_q = (scbg_q - q_bg_mean) * sc_bg_mask_3d
 
-    for feat_type in recon_feat_objectives:
+    ss2sc_flow, mc2sc_flow = None, None
+
+    # 'outfeat' first, then 'attn_out'. The flow computed on 'outfeat' is more accurate, and 
+    # is used on 'attn_out' to save compute.
+    for feat_type in ['outfeat', 'attn_out']:
         if feat_type == 'attn_out':
             # ca_attn_out: output of the CA layer, i.e., attention-aggregated v.
             feat_obj = ca_attn_out
@@ -2537,8 +2536,6 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # The estimated ss2sc_flow is returned and reused in the next iteration to save compute.
         # On outfeat, the input ss2sc_flow is the same ss2sc_flow estimated on attn_out.
         target_feats = { 'ssfg': ssfg_feat, 'mc': mc_feat }
-        ss2sc_flow = None
-        mc2sc_flow = None
 
         losses_sc_recons_obj, loss_sparse_attns_distill_obj, flow_distill_stats, ss2sc_flow, mc2sc_flow = \
             calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats, 
@@ -2560,8 +2557,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
             # If the recon loss is too large, it means there's probably spatial misalignment between the two features.
             # Optimizing w.r.t. this loss may lead to degenerate results.
-            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 10.
-            # max loss 0.4 * 10 = 4.
+            # We tolerate losses[-1] to be at most recon_scaled_loss_threses[feat_name] * 20000.
+            # max loss 0.4 * 20000 = 8000.
             total_loss_count += 1
             to_discard = (losses[-1] >= recon_scaled_loss_threses[feat_name] * recon_max_scale_of_threses)
             if to_discard:
