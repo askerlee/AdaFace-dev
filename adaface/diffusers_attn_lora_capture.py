@@ -674,8 +674,8 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
 
     return ffn_lora_layers, ffn_opt_modules
 
-def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks, 
-                               use_attn_lora, capture_ca_activations, 
+def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, outfeat_capture_blocks, 
+                               use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
                                outfeat_capture_blocks_enable_freeu, shrink_subj_attn=False):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
@@ -685,6 +685,26 @@ def set_lora_and_capture_flags(attn_capture_procs, outfeat_capture_blocks,
     for block in outfeat_capture_blocks:
         block.capture_outfeats  = capture_ca_activations
         block.enable_freeu      = outfeat_capture_blocks_enable_freeu
+
+    if not use_ffn_lora:
+        unet.disable_adapters()
+    else:
+        # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
+        if ffn_lora_adapter_name is not None:
+            unet.set_adapter(ffn_lora_adapter_name)
+            # NOTE: Don't forget to enable_adapters(). 
+            # The adapters are not enabled by default after set_adapter().
+            unet.enable_adapters()
+        else:
+            breakpoint()
+
+    # During training, disable_adapters() and set_adapter() will set all/inactive adapters with requires_grad=False, 
+    # which might cause issues during DDP training.
+    # So we restore them to requires_grad=True.
+    # During test, unet_lora_modules will be passed as None, so this block will be skipped.
+    if unet_lora_modules is not None:
+        for param in unet_lora_modules.parameters():
+            param.requires_grad = True
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[23, 24], out_dtype=torch.float32):

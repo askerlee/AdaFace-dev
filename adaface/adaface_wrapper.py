@@ -297,7 +297,7 @@ class AdaFaceWrapper(nn.Module):
                                    q_lora_updates_query=q_lora_updates_query)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
         if use_ffn_lora:
-            target_modules_pat = 'up_blocks.3.resnets.[12].conv.+'
+            target_modules_pat = 'up_blocks.3.resnets.[12].conv[a-z0-9_]+'
         else:
             # A special pattern, "dummy-target-modules" tells PEFT to add loras on NONE of the layers.
             # We couldn't simply skip PEFT initialization (converting unet to a PEFT model),
@@ -339,8 +339,8 @@ class AdaFaceWrapper(nn.Module):
 
         # If shrink_subj_attn is True and use_attn_lora is False, we load all these params from ckpt,
         # but since we set use_attn_lora to False, attn loras won't be used during inference nonetheless.
-        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, self.ffn_lora_layers, 
-                                   use_attn_lora, use_ffn_lora, capture_ca_activations=False, 
+        set_lora_and_capture_flags(unet, None, self.attn_capture_procs, self.outfeat_capture_blocks, 
+                                   use_attn_lora, use_ffn_lora, 'recon_loss', capture_ca_activations=False, 
                                    shrink_subj_attn=shrink_subj_attn)
 
         return unet

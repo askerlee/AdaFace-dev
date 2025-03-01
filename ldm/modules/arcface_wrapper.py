@@ -116,10 +116,12 @@ class ArcFaceWrapper(nn.Module):
             ref_fg_faces_emb = ref_fg_faces_emb.repeat(len(aligned_fg_faces_emb)//len(ref_fg_faces_emb), 1)
         
         # labels = 1: align the embeddings of the same person.
+        # losses_arcface_align: tensor of [BS].
         losses_arcface_align = F.cosine_embedding_loss(ref_fg_faces_emb, aligned_fg_faces_emb, 
                                                        torch.ones(ref_fg_faces_emb.shape[0]).to(ref_fg_faces_emb.device),
                                                        reduction='none')
         # Mask out the losses of instances that have no face detected.
+        # aligned_face_detected_inst_mask: binary tensor of [BS].
         loss_arcface_align = (losses_arcface_align * aligned_face_detected_inst_mask).sum() / aligned_face_detected_inst_mask.sum()
         print(f"loss_arcface_align: {loss_arcface_align.item():.2f}")
 

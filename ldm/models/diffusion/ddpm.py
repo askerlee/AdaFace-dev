@@ -1794,7 +1794,7 @@ class LatentDiffusion(DDPM):
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
-                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
+                                    use_ffn_lora=True, ffn_lora_adapter_name='recon_loss')
         
             noise_preds.append(noise_pred)
             x_starts.append(x_recon.detach())
@@ -2681,14 +2681,15 @@ class LatentDiffusion(DDPM):
                     comp_iters_bg_has_face_frac = self.comp_iters_bg_has_face_count / self.comp_iters_count
                     mon_loss_dict.update({f'{session_prefix}/comp_iters_bg_has_face_frac': comp_iters_bg_has_face_frac})
 
-        mon_loss_names = [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_min', 
-                           'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc', 'loss_sc_recon_mc_min',
-                           'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
-                           'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
-                           'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 
-                           'sc_bg_percent', 'discarded_loss_ratio' ]
+        monitor_loss_names = \
+            [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_sameloc', 'loss_sc_recon_ssfg_min', 
+              'loss_sc_recon_mc_attn_agg',   'loss_sc_recon_mc_flow',   'loss_sc_recon_mc_sameloc',   'loss_sc_recon_mc_min',
+              'loss_sc_to_ssfg_sparse_attns_distill', 'loss_sc_to_mc_sparse_attns_distill',
+              'ssfg_sameloc_win_rate', 'ssfg_flow_win_rate', 'mc_flow_win_rate', 'mc_sameloc_win_rate',
+              'ssfg_avg_sparse_distill_weight', 'mc_avg_sparse_distill_weight', 
+              'sc_bg_percent', 'discarded_loss_ratio' ]
         
-        for loss_name in mon_loss_names:
+        for loss_name in monitor_loss_names:
             loss_name2 = f'{session_prefix}/{loss_name}'
             mon_loss_dict[loss_name2] = 0
 
@@ -2754,7 +2755,7 @@ class LatentDiffusion(DDPM):
             # Similar are ca_attns and ca_attns, each ca_outfeats in ca_outfeats is already 4D like [4, 8, 64, 64].
 
         comp_fg_bg_preserve_loss_count = len(losses_comp_fg_bg_preserve) + 1e-6
-        for loss_name in mon_loss_names:
+        for loss_name in monitor_loss_names:
             loss_name2 = f'{session_prefix}/{loss_name}'
             if loss_name2 in mon_loss_dict:
                 if mon_loss_dict[loss_name2] > 0:
@@ -3276,7 +3277,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # img_mask is not used in the prompt-image cross-attention layers.
-        img_mask     = extra_info.get('img_mask', None) if extra_info is not None else None
+        img_mask     = extra_info.get('img_mask',     None) if extra_info is not None else None
         subj_indices = extra_info.get('subj_indices', None) if extra_info is not None else None
         # shrink_subj_attn is only set to the LoRA'ed attn layers, i.e., 
         # layers 22, 23, 24, and only takes effect when subj_indices is not None.
@@ -3293,25 +3294,14 @@ class DiffusersUNetWrapper(pl.LightningModule):
         ffn_lora_adapter_name = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
         outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
 
-        if not use_ffn_lora:
-            self.diffusion_model.disable_adapters()
-        else:
-            # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
-            if ffn_lora_adapter_name is not None:
-                self.diffusion_model.set_adapter(ffn_lora_adapter_name)
-                # NOTE: Don't forget to enable_adapters(). 
-                # The adapters are not enabled by default after set_adapter().
-                self.diffusion_model.enable_adapters()
-            else:
-                breakpoint()
-
         # set_lora_and_capture_flags() accesses self.attn_capture_procs and self.outfeat_capture_blocks.
         # The activation capture flags and caches in attn_capture_procs and outfeat_capture_blocks are set differently.
         # So we keep them in different lists.
         # use_attn_lora, capture_ca_activations, shrink_subj_attn are only applied to layers 
         # in self.attn_capture_procs.
-        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, 
-                                   use_attn_lora, capture_ca_activations, 
+        set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
+                                   self.attn_capture_procs, self.outfeat_capture_blocks, 
+                                   use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
                                    outfeat_capture_blocks_enable_freeu, shrink_subj_attn)
 
         # x: x_noisy from LatentDiffusion.apply_model().
@@ -3339,8 +3329,10 @@ class DiffusersUNetWrapper(pl.LightningModule):
 
         # Restore capture_ca_activations to False, and disable all attn loras. 
         # NOTE: FFN loras has been disabled above.
-        set_lora_and_capture_flags(self.attn_capture_procs, self.outfeat_capture_blocks, 
-                                   False, False, False, False)
+        set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
+                                   self.attn_capture_procs, self.outfeat_capture_blocks, 
+                                   False, False, None, False, 
+                                   False, False)
 
         out = out.to(out_dtype)
         return out
