@@ -2837,9 +2837,9 @@ class LatentDiffusion(DDPM):
             # Trying to calc arcface_align_loss from difficult to easy steps.
             # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
 
-            for sel_step in range(len(x_recons)):
-                if sel_step == 0:
-                    continue
+            # In the first step, the subject face is very blurry, if it's ever generated.
+            # The corresponding arcface align loss will be highly noisy. So we always skip it.
+            for sel_step in range(1, len(x_recons)):
                 x_recon  = x_recons[sel_step]
                 # We have checked that x_start_ss is always a valid face image.
                 # Align subj_comp_recon to x_start_ss.

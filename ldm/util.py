@@ -2195,7 +2195,6 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     sc_attns                    = {}
     sc_recon_feats_attn_agg     = {}
     sc_recon_feats_flow         = {}
-    sc_recon_feats_agg          = {}
     sc_recon_feats_flow_attn    = {}
     sc_feats_sameloc            = {}
 
@@ -2209,12 +2208,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     matching_score_scale = 1 #(ca_outfeat.shape[1] / num_heads) ** -0.5
     # Pairwise matching scores (961 subj comp image tokens) -> (961 subj single tokens, or 961 cls comp tokens).
     # matmul() does multiplication on the last two dims.
-    scfg_to_ssfg_score = torch.matmul(scfg_q.transpose(1, 2).contiguous(), ssfg_q) * matching_score_scale
-    #scfg_to_ssfg_score = smooth_attn_mat(scfg_to_ssfg_score, H, W, kernel_center_weight=2)
-    sc_attns['ssfg']   = F.softmax(scfg_to_ssfg_score, dim=1)
-    sc_to_mc_score = torch.matmul(scbg_q.transpose(1, 2).contiguous(), mc_q) * matching_score_scale
-    #sc_to_mc_score = smooth_attn_mat(sc_to_mc_score, H, W, kernel_center_weight=2)
-    sc_attns['mc'] = F.softmax(sc_to_mc_score, dim=1)
+    scfg_to_ssfg_score  = torch.matmul(scfg_q.transpose(1, 2).contiguous(), ssfg_q) * matching_score_scale
+    sc_attns['ssfg']    = F.softmax(scfg_to_ssfg_score, dim=1)
+    sc_to_mc_score      = torch.matmul(scbg_q.transpose(1, 2).contiguous(), mc_q) * matching_score_scale
+    sc_attns['mc']      = F.softmax(sc_to_mc_score, dim=1)
     # sc_attns['ssfg'], sc_attns['mc'] are normalized across the sc-token dim, i.e., dim 1.
     # sc_attns['ssfg'].sum(dim=1) == [[1, 1, ..., 1]].
     # sc_recon_feat*['ssfg']: [1, 1280, 961] => [1, 961, 1280]
