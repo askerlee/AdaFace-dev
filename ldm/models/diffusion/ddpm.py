@@ -1559,14 +1559,16 @@ class LatentDiffusion(DDPM):
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
                                                     enable_grad=False, use_attn_lora=use_attn_lora,
-                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
+                                                    use_ffn_lora=use_ffn_lora, 
+                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_subj_attn']   = shrink_subj_attn
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
-                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
+                                                    use_ffn_lora=use_ffn_lora, 
+                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
             ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
             # Revert to always disable attn LoRAs on class instances to avoid degeneration.
             extra_info_ms = copy.copy(extra_info)
@@ -1587,16 +1589,18 @@ class LatentDiffusion(DDPM):
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
             noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
                                                     enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
-                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
+                                                    use_ffn_lora=use_ffn_lora, 
+                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
             
             extra_info_mc = copy.copy(extra_info)
             extra_info_mc['subj_indices']       = None
             extra_info_mc['shrink_subj_attn']   = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
-            # Never use attn LoRAs and ffn LoRAs on mc instances.
+            # Never use attn LoRAs on mc instances.
             noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
                                                     enable_grad=False, use_attn_lora=False,
-                                                    use_ffn_lora=False, ffn_lora_adapter_name=None)
+                                                    use_ffn_lora=use_ffn_lora, 
+                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
             extra_info = cond_context[2]

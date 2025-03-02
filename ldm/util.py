@@ -2225,7 +2225,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
         # Otherwise ss2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
         # and return the newly estimated ss2sc_flow.     
         sc_recon_feats_flow['ssfg'], ss2sc_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, target_feats['ssfg'], scfg_feat, scfg_feat, 
+            reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ssfg_q, scfg_q, scfg_feat, 
                                                 H, W, small_motion_ignore_thres=0,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W)
@@ -2243,7 +2243,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
         # Otherwise mc2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
         # and return the newly estimated mc2sc_flow.
         sc_recon_feats_flow['mc'], mc2sc_flow = \
-            reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, target_feats['mc'], scbg_feat, scbg_feat,
+            reconstruct_feat_with_matching_flow(flow_model, mc2sc_flow, mc_q, scbg_q, scbg_feat,
                                                 H, W, small_motion_ignore_thres=small_motion_ignore_thres,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W)
