@@ -465,10 +465,16 @@ def CrossAttnUpBlock2D_forward_capture(
         if res_hidden_states_stopgrad:
             res_hidden_states = res_hidden_states.detach()
 
-        # FreeU: Only operate on the first two stages
+        # FreeU: The original design is it only operates on the first two stages (0 and 1). 
+        # But this custom forward intercepts the 4th stage, so we apply FreeU to the 4th stage.
+        # bi: boost to hidden_states, si: suppression to res_hidden_states. 
+        # (s1=0.6, b1=1.5), (s2=0.2, b2=1.6).
         if is_freeu_enabled:
+            # If self.resolution_idx is 3, we use the settings for 
+            # resolution_idx==1, i.e., the second stage.
+            resolution_idx = self.resolution_idx if self.resolution_idx <= 1 else 1
             hidden_states, res_hidden_states = apply_freeu(
-                self.resolution_idx,
+                resolution_idx,
                 hidden_states,
                 res_hidden_states,
                 s1=self.s1,

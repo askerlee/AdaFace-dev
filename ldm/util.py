@@ -1781,13 +1781,6 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
         # and maximize avg_subj_attn_at_fg, which is the desired behavior.
         avg_subj_attn_at_fg = masked_mean(subj_attn_at_fg, fg_mask3, dim=(1,2), keepdim=True)
 
-        '''
-        avg_subj_attn_at_bg = masked_mean(subj_attn_at_bg, bg_mask3, dim=(1,2), keepdim=True)
-        if os.environ.get('DEBUG', 0) == '1':
-            print(f'layer {unet_layer_idx}')
-            print(f'avg_subj_attn_at_fg: {avg_subj_attn_at_fg.mean():.4f}, avg_subj_attn_at_bg: {avg_subj_attn_at_bg.mean():.4f}')
-        '''
-
         # Encourage avg_subj_attn_at_fg (subj_attn averaged at foreground locations) 
         # to be at least larger by fgbg_attn_contrast_margin = 0.05 than 
         # subj_attn_at_bg at any background locations.
@@ -2230,14 +2223,6 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                                                 num_flow_est_iters=num_flow_est_iters)
         sc_recon_feats_flow_attn['ssfg'] = flow2attn(ss2sc_flow, H, W)
 
-        '''
-        if debug_flow_attn:
-            sc_recon_ssfg_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(scfg_feat, sc_recon_feats_flow_attn['ssfg'])
-            diff1 = (sc_recon_ssfg_feat_attn_agg2 - sc_recon_feats_flow['ssfg']).abs().mean()
-            if diff1 > 2e-4:
-                breakpoint()
-        '''
-
         # mc2sc_flow: [1, 2, H, W]
         # If mc2sc_flow is not provided, estimate it using the flow model.
         # Otherwise mc2sc_flow is passed to reconstruct_feat_with_matching_flow() to be used,
@@ -2249,6 +2234,10 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
         sc_recon_feats_flow_attn['mc'] = flow2attn(mc2sc_flow, H, W)
         '''        
         if debug_flow_attn:
+            sc_recon_ssfg_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(scfg_feat, sc_recon_feats_flow_attn['ssfg'])
+            diff1 = (sc_recon_ssfg_feat_attn_agg2 - sc_recon_feats_flow['ssfg']).abs().mean()
+            if diff1 > 2e-4:
+                breakpoint()        
             sc_recon_mc_feat_attn_agg2 = reconstruct_feat_with_attn_aggregation(scbg_feat, sc_recon_feats_flow_attn['mc'])
             diff2 = (sc_recon_mc_feat_attn_agg2 - sc_recon_feats_flow['mc']).abs().mean()
             if diff2 > 2e-4:
