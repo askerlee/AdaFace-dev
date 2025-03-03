@@ -441,16 +441,6 @@ def CrossAttnUpBlock2D_forward_capture(
         if cross_attention_kwargs.get("scale", None) is not None:
             logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
 
-    is_freeu_enabled = (
-        getattr(self, "s1", None)
-        and getattr(self, "s2", None)
-        and getattr(self, "b1", None)
-        and getattr(self, "b2", None)
-    )
-    # By default, disable freeu on the last few CrossAttnUpBlock2D layers, 
-    # unless explicitly enabled during comp distill iterations.
-    is_freeu_enabled = getattr(self, 'enable_freeu', False) and is_freeu_enabled
-
     self.cached_outfeats = {}
     res_hidden_states_stopgrad  = getattr(self, "res_hidden_states_stopgrad", False)
     capture_outfeats            = getattr(self, "capture_outfeats",           False)
@@ -465,22 +455,23 @@ def CrossAttnUpBlock2D_forward_capture(
         if res_hidden_states_stopgrad:
             res_hidden_states = res_hidden_states.detach()
 
+        # self.enable_freeu is set in set_lora_and_capture_flags() 
+        # with the outfeat_capture_blocks_enable_freeu flag.
         # FreeU: The original design is it only operates on the first two stages (0 and 1). 
         # But this custom forward intercepts the 4th stage, so we apply FreeU to the 4th stage.
         # bi: boost to hidden_states, si: suppression to res_hidden_states. 
-        # (s1=0.6, b1=1.5), (s2=0.2, b2=1.6).
-        if is_freeu_enabled:
-            # If self.resolution_idx is 3, we use the settings for 
-            # resolution_idx==1, i.e., the second stage.
-            resolution_idx = self.resolution_idx if self.resolution_idx <= 1 else 1
+        # (s2=0.5, b2=1.5).
+        if self.enable_freeu:
+            # We fix resolution_idx==1, which uses s2 and b2 only.
+            resolution_idx = 1
             hidden_states, res_hidden_states = apply_freeu(
                 resolution_idx,
                 hidden_states,
                 res_hidden_states,
-                s1=self.s1,
-                s2=self.s2,
-                b1=self.b1,
-                b2=self.b2,
+                s1=-1,
+                s2=0.5,
+                b1=-1,
+                b2=1.5,
             )
 
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
@@ -682,15 +673,16 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
 
 def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, outfeat_capture_blocks, 
                                use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                               outfeat_capture_blocks_enable_freeu, shrink_subj_attn=False):
+                               outfeat_capture_blocks_enable_freeu, shrink_subj_attn, res_hidden_states_stopgrad):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
         attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_subj_attn, enable_lora=use_attn_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
     for block in outfeat_capture_blocks:
-        block.capture_outfeats  = capture_ca_activations
-        block.enable_freeu      = outfeat_capture_blocks_enable_freeu
+        block.capture_outfeats           = capture_ca_activations
+        block.enable_freeu               = outfeat_capture_blocks_enable_freeu
+        block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
 
     if not use_ffn_lora:
         unet.disable_adapters()

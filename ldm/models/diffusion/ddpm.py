@@ -119,8 +119,6 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=3.,
-                 enable_freeu=True,
-                 res_hidden_states_stopgrad=True,
                 ):
         
         super().__init__()
@@ -202,8 +200,6 @@ class DDPM(pl.LightningModule):
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
-        self.enable_freeu           = enable_freeu
-        self.res_hidden_states_stopgrad = res_hidden_states_stopgrad
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -222,9 +218,7 @@ class DDPM(pl.LightningModule):
                                               subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
                                               # q_lora_updates_query = True: q is updated by the LoRA layer.
                                               # False: q is not updated, and an additional q2 is updated and returned.
-                                              q_lora_updates_query=self.q_lora_updates_query,
-                                              enable_freeu=self.enable_freeu,
-                                              res_hidden_states_stopgrad=self.res_hidden_states_stopgrad
+                                              q_lora_updates_query=self.q_lora_updates_query
                                              )
             self.vae = self.model.pipeline.vae
 
@@ -1517,7 +1511,9 @@ class LatentDiffusion(DDPM):
                        shrink_subj_attn=False, subj_indices=None, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
-                       capture_ca_activations=False, outfeat_capture_blocks_enable_freeu=False,
+                       capture_ca_activations=False, 
+                       outfeat_capture_blocks_enable_freeu=False,
+                       res_hidden_states_stopgrad=False,
                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1526,6 +1522,7 @@ class LatentDiffusion(DDPM):
         extra_info = cond_context[2]
         extra_info['capture_ca_activations']              = capture_ca_activations
         extra_info['outfeat_capture_blocks_enable_freeu'] = outfeat_capture_blocks_enable_freeu
+        extra_info['res_hidden_states_stopgrad']          = res_hidden_states_stopgrad
         extra_info['img_mask']                            = img_mask
         extra_info['shrink_subj_attn']                    = shrink_subj_attn
         # subj_indices are not used if shrink_subj_attn is False.
@@ -1675,6 +1672,7 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
                                     outfeat_capture_blocks_enable_freeu=False,
+                                    res_hidden_states_stopgrad=False,
                                     use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=enable_unet_ffn_lora, 
                                     ffn_lora_adapter_name='recon_loss')
@@ -1795,6 +1793,7 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
                                     outfeat_capture_blocks_enable_freeu=True,
+                                    res_hidden_states_stopgrad=True,
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
@@ -2401,6 +2400,7 @@ class LatentDiffusion(DDPM):
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
                                     outfeat_capture_blocks_enable_freeu=False,
+                                    res_hidden_states_stopgrad=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3173,14 +3173,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                  use_ffn_lora=True, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 subj_attn_var_shrink_factor=2., q_lora_updates_query=False,
-                 enable_freeu=False,
-                 res_hidden_states_stopgrad=True):
+                 subj_attn_var_shrink_factor=2., q_lora_updates_query=False):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
-        if enable_freeu:
-            # Recommended settings on https://github.com/ChenyangSi/FreeU.
-            self.pipeline.enable_freeu(s1=0.6, s2=0.2, b1=1.5, b2=1.6)
 
         # diffusion_model is actually a UNet. Use this variable name to be 
         # consistent with DiffusionWrapper.
@@ -3205,10 +3200,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                    q_lora_updates_query=q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
 
-        self.res_hidden_states_stopgrad_blocks = self.diffusion_model.up_blocks[1:]
-        for block in self.res_hidden_states_stopgrad_blocks:
-            block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
-            block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
+        #self.res_hidden_states_stopgrad_blocks = self.diffusion_model.up_blocks[1:]
+        #for block in self.res_hidden_states_stopgrad_blocks:
+        #    block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
 
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
@@ -3292,6 +3286,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         use_ffn_lora           = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
         ffn_lora_adapter_name  = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
         outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
+        res_hidden_states_stopgrad = extra_info.get('res_hidden_states_stopgrad', False) if extra_info is not None else False
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs and self.outfeat_capture_blocks.
         # The activation capture flags and caches in attn_capture_procs and outfeat_capture_blocks are set differently.
@@ -3301,7 +3296,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, 
                                    use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                                   outfeat_capture_blocks_enable_freeu, shrink_subj_attn)
+                                   outfeat_capture_blocks_enable_freeu, shrink_subj_attn, res_hidden_states_stopgrad)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3331,7 +3326,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, 
                                    False, False, None, False, 
-                                   False, False)
+                                   False, False, False)
 
         out = out.to(out_dtype)
         return out
