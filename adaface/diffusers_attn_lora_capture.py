@@ -444,7 +444,7 @@ def CrossAttnUpBlock2D_forward_capture(
     self.cached_outfeats = {}
     res_hidden_states_stopgrad  = getattr(self, "res_hidden_states_stopgrad", False)
     capture_outfeats            = getattr(self, "capture_outfeats",           False)
-
+    enable_freeu                = getattr(self, "enable_freeu",               False)
     layer_idx = 0
 
     for resnet, attn in zip(self.resnets, self.attentions):
@@ -461,7 +461,7 @@ def CrossAttnUpBlock2D_forward_capture(
         # But this custom forward intercepts the 4th stage, so we apply FreeU to the 4th stage.
         # bi: boost to hidden_states, si: suppression to res_hidden_states. 
         # (s2=0.5, b2=1.5).
-        if self.enable_freeu:
+        if enable_freeu:
             # We fix resolution_idx==1, which uses s2 and b2 only.
             resolution_idx = 1
             hidden_states, res_hidden_states = apply_freeu(
@@ -671,7 +671,8 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
 
     return ffn_lora_layers, ffn_opt_modules
 
-def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, outfeat_capture_blocks, 
+def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, 
+                               outfeat_capture_blocks, res_hidden_states_stopgrad_blocks,
                                use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
                                outfeat_capture_blocks_enable_freeu, shrink_subj_attn, res_hidden_states_stopgrad):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
@@ -682,6 +683,8 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, outf
     for block in outfeat_capture_blocks:
         block.capture_outfeats           = capture_ca_activations
         block.enable_freeu               = outfeat_capture_blocks_enable_freeu
+
+    for block in res_hidden_states_stopgrad_blocks:
         block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
 
     if not use_ffn_lora:

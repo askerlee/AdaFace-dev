@@ -1649,9 +1649,10 @@ class LatentDiffusion(DDPM):
                                 enable_unet_attn_lora, enable_unet_ffn_lora, do_adv_attack, DO_ADV_BS):
 
         assert num_denoising_steps <= 10
-
-        # Initially, x_starts only contains the original x_start.
-        x_starts    = [ x_start ]
+        
+        x_start0 = x_start
+        # Initially, x_starts only contains the original x_start0.
+        x_starts    = [ x_start0 ]
         noises      = [ noise ]
         ts          = [ t ]
         noise_preds = []
@@ -1672,7 +1673,7 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
                                     outfeat_capture_blocks_enable_freeu=False,
-                                    res_hidden_states_stopgrad=False,
+                                    res_hidden_states_stopgrad=True,
                                     use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=enable_unet_ffn_lora, 
                                     ffn_lora_adapter_name='recon_loss')
@@ -1681,8 +1682,9 @@ class LatentDiffusion(DDPM):
             # The predicted x0 is used as the x_start in the next denoising step.
             pred_x0 = x_recon
 
-            # NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
-            x_starts.append(pred_x0.detach())
+            ## NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
+            #x_starts.append(pred_x0.detach())
+            x_starts.append(x_start0)
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
@@ -1792,7 +1794,7 @@ class LatentDiffusion(DDPM):
                                     subj_comp_distill_on_rep_prompts=True,
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    outfeat_capture_blocks_enable_freeu=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     res_hidden_states_stopgrad=True,
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
@@ -2400,7 +2402,7 @@ class LatentDiffusion(DDPM):
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
                                     outfeat_capture_blocks_enable_freeu=False,
-                                    res_hidden_states_stopgrad=False,
+                                    res_hidden_states_stopgrad=True,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3017,7 +3019,7 @@ class LatentDiffusion(DDPM):
             if self.optimizer_type == 'CAdamW':
                 # CAdamW doesn't support individual LRs.
                 opt = OptimizerClass(opt_params, lr=lr, weight_decay=self.weight_decay,
-                                        betas=self.adam_config.betas)
+                                     betas=self.adam_config.betas)
             else:
                 opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
                                     betas=self.adam_config.betas)
@@ -3200,9 +3202,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                    q_lora_updates_query=q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
 
-        #self.res_hidden_states_stopgrad_blocks = self.diffusion_model.up_blocks[1:]
-        #for block in self.res_hidden_states_stopgrad_blocks:
-        #    block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
+        self.res_hidden_states_stopgrad_blocks = self.diffusion_model.up_blocks[1:]
+        for block in self.res_hidden_states_stopgrad_blocks:
+            block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
 
         # Replace the forward() method of the last up block with a capturing method.
         self.outfeat_capture_blocks = [ self.diffusion_model.up_blocks[3] ]
@@ -3294,7 +3296,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # use_attn_lora, capture_ca_activations, shrink_subj_attn are only applied to layers 
         # in self.attn_capture_procs.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
-                                   self.attn_capture_procs, self.outfeat_capture_blocks, 
+                                   self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_stopgrad_blocks,
                                    use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
                                    outfeat_capture_blocks_enable_freeu, shrink_subj_attn, res_hidden_states_stopgrad)
 
@@ -3324,7 +3326,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Restore capture_ca_activations to False, and disable all attn loras. 
         # NOTE: FFN loras has been disabled above.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
-                                   self.attn_capture_procs, self.outfeat_capture_blocks, 
+                                   self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_stopgrad_blocks,
                                    False, False, None, False, 
                                    False, False, False)
 
