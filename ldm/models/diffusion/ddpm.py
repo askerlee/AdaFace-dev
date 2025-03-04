@@ -1414,6 +1414,7 @@ class LatentDiffusion(DDPM):
             # *** and subj_comp_rep_prompts repeats the compositional part twice.
             prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
 
+            '''
             # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings as cls_comp_emb2.
             cls_comp_emb2      = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb      * self.cls_subj_mix_ratio
             # Mix 0.9 of the subject comp embeddings with 0.1 of the cls comp embeddings 
@@ -1425,7 +1426,10 @@ class LatentDiffusion(DDPM):
             # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp rep embeddings as subj_comp_rep_emb2.
             subj_comp_rep_emb2 = cls_comp_emb  * (1 - reverse_mix_ratio)       + subj_comp_rep_emb * reverse_mix_ratio
             prompt_emb = torch.cat([subj_single_emb, subj_comp_emb2, subj_comp_rep_emb2, cls_comp_emb2], dim=0)
-            
+            '''
+
+            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb], dim=0)
+
             # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
             prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
             prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
@@ -1512,8 +1516,8 @@ class LatentDiffusion(DDPM):
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, 
+                       res_hidden_states_stopgrad=True,
                        outfeat_capture_blocks_enable_freeu=False,
-                       res_hidden_states_stopgrad=False,
                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1672,8 +1676,8 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    outfeat_capture_blocks_enable_freeu=False,
                                     res_hidden_states_stopgrad=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=enable_unet_ffn_lora, 
                                     ffn_lora_adapter_name='recon_loss')
@@ -1794,8 +1798,8 @@ class LatentDiffusion(DDPM):
                                     subj_comp_distill_on_rep_prompts=True,
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    outfeat_capture_blocks_enable_freeu=False,
                                     res_hidden_states_stopgrad=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
@@ -2401,8 +2405,8 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    outfeat_capture_blocks_enable_freeu=False,
                                     res_hidden_states_stopgrad=True,
+                                    outfeat_capture_blocks_enable_freeu=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.

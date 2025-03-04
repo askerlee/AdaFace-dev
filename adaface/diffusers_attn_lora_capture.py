@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
-from diffusers.utils.torch_utils import apply_freeu
+from diffusers.utils.torch_utils import apply_freeu, fourier_filter
 # UNet is a diffusers PeftAdapterMixin instance.
 from diffusers.loaders.peft import PeftAdapterMixin
 from peft import LoraConfig, get_peft_model
@@ -455,25 +455,6 @@ def CrossAttnUpBlock2D_forward_capture(
         if res_hidden_states_stopgrad:
             res_hidden_states = res_hidden_states.detach()
 
-        # self.enable_freeu is set in set_lora_and_capture_flags() 
-        # with the outfeat_capture_blocks_enable_freeu flag.
-        # FreeU: The original design is it only operates on the first two stages (0 and 1). 
-        # But this custom forward intercepts the 4th stage, so we apply FreeU to the 4th stage.
-        # bi: boost to hidden_states, si: suppression to res_hidden_states. 
-        # (s2=0.5, b2=1.5).
-        if enable_freeu:
-            # We fix resolution_idx==1, which uses s2 and b2 only.
-            resolution_idx = 1
-            hidden_states, res_hidden_states = apply_freeu(
-                resolution_idx,
-                hidden_states,
-                res_hidden_states,
-                s1=-1,
-                s2=0.5,
-                b1=-1,
-                b2=1.5,
-            )
-
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
         if self.training and self.gradient_checkpointing:
@@ -517,6 +498,15 @@ def CrossAttnUpBlock2D_forward_capture(
             )[0]
 
         if capture_outfeats:
+            # self.enable_freeu is set in set_lora_and_capture_flags() 
+            # with the outfeat_capture_blocks_enable_freeu flag.
+            # FreeU: The original design is to apply on the first two stages (0 and 1) only, and on 
+            # both hidden_states and res_hidden_states. Now we only care about the hidden_states used
+            # for calc_elastic_matching_loss(), which consists of two hidden_states 
+            # (output from layers 23 and 24) in the 4th stage.
+            if enable_freeu:
+                hidden_states = fourier_filter(hidden_states, threshold=1, scale=0.5)
+
             self.cached_outfeats[layer_idx] = hidden_states
             layer_idx += 1
 
