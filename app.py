@@ -102,7 +102,7 @@ def remove_back_to_files():
 
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
-                   num_images, prompt, negative_prompt, gender, enhance_face, enhance_composition, 
+                   num_images, prompt, negative_prompt, gender, highlight_face, enhance_composition, 
                    seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
@@ -135,7 +135,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
-    if enhance_face and "portrait" not in prompt:
+    if highlight_face and "portrait" not in prompt:
         prompt = "face portrait, " + prompt
 
     if gender != "(none)":
@@ -174,8 +174,14 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
             break
 
     if prompt_sig is None:
-        # Use the last word of the prompt as the signature.
-        prompt_sig = prompt.lower().replace(",", " ").split()[-1]
+        prompt_parts = prompt.lower().split(",")
+        # Remove the view/shot parts (full body view, long shot, etc.) from the prompt.
+        prompt_parts = [ part for part in prompt_parts if not re.search(r"\W(view|shot)(\W|$)", part) ]
+        if len(prompt_parts) > 0:
+            # Use the last word of the prompt as the signature.
+            prompt_sig = prompt_parts[-1].split()[-1]
+        else:
+            prompt_sig = "person"
 
     if len(prompt_sig) > 0:
         prompt_sig = "-" + prompt_sig
@@ -249,7 +255,7 @@ description = r"""
 
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
-2. Check "Enhance Face" to highlight fine facial features.
+2. Check "Highlight face" to highlight fine facial features.
 3. If the face dominates the image, try increasing 'Weight of ID prompt in the negative prompt'.
 4. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
   AdaFace-Animate 
@@ -318,12 +324,12 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
 
                 with gr.Column(scale=100):                
                     prompt = gr.Dropdown(label="Prompt",
-                            info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'enhance face'.",
+                            info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'Highlight face'.",
                             value="highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
                             allow_custom_value=True,
                             choices=[
                                     "highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                                    "walking on the beach, sunset, orange sky",
+                                    "walking on the beach, sunset, orange sky, front view",
                                     "in a white apron and chef hat, garnishing a gourmet dish",
                                     "dancing pose among folks in a park, waving hands",
                                     "in iron man costume, the sky ablaze with hues of orange and purple, full body view",
@@ -334,11 +340,13 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "celebrating chinese new year, fireworks, full body view",
                                     "running pose in a park, full body view",
                                     "in space suit, space helmet, walking on mars, full body view",
-                                    "in superman costume, the sky ablaze with hues of orange and purple, full body view"
+                                    "in superman costume, the sky ablaze with hues of orange and purple, full body view",
+                                    "in a wheelchair, full body view",
+                                    "on a horse, full body view"
                             ])
             
-            enhance_face = gr.Checkbox(label="Enhance face", value=False, 
-                                       info="Enhance the facial features by prepending 'face portrait' to the prompt")
+            highlight_face = gr.Checkbox(label="Highlight face", value=False, 
+                                         info="Enhance the facial features by prepending 'face portrait' to the prompt")
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
@@ -443,7 +451,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         generate_image_call_dict = {
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
-                       negative_prompt, gender, enhance_face, enhance_composition, seed, disable_adaface, subj_name_sig],
+                       negative_prompt, gender, highlight_face, enhance_composition, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
