@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from evaluation.arcface_resnet import resnet_face18
 from evaluation.retinaface_pytorch import RetinaFaceClient
+from torchvision.transforms.functional import rgb_to_grayscale
 
 def load_image_for_arcface(img_path, device='cpu'):
     # cv2.imread ignores the alpha channel by default.
@@ -65,6 +66,8 @@ class ArcFaceWrapper(nn.Module):
         rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
         # Convert RGB to grayscale
         fg_faces_gray = (fg_face_crops * rgb_to_gray_weights).sum(dim=1, keepdim=True)
+        # fg_faces_gray2 = rgb_to_grayscale(fg_face_crops)
+
         # Resize to (128, 128); arcface takes 128x128 images as input.
         fg_faces_gray = F.interpolate(fg_faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
         with torch.set_grad_enabled(enable_grad):

@@ -583,13 +583,13 @@ class PersonalizedBase(Dataset):
         # NOTE: We've made sure that the number of words in each base_template is the same as the number of tokens.
         # So we can use the number of tokens to calculate the number of extra tokens in the base_template 
         # than in single_fp_prompt_tmpl.
-        base_fp_template = "face portrait of {}"
+        base_fp_template = "a portrait of {}"
         base_tmpl_num_extra_tokens = len(base_template.split()) - len(base_fp_template.split())
         # Append ", " to the base_template, so that compos_partial tokens are aligned between fp and non-fp prompts.
         # We align fp prompts with non-fp prompts, because we always use fp prompts for the cls comp prompts,
         # but sometimes we use non-fp prompts for the subj comp prompts.
-        cls_base_fp_template  = "face portrait of {}" + ', ' * base_tmpl_num_extra_tokens
-        subj_base_fp_template =    "a portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+        cls_base_fp_template  = "a portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+        subj_base_fp_template = "a portrait of {}" + ', ' * base_tmpl_num_extra_tokens
 
         example["subj_single_prompt"]       = base_template.format(subject_string)
         example["subj_comp_prompt"]         = base_template.format(subject_string)   + ", " + compos_partial

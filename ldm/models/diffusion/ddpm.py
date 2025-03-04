@@ -962,7 +962,12 @@ class LatentDiffusion(DDPM):
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
-                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
+                # Sometimes the cls comp instances don't have clear faces.
+                # So use the fp trick on cls comp prompts at 50% of the time.
+                if self.global_step % 2 == 0:
+                    CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
+                else:
+                    CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
             else:
                 # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                 # cls prompts are only used for delta loss, so they don't need to be fp prompts.
