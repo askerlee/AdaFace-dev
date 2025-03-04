@@ -45,8 +45,7 @@ def parse_args():
                         help="Type of pipeline to use (default: txt2img)")
     parser.add_argument("--base_model_path", type=str, default=None, 
                         help="Type of checkpoints to use (default: None, using the official model)")
-    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
-                        default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+    parser.add_argument('--adaface_ckpt_path', type=str, required=True)
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")   
     parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
@@ -66,17 +65,12 @@ def parse_args():
     parser.add_argument("--example_image_count", type=int, default=-1, help="Number of example images to use")
     parser.add_argument("--out_image_count",     type=int, default=4,  help="Number of images to generate")
     parser.add_argument("--prompt", type=str, default="a woman z in superman costume")
-    parser.add_argument("--noise", dest='perturb_std', type=float, default=0)
+    parser.add_argument("--perturb_std", type=float, default=0)
     parser.add_argument("--randface", action="store_true")
     parser.add_argument("--scale", dest='guidance_scale', type=float, default=4, 
                         help="Guidance scale for the diffusion model")
-    parser.add_argument("--subject_string", 
-                        type=str, default="z",
-                        help="Subject placeholder string used in prompts to denote the concept.")
     parser.add_argument("--num_images_per_row", type=int, default=4,
                         help="Number of images to display in a row in the output grid image.")
-    parser.add_argument("--num_inference_steps", type=int, default=50,
-                        help="Number of inference steps")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on")
     parser.add_argument("--seed", type=int, default=42, 
                         help="the seed (for reproducible sampling). Set to -1 to disable.")
@@ -98,10 +92,8 @@ if __name__ == "__main__":
         args.unet_weights_in_ensemble = None
         
     adaface = AdaFaceWrapper(args.pipeline, args.base_model_path, 
-                             args.adaface_encoder_types, args.adaface_ckpt_paths, 
+                             args.adaface_encoder_types, args.adaface_ckpt_path, 
                              args.adaface_encoder_cfg_scales, args.enabled_encoders,
-                             num_inference_steps=args.num_inference_steps, 
-                             subject_string=args.subject_string, 
                              unet_types=None,
                              main_unet_filepath=args.main_unet_filepath,
                              extra_unet_dirpaths=args.extra_unet_dirpaths,
@@ -144,7 +136,7 @@ if __name__ == "__main__":
     rand_init_id_embs = torch.randn(1, 512)
 
     init_id_embs = rand_init_id_embs if args.randface else None
-    noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
+    init_noise = torch.randn(args.out_image_count, 4, 64, 64).cuda()
     # args.perturb_std: the *relative* std of the noise added to the face embeddings.
     # A noise level of 0.08 could change gender, but 0.06 is usually safe.
     # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
@@ -152,5 +144,7 @@ if __name__ == "__main__":
         adaface.prepare_adaface_embeddings(image_paths, init_id_embs, 
                                            perturb_at_stage='img_prompt_emb',
                                            perturb_std=args.perturb_std, update_text_encoder=True)    
-    images = adaface(noise, args.prompt, None, 'append', args.guidance_scale, args.out_image_count, verbose=True)
+    images = adaface(init_noise, args.prompt, None, None, 
+                     'append', args.guidance_scale, 
+                     args.out_image_count, verbose=True)
     save_images(images, args.num_images_per_row, subject_name, f"guide{args.guidance_scale}", args.perturb_std)
