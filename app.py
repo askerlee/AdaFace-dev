@@ -336,7 +336,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "jedi wielding a lightsaber, star wars, eye level shot, full body view",
                                     "night view of tokyo street, neon light, full body view",
                                     "playing guitar on a boat, ocean waves",
-                                    "with a passion for reading, curled up with a book in a cozy nook near a window",
+                                    "with a passion for reading, curled up with a book in a cozy nook near a window, front view",
                                     "celebrating chinese new year, fireworks, full body view",
                                     "running pose in a park, full body view",
                                     "in space suit, space helmet, walking on mars, full body view",
