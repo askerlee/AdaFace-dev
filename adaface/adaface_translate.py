@@ -25,10 +25,9 @@ def seed_everything(seed):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base_model_path", type=str, default='models/realisticvision/realisticVisionV40_v40VAE.safetensors', 
-                        help="Path to the UNet checkpoint (default: RealisticVision 4.0)")
-    parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
-                        default=['models/adaface/subjects-celebrity2024-05-16T17-22-46_zero3-ada-30000.pt'])
+    parser.add_argument("--base_model_path", type=str, default='models/sar/sar.safetensors', 
+                        help="Path to the UNet checkpoint (Default: SAR)")
+    parser.add_argument('--adaface_ckpt_path', type=str, required=True)
     parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                         choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")      
     parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
@@ -43,6 +42,8 @@ def parse_args():
     parser.add_argument('--unet_weights_in_ensemble', type=float, nargs="+", default=[1], 
                         help="Weights for the UNet models")    
     parser.add_argument("--in_folder",  type=str, required=True, help="Path to the folder containing input images")
+    parser.add_argument("--restore_image", type=str, default=None, 
+                        help="Path to the image to be restored")
     # If True, the input folder contains images of mixed subjects.
     # If False, the input folder contains multiple subfolders, each of which contains images of the same subject.
     parser.add_argument("--is_mix_subj_folder", type=str2bool, const=True, default=False, nargs="?", 
@@ -52,19 +53,14 @@ def parse_args():
     parser.add_argument("--out_folder", type=str, required=True, help="Path to the folder saving output images")
     parser.add_argument("--out_count_per_input_image", type=int, default=1,  help="Number of output images to generate per input image")
     parser.add_argument("--copy_masks", action="store_true", help="Copy the mask images to the output folder")
-    parser.add_argument("--noise", dest='perturb_std', type=float, default=0)
+    parser.add_argument("--perturb_std", type=float, default=0)
     parser.add_argument("--scale", dest='guidance_scale', type=float, default=4, 
                         help="Guidance scale for the diffusion model")
     parser.add_argument("--ref_img_strength", type=float, default=0.8,
                         help="Strength of the reference image in the output image.")
-    parser.add_argument("--subject_string", 
-                        type=str, default="z",
-                        help="Subject placeholder string used in prompts to denote the concept.")
     parser.add_argument("--prompt", type=str, default="a person z")
     parser.add_argument("--num_images_per_row", type=int, default=4,
                         help="Number of images to display in a row in the output grid image.")
-    parser.add_argument("--num_inference_steps", type=int, default=50,
-                        help="Number of DDIM inference steps")
     parser.add_argument("--num_gpus", type=int, default=1, help="Number of GPUs to use. If num_gpus > 1, use accelerate for distributed execution.")
     parser.add_argument("--device", type=str, default="cuda", help="Device to run the model on")
     parser.add_argument("--seed", type=int, default=42, 
@@ -93,10 +89,8 @@ if __name__ == "__main__":
         process_index = 0
 
     adaface = AdaFaceWrapper("img2img", args.base_model_path, 
-                             args.adaface_encoder_types, args.adaface_ckpt_paths,
+                             args.adaface_encoder_types, args.adaface_ckpt_path,
                              args.adaface_encoder_cfg_scales, args.enabled_encoders,
-                             num_inference_steps=args.num_inference_steps, 
-                             subject_string=args.subject_string, 
                              unet_types=None,
                              extra_unet_dirpaths=args.extra_unet_dirpaths, 
                              unet_weights_in_ensemble=args.unet_weights_in_ensemble, 
@@ -104,6 +98,7 @@ if __name__ == "__main__":
 
     in_folder = args.in_folder
     if os.path.isfile(in_folder):
+        args.in_folder = os.path.dirname(args.in_folder)
         subject_folders = [ os.path.dirname(in_folder) ]
         images_by_subject = [[in_folder]]
     else:
@@ -159,6 +154,24 @@ if __name__ == "__main__":
         images_by_subject = images_by_subject[process_index::args.num_gpus]
         #subject_folders, images_by_subject = distributed_state.split_between_processes(zip(subject_folders, images_by_subject))
 
+    if args.restore_image is not None:
+        in_images = []
+        for image_path in [args.restore_image]:
+            image = Image.open(image_path).convert("RGB").resize((512, 512))
+            # [512, 512, 3] -> [3, 512, 512].
+            image = np.array(image).transpose(2, 0, 1)
+            # Convert the image to a tensor of shape (1, 3, 512, 512) and move it to the GPU.
+            image = torch.tensor(image).unsqueeze(0).float().cuda()
+            in_images.append(image)
+
+        # Put all input images of the subject into a batch. This assumes max_images_per_subject is small.
+        # NOTE: For simplicity, we do not check overly large batch sizes.
+        in_images = torch.cat(in_images, dim=0) 
+        # in_images: [5, 3, 512, 512].
+        # Normalize the pixel values to [0, 1].
+        in_images = in_images / 255.0
+        num_out_images = len(in_images) * args.out_count_per_input_image
+
     for (subject_folder, image_paths) in zip(subject_folders, images_by_subject):
         # If is_mix_subj_folder, then image_paths only contains 1 image, and we use the file name as the signature of the image.
         # Otherwise, we use the folder name as the signature of the images.
@@ -178,29 +191,32 @@ if __name__ == "__main__":
             os.makedirs(subject_out_folder)
         print(f"Output images will be saved to {subject_out_folder}")
 
-        in_images = []
-        for image_path in image_paths:
-            image = Image.open(image_path).convert("RGB").resize((512, 512))
-            # [512, 512, 3] -> [3, 512, 512].
-            image = np.array(image).transpose(2, 0, 1)
-            # Convert the image to a tensor of shape (1, 3, 512, 512) and move it to the GPU.
-            image = torch.tensor(image).unsqueeze(0).float().cuda()
-            in_images.append(image)
+        if args.restore_image is None:
+            in_images = []
+            for image_path in image_paths:
+                image = Image.open(image_path).convert("RGB").resize((512, 512))
+                # [512, 512, 3] -> [3, 512, 512].
+                image = np.array(image).transpose(2, 0, 1)
+                # Convert the image to a tensor of shape (1, 3, 512, 512) and move it to the GPU.
+                image = torch.tensor(image).unsqueeze(0).float().cuda()
+                in_images.append(image)
 
-        # Put all input images of the subject into a batch. This assumes max_images_per_subject is small.
-        # NOTE: For simplicity, we do not check overly large batch sizes.
-        in_images = torch.cat(in_images, dim=0) 
-        # in_images: [5, 3, 512, 512].
-        # Normalize the pixel values to [0, 1].
-        in_images = in_images / 255.0
-        num_out_images = len(in_images) * args.out_count_per_input_image
+            # Put all input images of the subject into a batch. This assumes max_images_per_subject is small.
+            # NOTE: For simplicity, we do not check overly large batch sizes.
+            in_images = torch.cat(in_images, dim=0) 
+            # in_images: [5, 3, 512, 512].
+            # Normalize the pixel values to [0, 1].
+            in_images = in_images / 255.0
+            num_out_images = len(in_images) * args.out_count_per_input_image
 
         with torch.no_grad():
             # args.perturb_std: the *relative* std of the noise added to the face embeddings.
             # A noise level of 0.08 could change gender, but 0.06 is usually safe.
             # The returned adaface_subj_embs are already incorporated in the text encoder, and not used explicitly.
             # NOTE: We assume out_count_per_input_image == 1, so that the output images are of the same number as the input images.
-            out_images = adaface(in_images, args.prompt, None, 'append', args.guidance_scale, num_out_images, ref_img_strength=args.ref_img_strength)
+            out_images = adaface(in_images, args.prompt, None, None,
+                                 'append', args.guidance_scale, num_out_images, 
+                                 ref_img_strength=args.ref_img_strength)
 
             for img_i, img in enumerate(out_images):
                 # out_images: subj_1, subj_2, ..., subj_n, subj_1, subj_2, ..., subj_n, ...
@@ -208,9 +224,11 @@ if __name__ == "__main__":
                 copy_i = img_i // len(in_images)
                 image_filename_stem, image_fileext = os.path.splitext(os.path.basename(image_paths[subj_i]))
                 if copy_i == 0:
-                    img.save(os.path.join(subject_out_folder, f"{image_filename_stem}{image_fileext}"))
+                    save_path = os.path.join(subject_out_folder, f"{image_filename_stem}{image_fileext}")
                 else:
-                    img.save(os.path.join(subject_out_folder, f"{image_filename_stem}_{copy_i}{image_fileext}"))
+                    save_path = os.path.join(subject_out_folder, f"{image_filename_stem}_{copy_i}{image_fileext}")
+                img.save(save_path)
+                print(f"Saved {save_path}")
 
                 if args.copy_masks:
                     mask_path = image_paths[subj_i].replace(image_fileext, "_mask.png")

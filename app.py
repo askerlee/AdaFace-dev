@@ -71,16 +71,16 @@ adaface = None
 
 if not args.test_ui_only:
     adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=base_model_path,
-                            adaface_encoder_types=args.adaface_encoder_types, 
-                            adaface_ckpt_paths=args.adaface_ckpt_path, 
-                            adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
-                            enabled_encoders=args.enabled_encoders,
-                            unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
-                            unet_uses_attn_lora=args.unet_uses_attn_lora,
-                            attn_lora_layer_names=args.attn_lora_layer_names,
-                            shrink_subj_attn=False,
-                            q_lora_updates_query=args.q_lora_updates_query,
-                            device='cpu')
+                             adaface_encoder_types=args.adaface_encoder_types, 
+                             adaface_ckpt_paths=args.adaface_ckpt_path, 
+                             adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
+                             enabled_encoders=args.enabled_encoders,
+                             unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
+                             unet_uses_attn_lora=args.unet_uses_attn_lora,
+                             attn_lora_layer_names=args.attn_lora_layer_names,
+                             shrink_subj_attn=False,
+                             q_lora_updates_query=args.q_lora_updates_query,
+                             device='cpu')
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
