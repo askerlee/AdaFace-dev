@@ -218,7 +218,8 @@ def parse_args():
                         choices=["arc2face", "consistentID"], 
                         help="List of enabled encoders (among the list of adaface_encoder_types)")
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", required=True)
-    # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
+    # If adaface_encoder_cfg_scales is not specified, the weights will be set to 
+    # 6.0 (consistentID) and 1.0 (arc2face).
     parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=None,    
                         help="CFG scales of output embeddings of the ID2Ada prompt encoders")
     # Options below are only relevant for --diffusers --method adaface.
@@ -232,7 +233,8 @@ def parse_args():
     parser.add_argument("--placeholder_tokens_pos", type=str, default="append",
                         choices=["prepend", "append"],
                         help="Position of the placeholder tokens in the prompt")
-    # One value for each encoder. If enabled, the static image suffix embeddings of that encoder 
+    # If specified, then should be a list, in which one value for each encoder. 
+    # If enabled, the static image suffix embeddings of that encoder 
     # will be used during inference.
     parser.add_argument("--enable_static_img_suffix_embs", type=str2bool, nargs="+", default=None,
                         help="Enable the static image suffix embeddings during inference")

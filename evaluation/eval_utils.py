@@ -38,6 +38,7 @@ def init_evaluators(device):
     dino_evator = DINOEvaluator(device)
     return clip_evator, dino_evator
 
+# If a 'path' in paths is an np array, then return it as is.
 def expand_paths(paths, filter_pat="_mask.png", num_samples=-1):
     img_extensions = [ "jpg", "jpeg", "png", "bmp" ]
 
@@ -46,15 +47,19 @@ def expand_paths(paths, filter_pat="_mask.png", num_samples=-1):
 
     all_paths = []
     for path in paths:
-        if os.path.isfile(path):
+        if isinstance(path, np.ndarray):
+            all_paths.append(path)
+        elif os.path.isfile(path):
             all_paths.append(path)
         else:
             for ext in img_extensions:
                 all_paths += glob.glob(path + "/*" + ext)
 
     # Remove mask images.
-    all_paths = filter(lambda x: not x.endswith(filter_pat), all_paths)
-    all_paths = sorted(all_paths)
+    all_paths = list(filter(lambda x: isinstance(x, np.ndarray) or not x.endswith(filter_pat), all_paths))
+    if len(all_paths) > 0 and isinstance(all_paths[0], str):
+        all_paths = sorted(all_paths)
+
     if num_samples > 0:
         all_paths = all_paths[-num_samples:]
     return all_paths
@@ -120,9 +125,8 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
     This function extracts faces from a list of images, and embeds them as embeddings. 
 
     Parameters:
-            image_paths: exact image paths as a list of strings. numpy array (BGR) or based64 encoded
-            images are also welcome. If one of pair has more than one face, then we will compare the
-            face pair with max similarity.
+            image_paths: exact image paths as a list of strings. 
+            A list of numpy array (RGB) are also welcome. 
 
             model_name (str): VGG-Face, Facenet, Facenet512, OpenFace, DeepFace, DeepID, Dlib
             , ArcFace and SFace
@@ -163,22 +167,28 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
     global cached_embeddings
 
     for img_path in image_paths:
-        if not "cached_embeddings" in globals():
-            cached_embeddings = {}
-        if img_path in cached_embeddings:
-            embeddings = cached_embeddings[img_path]
-            all_embeddings.append(embeddings)
-            continue
+        if cache_embeds:
+            if not "cached_embeddings" in globals():
+                cached_embeddings = {}
+            if img_path in cached_embeddings:
+                embeddings = cached_embeddings[img_path]
+                all_embeddings.append(embeddings)
+                continue
 
         embeddings = []
 
-        image_obj = Image.open(img_path)
-        image_obj2, _, _ = pad_image_obj_to_square(image_obj)
-        # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
-        # PersonalizedBase dataset class.
-        image_obj2 = image_obj2.resize(size, Image.NEAREST)
-        # Keep the original RGB image for face detection.
-        image_np = np.array(image_obj2)
+        if isinstance(img_path, str):
+            image_obj = Image.open(img_path)
+            image_obj2, _, _ = pad_image_obj_to_square(image_obj)
+            # Resize image to (512, 512). The scheme is Image.NEAREST, to be consistent with 
+            # PersonalizedBase dataset class.
+            image_obj2 = image_obj2.resize(size, Image.NEAREST)
+            # Keep the original RGB image for face detection.
+            image_np = np.array(image_obj2)
+        elif isinstance(img_path, np.ndarray):
+            image_np = img_path
+        else:
+            breakpoint()
 
         try:
             start = time.time()
@@ -194,7 +204,8 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
             det_time += time.time() - start
 
         except Exception as e: 
-            print(img_path)
+            if isinstance(img_path, str):
+                print(f"Error in {img_path}")
             traceback.print_exc()
             continue
         
@@ -334,10 +345,14 @@ def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
 
     return mean_similarity, src_no_face_img_count, dst_no_face_img_count
 
-# src_path, dst_path: a folder or a single image path
+# src_path, dst_path: a folder or a single image path, or an np array.
 def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
-                         face_engine="deepface", insightface_app=None, cache_src_embeds=True):
+                         face_engine="deepface", insightface_app=None, 
+                         cache_src_embeds=True, verbose=True):
 
+    # expand_paths(): if src_path is a directory, find all images in the directory.
+    # If src_path is a single image, return the image path.
+    # If src_path is an np array, then return [src_path].
     src_paths = expand_paths(src_path, num_samples=src_num_samples)
     dst_paths = expand_paths(dst_path, num_samples=dst_num_samples)
 
@@ -376,18 +391,20 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
     
     dst_normal_img_count = len(dst_paths) - dst_no_face_img_count
 
-    if isinstance(src_path, (list, tuple)):
-        src_path = src_path[0]
-    if isinstance(dst_path, (list, tuple)):
-        dst_path = dst_path[0]
+    if verbose:
+        if isinstance(src_path, (list, tuple)):
+            src_path = src_path[0]
+        if isinstance(dst_path, (list, tuple)):
+            dst_path = dst_path[0]
 
-    if src_path[-1] == "/":
-        src_path = src_path[:-1]
-    if dst_path[-1] == "/":
-        dst_path = dst_path[:-1]
-    src_path_base = os.path.basename(src_path)
-    dst_path_base = os.path.basename(dst_path)
-    print(f"avg face sim: {avg_similarity:.3f}    '{src_path_base}' vs '{dst_path_base}' ({dst_no_face_img_count} no face)")
+        if src_path[-1] == "/":
+            src_path = src_path[:-1]
+        if dst_path[-1] == "/":
+            dst_path = dst_path[:-1]
+        src_path_base = os.path.basename(src_path)
+        dst_path_base = os.path.basename(dst_path)
+        print(f"avg face sim: {avg_similarity:.3f}    '{src_path_base}' vs '{dst_path_base}' ({dst_no_face_img_count} no face)")
+
     return avg_similarity, dst_normal_img_count, dst_no_face_img_count
 
 # extra_sig could be a regular expression
