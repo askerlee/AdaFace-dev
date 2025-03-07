@@ -41,7 +41,7 @@ from evaluation.clip_eval import CLIPEvaluator
 import sys
 import asyncio
 torch.set_printoptions(precision=4, sci_mode=False)
-
+import cv2
 import platform
 
 # Check the architecture
@@ -2038,9 +2038,31 @@ class LatentDiffusion(DDPM):
                 self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
                 if self.log_attn:
+                    # attn: ['23': [4, 8, 4096, 97], '24': [4, 8, 4096, 97]]. 
+                    # 97: CLIP text embeddings extended from 77 to 97.
                     attn = ca_layers_activations_list[i]['attn']
+                    heatmaps = []
+                    for layer_idx in attn.keys():
+                        # subj_attn: [8, 4096, 20] -> [8, 4096] -> [4096]
+                        subj_attn_1d = attn[layer_idx][1, :, :, all_subj_indices_1b[1]].sum(dim=-1).mean(dim=0)
+                        subj_attn_2d = subj_attn_1d.view(64, 64)
+                        # Normalize the attention weights to [0, 1].
+                        subj_attn_2d = subj_attn_2d - subj_attn_2d.min()
+                        subj_attn_2d = subj_attn_2d / subj_attn_2d.max()
+                        # [64, 64] -> [512, 512].
+                        subj_attn_2d = F.interpolate(subj_attn_2d.reshape(1, 1, *subj_attn_2d.shape), size=(512, 512), mode='bilinear').squeeze()
+                        subj_attn_2d_np = np.uint8(subj_attn_2d.detach().cpu().numpy() * 255)
+                        # heatmap: [512, 512, 3]
+                        heatmap = cv2.applyColorMap(subj_attn_2d_np, cv2.COLORMAP_JET)
+                        # heatmap: [512, 512, 3] -> [3, 512, 512].
+                        heatmap = torch.from_numpy(heatmap).permute(2, 0, 1)
+                        heatmaps.append(heatmap)
+
+                    # heatmaps: [2, 3, 512, 512].
+                    heatmaps = torch.stack(heatmaps, dim=0)
+                    self.cache_and_log_generations(heatmaps, None, do_normalize=False)
                     breakpoint()
-                    
+
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
