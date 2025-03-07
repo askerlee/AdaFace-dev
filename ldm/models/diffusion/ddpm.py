@@ -2063,17 +2063,20 @@ class LatentDiffusion(DDPM):
                         # Normalize the attention weights to [0, 1].
                         subj_attn_2d = subj_attn_2d - subj_attn_2d.min()
                         subj_attn_2d = subj_attn_2d / subj_attn_2d.max()
+
                         # [64, 64] -> [512, 512].
                         subj_attn_2d = F.interpolate(subj_attn_2d.reshape(1, 1, *subj_attn_2d.shape), size=(512, 512), mode='bilinear').squeeze()
                         subj_attn_2d_np = np.uint8(subj_attn_2d.detach().cpu().numpy() * 255)
-                        # heatmap: [512, 512, 3]
-                        heatmap = cv2.applyColorMap(subj_attn_2d_np, cv2.COLORMAP_JET)
+                        # heatmap: [512, 512, 3]. Note to convert BGR to RGB.
+                        heatmap = cv2.applyColorMap(subj_attn_2d_np, cv2.COLORMAP_JET)[..., ::-1].copy()
                         # heatmap: [512, 512, 3] -> [3, 512, 512].
                         heatmap = torch.from_numpy(heatmap).permute(2, 0, 1).to(subj_attn_1d.device)
                         heatmaps.append(heatmap)
 
                     # heatmaps: [2, 3, 512, 512].
                     heatmaps = torch.stack(heatmaps, dim=0)
+                    avg_heatmap = heatmaps.float().mean(dim=0, keepdim=True).to(heatmaps.dtype)
+                    heatmaps = torch.cat([heatmaps, avg_heatmap], dim=0)
                     self.cache_and_log_generations(heatmaps, None, do_normalize=False)
 
             # x_start0: x_start before priming, i.e., the input latent images. 
