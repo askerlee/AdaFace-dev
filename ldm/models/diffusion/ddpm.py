@@ -119,6 +119,7 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=2.,
+                 log_attn=False,
                 ):
         
         super().__init__()
@@ -200,6 +201,7 @@ class DDPM(pl.LightningModule):
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
+        self.log_attn               = log_attn
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -2035,6 +2037,10 @@ class LatentDiffusion(DDPM):
 
                 self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
+                if self.log_attn:
+                    attn = ca_layers_activations_list[i]['attn']
+                    breakpoint()
+                    
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,

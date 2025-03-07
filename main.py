@@ -271,6 +271,8 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
+    parser.add_argument("--log_attn", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to log the attention weights for visualization")
     parser.add_argument("--apex", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use apex")
     return parser
@@ -739,7 +741,7 @@ if __name__ == "__main__":
         config.model.params.cond_stage_config.params.randomize_clip_skip_weights = opt.randomize_clip_skip_weights
         config.model.params.cond_stage_config.params.max_length                  = opt.clip_prompt_max_length
         config.model.params.use_fp_trick = opt.use_fp_trick
-
+        
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
         config.model.params.use_ldm_unet            = opt.use_ldm_unet
         config.model.params.unet_uses_attn_lora     = opt.unet_uses_attn_lora
@@ -768,6 +770,8 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'lr'):
             config.model.base_lr = opt.lr
+
+        config.model.params.log_attn = opt.log_attn
 
         # Personalization config
         config.model.params.personalization_config.params.adaface_ckpt_paths    = opt.adaface_ckpt_paths    
