@@ -538,7 +538,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             continue
         # cross_attention_dim: 768.
         cross_attention_dim = None if name.endswith("attn1.processor") else unet.config.cross_attention_dim
-        if cross_attention_dim is None or (name.startswith("up_blocks.3.attentions.0")):
+        if cross_attention_dim is None:
             # Self attention. Don't enable LoRA or capture activations.
             # We replace the default attn_proc with AttnProcessor_LoRA_Capture, 
             # so that it can incorporate img_mask into self-attention.
@@ -696,7 +696,7 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs,
             param.requires_grad = True
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
-                             captured_layer_indices=[23, 24], out_dtype=torch.float32):
+                             captured_layer_indices=[22, 23, 24], out_dtype=torch.float32):
     captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'q2', 'k', 'attn_out') }
 
     if not capture_ca_activations:
@@ -718,12 +718,9 @@ def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat
                 # Currently we only capture one block, up_blocks.3. So we hard-code the index 0.
                 captured_activations['outfeat'][layer_idx] = all_cached_outfeats[0][internal_idx].to(out_dtype)
             else:
-                # internal_idx is the index of layers in up_blocks.3. Layers 23 and 24 map to 1 and 2.
-                # But layers in attn_capture_procs correspond to up_blocks.3.attentions[1:].
-                # Therefore, we need to subtract 1 from internal_idx to match the index in attn_capture_procs.
-                # NOTE: Layer 22 capturing is not supported, as layer 22 has internal_idx 0, and -1 maps
-                # to the last layer in attn_capture_procs, which is layer 24.
-                cached_activations = attn_capture_procs[internal_idx - 1].cached_activations
+                # internal_idx is the index of layers in up_blocks.3. 
+                # Layers 22, 23 and 24 map to 0, 1 and 2.
+                cached_activations = attn_capture_procs[internal_idx].cached_activations
                 captured_activations[k][layer_idx] = cached_activations[k].to(out_dtype)
 
     return captured_activations

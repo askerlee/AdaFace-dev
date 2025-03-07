@@ -273,6 +273,8 @@ def get_parser(**parser_kwargs):
                         help="Disable wandb logging")    
     parser.add_argument("--log_attn", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to log the attention weights for visualization")
+    parser.add_argument("--ablate_img_embs", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to ablate the image embeddings")
     parser.add_argument("--apex", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use apex")
     return parser
@@ -772,6 +774,7 @@ if __name__ == "__main__":
             config.model.base_lr = opt.lr
 
         config.model.params.log_attn = opt.log_attn
+        config.model.params.ablate_img_embs = opt.ablate_img_embs
 
         # Personalization config
         config.model.params.personalization_config.params.adaface_ckpt_paths    = opt.adaface_ckpt_paths    

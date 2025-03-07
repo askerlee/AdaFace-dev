@@ -120,6 +120,7 @@ class DDPM(pl.LightningModule):
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=2.,
                  log_attn=False,
+                 ablate_img_embs=False
                 ):
         
         super().__init__()
@@ -202,6 +203,7 @@ class DDPM(pl.LightningModule):
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
         self.log_attn               = log_attn
+        self.ablate_img_embs        = ablate_img_embs
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -787,8 +789,8 @@ class LatentDiffusion(DDPM):
 
         # 'placeholder2indices' and 'prompt_emb_mask' are cached to be used in forward() and p_losses().
         extra_info = { 
-                        'placeholder2indices':      copy.copy(self.embedding_manager.placeholder2indices),
-                        'prompt_emb_mask':          copy.copy(self.embedding_manager.prompt_emb_mask),
+                        'placeholder2indices':  copy.copy(self.embedding_manager.placeholder2indices),
+                        'prompt_emb_mask':      copy.copy(self.embedding_manager.prompt_emb_mask),
                         'prompt_pad_mask':      copy.copy(self.embedding_manager.prompt_pad_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
                         'capture_ca_activations':               False,
@@ -1401,6 +1403,18 @@ class LatentDiffusion(DDPM):
         
         extra_info['placeholder2indices_1b'] = placeholder2indices_1b
         extra_info['placeholder2indices_2b'] = placeholder2indices_2b
+
+        # Replace encoded subject embeddings with image embeddings.
+        if self.iter_flags['do_comp_feat_distill'] and self.ablate_img_embs:
+            subj_indices_1b = placeholder2indices_1b['z'][1]
+            # Only use the first instance in the batch to generate the adaface_subj_embs,
+            # as the whole batch is of the same subject.           
+            # id2img_prompt_embs: [1, 20, 768]. 
+            # subj_single_emb: [1, 97, 768] -> [1, 20, 768]
+            subj_single_emb = subj_single_emb.clone()
+            subj_comp_emb   = subj_comp_emb.clone()
+            subj_single_emb[:, subj_indices_1b] = self.iter_flags['id2img_prompt_embs'][:1]
+            subj_comp_emb[:, subj_indices_1b]   = self.iter_flags['id2img_prompt_embs'][:1]
 
         # cls_single_emb and cls_comp_emb have been patched above. 
         # Then combine them back into prompt_emb_4b_orig.
@@ -2055,7 +2069,7 @@ class LatentDiffusion(DDPM):
                         # heatmap: [512, 512, 3]
                         heatmap = cv2.applyColorMap(subj_attn_2d_np, cv2.COLORMAP_JET)
                         # heatmap: [512, 512, 3] -> [3, 512, 512].
-                        heatmap = torch.from_numpy(heatmap).permute(2, 0, 1)
+                        heatmap = torch.from_numpy(heatmap).permute(2, 0, 1).to(subj_attn_1d.device)
                         heatmaps.append(heatmap)
 
                     # heatmaps: [2, 3, 512, 512].
@@ -2975,7 +2989,7 @@ class LatentDiffusion(DDPM):
 
         # img_colors is a 1D tensor: (B,)
         if img_colors is None:
-            img_colors = torch.zeros(samples.size(0), dtype=torch.int)
+            img_colors = torch.zeros(samples.size(0), dtype=torch.int, device=samples.device)
 
         self.generation_cache.append(samples)
         self.generation_cache_img_colors.append(img_colors)
@@ -3357,7 +3371,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             get_captured_activations(capture_ca_activations, self.attn_capture_procs, 
                                      self.outfeat_capture_blocks,
                                      # Only capture the activations of the last 2 CA layers.
-                                     captured_layer_indices = [23, 24],
+                                     captured_layer_indices = [22, 23, 24],
                                      out_dtype=out_dtype)
 
         # Restore capture_ca_activations to False, and disable all attn loras. 
