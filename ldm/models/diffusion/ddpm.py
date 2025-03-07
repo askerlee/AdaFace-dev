@@ -2061,7 +2061,6 @@ class LatentDiffusion(DDPM):
                     # heatmaps: [2, 3, 512, 512].
                     heatmaps = torch.stack(heatmaps, dim=0)
                     self.cache_and_log_generations(heatmaps, None, do_normalize=False)
-                    breakpoint()
 
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
