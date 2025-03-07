@@ -118,7 +118,7 @@ class DDPM(pl.LightningModule):
                  p_shrink_subj_attn=0.5,
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
-                 sc_subj_attn_var_shrink_factor=3.,
+                 sc_subj_attn_var_shrink_factor=2.,
                 ):
         
         super().__init__()

@@ -3,7 +3,8 @@ import re
 import sys
 import argparse
 parser = argparse.ArgumentParser()
-parser.add_argument("--ckpt_pat", help="pattern to match checkpoint folders")
+parser.add_argument("--clean_ckpt_pat", help="pattern to match checkpoint folders")
+parser.add_argument("--skip_ckpt_pat", default=None, help="pattern to skip checkpoint folders")
 parser.add_argument("--del_samples", help="delete samples", action="store_true")
 args = parser.parse_args()
 
@@ -36,11 +37,14 @@ def delete_all_but_largest_checkpoint(ckpt_folder_path):
     
     print(f"Kept:    {os.path.join(ckpt_folder_path, largest_checkpoint)}")
 
-def clean_log_folders(root_log_folder, pat, del_samples):
+def clean_log_folders(root_log_folder, clean_ckpt_pat, skip_ckpt_pat, del_samples):
     # Iterate through all subfolders (log folders)
     for subfolder in os.listdir(root_log_folder):
         ckpt_folder_path = os.path.join(root_log_folder, subfolder, 'checkpoints')
-        if os.path.isdir(ckpt_folder_path) and re.search(pat, ckpt_folder_path):
+        if os.path.isdir(ckpt_folder_path) and re.search(clean_ckpt_pat, ckpt_folder_path):
+            if skip_ckpt_pat and re.search(skip_ckpt_pat, ckpt_folder_path):
+                print(f"Skipping: {ckpt_folder_path}")
+                continue
             print(f"Cleaning: {ckpt_folder_path}")
             delete_all_but_largest_checkpoint(ckpt_folder_path)
         else:
@@ -54,4 +58,5 @@ def clean_log_folders(root_log_folder, pat, del_samples):
 if __name__ == "__main__":
     # Set the path to the root folder containing all log folders
     root_log_folder = "logs/"  # Update this path
-    clean_log_folders(root_log_folder, pat=args.ckpt_pat, del_samples=args.del_samples)
+    clean_log_folders(root_log_folder, clean_ckpt_pat=args.clean_ckpt_pat, skip_ckpt_pat=args.skip_ckpt_pat, 
+                      del_samples=args.del_samples)

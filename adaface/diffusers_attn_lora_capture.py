@@ -165,8 +165,8 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
 
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                                 subj_indices=None, subj_attn_var_shrink_factor=2., is_causal=False, 
-                                 scale=None, enable_gqa=False) -> torch.Tensor:
+                                 shrink_subj_attn=False, subj_indices=None, subj_attn_var_shrink_factor=2., 
+                                 is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     B, L, S = query.size(0), query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
     # 1: head (to be broadcasted). L: query length. S: key length.
@@ -189,7 +189,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
 
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
 
-    if subj_indices is not None:
+    if shrink_subj_attn and subj_indices is not None:
         # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
         # for the subject embeddings indexed by subj_indices.
         subj_attn_scales = calc_subj_attn_scales(attn_weight, subj_indices, subj_attn_var_shrink_factor)
@@ -273,9 +273,6 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if len(args) > 0 or kwargs.get("scale", None) is not None:
             deprecation_message = "The `scale` argument is deprecated and will be ignored. Please remove it, as passing it will raise an error in the future. `scale` should directly be passed while calling the underlying pipeline component i.e., via `cross_attention_kwargs`."
             deprecate("scale", "1.0.0", deprecation_message)
-        
-        if not self.shrink_subj_attn:
-            subj_indices = None
         
         # hidden_states: [1, 4096, 320]
         residual = hidden_states
@@ -377,7 +374,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if is_cross_attn and (self.capture_ca_activations or self.shrink_subj_attn):
             hidden_states, attn_score, attn_prob = \
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
-                                             dropout_p=0.0, subj_indices=subj_indices,
+                                             dropout_p=0.0, shrink_subj_attn=self.shrink_subj_attn,
+                                             subj_indices=subj_indices,
                                              subj_attn_var_shrink_factor=self.subj_attn_var_shrink_factor)
         else:
             # Use the faster implementation of scaled_dot_product_attention 
