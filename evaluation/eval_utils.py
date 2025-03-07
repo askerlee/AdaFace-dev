@@ -120,7 +120,7 @@ def compare_folders(clip_evator, dino_evator, gt_dir, samples_dir, prompt, num_s
 # The pytorch implementation is slightly faster.
 def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='retinaface', 
                           enforce_detection=True, align=True, normalization="base", size=(512, 512),
-                          cache_embeds=False, MonkeyPatch_RetinaFace_Pytorch=True):
+                          cache_embeds=False, MonkeyPatch_RetinaFace_Pytorch=True, verbose=True):
     """
     This function extracts faces from a list of images, and embeds them as embeddings. 
 
@@ -204,9 +204,12 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
             det_time += time.time() - start
 
         except Exception as e: 
-            if isinstance(img_path, str):
-                print(f"Error in {img_path}")
-            traceback.print_exc()
+            if verbose:
+                if isinstance(img_path, str):
+                    print(f"Error in {img_path}")
+                traceback.print_exc()
+                # Append an empty list to indicate that there is no face in this image.
+            all_embeddings.append(embeddings)
             continue
         
         start = time.time()
@@ -358,9 +361,9 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
 
     if face_engine == "deepface":
         src_list_embeds = deepface_embed_images(src_paths, model_name="ArcFace", detector_backend = "retinaface",
-                                                cache_embeds=cache_src_embeds)
+                                                cache_embeds=cache_src_embeds, verbose=verbose)
         dst_list_embeds = deepface_embed_images(dst_paths, model_name="ArcFace", detector_backend = "retinaface",
-                                                cache_embeds=False)
+                                                cache_embeds=False, verbose=verbose)
     elif face_engine == "insightface":
         src_list_embeds = insightface_embed_images(insightface_app, src_paths)
         dst_list_embeds = insightface_embed_images(insightface_app, dst_paths)
