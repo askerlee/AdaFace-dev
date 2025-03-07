@@ -1409,7 +1409,7 @@ class LatentDiffusion(DDPM):
             subj_indices_1b = placeholder2indices_1b['z'][1]
             # Only use the first instance in the batch to generate the adaface_subj_embs,
             # as the whole batch is of the same subject.           
-            # id2img_prompt_embs: [1, 20, 768]. 
+            # id2img_prompt_embs: [3, 20, 768] (a batch of three embeddings of the same values).
             # subj_single_emb: [1, 97, 768] -> [1, 20, 768]
             subj_single_emb = subj_single_emb.clone()
             subj_comp_emb   = subj_comp_emb.clone()

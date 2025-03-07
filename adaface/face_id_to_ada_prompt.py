@@ -1203,13 +1203,17 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
             all_face_id_embs = face_id_embs.split(self.face_id_dims, dim=1)
         else:
             all_face_id_embs = [None] * self.num_sub_encoders
+
         if img_prompt_embs is not None:
             BS = img_prompt_embs.shape[0] if BS == -1 else BS
             if img_prompt_embs.shape[1] != self.num_id_vecs0:
                 breakpoint()
             all_img_prompt_embs = img_prompt_embs.split(self.encoders_num_id_vecs0, dim=1)
+            img_prompt_embs_provided = True
         else:
             all_img_prompt_embs = [None] * self.num_sub_encoders
+            img_prompt_embs_provided = False
+
         if image_paths is not None:
             BS = len(image_paths) if BS == -1 else BS
         if BS == -1:
@@ -1268,7 +1272,8 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                     all_adaface_subj_embs.append(adaface_subj_embs)
             else:
                 all_adaface_subj_embs.append(adaface_subj_embs)
-                all_img_prompt_embs[i] = img_prompt_embs
+                if not img_prompt_embs_provided:
+                    all_img_prompt_embs[i] = img_prompt_embs
                 num_available_id_vecs += N_ID
 
             lens_subj_emb_segments.append(N_ID)
