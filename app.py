@@ -102,8 +102,8 @@ def remove_back_to_files():
 
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
-                   num_images, prompt, negative_prompt, gender, highlight_face, enhance_composition, 
-                   seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
+                   num_images, prompt, negative_prompt, gender, highlight_face, ablate_prompt_embed_type, 
+                   enhance_composition, seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
 
@@ -150,6 +150,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                       out_image_count=num_images, generator=generator, 
                       repeat_prompt_for_each_encoder=enhance_composition,
                       ablate_prompt_no_placeholders=disable_adaface,
+                      ablate_prompt_embed_type=ablate_prompt_embed_type,
                       verbose=True)
 
     session_signature = ",".join(image_paths + [prompt, str(seed)])
@@ -347,6 +348,10 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
                                          info="Enhance the facial features by prepending 'face portrait' to the prompt")
+            ablate_prompt_embed_type = gr.Dropdown(label="Ablate prompt embeddings type",
+                                                   choices=["ada", "ada-nonmix", "img"], value="ada", visible=True,
+                                                   info="Use this type of prompt embeddings for ablation study")
+            
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
@@ -451,7 +456,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         generate_image_call_dict = {
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
-                       negative_prompt, gender, highlight_face, enhance_composition, seed, disable_adaface, subj_name_sig],
+                       negative_prompt, gender, highlight_face, ablate_prompt_embed_type, enhance_composition, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)

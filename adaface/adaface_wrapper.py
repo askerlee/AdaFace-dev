@@ -45,6 +45,7 @@ class AdaFaceWrapper(nn.Module):
         self.adaface_ckpt_paths = adaface_ckpt_paths
         self.adaface_encoder_cfg_scales = adaface_encoder_cfg_scales
         self.enabled_encoders = enabled_encoders
+        # None, or a list of two bools for two encoders. If None, both are disabled.
         self.enable_static_img_suffix_embs = enable_static_img_suffix_embs
         self.unet_uses_attn_lora = unet_uses_attn_lora
         self.attn_lora_layer_names = attn_lora_layer_names
@@ -78,7 +79,12 @@ class AdaFaceWrapper(nn.Module):
         # So num_id_vecs is the length of the returned adaface embeddings for each encoder.
         self.encoders_num_id_vecs = np.array(self.id2ada_prompt_encoder.encoders_num_id_vecs)
         self.encoders_num_static_img_suffix_embs = np.array(self.id2ada_prompt_encoder.encoders_num_static_img_suffix_embs)
-        self.encoders_num_id_vecs += self.encoders_num_static_img_suffix_embs
+        if self.enable_static_img_suffix_embs is not None:
+            assert len(self.enable_static_img_suffix_embs) == len(self.encoders_num_id_vecs)
+            self.encoders_num_static_img_suffix_embs *= np.array(self.enable_static_img_suffix_embs)            
+            self.encoders_num_id_vecs += self.encoders_num_static_img_suffix_embs
+
+        self.img_prompt_embs = None
         self.extend_tokenizer_and_text_encoder()
 
     def to(self, device):
@@ -419,7 +425,7 @@ class AdaFaceWrapper(nn.Module):
 
         print(f"Added {num_added_tokens} tokens ({self.all_placeholder_tokens_str}) to the tokenizer.")
 
-        # placeholder_token_ids: [49408, ..., 49423].
+        # placeholder_token_ids: [49408, ..., 49427].
         self.placeholder_token_ids = tokenizer.convert_tokens_to_ids(self.all_placeholder_tokens)
         #print("New tokens:", self.placeholder_token_ids)
         # Resize the token embeddings as we are adding new special tokens to the tokenizer
@@ -503,6 +509,8 @@ class AdaFaceWrapper(nn.Module):
 
         return prompt
 
+    # NOTE: all_adaface_subj_embs is the input to the CLIP text encoder.
+    # ** DO NOT use it as prompt_embeds in the forward() method.
     # If face_id_embs is None, then it extracts face_id_embs from the images,
     # then map them to ada prompt embeddings.
     # avg_at_stage: 'id_emb', 'img_prompt_emb', or None.
@@ -513,7 +521,7 @@ class AdaFaceWrapper(nn.Module):
                                    perturb_at_stage=None, # id_emb, img_prompt_emb, or None.
                                    perturb_std=0, update_text_encoder=True):
 
-        all_adaface_subj_embs, lens_subj_emb_segments = \
+        all_adaface_subj_embs, img_prompt_embs, lens_subj_emb_segments = \
             self.id2ada_prompt_encoder.generate_adaface_embeddings(\
                     image_paths, face_id_embs=face_id_embs, 
                     img_prompt_embs=None, 
@@ -525,6 +533,8 @@ class AdaFaceWrapper(nn.Module):
         if all_adaface_subj_embs is None:
             return None
         
+        self.img_prompt_embs = img_prompt_embs
+
         if all_adaface_subj_embs.ndim == 4:
             # [1, 1, 20, 768] -> [20, 768]
             all_adaface_subj_embs = all_adaface_subj_embs.squeeze(0).squeeze(0)
@@ -594,10 +604,43 @@ class AdaFaceWrapper(nn.Module):
         return prompt_embeds_, negative_prompt_embeds_, \
                pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
+    # ablate_prompt_embed_type: 'ada-nonmix', 'img'
+    def replace_ada_embs_with_other_embs(self, prompt, prompt_embeds, ablate_prompt_embed_type):
+        # Scan prompt and replace tokens in self.placeholder_token_ids 
+        # with the corresponding image embeddings.
+        prompt_tokens = self.pipeline.tokenizer.tokenize(prompt)
+        prompt_embeds2 = prompt_embeds.clone()
+        if ablate_prompt_embed_type == 'img':
+            if self.img_prompt_embs is None:
+                print("Unable to find img_prompt_embs. Either prepare_adaface_embeddings() hasn't been called, or faceless images were used.")
+                return prompt_embeds
+            # self.img_prompt_embs: [1, 20, 768]
+            repl_embeddings = self.img_prompt_embs
+        elif ablate_prompt_embed_type == 'ada-nonmix':
+            repl_embeddings_, _, _, _ = self.encode_prompt(prompt, ablate_prompt_only_placeholders=True,
+                                                           verbose=True)
+            # repl_embeddings_: [1, 77, 768] -> [1, 20, 768]
+            repl_embeddings = repl_embeddings_[:, 1:len(self.all_placeholder_tokens)+1]
+        else:
+            breakpoint()
+
+        repl_tokens = {}
+        for i in range(len(prompt_tokens)):
+            if prompt_tokens[i] in self.all_placeholder_tokens:
+                prompt_embeds2[:, i] = repl_embeddings[:, self.all_placeholder_tokens.index(prompt_tokens[i])]
+                repl_tokens[prompt_tokens[i]] = 1
+
+        repl_token_count = len(repl_tokens)
+        print(f"Replaced {repl_token_count} tokens with {ablate_prompt_embed_type} embeddings.")
+
+        return prompt_embeds2
+    
+
     def encode_prompt(self, prompt, negative_prompt=None, 
                       placeholder_tokens_pos='append',
                       ablate_prompt_only_placeholders=False,
                       ablate_prompt_no_placeholders=False,
+                      ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
                       repeat_prompt_for_each_encoder=True,
                       device=None, verbose=False):
         if negative_prompt is None:
@@ -624,6 +667,9 @@ class AdaFaceWrapper(nn.Module):
         prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_ = \
             self.diffusers_encode_prompts(prompt, plain_prompt, negative_prompt, device)
 
+        if ablate_prompt_embed_type != 'ada':
+            prompt_embeds_ = self.replace_ada_embs_with_other_embs(prompt, prompt_embeds_, ablate_prompt_embed_type)
+
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
     # ref_img_strength is used only in the img2img pipeline.
@@ -633,6 +679,7 @@ class AdaFaceWrapper(nn.Module):
                 ref_img_strength=0.8, generator=None, 
                 ablate_prompt_only_placeholders=False,
                 ablate_prompt_no_placeholders=False,
+                ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
                 repeat_prompt_for_each_encoder=True,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
@@ -649,6 +696,7 @@ class AdaFaceWrapper(nn.Module):
                                        placeholder_tokens_pos=placeholder_tokens_pos,
                                        ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
                                        ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
+                                       ablate_prompt_embed_type=ablate_prompt_embed_type,
                                        repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
                                        device=self.device, 
                                        verbose=verbose)

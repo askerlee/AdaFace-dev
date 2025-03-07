@@ -347,7 +347,7 @@ class EmbeddingManager(nn.Module):
             # enable_static_img_suffix_embs=None: use default settings, i.e.,
             # consistentID enables  static_img_suffix_embs, 
             # arc2face     disables static_img_suffix_embs.
-            adaface_subj_embs, lens_subj_emb_segments = \
+            adaface_subj_embs, _, lens_subj_emb_segments = \
                 self.id2ada_prompt_encoder.generate_adaface_embeddings(
                         image_paths=None, face_id_embs=None,
                         img_prompt_embs=id2img_prompt_embs,
@@ -395,7 +395,7 @@ class EmbeddingManager(nn.Module):
                 # is only the embeddings of the first instance.
                 # Since subj_basis_generator_frozen is frozen, there's no point to enable gradient flow.
                 with torch.no_grad():
-                    adaface_subj_embs0, lens_subj_emb_segments = \
+                    adaface_subj_embs0, _, lens_subj_emb_segments = \
                         self.id2ada_prompt_encoder.generate_adaface_embeddings(
                             image_paths=None, face_id_embs=None,
                             img_prompt_embs=id2img_prompt_embs,

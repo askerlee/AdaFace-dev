@@ -560,7 +560,7 @@ class FaceID2AdaPrompt(nn.Module):
                     verbose=True)
             
             if face_image_count == 0:
-                return None, lens_subj_emb_segments
+                return None, None, lens_subj_emb_segments
         
         # No matter whether avg_at_stage is id_emb or img_prompt_emb, we average img_prompt_embs.
         elif avg_at_stage is not None and avg_at_stage.lower() != 'none':
@@ -576,18 +576,6 @@ class FaceID2AdaPrompt(nn.Module):
         
         if self.num_id_vecs < self.num_id_vecs0:
             adaface_subj_embs = adaface_subj_embs[:, :self.num_id_vecs, :]
-            '''
-            num_kept_seg = self.num_id_vecs // 2
-            num_avg_seg  = self.num_id_vecs - num_kept_seg
-            kept_id_vecs_seg = adaface_subj_embs[:, :num_kept_seg, :]
-            # avg_id_vecs_seg: [BS, num_id_vecs0 - num_kept_seg, 768].
-            avg_id_vecs_seg  = adaface_subj_embs[:, num_kept_seg:, :]
-            # If arc2face, adaface_subj_embs: [BS, 16, 768] -> [BS, 8, 768].
-            # NOTE: for simplicity, we assume num_avg_seg divides num_id_vecs0 - num_kept_seg.
-            # Otherwise the last chunked segment will be smaller, causing an error.
-            avg_id_vecs = torch.stack(avg_id_vecs_seg.chunk(num_avg_seg, dim=1), dim=1).mean(dim=2, keepdim=False)
-            adaface_subj_embs = torch.cat([kept_id_vecs_seg, avg_id_vecs], dim=1)
-            '''
 
         # During training,  img_prompt_avg_at_stage is None, and BS >= 1.
         # During inference, img_prompt_avg_at_stage is 'id_emb' or 'img_prompt_emb', and BS == 1.
@@ -595,7 +583,7 @@ class FaceID2AdaPrompt(nn.Module):
             # adaface_subj_embs: [1, 16, 768] -> [16, 768]
             adaface_subj_embs = adaface_subj_embs.squeeze(0)
 
-        return adaface_subj_embs, lens_subj_emb_segments
+        return adaface_subj_embs, img_prompt_embs, lens_subj_emb_segments
 
 class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
     name = 'arc2face'
@@ -1260,7 +1248,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                 # ddpm.embedding_manager.train() -> id2ada_prompt_encoder.train() -> each sub-enconder's train().
                 # -> each sub-enconder's subj_basis_generator.train(). 
                 # Therefore grad for the following call is enabled.
-                adaface_subj_embs, encoder_lens_subj_emb_segments = \
+                adaface_subj_embs, img_prompt_embs, encoder_lens_subj_emb_segments = \
                     id2ada_prompt_encoder.generate_adaface_embeddings(image_paths,
                                                                       all_face_id_embs[i],
                                                                       all_img_prompt_embs[i],
@@ -1280,6 +1268,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
                     all_adaface_subj_embs.append(adaface_subj_embs)
             else:
                 all_adaface_subj_embs.append(adaface_subj_embs)
+                all_img_prompt_embs[i] = img_prompt_embs
                 num_available_id_vecs += N_ID
 
             lens_subj_emb_segments.append(N_ID)
@@ -1297,7 +1286,12 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # all_adaface_subj_embs[0]: [BS, 4, 768]. all_adaface_subj_embs[1]: [BS, 16, 768].
         # all_adaface_subj_embs: [BS, 20, 768].
         all_adaface_subj_embs = torch.cat(all_adaface_subj_embs, dim=-2)
-        return all_adaface_subj_embs, lens_subj_emb_segments
+        # Check if some of the img_prompt_embs are None.
+        if None in all_img_prompt_embs:
+            all_img_prompt_embs = None
+        else:
+            all_img_prompt_embs   = torch.cat(all_img_prompt_embs, dim=-2)
+        return all_adaface_subj_embs, all_img_prompt_embs, lens_subj_emb_segments
 
 
 '''
