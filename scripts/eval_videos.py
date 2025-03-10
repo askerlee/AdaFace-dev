@@ -124,10 +124,11 @@ if __name__ == "__main__":
             print(f"{key}: {avg_similarity:.3f}")
 
     print(f"Total {subject_count} subjects and {video_count} videos processed")
-    print("Average similarity:")
+    print("Average similarity/std:")
     for key in simi_stats:
         avg_similarity = np.mean(simi_stats[key])
-        print(f"{key}: {avg_similarity:.3f}")
+        std_similarity = np.std(simi_stats[key])
+        print(f"{key}: {avg_similarity:.3f}/{std_similarity:.3f}")
 
     end = time.time()
     print("Time elapsed: %.2f seconds" %(end - begin))
