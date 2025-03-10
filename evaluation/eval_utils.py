@@ -400,12 +400,16 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
         if isinstance(dst_path, (list, tuple)):
             dst_path = dst_path[0]
 
-        if src_path[-1] == "/":
+        if type(src_path) ==str and src_path[-1] == "/":
             src_path = src_path[:-1]
-        if dst_path[-1] == "/":
+            src_path_base = os.path.basename(src_path)
+        else:
+            src_path_base = 'src'
+        if type(dst_path) ==str and dst_path[-1] == "/":
             dst_path = dst_path[:-1]
-        src_path_base = os.path.basename(src_path)
-        dst_path_base = os.path.basename(dst_path)
+            dst_path_base = os.path.basename(dst_path)
+        else:
+            dst_path_base = 'dst'
         print(f"avg face sim: {avg_similarity:.3f}    '{src_path_base}' vs '{dst_path_base}' ({dst_no_face_img_count} no face)")
 
     return avg_similarity, dst_normal_img_count, dst_no_face_img_count

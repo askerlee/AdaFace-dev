@@ -68,7 +68,7 @@ if __name__ == "__main__":
         frames = extract_frames(args.single_video, interval=3, collate=False)
         avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
-                                    cache_src_embeds=False, verbose=False)
+                                    cache_src_embeds=False, verbose=True)
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.2f}")
         exit()
 

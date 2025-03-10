@@ -102,7 +102,8 @@ def remove_back_to_files():
 
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
-                   num_images, prompt, negative_prompt, gender, highlight_face, ablate_prompt_embed_type, 
+                   num_images, prompt, negative_prompt, gender, highlight_face, 
+                   ablate_prompt_embed_type, img_prompt_emb_weight,
                    enhance_composition, seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
@@ -151,6 +152,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                       repeat_prompt_for_each_encoder=enhance_composition,
                       ablate_prompt_no_placeholders=disable_adaface,
                       ablate_prompt_embed_type=ablate_prompt_embed_type,
+                      img_prompt_emb_weight=img_prompt_emb_weight,
                       verbose=True)
 
     session_signature = ",".join(image_paths + [prompt, str(seed)])
@@ -326,24 +328,24 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                 with gr.Column(scale=100):                
                     prompt = gr.Dropdown(label="Prompt",
                             info="Try something like 'walking on the beach'. If the face is not in focus, try checking 'Highlight face'.",
-                            value="highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
+                            value="portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
                             allow_custom_value=True,
                             choices=[
-                                    "highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
-                                    "walking on the beach, sunset, orange sky, front view",
-                                    "in a white apron and chef hat, garnishing a gourmet dish",
-                                    "dancing pose among folks in a park, waving hands",
-                                    "in iron man costume, the sky ablaze with hues of orange and purple, full body view",
-                                    "jedi wielding a lightsaber, star wars, eye level shot, full body view",
-                                    "night view of tokyo street, neon light, full body view",
-                                    "playing guitar on a boat, ocean waves",
-                                    "with a passion for reading, curled up with a book in a cozy nook near a window, front view",
-                                    "celebrating chinese new year, fireworks, full body view",
-                                    "running pose in a park, full body view",
-                                    "in space suit, space helmet, walking on mars, full body view",
-                                    "in superman costume, the sky ablaze with hues of orange and purple, full body view",
-                                    "in a wheelchair, full body view",
-                                    "on a horse, full body view"
+                                    "portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
+                                    "portrait, walking on the beach, sunset, orange sky, front view",
+                                    "portrait, in a white apron and chef hat, garnishing a gourmet dish",
+                                    "portrait, dancing pose among folks in a park, waving hands",
+                                    "portrait, in iron man costume, the sky ablaze with hues of orange and purple, full body view",
+                                    "portrait, jedi wielding a lightsaber, star wars, eye level shot, full body view",
+                                    "portrait, night view of tokyo street, neon light, full body view",
+                                    "portrait, playing guitar on a boat, ocean waves",
+                                    "portrait, with a passion for reading, curled up with a book in a cozy nook near a window, front view",
+                                    "portrait, celebrating new year, fireworks, full body view",
+                                    "portrait, running pose in a park, full body view",
+                                    "portrait, in space suit, space helmet, walking on mars, full body view",
+                                    "portrait, in superman costume, the sky ablaze with hues of orange and purple, full body view",
+                                    "portrait, in a wheelchair, full body view",
+                                    "portrait, on a horse, full body view"
                             ])
             
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
@@ -352,6 +354,10 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                                    choices=["ada", "ada-nonmix", "img"], value="ada", visible=True,
                                                    info="Use this type of prompt embeddings for ablation study")
             
+            img_prompt_emb_weight = gr.Slider(label="Weight of Image ID embeddings",
+                                              minimum=0.0, maximum=0.2, step=0.05, value=0,
+                                              info="Weight of the image ID embeddings in the prompt embeddings")
+                                              
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
                             info="Enhance the overall composition by repeating the compositional part of the prompt")
@@ -456,7 +462,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
         generate_image_call_dict = {
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
-                       negative_prompt, gender, highlight_face, ablate_prompt_embed_type, enhance_composition, seed, disable_adaface, subj_name_sig],
+                       negative_prompt, gender, highlight_face, ablate_prompt_embed_type, 
+                       img_prompt_emb_weight, enhance_composition, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
