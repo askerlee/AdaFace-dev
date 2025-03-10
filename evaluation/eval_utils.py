@@ -351,7 +351,7 @@ def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
 # src_path, dst_path: a folder or a single image path, or an np array.
 def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
                          face_engine="deepface", insightface_app=None, 
-                         cache_src_embeds=True, verbose=True):
+                         cache_src_embeds=True, verbose=True, debug=False):
 
     # expand_paths(): if src_path is a directory, find all images in the directory.
     # If src_path is a single image, return the image path.
@@ -364,6 +364,9 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
                                                 cache_embeds=cache_src_embeds, verbose=verbose)
         dst_list_embeds = deepface_embed_images(dst_paths, model_name="ArcFace", detector_backend = "retinaface",
                                                 cache_embeds=False, verbose=verbose)
+        if debug:
+            breakpoint()
+            
     elif face_engine == "insightface":
         src_list_embeds = insightface_embed_images(insightface_app, src_paths)
         dst_list_embeds = insightface_embed_images(insightface_app, dst_paths)

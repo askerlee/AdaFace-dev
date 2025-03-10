@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument("--face_engine", dest='face_engine', type=str, default='deepface', 
                         choices=['deepface', 'insightface'],
                         help="face engine to use for comparison")
+    parser.add_argument("--debug", dest='debug', action='store_true', help="Debug mode")
     args = parser.parse_args()
     return args
 
@@ -104,7 +105,7 @@ if __name__ == "__main__":
             frames = extract_frames(video_filename, interval=3, collate=False)
             avg_similarity, normal_frame_count, no_face_frame_count = \
                 compare_face_folders(image_filenames, frames, face_engine=args.face_engine, 
-                                        cache_src_embeds=False, verbose=False)
+                                     cache_src_embeds=False, verbose=False, debug=args.debug)
             
             method = "unknown"
             for key in simi_stats:
