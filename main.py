@@ -271,8 +271,8 @@ def get_parser(**parser_kwargs):
 
     parser.add_argument("--no_wandb", dest='use_wandb', action="store_false", 
                         help="Disable wandb logging")    
-    parser.add_argument("--log_attn", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to log the attention weights for visualization")
+    parser.add_argument("--log_attn_level", type=int, default=0,
+                        help="Whether and at which level we log the attention weights for visualization")
     parser.add_argument("--ablate_img_embs", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to ablate the image embeddings")
     parser.add_argument("--apex", type=str2bool, nargs="?", const=True, default=False,
@@ -773,7 +773,7 @@ if __name__ == "__main__":
         if hasattr(opt, 'lr'):
             config.model.base_lr = opt.lr
 
-        config.model.params.log_attn = opt.log_attn
+        config.model.params.log_attn_level = opt.log_attn_level
         config.model.params.ablate_img_embs = opt.ablate_img_embs
 
         # Personalization config

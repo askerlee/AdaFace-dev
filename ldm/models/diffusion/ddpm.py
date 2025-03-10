@@ -104,7 +104,7 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=4,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weights=[0.2, 0.0],
+                 recon_bg_pixel_weights=[0.4, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
@@ -119,7 +119,7 @@ class DDPM(pl.LightningModule):
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
                  sc_subj_attn_var_shrink_factor=2.,
-                 log_attn=False,
+                 log_attn_level=0,
                  ablate_img_embs=False
                 ):
         
@@ -202,7 +202,7 @@ class DDPM(pl.LightningModule):
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
-        self.log_attn               = log_attn
+        self.log_attn_level         = log_attn_level
         self.ablate_img_embs        = ablate_img_embs
 
         if self.use_ldm_unet:
@@ -2051,7 +2051,7 @@ class LatentDiffusion(DDPM):
 
                 self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
 
-                if self.log_attn:
+                if self.log_attn_level > 0:
                     # attn: ['23': [4, 8, 4096, 97], '24': [4, 8, 4096, 97]]. 
                     # 97: CLIP text embeddings extended from 77 to 97.
                     attn = ca_layers_activations_list[i]['attn']
@@ -2076,7 +2076,11 @@ class LatentDiffusion(DDPM):
                     # heatmaps: [2, 3, 512, 512].
                     heatmaps = torch.stack(heatmaps, dim=0)
                     avg_heatmap = heatmaps.float().mean(dim=0, keepdim=True).to(heatmaps.dtype)
-                    heatmaps = torch.cat([heatmaps, avg_heatmap], dim=0)
+                    if self.log_attn_level == 2:
+                        heatmaps = torch.cat([heatmaps, avg_heatmap], dim=0)
+                    else:
+                        # If log_attn_level == 1, only log the average heatmap.
+                        heatmaps = avg_heatmap
                     self.cache_and_log_generations(heatmaps, None, do_normalize=False)
 
             # x_start0: x_start before priming, i.e., the input latent images. 
