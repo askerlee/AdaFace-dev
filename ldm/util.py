@@ -1789,7 +1789,8 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
         layer_subj_mb_excess = subj_attn_at_bg + fgbg_attn_contrast_margin - avg_subj_attn_at_fg
         # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
         # activations conform to the margin restrictions.
-        loss_layer_subj_mb_suppress = masked_mean(layer_subj_mb_excess, layer_subj_mb_excess > 0)
+        #loss_layer_subj_mb_suppress = masked_mean(layer_subj_mb_excess, layer_subj_mb_excess > 0)
+        loss_layer_subj_mb_suppress = subj_attn_at_bg.mean() 
         loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress * LAYER_W)
     
     if len(loss_layers_subj_mb_suppress) == 0:
