@@ -1745,7 +1745,8 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
         # [2, 77, 8, 256] / [2, 77, 8, 64]
         attn_mat = unet_attn.permute(0, 3, 1, 2)
 
-        # subj_attn: [8, 8, 64] -> [2, 4, 8, 64] sum among K_subj embeddings -> [2, 8, 64]
+        # attn_mat: [1, 97, 8, 4096]. Normalized across the 97 prompt tokens.
+        # subj_attn: [1, 20, 8, 4096] sum among K_subj embeddings -> [1, 8, 4096]
         subj_attn = sel_emb_attns_by_indices(attn_mat, subj_indices, do_sum=True, do_mean=False)
 
         fg_mask2 = resize_mask_to_target_size(fg_mask, "fg_mask", subj_attn.shape[-1], 
