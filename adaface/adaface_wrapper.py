@@ -651,7 +651,7 @@ class AdaFaceWrapper(nn.Module):
                       ablate_prompt_only_placeholders=False,
                       ablate_prompt_no_placeholders=False,
                       ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
-                      img_prompt_emb_weights=(0, 0),
+                      img_prompt_emb_weights=None,
                       repeat_prompt_for_each_encoder=True,
                       device=None, verbose=False):
         if negative_prompt is None:
@@ -681,7 +681,7 @@ class AdaFaceWrapper(nn.Module):
         if ablate_prompt_embed_type != 'ada':
             alt_prompt_embed_type = ablate_prompt_embed_type
             alt_prompt_emb_weights = (1, 1)
-        elif sum(img_prompt_emb_weights) > 0:
+        elif (img_prompt_emb_weights is not None) and sum(img_prompt_emb_weights) > 0:
             alt_prompt_embed_type = 'img'
             alt_prompt_emb_weights = img_prompt_emb_weights
         else:
@@ -701,7 +701,7 @@ class AdaFaceWrapper(nn.Module):
                 ablate_prompt_only_placeholders=False,
                 ablate_prompt_no_placeholders=False,
                 ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
-                img_prompt_emb_weights=0.,
+                img_prompt_emb_weights=None,
                 repeat_prompt_for_each_encoder=True,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
