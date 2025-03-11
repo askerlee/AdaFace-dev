@@ -401,6 +401,7 @@ class AdaFaceWrapper(nn.Module):
         # We add z_0_0, z_0_1, z_0_2, ..., z_0_15, z_1_0, z_1_1, z_1_2, z_1_3 to the tokenizer.
         self.all_placeholder_tokens = []
         self.placeholder_tokens_strs = []
+        self.encoder_placeholder_tokens = []
         for i in range(len(self.adaface_encoder_types)):
             placeholder_tokens = []
             for j in range(self.encoders_num_id_vecs[i]):
@@ -408,6 +409,7 @@ class AdaFaceWrapper(nn.Module):
                 placeholder_tokens_str = " ".join(placeholder_tokens)
 
             self.all_placeholder_tokens.extend(placeholder_tokens)
+            self.encoder_placeholder_tokens.append(placeholder_tokens)
             self.placeholder_tokens_strs.append(placeholder_tokens_str)
 
         self.all_placeholder_tokens_str = " ".join(self.placeholder_tokens_strs)
@@ -606,7 +608,7 @@ class AdaFaceWrapper(nn.Module):
     
     # alt_prompt_embed_type: 'ada-nonmix', 'img'
     def mix_ada_embs_with_other_embs(self, prompt, prompt_embeds, 
-                                     alt_prompt_embed_type, alt_prompt_emb_weight):
+                                     alt_prompt_embed_type, alt_prompt_emb_weights):
         # Scan prompt and replace tokens in self.placeholder_token_ids 
         # with the corresponding image embeddings.
         prompt_tokens = self.pipeline.tokenizer.tokenize(prompt)
@@ -628,15 +630,18 @@ class AdaFaceWrapper(nn.Module):
         repl_tokens = {}
         for i in range(len(prompt_tokens)):
             if prompt_tokens[i] in self.all_placeholder_tokens:
-                prompt_embeds2[:, i] = prompt_embeds2[:, i] * (1 - alt_prompt_emb_weight) + \
-                                        repl_embeddings[:, self.all_placeholder_tokens.index(prompt_tokens[i])] * alt_prompt_emb_weight
+                encoder_idx = next((i for i, sublist in enumerate(self.encoder_placeholder_tokens) \
+                                    if prompt_tokens[i] in sublist), 0)
+                alt_prompt_emb_weight = alt_prompt_emb_weights[encoder_idx]
+                prompt_embeds2[:, i] = prompt_embeds2[:, i] * (1 - alt_prompt_emb_weight) \
+                                       + repl_embeddings[:, self.all_placeholder_tokens.index(prompt_tokens[i])] * alt_prompt_emb_weight
                 repl_tokens[prompt_tokens[i]] = 1
 
         repl_token_count = len(repl_tokens)
-        if alt_prompt_emb_weight == 1:
+        if np.all(np.array(alt_prompt_emb_weights) == 1):
             print(f"Replaced {repl_token_count} tokens with {alt_prompt_embed_type} embeddings.")
         else:
-            print(f"Mixed {repl_token_count} tokens with {alt_prompt_embed_type} embeddings, weight {alt_prompt_emb_weight}.")
+            print(f"Mixed {repl_token_count} tokens with {alt_prompt_embed_type} embeddings, weight {alt_prompt_emb_weights}.")
 
         return prompt_embeds2
     
@@ -646,7 +651,7 @@ class AdaFaceWrapper(nn.Module):
                       ablate_prompt_only_placeholders=False,
                       ablate_prompt_no_placeholders=False,
                       ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
-                      img_prompt_emb_weight=0.,
+                      img_prompt_emb_weights=(0, 0),
                       repeat_prompt_for_each_encoder=True,
                       device=None, verbose=False):
         if negative_prompt is None:
@@ -675,16 +680,16 @@ class AdaFaceWrapper(nn.Module):
 
         if ablate_prompt_embed_type != 'ada':
             alt_prompt_embed_type = ablate_prompt_embed_type
-            alt_prompt_emb_weight = 1
-        elif img_prompt_emb_weight > 0:
+            alt_prompt_emb_weights = (1, 1)
+        elif sum(img_prompt_emb_weights) > 0:
             alt_prompt_embed_type = 'img'
-            alt_prompt_emb_weight = img_prompt_emb_weight
+            alt_prompt_emb_weights = img_prompt_emb_weights
         else:
-            alt_prompt_emb_weight = 0
+            alt_prompt_emb_weights = (0, 0)
 
-        if alt_prompt_emb_weight > 0:
+        if sum(alt_prompt_emb_weights) > 0:
             prompt_embeds_ = self.mix_ada_embs_with_other_embs(prompt, prompt_embeds_, 
-                                                               alt_prompt_embed_type, alt_prompt_emb_weight)
+                                                               alt_prompt_embed_type, alt_prompt_emb_weights)
 
         return prompt_embeds_, negative_prompt_embeds_, pooled_prompt_embeds_, negative_pooled_prompt_embeds_
     
@@ -696,7 +701,7 @@ class AdaFaceWrapper(nn.Module):
                 ablate_prompt_only_placeholders=False,
                 ablate_prompt_no_placeholders=False,
                 ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
-                img_prompt_emb_weight=0.,
+                img_prompt_emb_weights=0.,
                 repeat_prompt_for_each_encoder=True,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
@@ -714,7 +719,7 @@ class AdaFaceWrapper(nn.Module):
                                        ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
                                        ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
                                        ablate_prompt_embed_type=ablate_prompt_embed_type,
-                                       img_prompt_emb_weight=img_prompt_emb_weight,
+                                       img_prompt_emb_weights=img_prompt_emb_weights,
                                        repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
                                        device=self.device, 
                                        verbose=verbose)
