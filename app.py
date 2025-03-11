@@ -136,8 +136,11 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
-    if highlight_face and "portrait" not in prompt:
-        prompt = "face portrait, " + prompt
+    if highlight_face: 
+        if "portrait" not in prompt:
+            prompt = "face portrait, " + prompt
+        else:
+            prompt = prompt.replace("portrait", "face portrait")
 
     if gender != "(none)":
         if "portrait" in prompt:
@@ -253,13 +256,12 @@ description = r"""
 <b>Official demo</b> for our working paper <b>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</b>.<br>
 
 ❗️**What's New**❗️
-- Support switching between two model styles: **Realistic** and **Anime**.
+- Support switching between three model styles: **Photorealistic**, **Realistic** and **Anime**.
 - If you just changed the model style, the first image/video generation will take extra 20~30 seconds for loading new model weight.
 
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
 2. Check "Highlight face" to highlight fine facial features.
-3. If the face dominates the image, try increasing 'Weight of ID prompt in the negative prompt'.
 4. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
   AdaFace-Animate 
   <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
