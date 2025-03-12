@@ -56,6 +56,10 @@ if __name__ == "__main__":
             subject_path = os.path.join(args.root, subject)
             if os.path.isdir(subject_path) == False:
                 continue
+            # Ignore subjects with ignore.txt in their folder.
+            # These are private subjects that should not be counted in the public dataset.
+            if os.path.exists(os.path.join(subject_path, "ignore.txt")):
+                continue
             subject_paths.append(subject_path)
 
     if args.subject is not None:

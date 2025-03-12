@@ -339,7 +339,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, in a white apron and chef hat, garnishing a gourmet dish",
                                     "portrait, dancing pose among folks in a park, waving hands",
                                     "portrait, in iron man costume, the sky ablaze with hues of orange and purple, full body view",
-                                    "portrait, jedi wielding a lightsaber, star wars, eye level shot, full body view",
+                                    "portrait, jedi wielding a lightsaber, star wars, full body view",
                                     "portrait, night view of tokyo street, neon light, full body view",
                                     "portrait, playing guitar on a boat, ocean waves",
                                     "portrait, with a passion for reading, curled up with a book in a cozy nook near a window, front view",
@@ -347,8 +347,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, running pose in a park, full body view",
                                     "portrait, in space suit, space helmet, walking on mars, full body view",
                                     "portrait, in superman costume, the sky ablaze with hues of orange and purple, full body view",
-                                    "portrait, in a wheelchair, full body view",
-                                    "portrait, on a horse, full body view"
+                                    "in a wheelchair, full body view",
+                                    "on a horse, full body view"
                             ])
             
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
