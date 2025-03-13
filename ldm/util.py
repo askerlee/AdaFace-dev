@@ -1597,8 +1597,8 @@ def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask,
         instance_mask = instance_mask.float().reshape(-1, 1, 1, 1)
 
     # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-    fg_mask     = fg_mask  * instance_mask
-    img_mask    = img_mask * instance_mask
+    fg_mask     = fg_mask    * instance_mask
+    img_mask    = img_mask   * instance_mask
     noise_pred  = noise_pred * img_mask
     noise_gt    = noise_gt   * img_mask
     loss_recon_pixels = loss_func(noise_pred, noise_gt, reduction='none')
@@ -1727,8 +1727,8 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
     attn_align_layer_weights = normalize_dict_values(attn_align_layer_weights)
     # K_subj: 9, number of embeddings per subject token.
     K_subj = len(subj_indices[0]) // len(torch.unique(subj_indices[0]))
-    # fgbg_attn_contrast_margin is on probs, not scores. So it's smaller.
-    fgbg_attn_contrast_margin = 0.05
+    # fgbg_attn_contrast_margin = 0.05
+    bg_attn_tolerance = 0.02
 
     # subj_indices: ([0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3], 
     #                [5, 6, 7, 8, 6, 7, 8, 9, 5, 6, 7, 8, 6, 7, 8, 9]).
@@ -1780,18 +1780,18 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
         # NOTE: avg_subj_attn_at_fg is not detached from the computation graph, therefore, 
         # minimizing loss_layer_subj_mb_suppress (layer_subj_mb_excess) means to minimize subj_attn_at_bg
         # and maximize avg_subj_attn_at_fg, which is the desired behavior.
-        avg_subj_attn_at_fg = masked_mean(subj_attn_at_fg, fg_mask3, dim=(1,2), keepdim=True)
+        # avg_subj_attn_at_fg = masked_mean(subj_attn_at_fg, fg_mask3, dim=(1,2), keepdim=True)
 
         # Encourage avg_subj_attn_at_fg (subj_attn averaged at foreground locations) 
         # to be at least larger by fgbg_attn_contrast_margin = 0.05 than 
         # subj_attn_at_bg at any background locations.
         # If not, clamp() > 0, incurring a loss.
         # layer_subj_mb_excess: [BLOCK_SIZE, 8, 64].
-        layer_subj_mb_excess = subj_attn_at_bg + fgbg_attn_contrast_margin - avg_subj_attn_at_fg
-        # Compared to masked_mean(), mean() is like dynamically reducing the loss weight when more and more 
-        # activations conform to the margin restrictions.
-        #loss_layer_subj_mb_suppress = masked_mean(layer_subj_mb_excess, layer_subj_mb_excess > 0)
-        loss_layer_subj_mb_suppress = subj_attn_at_bg.mean() 
+        # layer_subj_mb_excess = subj_attn_at_bg + fgbg_attn_contrast_margin - avg_subj_attn_at_fg
+        layer_subj_mb_excess = subj_attn_at_bg - bg_attn_tolerance
+        # Only penalize tokens where subj attention excess layer_subj_mb_excess > 0, 
+        # i.e., when subj_attn_at_bg > bg_attn_tolerance.
+        loss_layer_subj_mb_suppress = masked_mean(layer_subj_mb_excess, layer_subj_mb_excess > 0)
         loss_layers_subj_mb_suppress.append(loss_layer_subj_mb_suppress * LAYER_W)
     
     if len(loss_layers_subj_mb_suppress) == 0:
@@ -1982,6 +1982,7 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
             loss_subj_k_distill_layer = F.mse_loss(sc_subj_k, sc_subj_rep_k.detach())
             loss_comp_rep_distill_subj_k += loss_subj_k_distill_layer * LAYER_W
 
+            # sc_nonsubj_emb_mask includes both non-subj tokens and padding tokens.
             # NOTE: sc_nonsubj_emb_mask for nonsubj_k_distill is derived from sc_emb_mask, so that 
             # the repeated compositional prompt part is ignored from distillation. 
             # Otherwise they will be aligned with the ks of padding tokens in sc_k.

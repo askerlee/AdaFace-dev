@@ -104,7 +104,7 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=4,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weights=[0.4, 0.0],
+                 recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
@@ -2869,11 +2869,13 @@ class LatentDiffusion(DDPM):
                 # In this case, we don't do distillation on the subject-comp-rep instance.
                 fg_percent_rep_distill_scale = 0
 
+            comp_rep_distill_nonsubj_k_loss_scale = 5
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
-            loss_subj_comp_rep_distill_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
+            subj_comp_rep_distill_loss_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
             loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
-                                       loss_comp_rep_distill_nonsubj_k) * loss_subj_comp_rep_distill_scale
+                                       loss_comp_rep_distill_nonsubj_k * comp_rep_distill_nonsubj_k_loss_scale) \
+                                      * subj_comp_rep_distill_loss_scale
             
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
         if v_loss_comp_feat_distill > 0:
