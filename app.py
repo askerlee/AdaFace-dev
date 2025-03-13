@@ -359,7 +359,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             
             consist_img_prompt_emb_weight = gr.Slider(label="Weight of ConsistentID Image ID embeddings",
                                                       minimum=0.0, maximum=0.2, step=0.05, value=0,
-                                                      info="Weight of the image ID embeddings in the prompt embeddings")
+                                                      info="Weight of the image ID embeddings in the prompt embeddings",
+                                                      visible=False)
                                               
             enhance_composition = \
                 gr.Checkbox(label="Enhance composition", value=True, visible=False,
