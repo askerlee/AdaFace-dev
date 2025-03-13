@@ -2886,11 +2886,12 @@ class LatentDiffusion(DDPM):
                                                     x_start_ss, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE):
         # We cannot afford calculating loss_comp_arcface_align for > 1 steps. Otherwise, OOM.
-        max_arcface_align_loss_count = 1
-        arcface_align_loss_count     = 0
-        bg_faces_suppress_loss_count = 0
-        sc_fg_mask, sc_fg_face_bboxes  = None, None
-        sc_face_detected_at_step     = -1
+        max_arcface_align_loss_count        = 1
+        arcface_align_loss_count            = 0
+        comp_sc_subj_mb_suppress_loss_count = 0
+        bg_faces_suppress_loss_count        = 0
+        sc_fg_mask, sc_fg_face_bboxes       = None, None
+        sc_face_detected_at_step            = -1
 
         # Don't initialize zero_losses as torch.zeros(3), otherwise the losses cannot do inplace addition.
         zero_losses = [ torch.tensor(0., device=x_start_ss.device, dtype=x_start_ss.dtype) for _ in range(3) ]
@@ -2902,9 +2903,10 @@ class LatentDiffusion(DDPM):
             # Trying to calc arcface_align_loss from difficult to easy steps.
             # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
 
-            # In the first step, the subject face is very blurry, if it's ever generated.
+            # In step 0, the subject face is very blurry, if it's ever generated.
             # The corresponding arcface align loss will be highly noisy. So we always skip it.
-            for sel_step in range(1, len(x_recons)):
+            # Reverse the steps, so we start from the clearest face image, and get the most accurate sc_fg_mask.
+            for sel_step in range(len(x_recons) - 1, -1, -1):
                 x_recon  = x_recons[sel_step]
                 # We have checked that x_start_ss is always a valid face image.
                 # Align subj_comp_recon to x_start_ss.
@@ -2916,32 +2918,45 @@ class LatentDiffusion(DDPM):
                 # They need to be decoded first.
                 # If no faces are detected in x_recon, loss_arcface_align_comp_step is 0, 
                 # and sc_fg_face_bboxes is None.
-                # NOTE: In the first iteration, sc_fg_mask is None, and it's fine.
+                # NOTE: In the first iteration, sc_fg_mask is None, 
+                # and we'll generate it based on sc_fg_face_bboxes.
                 
-                # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
-                # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
-                loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, \
-                  sc_fg_face_bboxes, sc_fg_face_detected_inst_mask = \
-                    self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
-                # Found valid face images. Stop trying, since we cannot afford calculating loss_comp_arcface_align for > 1 steps.
-                if loss_arcface_align_comp_step > 0:
-                    print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
-                    loss_comp_arcface_align += loss_arcface_align_comp_step
-                    arcface_align_loss_count += 1
-                    ca_layers_activations = ca_layers_activations_list[sel_step]
-                    if sc_face_detected_at_step == -1:
-                        sc_face_detected_at_step = sel_step
+                # Only do arcface_align_loss for the first iteration (i.e., the last denoising iteration).
+                if (arcface_align_loss_count < max_arcface_align_loss_count) and \
+                   ((len(x_recons) > 1 and sel_step >= 1) or len(x_recons) == 1):
+                    # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
+                    # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
+                    loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, \
+                    sc_fg_face_bboxes, sc_fg_face_detected_inst_mask = \
+                        self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
+                    # Found valid face images. Stop trying, since we cannot afford calculating loss_comp_arcface_align for > 1 steps.
+                    if loss_arcface_align_comp_step > 0:
+                        print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
+                        loss_comp_arcface_align += loss_arcface_align_comp_step
+                        arcface_align_loss_count += 1
+                        ca_layers_activations = ca_layers_activations_list[sel_step]
+                        if sc_face_detected_at_step == -1:
+                            sc_face_detected_at_step = sel_step
 
-                    # Generate sc_fg_mask for the first time, based on the detected face area.
-                    if sc_fg_mask is None:
-                        # sc_fg_mask: [1, 1, 64, 64].
-                        sc_fg_mask = torch.zeros_like(subj_comp_recon[:, :1])
-                        # When loss_comp_arcface_align > 0, sc_fg_face_bboxes is always not None.
-                        # sc_fg_face_bboxes: [[22, 15, 36, 33]], already scaled down to 64*64.
-                        for i in range(len(sc_fg_face_bboxes)):
-                            x1, y1, x2, y2 = sc_fg_face_bboxes[i]
-                            sc_fg_mask[i, :, y1:y2, x1:x2] = 1
-                            
+                        # Generate sc_fg_mask for the first time, based on the detected face area.
+                        if sc_fg_mask is None:
+                            # sc_fg_mask: [1, 1, 64, 64].
+                            sc_fg_mask = torch.zeros_like(subj_comp_recon[:, :1])
+                            # When loss_comp_arcface_align > 0, sc_fg_face_bboxes is always not None.
+                            # sc_fg_face_bboxes: [[22, 15, 36, 33]], already scaled down to 64*64.
+                            for i in range(len(sc_fg_face_bboxes)):
+                                x1, y1, x2, y2 = sc_fg_face_bboxes[i]
+                                sc_fg_mask[i, :, y1:y2, x1:x2] = 1
+
+                        if loss_comp_bg_faces_suppress_step > 0:
+                            loss_comp_bg_faces_suppress += loss_comp_bg_faces_suppress_step
+                            bg_faces_suppress_loss_count += 1
+                
+                # Always calculate loss_comp_sc_subj_mb_suppress, as long as sc_fg_mask is available,
+                # since it's fast to compute and doesn't require much memory.
+                # NOTE: loss_comp_sc_subj_mb_suppress will help mitigate "attention deficits" 
+                # in early denoising steps.
+                if sc_fg_mask is not None:
                     # ca_layers_activations['attn']: { 22 -> [4, 8, 4096, 77], 23 -> [4, 8, 4096, 77], 24 -> [4, 8, 4096, 77] }.
                     # sc_attn_dict: { 22 -> [1, 8, 64, 64], 23 -> [1, 8, 64, 64], 24 -> [1, 8, 64, 64] }.
                     sc_attn_dict = { layer_idx: attn.chunk(4)[1] for layer_idx, attn in ca_layers_activations['attn'].items() }
@@ -2949,13 +2964,7 @@ class LatentDiffusion(DDPM):
                     loss_comp_sc_subj_mb_suppress_step = \
                         calc_subj_masked_bg_suppress_loss(sc_attn_dict, all_subj_indices_1b, BLOCK_SIZE, sc_fg_mask)
                     loss_comp_sc_subj_mb_suppress += loss_comp_sc_subj_mb_suppress_step
-
-                if loss_comp_bg_faces_suppress_step > 0:
-                    loss_comp_bg_faces_suppress += loss_comp_bg_faces_suppress_step
-                    bg_faces_suppress_loss_count += 1
-
-                if arcface_align_loss_count >= max_arcface_align_loss_count:
-                    break
+                    comp_sc_subj_mb_suppress_loss_count += 1
 
             if arcface_align_loss_count > 0:
                 loss_comp_arcface_align = loss_comp_arcface_align / arcface_align_loss_count
@@ -2964,10 +2973,11 @@ class LatentDiffusion(DDPM):
                 comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                 mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
-                loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / arcface_align_loss_count
+            if comp_sc_subj_mb_suppress_loss_count > 0:
+                loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / comp_sc_subj_mb_suppress_loss_count
                 mon_loss_dict.update({f'{session_prefix}/comp_sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
 
-            if loss_comp_bg_faces_suppress > 0:
+            if bg_faces_suppress_loss_count > 0:
                 loss_comp_bg_faces_suppress = loss_comp_bg_faces_suppress / bg_faces_suppress_loss_count
                 mon_loss_dict.update({f'{session_prefix}/comp_bg_faces_suppress': loss_comp_bg_faces_suppress.mean().detach().item() })
 
