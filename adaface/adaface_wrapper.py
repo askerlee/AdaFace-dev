@@ -651,7 +651,7 @@ class AdaFaceWrapper(nn.Module):
                       ablate_prompt_only_placeholders=False,
                       ablate_prompt_no_placeholders=False,
                       ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
-                      img_prompt_emb_weights=None,
+                      nonmix_prompt_emb_weight=0,
                       repeat_prompt_for_each_encoder=True,
                       device=None, verbose=False):
         if negative_prompt is None:
@@ -681,9 +681,9 @@ class AdaFaceWrapper(nn.Module):
         if ablate_prompt_embed_type != 'ada':
             alt_prompt_embed_type = ablate_prompt_embed_type
             alt_prompt_emb_weights = (1, 1)
-        elif (img_prompt_emb_weights is not None) and sum(img_prompt_emb_weights) > 0:
-            alt_prompt_embed_type = 'img'
-            alt_prompt_emb_weights = img_prompt_emb_weights
+        elif nonmix_prompt_emb_weight > 0:
+            alt_prompt_embed_type = 'ada-nonmix'
+            alt_prompt_emb_weights = (nonmix_prompt_emb_weight, nonmix_prompt_emb_weight)
         else:
             alt_prompt_emb_weights = (0, 0)
 
@@ -701,7 +701,7 @@ class AdaFaceWrapper(nn.Module):
                 ablate_prompt_only_placeholders=False,
                 ablate_prompt_no_placeholders=False,
                 ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
-                img_prompt_emb_weights=None,
+                nonmix_prompt_emb_weight=0,
                 repeat_prompt_for_each_encoder=True,                
                 verbose=False):
         noise = noise.to(device=self.device, dtype=torch.float16)
@@ -719,7 +719,7 @@ class AdaFaceWrapper(nn.Module):
                                        ablate_prompt_only_placeholders=ablate_prompt_only_placeholders,
                                        ablate_prompt_no_placeholders=ablate_prompt_no_placeholders,
                                        ablate_prompt_embed_type=ablate_prompt_embed_type,
-                                       img_prompt_emb_weights=img_prompt_emb_weights,
+                                       nonmix_prompt_emb_weight=nonmix_prompt_emb_weight,
                                        repeat_prompt_for_each_encoder=repeat_prompt_for_each_encoder,
                                        device=self.device, 
                                        verbose=verbose)
