@@ -93,15 +93,6 @@ class FaceID2AdaPrompt(nn.Module):
         self.clip_embedding_dim             = 1024
         self.output_dim                     = 768
 
-    def get_id2img_learnable_modules(self):
-        raise NotImplementedError
-    
-    def load_id2img_learnable_modules(self, id2img_learnable_modules_state_dict_list):
-        id2img_prompt_encoder_learnable_modules = self.get_id2img_learnable_modules()
-        for module, state_dict in zip(id2img_prompt_encoder_learnable_modules, id2img_learnable_modules_state_dict_list):
-            module.load_state_dict(state_dict)
-        print(f'{len(id2img_prompt_encoder_learnable_modules)} ID2ImgPrompt encoder modules loaded.')
-    
     # init_img2txt_projection() can only be called after the derived class is initialized,
     # when self.num_id_vecs0, self.num_static_img_suffix_embs and self.clip_embedding_dim have been set.
     def init_img2txt_projection(self):
@@ -642,6 +633,13 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
 
+        for param in self.clip_image_encoder.parameters():
+            param.requires_grad = False
+        for param in self.text_to_image_prompt_encoder.parameters():
+            param.requires_grad = False
+        for param in self.subj_basis_generator.parameters():
+            param.requires_grad = self.is_training
+
         print(f"{self.name} ada prompt encoder initialized, "
               f"ID vecs: {self.num_id_vecs0}, static suffix: {self.num_static_img_suffix_embs}.")
 
@@ -718,9 +716,6 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         # [N, 22, 768] -> [N, 16, 768]
         return prompt_embeds[:, 4:20]
 
-    def get_id2img_learnable_modules(self):
-        return [ self.text_to_image_prompt_encoder ]
-    
 # ConsistentID_ID2AdaPrompt is just a wrapper of ConsistentIDPipeline, so it's not an nn.Module.
 class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
     name = 'consistentID'
@@ -782,6 +777,13 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         self.init_img2txt_projection()
         if self.adaface_ckpt_path is not None:
             self.load_adaface_ckpt(self.adaface_ckpt_path)
+
+        for param in self.clip_image_encoder.parameters():
+            param.requires_grad = False
+        for param in self.image_proj_model.parameters():
+            param.requires_grad = False
+        for param in self.subj_basis_generator.parameters():
+            param.requires_grad = self.is_training
 
         print(f"{self.name} ada prompt encoder initialized, "
               f"ID vecs: {self.num_id_vecs0}, static suffix: {self.num_static_img_suffix_embs}.")
@@ -849,9 +851,6 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             breakpoint()
         
         return global_id_embeds
-
-    def get_id2img_learnable_modules(self):
-        return [ self.image_proj_model ]
 
 # A wrapper for combining multiple FaceID2AdaPrompt instances.
 class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
@@ -949,15 +948,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         else:
             self.are_encoders_enabled = \
                 torch.tensor([True] * self.num_sub_encoders)
-
-        for i, encoder in enumerate(self.id2ada_prompt_encoders):
-            if not (self.is_training and self.are_encoders_enabled[i]):
-                for param in encoder.parameters():
-                    param.requires_grad = False
-            else:
-                for param in encoder.parameters():
-                    param.requires_grad = True
-                    
+    
     def load_adaface_ckpt(self, adaface_ckpt_paths):
         if isinstance(adaface_ckpt_paths, (list, tuple, ListConfig)):
             # If multiple adaface ckpt paths are provided, then we assume they are the 
