@@ -596,9 +596,10 @@ class LatentDiffusion(DDPM):
         if self.arcface_align_loss_weight > 0:
             # arcface will be moved to GPU automatically.
             self.arcface = ArcFaceWrapper('cpu')
-            # Disable training mode, as this mode 
-            # doesn't accept only 1 image as input.
+            # Disable training mode, as this mode doesn't accept only 1 image as input.
             self.arcface.train = disabled_train
+            for param in self.arcface.parameters():
+                param.requires_grad = False
         else:
             self.arcface = None
 
@@ -2799,10 +2800,6 @@ class LatentDiffusion(DDPM):
             # i.e., no faces are detected in the subject-single instance. But this should be very rare.
             if ss_fg_mask is None or sc_face_detected_at_step == -1 or step_idx < sc_face_detected_at_step:
                 continue
-            
-            # sc_fg_mask should always be available if step_idx >= sc_face_detected_at_step.
-            if sc_fg_mask is None:
-                continue
 
             loss_comp_fg_bg_preserve = \
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
@@ -2886,7 +2883,7 @@ class LatentDiffusion(DDPM):
                                                     x_start_ss, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE):
         # We cannot afford calculating loss_comp_arcface_align for > 1 steps. Otherwise, OOM.
-        max_arcface_align_loss_count        = 1
+        max_arcface_align_loss_count        = 2
         arcface_align_loss_count            = 0
         comp_sc_subj_mb_suppress_loss_count = 0
         bg_faces_suppress_loss_count        = 0
@@ -2927,7 +2924,7 @@ class LatentDiffusion(DDPM):
                     # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
                     # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
                     loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, \
-                    sc_fg_face_bboxes, sc_fg_face_detected_inst_mask = \
+                    sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)
                     # Found valid face images. Stop trying, since we cannot afford calculating loss_comp_arcface_align for > 1 steps.
                     if loss_arcface_align_comp_step > 0:
@@ -2940,6 +2937,7 @@ class LatentDiffusion(DDPM):
 
                         # Generate sc_fg_mask for the first time, based on the detected face area.
                         if sc_fg_mask is None:
+                            sc_fg_face_bboxes = sc_fg_face_bboxes_
                             # sc_fg_mask: [1, 1, 64, 64].
                             sc_fg_mask = torch.zeros_like(subj_comp_recon[:, :1])
                             # When loss_comp_arcface_align > 0, sc_fg_face_bboxes is always not None.
