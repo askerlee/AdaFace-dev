@@ -14,7 +14,7 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline, Autoencoder
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
-                        calc_subj_masked_bg_suppress_loss, save_grid, gen_smooth_grad_layer, \
+                        calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_distill_loss, save_grid, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
@@ -85,6 +85,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
+                 comp_sc_subj_attn_cross_t_distill_loss_weight=0.2,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -139,6 +140,7 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
+        self.comp_sc_subj_attn_cross_t_distill_loss_weight = comp_sc_subj_attn_cross_t_distill_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -2682,6 +2684,7 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_subj_attn   = []
         losses_comp_rep_distill_subj_k      = []
         losses_comp_rep_distill_nonsubj_k   = []
+        losses_subj_attn_cross_t_distill         = []
         device = x_start_ss.device
         dtype  = x_start_ss.dtype
         latent_shape = x_start_ss.shape
@@ -2798,9 +2801,18 @@ class LatentDiffusion(DDPM):
             # So we skip all the steps.
             # We also skip loss_comp_fg_bg_preserve on all steps if ss_fg_mask is None, 
             # i.e., no faces are detected in the subject-single instance. But this should be very rare.
-            if ss_fg_mask is None or sc_face_detected_at_step == -1 or step_idx < sc_face_detected_at_step:
+            if ss_fg_mask is None or sc_face_detected_at_step == -1:
                 continue
 
+            if (step_idx < len(ca_layers_activations_list) - 1) and (step_idx >= sc_face_detected_at_step - 1):
+                loss_subj_attn_cross_t_distill_step = \
+                    calc_subj_attn_cross_t_distill_loss(ca_layers_activations, ca_layers_activations_list[step_idx+1],
+                                                        all_subj_indices_1b)
+                losses_subj_attn_cross_t_distill.append(loss_subj_attn_cross_t_distill_step)
+                
+            if step_idx < sc_face_detected_at_step:
+                # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
+                continue
             loss_comp_fg_bg_preserve = \
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
@@ -2833,18 +2845,20 @@ class LatentDiffusion(DDPM):
         loss_comp_rep_distill_nonsubj_k  = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
         loss_subj_attn_norm_distill      = torch.stack(losses_subj_attn_norm_distill).mean()
 
-        # Chance is we may skip all the steps for computing loss_comp_fg_bg_preserve. Therefore we need to check.
+        # Chance is we may have skipped all the steps for computing 
+        # loss_comp_fg_bg_preserve. Therefore we need to check if 
+        # losses_comp_fg_bg_preserve is empty.
         if len(losses_comp_fg_bg_preserve) > 0:
             loss_comp_fg_bg_preserve = torch.stack(losses_comp_fg_bg_preserve).mean()
-        else:
-            # Set all the losses to 0 if there's no step to calculate the losses.
-            loss_comp_fg_bg_preserve = torch.tensor(0., device=device, dtype=dtype)
-            
-        if loss_comp_fg_bg_preserve > 0:
             mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
             # loss_comp_fg_bg_preserve: 2~3.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
+
+        if len(losses_subj_attn_cross_t_distill) > 0:
+            loss_subj_attn_cross_t_distill = torch.stack(losses_subj_attn_cross_t_distill).mean()
+            mon_loss_dict.update({f'{session_prefix}/subj_attn_cross_t_distill': loss_subj_attn_cross_t_distill.mean().detach().item() })
+            loss_comp_feat_distill += loss_subj_attn_cross_t_distill * self.comp_sc_subj_attn_cross_t_distill_loss_weight
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
         if loss_subj_attn_norm_distill > 0:
