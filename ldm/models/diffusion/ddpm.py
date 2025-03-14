@@ -85,7 +85,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=0.,
                  recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
-                 comp_sc_subj_attn_cross_t_distill_loss_weight=0.2,
+                 comp_sc_subj_attn_cross_t_distill_loss_weight=10,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -2858,6 +2858,7 @@ class LatentDiffusion(DDPM):
         if len(losses_subj_attn_cross_t_distill) > 0:
             loss_subj_attn_cross_t_distill = torch.stack(losses_subj_attn_cross_t_distill).mean()
             mon_loss_dict.update({f'{session_prefix}/subj_attn_cross_t_distill': loss_subj_attn_cross_t_distill.mean().detach().item() })
+            # loss_subj_attn_cross_t_distill: 1e-5~2e-5 * 10 => 1e-4~2e-4.
             loss_comp_feat_distill += loss_subj_attn_cross_t_distill * self.comp_sc_subj_attn_cross_t_distill_loss_weight
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
