@@ -2898,7 +2898,7 @@ class LatentDiffusion(DDPM):
                                                     x_start_ss, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, BLOCK_SIZE):
         # We cannot afford calculating loss_comp_arcface_align for > 1 steps. Otherwise, OOM.
-        max_arcface_align_loss_count        = 2
+        max_arcface_align_loss_count        = 3
         arcface_align_loss_count            = 0
         comp_sc_subj_mb_suppress_loss_count = 0
         bg_faces_suppress_loss_count        = 0
@@ -2912,11 +2912,8 @@ class LatentDiffusion(DDPM):
         loss_comp_bg_faces_suppress   = zero_losses[2]
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
-            # Trying to calc arcface_align_loss from difficult to easy steps.
-            # sel_step: 0~2. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
-
-            # In step 0, the subject face is very blurry, if it's ever generated.
-            # The corresponding arcface align loss will be highly noisy. So we always skip it.
+            # Trying to calc arcface_align_loss from easy to difficult steps.
+            # sel_step: 2~0. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
             # Reverse the steps, so we start from the clearest face image, and get the most accurate sc_fg_mask.
             for sel_step in range(len(x_recons) - 1, -1, -1):
                 x_recon  = x_recons[sel_step]
@@ -2934,8 +2931,7 @@ class LatentDiffusion(DDPM):
                 # and we'll generate it based on sc_fg_face_bboxes.
                 
                 # Only do arcface_align_loss for the first iteration (i.e., the last denoising iteration).
-                if (arcface_align_loss_count < max_arcface_align_loss_count) and \
-                   ((len(x_recons) > 1 and sel_step >= 1) or len(x_recons) == 1):
+                if arcface_align_loss_count < max_arcface_align_loss_count:
                     # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
                     # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
                     loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, \
