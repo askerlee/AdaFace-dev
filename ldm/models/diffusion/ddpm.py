@@ -111,7 +111,7 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=5e-3,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
-                 recon_uses_attn_lora=True,
+                 recon_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -197,7 +197,7 @@ class DDPM(pl.LightningModule):
 
         self.use_ldm_unet           = use_ldm_unet
         self.unet_uses_attn_lora    = unet_uses_attn_lora
-        self.recon_uses_attn_lora   = recon_uses_attn_lora
+        self.recon_uses_ffn_lora    = recon_uses_ffn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
@@ -1704,6 +1704,7 @@ class LatentDiffusion(DDPM):
                                     res_hidden_states_stopgrad=True,
                                     outfeat_capture_blocks_enable_freeu=False,
                                     use_attn_lora=enable_unet_attn_lora,
+                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
                                     use_ffn_lora=enable_unet_ffn_lora, 
                                     ffn_lora_adapter_name='recon_loss')
             
@@ -1935,7 +1936,7 @@ class LatentDiffusion(DDPM):
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
                                             num_recon_denoising_steps, x_start, noise, cond_context, 
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights,
-                                            enable_unet_attn_lora, self.recon_uses_attn_lora, do_adv_attack, DO_ADV_BS)
+                                            enable_unet_attn_lora, self.recon_uses_ffn_lora, do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
 
