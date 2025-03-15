@@ -1622,10 +1622,10 @@ class LatentDiffusion(DDPM):
             extra_info_mc['subj_indices']       = None
             extra_info_mc['shrink_subj_attn']   = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
-            # Never use attn LoRAs on mc instances.
+            # Never use attn and ffn LoRAs on mc instances.
             noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
                                                     enable_grad=False, use_attn_lora=False,
-                                                    use_ffn_lora=use_ffn_lora, 
+                                                    use_ffn_lora=False, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
