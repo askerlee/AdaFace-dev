@@ -657,7 +657,7 @@ class EmbeddingManager(nn.Module):
                 unet_ffn_adapter_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' in k }
                 # Filter unet_ffn_adapter_modules_sd by load_unet_ffn_adapters_from_ckpt.
                 unet_ffn_adapter_modules_sd = { k: v for k, v in unet_ffn_adapter_modules_sd.items() if any([ adapter_name in k for adapter_name in load_unet_ffn_adapters_from_ckpt ]) }
-                unet_lora_modules_sd = unet_attn_lora_modules_sd.extend(unet_ffn_adapter_modules_sd)
+                unet_lora_modules_sd = unet_attn_lora_modules_sd.update(unet_ffn_adapter_modules_sd)
                 if len(unet_lora_modules_sd) < pre_filter_len:
                     print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
 
