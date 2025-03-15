@@ -1623,6 +1623,8 @@ class LatentDiffusion(DDPM):
             extra_info_mc['shrink_subj_attn']   = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
             # Never use attn and ffn LoRAs on mc instances.
+            # FFN LoRAs on mc instances may lead to trivial solutions of suppressing 
+            # background/compositional components and focusing on the subject only.
             noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
                                                     enable_grad=False, use_attn_lora=False,
                                                     use_ffn_lora=False, 
