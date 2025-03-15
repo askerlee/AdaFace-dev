@@ -617,12 +617,8 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
         # cause weird errors. Instead, we directly use diffusers peft adapter methods.
         unet.add_adapter(peft_config, "recon_loss")
         unet.add_adapter(peft_config, "unet_distill")
+        unet.add_adapter(peft_config, "comp_distill")
         unet.enable_adapters()
-        # We can switch between the two adapters:
-        ''' 
-        unet.set_adapter("recon_loss")
-        unet.set_adapter("unet_distill")
-        '''
 
     # lora_layers contain both the LoRA A and B matrices, as well as the original layers.
     # lora_layers are used to set the flag, not used for optimization.
@@ -678,7 +674,7 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs,
     if not use_ffn_lora:
         unet.disable_adapters()
     else:
-        # ffn_lora_adapter_name: 'recon_loss' or 'unet_distill'.
+        # ffn_lora_adapter_name: 'recon_loss', 'unet_distill', 'comp_distill'.
         if ffn_lora_adapter_name is not None:
             unet.set_adapter(ffn_lora_adapter_name)
             # NOTE: Don't forget to enable_adapters(). 

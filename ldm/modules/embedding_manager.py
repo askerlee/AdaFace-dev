@@ -62,7 +62,7 @@ class EmbeddingManager(nn.Module):
             multi_token_filler=',',
             unet_lora_modules=None,
             load_unet_attn_lora_from_ckpt=True,
-            load_unet_ffn_lora_from_ckpt=True,
+            load_unet_ffn_adapters_from_ckpt=['recon_loss', 'unet_distill'],
     ):
         super().__init__()
 
@@ -182,7 +182,7 @@ class EmbeddingManager(nn.Module):
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
         # but instead use self.load().
         if adaface_ckpt_paths is not None:
-            self.load(adaface_ckpt_paths, load_unet_attn_lora_from_ckpt, load_unet_ffn_lora_from_ckpt)
+            self.load(adaface_ckpt_paths, load_unet_attn_lora_from_ckpt, load_unet_ffn_adapters_from_ckpt)
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, subj_name_to_cls_delta_string, cls_delta_string)
@@ -575,7 +575,7 @@ class EmbeddingManager(nn.Module):
         torch.save(saved_dict, adaface_ckpt_path)
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, adaface_ckpt_paths, load_unet_attn_lora_from_ckpt=True, load_unet_ffn_lora_from_ckpt=True):
+    def load(self, adaface_ckpt_paths, load_unet_attn_lora_from_ckpt=True, load_unet_ffn_adapters_from_ckpt=['recon_loss', 'unet_distill']):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict   = {}
@@ -642,7 +642,7 @@ class EmbeddingManager(nn.Module):
                     print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
                 
             if self.unet_lora_modules is not None and 'unet_lora_modules' in ckpt \
-              and (load_unet_attn_lora_from_ckpt or load_unet_ffn_lora_from_ckpt):
+              and (load_unet_attn_lora_from_ckpt or len(load_unet_ffn_adapters_from_ckpt) > 0):
                 unet_lora_modules_sd = ckpt['unet_lora_modules']
                 if not load_unet_attn_lora_from_ckpt:
                     pre_filter_len = len(unet_lora_modules_sd)
@@ -650,12 +650,16 @@ class EmbeddingManager(nn.Module):
                     unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'attn2_processor' not in k }
                     if len(unet_lora_modules_sd) < pre_filter_len:
                         print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} attn LoRA modules in {adaface_ckpt_path}")
-                if not load_unet_ffn_lora_from_ckpt:
-                    pre_filter_len = len(unet_lora_modules_sd)
-                    # Filter out the FFN LoRA modules.
-                    unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
-                    if len(unet_lora_modules_sd) < pre_filter_len:
-                        print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
+
+                pre_filter_len = len(unet_lora_modules_sd)
+                # Separate the attn and FFN LoRA modules.
+                unet_attn_lora_modules_sd   = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
+                unet_ffn_adapter_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' in k }
+                # Filter unet_ffn_adapter_modules_sd by load_unet_ffn_adapters_from_ckpt.
+                unet_ffn_adapter_modules_sd = { k: v for k, v in unet_ffn_adapter_modules_sd.items() if any([ adapter_name in k for adapter_name in load_unet_ffn_adapters_from_ckpt ]) }
+                unet_lora_modules_sd = unet_attn_lora_modules_sd.extend(unet_ffn_adapter_modules_sd)
+                if len(unet_lora_modules_sd) < pre_filter_len:
+                    print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
 
                 total_num_fix_key_prefixes = 0
                 for key in list(unet_lora_modules_sd.keys()):
@@ -671,7 +675,7 @@ class EmbeddingManager(nn.Module):
                 for key in list(unet_lora_modules_sd.keys()):
                     # Copy the missing keys from the default weight.
                     key_renamed = False
-                    for adapter_name in ('recon_loss', 'unet_distill'):
+                    for adapter_name in ('recon_loss', 'unet_distill', 'comp_distill'):
                         adapter_key = key.replace('default.weight', f'{adapter_name}.weight')
                         if adapter_key in self.unet_lora_modules.state_dict().keys() \
                           and (adapter_key not in unet_lora_modules_sd):
@@ -699,7 +703,7 @@ class EmbeddingManager(nn.Module):
                 continue
             elif 'unet_lora_modules' not in ckpt:
                 print(f"'unet_lora_modules' not found in {adaface_ckpt_path}")
-            elif not load_unet_attn_lora_from_ckpt and not load_unet_ffn_lora_from_ckpt:
+            elif not load_unet_attn_lora_from_ckpt and not load_unet_ffn_adapters_from_ckpt:
                 print(f"Instructed to skip loading unet_lora_modules from {adaface_ckpt_path}")
 
         # ',' is used as filler tokens.

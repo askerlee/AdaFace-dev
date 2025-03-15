@@ -226,8 +226,10 @@ def get_parser(**parser_kwargs):
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
     parser.add_argument("--load_unet_attn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to load the attn LoRA modules from the checkpoint")
-    parser.add_argument("--load_unet_ffn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to load the ffn LoRA modules from the checkpoint")
+    parser.add_argument("--load_unet_ffn_adapters_from_ckpt", type=str, nargs="*", 
+                        default=['recon_loss', 'unet_distill'],
+                        choices=['recon_loss', 'unet_distill', 'comp_distill'], 
+                        help="Load these ffn adapters from the checkpoint")
     parser.add_argument("--p_shrink_subj_attn", type=float, default=argparse.SUPPRESS,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
     parser.add_argument("--sc_subj_attn_var_shrink_factor", type=float, default=2.,
@@ -693,7 +695,7 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.prompt2token_proj_ext_attention_perturb_ratio = opt.prompt2token_proj_ext_attention_perturb_ratio
         config.model.params.personalization_config.params.load_unet_attn_lora_from_ckpt = opt.load_unet_attn_lora_from_ckpt
-        config.model.params.personalization_config.params.load_unet_ffn_lora_from_ckpt  = opt.load_unet_ffn_lora_from_ckpt
+        config.model.params.personalization_config.params.load_unet_ffn_adapters_from_ckpt  = opt.load_unet_ffn_adapters_from_ckpt
         
         if hasattr(opt, 'unet_distill_iter_gap'):
             config.model.params.unet_distill_iter_gap = opt.unet_distill_iter_gap

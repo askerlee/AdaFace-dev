@@ -1829,7 +1829,7 @@ class LatentDiffusion(DDPM):
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
-                                    use_ffn_lora=True, ffn_lora_adapter_name='recon_loss')
+                                    use_ffn_lora=True, ffn_lora_adapter_name='comp_distill')
         
             noise_preds.append(noise_pred)
             x_starts.append(x_recon.detach())
