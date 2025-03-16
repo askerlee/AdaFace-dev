@@ -228,7 +228,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to load the attn LoRA modules from the checkpoint")
     parser.add_argument("--load_unet_ffn_adapters_from_ckpt", type=str, nargs="*", 
                         default=['recon_loss', 'unet_distill'],
-                        choices=['recon_loss', 'unet_distill', 'comp_distill'], 
+                        choices=['recon_loss', 'unet_distill', 'comp_distill', 'all'], 
                         help="Load these ffn adapters from the checkpoint")
     parser.add_argument("--p_shrink_subj_attn", type=float, default=argparse.SUPPRESS,
                         help="Whether to suppress the subject attention in the subject-compositional instances")

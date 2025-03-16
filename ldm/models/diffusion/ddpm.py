@@ -1960,6 +1960,12 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
+            # cond_context contains 
+            #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
+            # But in order to do priming, we need cond_context_orig which contains
+            # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
+            # Therefore, we use extra_info['prompt_emb_4b_orig'] to get the old context.
+            cond_context_orig = (extra_info['prompt_emb_4b_orig'], cond_context[1], cond_context[2])
             # x_start_primed: the primed (denoised) x_start, ready for denoising.
             # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
             # We return noise to make the noise_gt up-to-date, which is the recon objective.
@@ -1976,7 +1982,7 @@ class LatentDiffusion(DDPM):
             # Only the first 1/4 of the batch (actually 1 image), i.e., x_start0_ss, is used for priming.
             # They are repeated 4 times to form a primed batch.
             x_start_primed, noise, masks = \
-                self.prime_x_start_for_comp_prompts(cond_context, x_start, noise,
+                self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
                                                     (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
             # Update masks.
             img_mask, fg_mask = masks
@@ -2543,7 +2549,8 @@ class LatentDiffusion(DDPM):
         t      = t_rear.repeat(4)
 
         subj_single_prompt_emb, subj_comp_prompt_emb, subj_comp_rep_prompt_emb, cls_comp_prompt_emb = prompt_emb.chunk(4)
-        
+        cls_comp_prompt_emb2 = (1 - self.cls_subj_mix_ratio) * subj_comp_rep_prompt_emb + self.cls_subj_mix_ratio * cls_comp_prompt_emb
+
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
@@ -2572,9 +2579,9 @@ class LatentDiffusion(DDPM):
             if self.cls_subj_mix_scheme == 'unet':
                 teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb]
             else:
-                # subj_comp_rep_prompt_emb + the SAR checkpoint will 
-                # generate good compositional images. No need to use class prompt embs.
-                teacher_context=[subj_comp_rep_prompt_emb]
+                # cls_comp_prompt_emb2 + the SAR checkpoint will 
+                # generate good compositional images.
+                teacher_context=[cls_comp_prompt_emb2]
 
             # Since we always use CFG for class priming denoising,
             # we need to pass the negative prompt as well.
@@ -2635,9 +2642,9 @@ class LatentDiffusion(DDPM):
         if self.cls_subj_mix_scheme == 'unet':
             teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb]
         else:
-            # subj_comp_rep_prompt_emb + the SAR checkpoint will 
-            # generate good compositional images. No need to use class prompt embs.
-            teacher_context=[ torch.cat([subj_single_prompt_emb, subj_comp_rep_prompt_emb], dim=0) ]
+            # cls_comp_prompt_emb2 + the SAR checkpoint will 
+            # generate good compositional images. 
+            teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
 
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
