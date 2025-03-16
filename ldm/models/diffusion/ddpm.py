@@ -103,7 +103,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.2,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=4,
+                 recon_with_adv_attack_iter_gap=3,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -1745,7 +1745,8 @@ class LatentDiffusion(DDPM):
                 noise = torch.randn_like(x_start)
                 # Do adversarial "attack" (edit) on x_start, so that it's harder to reconstruct.
                 # This way, we force the adaface encoders to better reconstruct the subject.
-                # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 4 recon iterations.
+                # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images 
+                # every 3 non-comp recon iterations.
                 # Doing adversarial attack on the input images seems to introduce high-frequency noise 
                 # to the whole image (not just the face area), so we only do it after the first denoise step.
                 if do_adv_attack:
@@ -1921,14 +1922,19 @@ class LatentDiffusion(DDPM):
             W = self.recon_num_denoising_steps_range[1] - self.recon_num_denoising_steps_range[0] + 1
             num_recon_denoising_steps = self.normal_recon_iters_count % W + self.recon_num_denoising_steps_range[0]
 
-
             # Enable attn LoRAs on UNet 50% of the time during recon iterations.
             enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
-            # recon_with_adv_attack_iter_gap = 4, i.e., adversarial attack on the input images every 3 recon iterations.
+            # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 
+            # 3 non-comp recon iterations.
+            # Previously, recon_with_adv_attack_iter_gap = 4 and do_adv_attack on both non-comp and 
+            # comp recon iterations. That is 25% of recon iterations.
+            # Now,        recon_with_adv_attack_iter_gap = 3 and do_adv_attack only on non-comp recon iterations.
+            # That is 80% / 3 = 26.67% of recon iterations. Almost the same as before.
             # Doing adversarial attack on the input images seems to introduce high-frequency noise 
             # to the whole image (not just the face area), so we only do it after the first denoise step.
             do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
-                            and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0)
+                            and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0) \
+                            and not self.iter_flags['recon_on_comp_prompt']
             # LDM VAE uses fp32, and we can only afford a DO_ADV_BS=1.
             if self.use_ldm_unet:
                 DO_ADV_BS = 1
