@@ -224,10 +224,10 @@ def get_parser(**parser_kwargs):
                         help="Rank of the LoRA in the Diffusers UNet model")    
     parser.add_argument("--unet_lora_scale_down", type=float, default=8,
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
-    parser.add_argument("--load_unet_attn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--load_unet_attn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to load the attn LoRA modules from the checkpoint")
     parser.add_argument("--load_unet_ffn_adapters_from_ckpt", type=str, nargs="*", 
-                        default=['recon_loss', 'unet_distill'],
+                        default=['all'],
                         choices=['recon_loss', 'unet_distill', 'comp_distill', 'all'], 
                         help="Load these ffn adapters from the checkpoint")
     parser.add_argument("--p_shrink_subj_attn", type=float, default=argparse.SUPPRESS,
