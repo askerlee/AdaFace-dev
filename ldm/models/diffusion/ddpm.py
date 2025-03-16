@@ -1419,15 +1419,15 @@ class LatentDiffusion(DDPM):
             subj_single_emb[:, subj_indices_1b] = self.iter_flags['id2img_prompt_embs'][:1]
             subj_comp_emb[:, subj_indices_1b]   = self.iter_flags['id2img_prompt_embs'][:1]
 
-        # prompt_emb_4b_orig_nonmix: in which cls_comp_emb is not mixed with subj_comp_emb.
-        prompt_emb_4b_orig_nonmix = torch.cat([subj_single_emb, subj_comp_emb, 
-                                               cls_single_emb,  cls_comp_emb], dim=0)
+        # prompt_emb_4b_rep_nonmix: in which cls_comp_emb is not mixed with subj_comp_emb.
+        prompt_emb_4b_rep_nonmix = torch.cat([subj_single_emb,   subj_comp_emb, 
+                                              subj_comp_rep_emb, cls_comp_emb], dim=0)
         # cls_single_emb and cls_comp_emb have been patched above. 
         # Then combine them back into prompt_emb_4b_orig_dist.
         # prompt_emb_4b_orig_dist: [4, 77, 768].
         prompt_emb_4b_orig_dist = torch.cat([subj_single_emb, subj_comp_emb,
                                              cls_single_emb_dist, cls_comp_emb_dist], dim=0)
-        extra_info['prompt_emb_4b_orig_nonmix'] = prompt_emb_4b_orig_nonmix
+        extra_info['prompt_emb_4b_rep_nonmix'] = prompt_emb_4b_rep_nonmix
         extra_info['prompt_emb_4b_orig_dist']   = prompt_emb_4b_orig_dist
 
         if self.iter_flags['do_comp_feat_distill']:
@@ -1966,8 +1966,8 @@ class LatentDiffusion(DDPM):
             #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
             # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
-            # Therefore, we use extra_info['prompt_emb_4b_orig_nonmix'] to get the old context.
-            cond_context_orig = (extra_info['prompt_emb_4b_orig_nonmix'], cond_context[1], cond_context[2])
+            # Therefore, we use extra_info['prompt_emb_4b_rep_nonmix'] to get the old context.
+            cond_context_orig = (extra_info['prompt_emb_4b_rep_nonmix'], cond_context[1], cond_context[2])
             # x_start_primed: the primed (denoised) x_start, ready for denoising.
             # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
             # We return noise to make the noise_gt up-to-date, which is the recon objective.
