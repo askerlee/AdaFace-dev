@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
-from diffusers.utils.torch_utils import apply_freeu, fourier_filter
+from diffusers.utils.torch_utils import fourier_filter
 # UNet is a diffusers PeftAdapterMixin instance.
 from diffusers.loaders.peft import PeftAdapterMixin
 from peft import LoraConfig, get_peft_model
@@ -442,7 +442,6 @@ def CrossAttnUpBlock2D_forward_capture(
     self.cached_outfeats = {}
     res_hidden_states_stopgrad  = getattr(self, "res_hidden_states_stopgrad", False)
     capture_outfeats            = getattr(self, "capture_outfeats",           False)
-    enable_freeu                = getattr(self, "enable_freeu",               False)
     layer_idx = 0
 
     for resnet, attn in zip(self.resnets, self.attentions):
@@ -496,15 +495,6 @@ def CrossAttnUpBlock2D_forward_capture(
             )[0]
 
         if capture_outfeats:
-            # self.enable_freeu is set in set_lora_and_capture_flags() 
-            # with the outfeat_capture_blocks_enable_freeu flag.
-            # FreeU: The original design is to apply on the first two stages (0 and 1) only, and on 
-            # both hidden_states and res_hidden_states. Now we only care about the hidden_states used
-            # for calc_elastic_matching_loss(), which consists of two hidden_states 
-            # (output from layers 23 and 24) in the 4th stage.
-            if enable_freeu:
-                hidden_states = fourier_filter(hidden_states, threshold=1, scale=0.5)
-
             self.cached_outfeats[layer_idx] = hidden_states
             layer_idx += 1
 
@@ -658,7 +648,7 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
 def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, 
                                outfeat_capture_blocks, res_hidden_states_stopgrad_blocks,
                                use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                               outfeat_capture_blocks_enable_freeu, shrink_subj_attn, res_hidden_states_stopgrad):
+                               shrink_subj_attn, res_hidden_states_stopgrad):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
         attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_subj_attn, enable_lora=use_attn_lora)
@@ -666,7 +656,6 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs,
     # It contains 3 FFN layers. We want to capture their output features.
     for block in outfeat_capture_blocks:
         block.capture_outfeats           = capture_ca_activations
-        block.enable_freeu               = outfeat_capture_blocks_enable_freeu
 
     for block in res_hidden_states_stopgrad_blocks:
         block.res_hidden_states_stopgrad = res_hidden_states_stopgrad

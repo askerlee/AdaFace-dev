@@ -797,7 +797,6 @@ class LatentDiffusion(DDPM):
                         'prompt_pad_mask':      copy.copy(self.embedding_manager.prompt_pad_mask),
                         # Will be updated to True in p_losses() when in compositional iterations.
                         'capture_ca_activations':               False,
-                        'outfeat_capture_blocks_enable_freeu':  False,
                         'use_attn_lora':                        False,
                         'use_ffn_lora':                         False,
                      }
@@ -1544,7 +1543,6 @@ class LatentDiffusion(DDPM):
                        subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, 
                        res_hidden_states_stopgrad=True,
-                       outfeat_capture_blocks_enable_freeu=False,
                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1552,7 +1550,6 @@ class LatentDiffusion(DDPM):
 
         extra_info = cond_context[2]
         extra_info['capture_ca_activations']              = capture_ca_activations
-        extra_info['outfeat_capture_blocks_enable_freeu'] = outfeat_capture_blocks_enable_freeu
         extra_info['res_hidden_states_stopgrad']          = res_hidden_states_stopgrad
         extra_info['img_mask']                            = img_mask
         extra_info['shrink_subj_attn']                    = shrink_subj_attn
@@ -1655,7 +1652,6 @@ class LatentDiffusion(DDPM):
 
             uncond_prompt_in = self.uncond_context[1] * x_noisy.shape[0]
             uncond_extra_info = copy.copy(self.uncond_context[2])
-            uncond_extra_info['outfeat_capture_blocks_enable_freeu'] = outfeat_capture_blocks_enable_freeu
             uncond_context = (uncond_emb, uncond_prompt_in, uncond_extra_info)
 
             # We never needs gradients on unconditional generation.
@@ -1706,7 +1702,6 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
                                     res_hidden_states_stopgrad=True,
-                                    outfeat_capture_blocks_enable_freeu=False,
                                     use_attn_lora=enable_unet_attn_lora,
                                     # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
                                     use_ffn_lora=enable_unet_ffn_lora, 
@@ -1830,7 +1825,6 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
                                     res_hidden_states_stopgrad=True,
-                                    outfeat_capture_blocks_enable_freeu=False,
                                     # Enable the attn lora in subject-compos batches, as long as 
                                     # attn lora is globally enabled.
                                     use_attn_lora=self.unet_uses_attn_lora,
@@ -2474,7 +2468,6 @@ class LatentDiffusion(DDPM):
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
                                     res_hidden_states_stopgrad=True,
-                                    outfeat_capture_blocks_enable_freeu=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3382,7 +3375,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
         use_attn_lora          = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
         use_ffn_lora           = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
         ffn_lora_adapter_name  = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
-        outfeat_capture_blocks_enable_freeu  = extra_info.get('outfeat_capture_blocks_enable_freeu',  False) if extra_info is not None else False
         res_hidden_states_stopgrad = extra_info.get('res_hidden_states_stopgrad', False) if extra_info is not None else False
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs and self.outfeat_capture_blocks.
@@ -3393,7 +3385,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_stopgrad_blocks,
                                    use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                                   outfeat_capture_blocks_enable_freeu, shrink_subj_attn, res_hidden_states_stopgrad)
+                                   shrink_subj_attn, res_hidden_states_stopgrad)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3422,8 +3414,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # NOTE: FFN loras has been disabled above.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_stopgrad_blocks,
-                                   False, False, None, False, 
-                                   False, False, False)
+                                   False, False, None, False, False, False)
 
         out = out.to(out_dtype)
         return out
