@@ -1395,11 +1395,11 @@ class LatentDiffusion(DDPM):
         # Therefore we use two tricks to enhance its expression:
         # emb_cfg = 2:         compel style CFG for embeddings, i.e., cond_emb * 2 - uncond_emb.
         # emb_extra_boost = 2: increasing the embedding magnitude after distribution by 2.
-        cls_single_emb = \
+        cls_single_emb_dist = \
             distribute_embedding_to_M_tokens_by_dict(cls_single_emb, uncond_prompt_embeddings, 
                                                      placeholder2indices_1b, divide_scheme='sqrt_M', 
                                                      emb_cfg=2, emb_extra_boost=2)
-        cls_comp_emb   = \
+        cls_comp_emb_dist   = \
             distribute_embedding_to_M_tokens_by_dict(cls_comp_emb,   uncond_prompt_embeddings, 
                                                      placeholder2indices_1b, divide_scheme='sqrt_M', 
                                                      emb_cfg=2, emb_extra_boost=2)
@@ -1419,14 +1419,16 @@ class LatentDiffusion(DDPM):
             subj_single_emb[:, subj_indices_1b] = self.iter_flags['id2img_prompt_embs'][:1]
             subj_comp_emb[:, subj_indices_1b]   = self.iter_flags['id2img_prompt_embs'][:1]
 
+        # prompt_emb_4b_orig_nonmix: in which cls_comp_emb is not mixed with subj_comp_emb.
+        prompt_emb_4b_orig_nonmix = torch.cat([subj_single_emb, subj_comp_emb, 
+                                               cls_single_emb,  cls_comp_emb], dim=0)
         # cls_single_emb and cls_comp_emb have been patched above. 
-        # Then combine them back into prompt_emb_4b_orig.
-        # prompt_emb_4b_orig is the 4 sets of embeddings of subj_single_prompts, subj_comp_prompts, 
-        # cls_single_prompts, cls_comp_prompts used for prompt delta loss.             
-        # prompt_emb_4b_orig: [4, 77, 768].
-        prompt_emb_4b_orig = torch.cat([subj_single_emb, subj_comp_emb, 
-                                        cls_single_emb,  cls_comp_emb], dim=0)
-        extra_info['prompt_emb_4b_orig'] = prompt_emb_4b_orig
+        # Then combine them back into prompt_emb_4b_orig_dist.
+        # prompt_emb_4b_orig_dist: [4, 77, 768].
+        prompt_emb_4b_orig_dist = torch.cat([subj_single_emb, subj_comp_emb,
+                                             cls_single_emb_dist, cls_comp_emb_dist], dim=0)
+        extra_info['prompt_emb_4b_orig_nonmix'] = prompt_emb_4b_orig_nonmix
+        extra_info['prompt_emb_4b_orig_dist']   = prompt_emb_4b_orig_dist
 
         if self.iter_flags['do_comp_feat_distill']:
             # prompt_in: subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
@@ -1900,7 +1902,7 @@ class LatentDiffusion(DDPM):
         # do_prompt_emb_delta_reg is always done, regardless of the iter_type.
         if self.iter_flags['do_prompt_emb_delta_reg']:
             loss_prompt_emb_delta = \
-                calc_prompt_emb_delta_loss(extra_info['prompt_emb_4b_orig'], extra_info['prompt_emb_mask_4b_orig'])
+                calc_prompt_emb_delta_loss(extra_info['prompt_emb_4b_orig_dist'], extra_info['prompt_emb_mask_4b_orig'])
 
             mon_loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
@@ -1964,8 +1966,8 @@ class LatentDiffusion(DDPM):
             #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
             # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
-            # Therefore, we use extra_info['prompt_emb_4b_orig'] to get the old context.
-            cond_context_orig = (extra_info['prompt_emb_4b_orig'], cond_context[1], cond_context[2])
+            # Therefore, we use extra_info['prompt_emb_4b_orig_nonmix'] to get the old context.
+            cond_context_orig = (extra_info['prompt_emb_4b_orig_nonmix'], cond_context[1], cond_context[2])
             # x_start_primed: the primed (denoised) x_start, ready for denoising.
             # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
             # We return noise to make the noise_gt up-to-date, which is the recon objective.
