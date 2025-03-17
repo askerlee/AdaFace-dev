@@ -2693,6 +2693,8 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_subj_attn   = []
         losses_comp_rep_distill_subj_k      = []
         losses_comp_rep_distill_nonsubj_k   = []
+        losses_comp_rep_distill_subj_v      = []
+        losses_comp_rep_distill_nonsubj_v   = []
         losses_subj_attn_cross_t_distill         = []
         device = x_start_ss.device
         dtype  = x_start_ss.dtype
@@ -2792,18 +2794,22 @@ class LatentDiffusion(DDPM):
 
             losses_subj_attn_norm_distill.append(loss_subj_attn_norm_distill)
         
-            loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k = \
+            loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
+            loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v = \
                 calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                 prompt_emb_mask_4b,    prompt_pad_mask_4b,
                                                 sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
             
             if loss_comp_rep_distill_subj_attn == 0:
-                loss_comp_rep_distill_subj_attn = loss_comp_rep_distill_subj_k = loss_comp_rep_distill_nonsubj_k = \
-                    torch.tensor(0., device=device, dtype=dtype)
+                loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
+                loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v = \
+                    [ torch.tensor(0., device=device, dtype=dtype) ] * 5
 
             losses_comp_rep_distill_subj_attn.append(loss_comp_rep_distill_subj_attn)
             losses_comp_rep_distill_subj_k.append(loss_comp_rep_distill_subj_k)
             losses_comp_rep_distill_nonsubj_k.append(loss_comp_rep_distill_nonsubj_k)
+            losses_comp_rep_distill_subj_v.append(loss_comp_rep_distill_subj_v)
+            losses_comp_rep_distill_nonsubj_v.append(loss_comp_rep_distill_nonsubj_v)
 
             # NOTE: Skip computing loss_comp_fg_bg_preserve before sc_face is detected.
             # If sc_face_detected_at_step == -1, then in all steps, sc_face is not detected.
@@ -2853,6 +2859,8 @@ class LatentDiffusion(DDPM):
         loss_comp_rep_distill_subj_k     = torch.stack(losses_comp_rep_distill_subj_k).mean()
         loss_comp_rep_distill_nonsubj_k  = torch.stack(losses_comp_rep_distill_nonsubj_k).mean()
         loss_subj_attn_norm_distill      = torch.stack(losses_subj_attn_norm_distill).mean()
+        loss_comp_rep_distill_subj_v     = torch.stack(losses_comp_rep_distill_subj_v).mean()
+        loss_comp_rep_distill_nonsubj_v  = torch.stack(losses_comp_rep_distill_nonsubj_v).mean()
 
         # Chance is we may have skipped all the steps for computing 
         # loss_comp_fg_bg_preserve. Therefore we need to check if 
@@ -2878,6 +2886,8 @@ class LatentDiffusion(DDPM):
             mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
             mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_k':     loss_comp_rep_distill_subj_k.item() })
             mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_v':     loss_comp_rep_distill_subj_v.item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_v':  loss_comp_rep_distill_nonsubj_v.item() })
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
             # valid_scale_range=(0.02, 1): If sc_fg_mask_percent = 0.19, then fg_percent_rep_distill_scale = 0.02.
@@ -2891,11 +2901,14 @@ class LatentDiffusion(DDPM):
                 fg_percent_rep_distill_scale = 0
 
             comp_rep_distill_nonsubj_k_loss_scale = 5
+            # Weaker regularization on the non-subj v alignment.
+            comp_rep_distill_nonsubj_v_loss_scale = 2
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             subj_comp_rep_distill_loss_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
             loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
-                                       loss_comp_rep_distill_nonsubj_k * comp_rep_distill_nonsubj_k_loss_scale) \
+                                       loss_comp_rep_distill_nonsubj_k * comp_rep_distill_nonsubj_k_loss_scale + \
+                                       loss_comp_rep_distill_subj_v    * comp_rep_distill_nonsubj_v_loss_scale) \
                                       * subj_comp_rep_distill_loss_scale
             
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()

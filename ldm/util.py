@@ -1932,7 +1932,9 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
     # we will distill the whole image on the subject-comp rep prompts.
     loss_comp_rep_distill_subj_attn = 0
     loss_comp_rep_distill_subj_k    = 0
+    loss_comp_rep_distill_subj_v    = 0
     loss_comp_rep_distill_nonsubj_k = 0
+    loss_comp_rep_distill_nonsubj_v = 0
     subj_comp_rep_distill_layer_weights = { 23: 1, 24: 1, 
                                           }
     subj_comp_rep_distill_layer_weights = normalize_dict_values(subj_comp_rep_distill_layer_weights)
@@ -1975,6 +1977,7 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
             # sc_k, sc_rep_k: [1, 320, 77]
             # sc_emb_mask: [1, 77]
             ss_k, sc_k, sc_rep_k, mc_k = ca_layers_activations['k'][unet_layer_idx].chunk(4)
+            ss_v, sc_v, sc_rep_v, mc_v = ca_layers_activations['v'][unet_layer_idx].chunk(4)
             # sc_valid_k, sc_valid_rep_k: [1, 320, 77] -> [320, 1, 77] -> [320, 47]
             # Remove BOS and EOS (padding) tokens.
             sc_subj_k      = sc_k.permute(0, 2, 1)[subj_indices_1b]
@@ -1982,14 +1985,22 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
             loss_subj_k_distill_layer = F.mse_loss(sc_subj_k, sc_subj_rep_k.detach())
             loss_comp_rep_distill_subj_k += loss_subj_k_distill_layer * LAYER_W
 
+            sc_subj_v     = sc_v.permute(0, 2, 1)[subj_indices_1b]
+            sc_subj_rep_v = sc_rep_v.permute(0, 2, 1)[subj_indices_1b]
+            loss_subj_v_distill_layer = F.mse_loss(sc_subj_v, sc_subj_rep_v.detach())
+            loss_comp_rep_distill_subj_v += loss_subj_v_distill_layer * LAYER_W
+
             # sc_nonsubj_emb_mask includes both non-subj tokens and padding tokens.
             # NOTE: sc_nonsubj_emb_mask for nonsubj_k_distill is derived from sc_emb_mask, so that 
             # the repeated compositional prompt part is ignored from distillation. 
             # Otherwise they will be aligned with the ks of padding tokens in sc_k.
             loss_nonsubj_k_distill_layer = masked_l2_loss(sc_k, mc_k.detach(), sc_nonsubj_emb_mask)
             loss_comp_rep_distill_nonsubj_k += loss_nonsubj_k_distill_layer * LAYER_W
+            loss_nonsubj_v_distill_layer = masked_l2_loss(sc_v, mc_v.detach(), sc_nonsubj_emb_mask)
+            loss_comp_rep_distill_nonsubj_v += loss_nonsubj_v_distill_layer * LAYER_W
 
-    return loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k
+    return loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
+           loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v
 
 def calc_subj_attn_cross_t_distill_loss(ca_layers_activations, future_ca_layers_activations, 
                                         subj_indices_1b):

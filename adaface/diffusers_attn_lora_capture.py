@@ -415,6 +415,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                 rearrange(query2, 'b h n d -> b (h d) n').contiguous() * math.sqrt(scale)
             self.cached_activations['k'] = \
                 rearrange(key, 'b h n d -> b (h d) n').contiguous() * math.sqrt(scale)
+            self.cached_activations['v'] = \
+                rearrange(value, 'b h n d -> b (h d) n').contiguous() * math.sqrt(scale)
             # attn_prob, attn_score: [2, 8, 4096, 77]
             self.cached_activations['attn'] = attn_prob
             self.cached_activations['attnscore'] = attn_score
@@ -682,7 +684,8 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs,
 
 def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat_capture_blocks, 
                              captured_layer_indices=[22, 23, 24], out_dtype=torch.float32):
-    captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 'q', 'q2', 'k', 'attn_out') }
+    captured_activations = { k: {} for k in ('outfeat', 'attn', 'attnscore', 
+                                             'q', 'q2', 'k', 'v', 'attn_out') }
 
     if not capture_ca_activations:
         return captured_activations
