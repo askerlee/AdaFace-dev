@@ -2906,9 +2906,9 @@ class LatentDiffusion(DDPM):
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             subj_comp_rep_distill_loss_scale = self.comp_distill_iter_gap * fg_percent_rep_distill_scale
 
-            loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + \
+            loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + loss_comp_rep_distill_subj_v + \
                                        loss_comp_rep_distill_nonsubj_k * comp_rep_distill_nonsubj_k_loss_scale + \
-                                       loss_comp_rep_distill_subj_v    * comp_rep_distill_nonsubj_v_loss_scale) \
+                                       loss_comp_rep_distill_nonsubj_v * comp_rep_distill_nonsubj_v_loss_scale) \
                                       * subj_comp_rep_distill_loss_scale
             
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()

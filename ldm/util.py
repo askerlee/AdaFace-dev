@@ -1980,14 +1980,14 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
             ss_v, sc_v, sc_rep_v, mc_v = ca_layers_activations['v'][unet_layer_idx].chunk(4)
             # sc_valid_k, sc_valid_rep_k: [1, 320, 77] -> [320, 1, 77] -> [320, 47]
             # Remove BOS and EOS (padding) tokens.
-            sc_subj_k      = sc_k.permute(0, 2, 1)[subj_indices_1b]
-            sc_subj_rep_k  = sc_rep_k.permute(0, 2, 1)[subj_indices_1b]
-            loss_subj_k_distill_layer = F.mse_loss(sc_subj_k, sc_subj_rep_k.detach())
+            sc_subj_k  = sc_k.permute(0, 2, 1)[subj_indices_1b]
+            ss_subj_k  = ss_k.permute(0, 2, 1)[subj_indices_1b]
+            loss_subj_k_distill_layer = F.mse_loss(sc_subj_k, ss_subj_k.detach())
             loss_comp_rep_distill_subj_k += loss_subj_k_distill_layer * LAYER_W
 
-            sc_subj_v     = sc_v.permute(0, 2, 1)[subj_indices_1b]
-            sc_subj_rep_v = sc_rep_v.permute(0, 2, 1)[subj_indices_1b]
-            loss_subj_v_distill_layer = F.mse_loss(sc_subj_v, sc_subj_rep_v.detach())
+            sc_subj_v = sc_v.permute(0, 2, 1)[subj_indices_1b]
+            ss_subj_v = ss_v.permute(0, 2, 1)[subj_indices_1b]
+            loss_subj_v_distill_layer = F.mse_loss(sc_subj_v, ss_subj_v.detach())
             loss_comp_rep_distill_subj_v += loss_subj_v_distill_layer * LAYER_W
 
             # sc_nonsubj_emb_mask includes both non-subj tokens and padding tokens.
