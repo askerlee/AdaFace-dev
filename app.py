@@ -352,18 +352,19 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
                                          info="Enhance the facial features by prepending 'face portrait' to the prompt")
+            enhance_composition = \
+                gr.Checkbox(label="Enhance composition", value=False, visible=True,
+                            info="Enhance the overall composition by repeating the compositional part of the prompt")
+
             ablate_prompt_embed_type = gr.Dropdown(label="Ablate prompt embeddings type",
-                                                   choices=["ada", "ada-nonmix", "img"], value="ada", visible=True,
+                                                   choices=["ada", "ada-nonmix", "img"], value="ada", visible=False,
                                                    info="Use this type of prompt embeddings for ablation study")
             
             nonmix_prompt_emb_weight = gr.Slider(label="Weight of ada-nonmix ID embeddings",
                                                  minimum=0.0, maximum=0.5, step=0.1, value=0,
                                                  info="Weight of ada-nonmix ID embeddings in the prompt embeddings",
-                                                 visible=True)
+                                                 visible=False)
                                         
-            enhance_composition = \
-                gr.Checkbox(label="Enhance composition", value=True, visible=False,
-                            info="Enhance the overall composition by repeating the compositional part of the prompt")
 
             subj_name_sig = gr.Textbox(
                 label="Nickname of Subject (optional; used to name saved images)", 
