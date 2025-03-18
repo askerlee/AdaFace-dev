@@ -47,8 +47,8 @@ model:
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
     prompt_emb_delta_reg_weight:      1e-5
     # Set cls_subj_mix_ratio to 1 to use only class embeddings.
-    # 0.8: 0.2 * subj embeddings + 0.8 * class embeddings
-    cls_subj_mix_ratio:               0.8
+    # 0.4: 0.6 * subj embeddings + 0.4 * class embeddings
+    cls_subj_mix_ratio:               0.4
     # cls_subj_mix_scheme: 'embedding' or 'unet'
     cls_subj_mix_scheme:              'embedding'
 

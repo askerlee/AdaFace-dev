@@ -80,7 +80,7 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=4,
-                 cls_subj_mix_ratio=0.8,        
+                 cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=0.,
                  recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
@@ -101,7 +101,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0.2,
+                 p_recon_on_comp_prompt=0,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=3,
                  recon_adv_mod_mag_range=[0.001, 0.003],
@@ -2094,7 +2094,8 @@ class LatentDiffusion(DDPM):
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
-                                                 x_start0_ss, x_recons, ca_layers_activations_list,
+                                                 x_start0_ss, x_recons, noise_preds, 
+                                                 ca_layers_activations_list,
                                                  all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
@@ -2198,6 +2199,8 @@ class LatentDiffusion(DDPM):
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
             cfg_scale  = 2
+            # Don't limit the image area to img_mask, to boost the compositional patterns in the background.
+            img_mask = None
             # print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
         else:
             # Use the default negative prompts.
@@ -2220,6 +2223,9 @@ class LatentDiffusion(DDPM):
         # (img_mask is not used in the prompt-guided cross-attention layers).
         noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
+                                         # img_mask is used to mask the blank areas around the augmented images.
+                                         # If recon_on_comp_prompt, then img_mask = None, i.e., no masking.
+                                         # fg_mask is used to confine adv_grad to the foreground area.
                                          x_start, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, 
                                          enable_unet_attn_lora, enable_unet_ffn_lora,
@@ -2229,6 +2235,7 @@ class LatentDiffusion(DDPM):
         losses_recon_subj_mb_suppress = []
         losses_arcface_align_recon    = []
         losses_pred_l2 = []
+        latent_shape, device = x_start.shape, x_start.device
 
         for i in range(num_denoising_steps):
             noise, noise_pred, x_recon, ca_layers_activations = \
@@ -2250,6 +2257,24 @@ class LatentDiffusion(DDPM):
                 
                 self.normal_recon_images_count += BLOCK_SIZE
 
+                # Only compute losses when all instances have faces detected.
+                if (1 - face_detected_inst_mask).sum() == 0:
+                    # If there are no failed indices, then we get ss_fg_mask.
+                    # NOTE: fg_face_bboxes are coords on x_recon_pixels (same as input_images), 512*512.
+                    # recon_fg_mask is on the latents, 64*64. So we scale fg_face_bboxes down by 8.
+                    fg_face_bboxes = pixel_bboxes_to_latent(fg_face_bboxes, input_images.shape[-1], latent_shape[-1])
+                    recon_fg_mask = torch.zeros(BLOCK_SIZE, 1, latent_shape[-2], latent_shape[-1], device=device)
+                    # ss_fg_mask is zero-initialized.
+                    # len(fg_face_bboxes) == BLOCK_SIZE == len(sg_fg_mask), usually 1.
+                    for i in range(len(fg_face_bboxes)):
+                        x1, y1, x2, y2 = fg_face_bboxes[i]
+                        recon_fg_mask[i, :, y1:y2, x1:x2] = 1
+                        print(f"Rank {self.trainer.global_rank} recon face coords {i}: {fg_face_bboxes[i]}.", end=' ')
+
+                    fg_mask2 = fg_mask * recon_fg_mask
+                else:
+                    fg_mask2 = fg_mask
+
                 if loss_arcface_align_recon > 0:
                     losses_arcface_align_recon.append(loss_arcface_align_recon)
                     self.normal_recon_face_images_count += face_detected_inst_mask.sum().item()
@@ -2264,7 +2289,7 @@ class LatentDiffusion(DDPM):
                     loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
                         calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_mask, 
                                                        ca_layers_activations,
-                                                       all_subj_indices, None, fg_mask,
+                                                       all_subj_indices, None, fg_mask2,
                                                        recon_bg_pixel_weight, x_start.shape[0])
                     
                     losses_recon.append(loss_recon)
@@ -2684,7 +2709,7 @@ class LatentDiffusion(DDPM):
     # x_start_ss: the latent of the first 1/4 batch of input images (actually only 1 image), 
     # ** without priming.
     def calc_comp_feat_distill_loss(self, mon_loss_dict, session_prefix,
-                                    x_start_ss, x_recons, ca_layers_activations_list, 
+                                    x_start_ss, x_recons, noise_preds, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     BLOCK_SIZE):
@@ -2696,6 +2721,8 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_subj_v      = []
         losses_comp_rep_distill_nonsubj_v   = []
         losses_subj_attn_cross_t_distill    = []
+        losses_pred_l2                      = []
+
         device = x_start_ss.device
         dtype  = x_start_ss.dtype
         latent_shape = x_start_ss.shape
@@ -2778,6 +2805,9 @@ class LatentDiffusion(DDPM):
             sc_fg_mask_percent = 0
         
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
+            # Calc the L2 norm of noise_pred.
+            loss_pred_l2 = (noise_preds[step_idx] ** 2).mean()
+            losses_pred_l2.append(loss_pred_l2)
             # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_recon_mc,
             # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
             # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
@@ -2913,6 +2943,11 @@ class LatentDiffusion(DDPM):
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
         if v_loss_comp_feat_distill > 0:
             mon_loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
+
+        loss_pred_l2 = torch.stack(losses_pred_l2).mean()
+        # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
+        mon_loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+
         return loss_comp_feat_distill            
 
     def calc_comp_face_align_and_mb_suppress_losses(self, mon_loss_dict, session_prefix, 
