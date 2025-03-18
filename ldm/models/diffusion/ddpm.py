@@ -101,7 +101,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0,
+                 p_recon_on_comp_prompt=0.2,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=3,
                  recon_adv_mod_mag_range=[0.001, 0.003],
@@ -2257,27 +2257,30 @@ class LatentDiffusion(DDPM):
                 
                 self.normal_recon_images_count += BLOCK_SIZE
 
-                # Only compute losses when all instances have faces detected.
-                if (1 - face_detected_inst_mask).sum() == 0:
-                    # If there are no failed indices, then we get ss_fg_mask.
-                    # NOTE: fg_face_bboxes are coords on x_recon_pixels (same as input_images), 512*512.
-                    # recon_fg_mask is on the latents, 64*64. So we scale fg_face_bboxes down by 8.
-                    fg_face_bboxes = pixel_bboxes_to_latent(fg_face_bboxes, input_images.shape[-1], latent_shape[-1])
-                    recon_fg_mask = torch.zeros(BLOCK_SIZE, 1, latent_shape[-2], latent_shape[-1], device=device)
-                    # ss_fg_mask is zero-initialized.
-                    # len(fg_face_bboxes) == BLOCK_SIZE == len(sg_fg_mask), usually 1.
-                    for i in range(len(fg_face_bboxes)):
-                        x1, y1, x2, y2 = fg_face_bboxes[i]
-                        recon_fg_mask[i, :, y1:y2, x1:x2] = 1
-                        print(f"Rank {self.trainer.global_rank} recon face coords {i}: {fg_face_bboxes[i]}.", end=' ')
-
-                    fg_mask2 = fg_mask * recon_fg_mask
-                else:
-                    fg_mask2 = fg_mask
-
                 if loss_arcface_align_recon > 0:
                     losses_arcface_align_recon.append(loss_arcface_align_recon)
                     self.normal_recon_face_images_count += face_detected_inst_mask.sum().item()
+
+                    # If no face is detected in x_start, then loss_arcface_align_recon = 0 and 
+                    # fg_face_bboxes = None. In such cases, it's meaningless to compute recon losses.
+                    # Only compute losses when all instances have faces detected.
+                    if (1 - face_detected_inst_mask).sum() == 0:
+                        # If there are no failed indices, then we get ss_fg_mask.
+                        # NOTE: fg_face_bboxes has been converted to the coords of the latents space, 64*64,
+                        # in calc_arcface_align_loss(). So we DON'T need to convert it again.
+                        recon_fg_mask = torch.zeros(BLOCK_SIZE, 1, latent_shape[-2], latent_shape[-1], device=device)
+                        # ss_fg_mask is zero-initialized.
+                        # len(fg_face_bboxes) == BLOCK_SIZE == len(sg_fg_mask), usually 1.
+                        for i in range(len(fg_face_bboxes)):
+                            x1, y1, x2, y2 = fg_face_bboxes[i]
+                            recon_fg_mask[i, :, y1:y2, x1:x2] = 1
+                            print(f"Rank {self.trainer.global_rank} recon face coords {i}: {fg_face_bboxes[i]}.", end=' ')
+
+                        fg_mask2 = fg_mask * recon_fg_mask
+                        mask_overlap_ratio = fg_mask2.sum() / fg_mask.sum()
+                        print(f"Recon face detected/segmented mask overlap: {mask_overlap_ratio:.2f}")
+                    else:
+                        fg_mask2 = fg_mask
 
                     # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
                     # bg loss is given a tiny weight to suppress multi-face artifacts.
