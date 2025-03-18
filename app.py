@@ -141,6 +141,9 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
             prompt = "face portrait, " + prompt
         else:
             prompt = prompt.replace("portrait", "face portrait")
+    if enhance_composition >= 2:
+        if "full body" not in prompt:
+            prompt = prompt + ", full body view"
 
     if gender != "(none)":
         if "portrait" in prompt:
@@ -152,7 +155,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     samples = adaface(noise, prompt, negative_prompt=negative_prompt, 
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, 
-                      repeat_prompt_for_each_encoder=enhance_composition,
+                      repeat_prompt_for_each_encoder=(enhance_composition >= 1),
                       ablate_prompt_no_placeholders=disable_adaface,
                       ablate_prompt_embed_type=ablate_prompt_embed_type,
                       nonmix_prompt_emb_weight=nonmix_prompt_emb_weight,
@@ -353,8 +356,9 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
                                          info="Enhance the facial features by prepending 'face portrait' to the prompt")
             enhance_composition = \
-                gr.Checkbox(label="Enhance composition", value=False, visible=True,
-                            info="Enhance the overall composition by repeating the compositional part of the prompt")
+                gr.Slider(label="Enhance composition", visible=True,
+                          info="Enhance the overall composition by two different tricks. 'In a wheelchair' or 'on a horse' etc. needs level 2",
+                          minimum=0, maximum=2, step=1, value=0)
 
             ablate_prompt_embed_type = gr.Dropdown(label="Ablate prompt embeddings type",
                                                    choices=["ada", "ada-nonmix", "img"], value="ada", visible=False,
