@@ -74,7 +74,7 @@ if __name__ == "__main__":
         avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
                                     cache_src_embeds=False, verbose=True)
-        print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.2f}")
+        print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
         exit()
 
     for subject_path in subject_paths:
@@ -119,7 +119,7 @@ if __name__ == "__main__":
                     subj_simi_stats[key].append(avg_similarity)
                     break
 
-            print(f"{method:<7} sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.2f}")
+            print(f"{method:<7} sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
             video_count += 1
 
         subject_count += 1
@@ -136,4 +136,4 @@ if __name__ == "__main__":
         print(f"{key}: {avg_similarity:.3f}/{std_similarity:.3f}")
 
     end = time.time()
-    print("Time elapsed: %.2f seconds" %(end - begin))
+    print("Time elapsed: %.1f seconds" %(end - begin))

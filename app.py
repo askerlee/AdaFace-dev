@@ -337,17 +337,17 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, walking on the beach, sunset, orange sky, front view",
                                     "portrait, in a white apron and chef hat, garnishing a gourmet dish",
                                     "portrait, dancing pose among folks in a park, waving hands",
-                                    "portrait, in iron man costume, the sky ablaze with hues of orange and purple, full body view",
-                                    "portrait, jedi wielding a lightsaber, star wars, full body view",
-                                    "portrait, night view of tokyo street, neon light, full body view",
+                                    "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
+                                    "portrait, jedi wielding a lightsaber, star wars",
+                                    "portrait, night view of tokyo street, neon light",
                                     "portrait, playing guitar on a boat, ocean waves",
                                     "portrait, with a passion for reading, curled up with a book in a cozy nook near a window, front view",
-                                    "portrait, celebrating new year, fireworks, full body view",
-                                    "portrait, running pose in a park, full body view",
-                                    "portrait, in space suit, space helmet, walking on mars, full body view",
-                                    "portrait, in superman costume, the sky ablaze with hues of orange and purple, full body view",
-                                    "in a wheelchair, full body view",
-                                    "on a horse, full body view"
+                                    "portrait, celebrating new year, fireworks",
+                                    "portrait, running pose in a park",
+                                    "portrait, in space suit, space helmet, walking on mars",
+                                    "portrait, in superman costume, the sky ablaze with hues of orange and purple",
+                                    "in a wheelchair",
+                                    "on a horse"
                             ])
             
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
