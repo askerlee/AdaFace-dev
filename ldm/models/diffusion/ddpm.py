@@ -94,8 +94,9 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
+                 max_num_comp_distill_steps_with_grad=3,
                  recon_num_denoising_steps_range=[2, 2],
-                 comp_distill_denoising_steps_range=[3, 3],
+                 comp_distill_denoising_steps_range=[4, 4],
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.3, 2],
                  p_unet_distill_uses_comp_prompt=0,
@@ -155,6 +156,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
+        self.max_num_comp_distill_steps_with_grad   = max_num_comp_distill_steps_with_grad
         self.recon_num_denoising_steps_range        = recon_num_denoising_steps_range
         self.comp_distill_denoising_steps_range     = comp_distill_denoising_steps_range
 
@@ -185,7 +187,11 @@ class DDPM(pl.LightningModule):
         self.normal_recon_face_images_count          = 0
         self.unet_distill_iters_count                = 0
         self.comp_iters_face_detected_count          = 0
-        self.comp_iters_bg_has_face_count       = 0
+        # If recent_comp_iters_face_detected_frac < comp_iters_face_detected_frac_thres,
+        # then we add more compositional steps until it reaches comp_iters_face_detected_frac_thres.
+        self.comp_iters_face_detected_frac_thres     = 0.55
+        self.recent_comp_iters_face_detected_count   = 0
+        self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
         self.adaface_adv_success_iters_count         = 0
@@ -995,7 +1001,7 @@ class LatentDiffusion(DDPM):
 
         # Don't use fp trick and the 'clear face' suffix at the same time.
         if not self.iter_flags['use_fp_trick'] and self.iter_flags['do_comp_feat_distill']:
-            p_clear_face = 0.5
+            p_clear_face = 0.8
         else:
             p_clear_face = 0
 
@@ -1004,7 +1010,20 @@ class LatentDiffusion(DDPM):
             cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts = \
                 [ [ p + ', clear face' for p in prompts ] for prompts in \
                     (cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts) ]
+
+        if self.iter_flags['do_comp_feat_distill']:
+            p_front_view = 0.8
+        else:
+            p_front_view = 0
             
+        if torch.rand(1) < p_front_view:
+            # Add 'front view' to the 4 types of prompts.
+            # Chance is 'front view' may have been added to the prompts already. 
+            # But it doesn't matter to repeat it.
+            cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts = \
+                [ [ p + ', front view' for p in prompts ] for prompts in \
+                    (cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts) ]
+                    
         delta_prompts = (subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts)
 
         if 'aug_mask' in batch:
@@ -1423,10 +1442,11 @@ class LatentDiffusion(DDPM):
                                               subj_comp_rep_emb, cls_comp_emb], dim=0)
         # cls_single_emb and cls_comp_emb have been patched above. 
         # Then combine them back into prompt_emb_4b_orig_dist.
+        # orig means it doesn't contain subj_comp_rep_emb.
         # prompt_emb_4b_orig_dist: [4, 77, 768].
-        prompt_emb_4b_orig_dist = torch.cat([subj_single_emb, subj_comp_emb,
-                                             cls_single_emb_dist, cls_comp_emb_dist], dim=0)
-        extra_info['prompt_emb_4b_rep_nonmix'] = prompt_emb_4b_rep_nonmix
+        prompt_emb_4b_orig_dist  = torch.cat([subj_single_emb,     subj_comp_emb,
+                                              cls_single_emb_dist, cls_comp_emb_dist], dim=0)
+        extra_info['prompt_emb_4b_rep_nonmix']  = prompt_emb_4b_rep_nonmix
         extra_info['prompt_emb_4b_orig_dist']   = prompt_emb_4b_orig_dist
 
         if self.iter_flags['do_comp_feat_distill']:
@@ -1441,22 +1461,12 @@ class LatentDiffusion(DDPM):
 
             # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings as cls_comp_emb2.
             cls_comp_emb2 = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
-            
-            '''
-            # Mix 0.9 of the subject comp embeddings with 0.1 of the cls comp embeddings 
-            # as subj_comp_emb2 and subj_comp_rep_emb2.
-            # if cls_subj_mix_ratio == 0.8, then reverse_mix_ratio == 0.9.
-            reverse_mix_ratio  = 0.5 + self.cls_subj_mix_ratio / 2
-            # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp embeddings as subj_comp_emb2.
-            subj_comp_emb2     = cls_comp_emb  * (1 - reverse_mix_ratio)       + subj_comp_emb     * reverse_mix_ratio
-            # Mix 0.2 of the cls comp embeddings with 0.8 of the subject comp rep embeddings as subj_comp_rep_emb2.
-            subj_comp_rep_emb2 = cls_comp_emb  * (1 - reverse_mix_ratio)       + subj_comp_rep_emb * reverse_mix_ratio
-            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb2, subj_comp_rep_emb2, cls_comp_emb2], dim=0)
-            '''
 
             prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb2], dim=0)
 
             # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
+            # The mask before update is prompt_emb_mask_4b_orig, which matches prompt_emb_4b_orig_dist.
+            # The mask after  update is prompt_emb_mask_4b,      which matches prompt_emb_4b_rep_nonmix and prompt_emb.
             prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
             prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
             prompt_emb_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_emb_mask']
@@ -1476,11 +1486,13 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['unet_distill_uses_comp_prompt'] \
               and not self.iter_flags['recon_on_comp_prompt']:
                 assert captions == subj_single_prompts
+                # captions is subj_single_prompts, so prompt_emb = subj_single_emb.
+                prompt_emb = subj_single_emb
             else:
                 assert captions == subj_comp_prompts
-            # When unet_distill_uses_comp_prompt, captions is subj_comp_prompts. 
-            # So in this case, subj_single_emb == subj_comp_emb.
-            prompt_emb = subj_single_emb
+                # captions is subj_comp_prompts, so prompt_emb = subj_comp_emb.
+                prompt_emb = subj_comp_emb
+
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_1b']
@@ -1785,7 +1797,7 @@ class LatentDiffusion(DDPM):
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_subj_attn=False,
-                                       cfg_scale=2.5, num_denoising_steps=3):
+                                       cfg_scale=2.5, num_denoising_steps=4, max_num_steps_with_grad=3):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1815,21 +1827,24 @@ class LatentDiffusion(DDPM):
             22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
             20, 21, 22, 23]))
             '''
-            noise_pred, x_recon, ca_layers_activations = \
-                self.guided_denoise(x_start, noise, t, cond_context,
-                                    uncond_emb, img_mask=None, 
-                                    shrink_subj_attn=shrink_subj_attn,
-                                    subj_indices=all_subj_indices_1b, 
-                                    batch_part_has_grad='subject-compos', 
-                                    subj_comp_distill_on_rep_prompts=True,
-                                    do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                    capture_ca_activations=True,
-                                    res_hidden_states_stopgrad=True,
-                                    # Enable the attn lora in subject-compos batches, as long as 
-                                    # attn lora is globally enabled.
-                                    use_attn_lora=self.unet_uses_attn_lora,
-                                    use_ffn_lora=False, ffn_lora_adapter_name='comp_distill')
-        
+
+            is_grad_enabled = (i >= num_denoising_steps - max_num_steps_with_grad)
+            with torch.set_grad_enabled(is_grad_enabled):
+                noise_pred, x_recon, ca_layers_activations = \
+                    self.guided_denoise(x_start, noise, t, cond_context,
+                                        uncond_emb, img_mask=None, 
+                                        shrink_subj_attn=shrink_subj_attn,
+                                        subj_indices=all_subj_indices_1b, 
+                                        batch_part_has_grad='subject-compos', 
+                                        subj_comp_distill_on_rep_prompts=True,
+                                        do_pixel_recon=True, cfg_scale=cfg_scale, 
+                                        capture_ca_activations=True,
+                                        res_hidden_states_stopgrad=True,
+                                        # Enable the attn lora in subject-compos batches, as long as 
+                                        # attn lora is globally enabled.
+                                        use_attn_lora=self.unet_uses_attn_lora,
+                                        use_ffn_lora=False, ffn_lora_adapter_name='comp_distill')
+            
             noise_preds.append(noise_pred)
             x_starts.append(x_recon.detach())
             x_recons.append(x_recon)
@@ -2023,12 +2038,15 @@ class LatentDiffusion(DDPM):
             # noise_preds is not used for loss computation.
             # x_recons[-1] will be used to detect faces.
             # All x_recons with faces detected will be used for arcface align loss computation.
+            # NOTE: max_num_comp_distill_steps_with_grad = 3 < num_comp_denoising_steps = 4.
+            # So the first denoising step will have no gradients and will be discarded.
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     shrink_subj_attn=shrink_subj_attn,
-                                                    cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps)
+                                                    cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
+                                                    max_num_steps_with_grad=self.max_num_comp_distill_steps_with_grad)
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
@@ -2091,6 +2109,13 @@ class LatentDiffusion(DDPM):
                         heatmaps = avg_heatmap
                     self.cache_and_log_generations(heatmaps, None, do_normalize=False)
 
+            # Drop the first num_comp_denoising_steps - max_num_comp_distill_steps_with_grad steps,
+            # since they don't have gradients.
+            if num_comp_denoising_steps > self.max_num_comp_distill_steps_with_grad:
+                N = self.max_num_comp_distill_steps_with_grad
+                x_recons, noise_preds, ca_layers_activations_list = \
+                    x_recons[-N:], noise_preds[-N:], ca_layers_activations_list[-N:]
+                
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
@@ -3037,6 +3062,7 @@ class LatentDiffusion(DDPM):
             if arcface_align_loss_count > 0:
                 loss_arcface_align_comp = loss_arcface_align_comp / arcface_align_loss_count
                 mon_loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
+                # This iteration is counted as face detected, as long as the face is detected in one step.
                 self.comp_iters_face_detected_count += 1
                 comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
                 mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
