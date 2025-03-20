@@ -748,10 +748,12 @@ class LatentDiffusion(DDPM):
             prompt_embeddings = merge_cls_token_embeddings(prompt_embeddings, 
                                                            self.embedding_manager.cls_delta_string_indices)
 
-        # return_prompt_embs_type: ['id', 'text_id']. Training default: 'text', i.e., 
+        # return_prompt_embs_type: ['id', 'text', 'text_id']. Training default: 'text', i.e., 
         # the conventional text embeddings returned by the clip encoder (embedding manager in the middle).
         # 'id': the subject embeddings only. 
         # 'text_id': concatenate the text embeddings with the subject IMAGE embeddings.
+        # 'id' and 'text_id' are ablation settings to evaluate the original ID2ImgPrompt module.
+        # NOTE the subject image embeddings don't go through CLIP.
         if return_prompt_embs_type in ['id', 'text_id']:
             # if text_conditioning_iter_type == 'plain_text_iter', the current prompt is a plain text 
             # without the subject string (probably a negative prompt).
@@ -921,7 +923,7 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill']:
                 # Use the fp trick all the time on compositional distillation iterations,
                 # so that class comp prompts will generate clear face areas.
-                p_use_fp_trick = 0
+                p_use_fp_trick = 0.5
             # recon_on_comp_prompt. So we add "portrait" to the prompts.
             # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
             # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
@@ -1004,22 +1006,19 @@ class LatentDiffusion(DDPM):
         cls_comp_prompts    = batch[CLS_COMP_PROMPT]
 
         # Don't use fp trick and the 'clear face' suffix at the same time.
-        if not self.iter_flags['use_fp_trick'] and self.iter_flags['do_comp_feat_distill']:
+        if self.iter_flags['do_comp_feat_distill']:
             p_clear_face = 0.8
+            p_front_view = 0.8
         else:
             p_clear_face = 0
-
+            p_front_view = 0
+            
         if torch.rand(1) < p_clear_face:
             # Add 'clear face' to the 4 types of prompts. Its effect is weaker than the fp trick.
             cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts = \
                 [ [ p + ', clear face' for p in prompts ] for prompts in \
                     (cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts) ]
 
-        if self.iter_flags['do_comp_feat_distill']:
-            p_front_view = 0.8
-        else:
-            p_front_view = 0
-            
         if torch.rand(1) < p_front_view:
             # Add 'front view' to the 4 types of prompts.
             # Chance is 'front view' may have been added to the prompts already. 
