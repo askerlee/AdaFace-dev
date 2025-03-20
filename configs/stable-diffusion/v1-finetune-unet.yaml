@@ -34,7 +34,7 @@ model:
     unet_distill_iter_gap:            1
 
     # typical delta reg loss: 0.85, * weight -> 1.7e-4
-    prompt_emb_delta_reg_weight:      1e-5
+    prompt_emb_delta_reg_weight:      1e-4
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     optimizer_type:           CAdamW 

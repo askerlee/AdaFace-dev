@@ -82,7 +82,7 @@ class DDPM(pl.LightningModule):
                  comp_distill_iter_gap=4,
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
-                 prompt_emb_delta_reg_weight=0.,
+                 prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_attn_cross_t_distill_loss_weight=10,
@@ -110,6 +110,8 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
+                 pred_l2_threshold=0.95,
+                 pred_l2_loss_weight=5e-3,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
@@ -241,6 +243,8 @@ class DDPM(pl.LightningModule):
         self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
         self.arcface_align_loss_weight = arcface_align_loss_weight
+        self.pred_l2_threshold = pred_l2_threshold
+        self.pred_l2_loss_weight = pred_l2_loss_weight
 
         if 'Prodigy' in self.optimizer_type:
             self.prodigy_config = prodigy_config
@@ -1916,11 +1920,8 @@ class LatentDiffusion(DDPM):
 
             mon_loss_dict.update({f'{session_prefix}/prompt_emb_delta': loss_prompt_emb_delta.mean().detach().item() })
 
-            # The Prodigy optimizer seems to suppress the embeddings too much, 
-            # so it uses a smaller scale to reduce the negative effect of prompt_emb_delta_loss.
-            prompt_emb_delta_loss_scale = 1 if self.optimizer_type == 'Prodigy' else 2
             # prompt_emb_delta_reg_weight: 1e-5.
-            loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight * prompt_emb_delta_loss_scale
+            loss += loss_prompt_emb_delta * self.prompt_emb_delta_reg_weight
 
         ##### begin of do_normal_recon #####
         if self.iter_flags['do_normal_recon']:  
@@ -2369,6 +2370,11 @@ class LatentDiffusion(DDPM):
 
             # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
             mon_loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+            if self.pred_l2_loss_weight > 0:
+                # When loss_pred_l2 is larger than pred_l2_threshold, loss_pred_l2 is 0.
+                # When loss_pred_l2 is smaller than pred_l2_threshold, loss_pred_l2 is positive.
+                # pred_l2_loss_weight: 1e-4.
+                loss_normal_recon += F.relu(self.pred_l2_threshold - loss_pred_l2) * self.pred_l2_loss_weight
 
             v_loss_normal_recon = loss_normal_recon.mean().detach().item()
             mon_loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
@@ -2975,6 +2981,11 @@ class LatentDiffusion(DDPM):
         loss_pred_l2 = torch.stack(losses_pred_l2).mean()
         # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
         mon_loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+        if self.pred_l2_loss_weight > 0:
+            # When loss_pred_l2 is larger than pred_l2_threshold, loss_pred_l2 is 0.
+            # When loss_pred_l2 is smaller than pred_l2_threshold, loss_pred_l2 is positive.
+            # pred_l2_loss_weight: 1e-4.
+            loss_comp_feat_distill += F.relu(self.pred_l2_threshold - loss_pred_l2) * self.pred_l2_loss_weight
 
         return loss_comp_feat_distill            
 
