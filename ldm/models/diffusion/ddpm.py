@@ -111,7 +111,7 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
                  pred_l2_threshold=0.95,
-                 pred_l2_loss_weight=5e-3,
+                 pred_l2_loss_weight=5e-2,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
@@ -528,7 +528,7 @@ class LatentDiffusion(DDPM):
             # So float16 is sufficient.
             if self.cls_subj_mix_scheme == 'unet':
                 unets = [unet, unet]
-                # ensemble weights: [0.2, 0.8]
+                # ensemble weights: [0.6, 0.4]
                 unet_weights_in_ensemble = [1 - self.cls_subj_mix_ratio, self.cls_subj_mix_ratio]
             else:
                 unets = [unet]
