@@ -2916,8 +2916,10 @@ class LatentDiffusion(DDPM):
                     calc_subj_attn_cross_t_distill_loss(ca_layers_activations, ca_layers_activations_list[step_idx+1],
                                                         all_subj_indices_1b)
                 losses_subj_attn_cross_t_distill.append(loss_subj_attn_cross_t_distill_step)
-                
-            if step_idx < sc_face_detected_at_step:
+            
+            # If the image is dominated by the face, then we don't need to preserve the background
+            # as it will be highly challenging to match the background with the mc instance.
+            if step_idx < sc_face_detected_at_step or sc_fg_mask_percent > 0.8:
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
             loss_comp_fg_bg_preserve = \

@@ -2483,6 +2483,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
     # sc_fg_mask_3d: Collapse the spatial dimensions of sc_fg_mask to 1 dim.
     sc_fg_mask_3d = sc_fg_mask.reshape(*sc_fg_mask.shape[:-2], -1)
+    # We have made sure that sc_fg_mask_percent <= 0.8 in calc_comp_feat_distill_loss(), so 
+    # sc_bg_mask_3d will never be all 0s.
     sc_bg_mask_3d   = 1 - sc_fg_mask_3d
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
@@ -2518,11 +2520,16 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     scbg_q = sc_q  * sc_bg_mask_3d
 
     # Remove mean features from mc_q, scbg_q to remove low-freq features for more accurate matching.
-    # In principle we should exclude the face area when computing q_bg_mean,
+    # In principle we should exclude the face area in mc_q when computing q_bg_mean,
     # but the face area is small so the side effect brought by the inaccuracy should be insignificant. 
-    # Anyway demeaning with s_q_mean is only to make the flow estimation more accurate.
-    q_bg_mean = torch.cat([mc_q, scbg_q], dim=0).mean(dim=(0,2), keepdim=True).detach()
+    # Anyway demeaning with q_bg_mean is only to make the flow estimation more accurate.
+    # We have made sure that sc_fg_mask_percent <= 0.8 in calc_comp_feat_distill_loss(), so 
+    # sc_bg_mask_3d will never be all 0s.
+    q_bg_mean_sum =   mc_q.mean(dim=(0,2), keepdim=True) \
+                    + scbg_q.mean(dim=(0,2), keepdim=True) * sc_bg_mask_3d.numel() / (sc_bg_mask_3d.sum() + 1e-5)
+    q_bg_mean = (q_bg_mean_sum / 2).detach()
     mc_q   =  mc_q   - q_bg_mean
+    # Remove mean features, and set the fg area to 0 again.
     scbg_q = (scbg_q - q_bg_mean) * sc_bg_mask_3d
 
     ss2sc_flow, mc2sc_flow = None, None
@@ -2572,8 +2579,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         # Set background features in scbg_feat to 0s to reduce noisy matching.
         # sc_feat: [1, 1280, 961]. sc_bg_mask_3d: [1, 1, 961].
         scbg_feat = sc_feat * sc_bg_mask_3d
-        feat_bg_mean = torch.cat([mc_feat, scbg_feat], dim=0).mean(dim=(0,2), keepdim=True).detach()
+        # scbg_feat_mean is adjusted by the ratio of unmasked tokens, since there are many 0s in the fg area.
+        # We have made sure that sc_fg_mask_percent <= 0.8 in calc_comp_feat_distill_loss(), so 
+        # sc_bg_mask_3d will never be all 0s.
+        feat_bg_mean_sum =   mc_feat.mean(dim=(0,2), keepdim=True) \
+                           + scbg_feat.mean(dim=(0,2), keepdim=True) * sc_bg_mask_3d.numel() / (sc_bg_mask_3d.sum() + 1e-5)
+        feat_bg_mean = (feat_bg_mean_sum / 2).detach()
+        # Remove mean features from mc_feat, scbg_feat to remove low-freq features for more accurate matching.
         mc_feat   =  mc_feat   - feat_bg_mean
+        # Remove mean features, and set the fg area to 0 again.
+        # We don't subtract feat_fg_mean from scbg_feat, otherwise scbg_feat will be not penalized
+        # when it is heavily mixed with fg features.
         scbg_feat = (scbg_feat - feat_bg_mean) * sc_bg_mask_3d
 
         #### Compute fg reconstruction losses. ####
