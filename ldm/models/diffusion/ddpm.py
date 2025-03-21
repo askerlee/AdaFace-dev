@@ -2917,19 +2917,24 @@ class LatentDiffusion(DDPM):
                                                         all_subj_indices_1b)
                 losses_subj_attn_cross_t_distill.append(loss_subj_attn_cross_t_distill_step)
             
-            # If the image is dominated by the face, then we don't need to preserve the background
-            # as it will be highly challenging to match the background with the mc instance.
-            if step_idx < sc_face_detected_at_step or sc_fg_mask_percent > 0.8:
+            # Usually sc_fg_mask_percent is around 0.05~0.25.
+            # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
+            # then we don't need to preserve the background as it will be highly 
+            # challenging to match the background with the mc instance.
+            # If sc_fg_mask_percent <= 0.01, it means the face is too small (each edge <= 0.1),
+            # then we don't need to preserve the fg.
+            if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= 0.36) \
+              or (sc_fg_mask_percent <= 0.01):
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
-            loss_comp_fg_bg_preserve = \
+            loss_comp_fg_bg_preserve_step = \
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                                 recon_max_scale_of_threses=20000
                                                )
-            losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve)
+            losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve_step)
 
             # ca_layers_activations['outfeat'] is a dict as: layer_idx -> ca_outfeat. 
             # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
