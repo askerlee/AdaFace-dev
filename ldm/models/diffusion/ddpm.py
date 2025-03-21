@@ -430,10 +430,12 @@ class DDPM(pl.LightningModule):
                 self.normal_recon_iters_count += 1
 
         # Switch model weights when switching between normal recon / unet distill and comp feat distill.
-        if not prev_do_comp_feat_distill and self.iter_flags['do_comp_feat_distill']:
+        if not prev_do_comp_feat_distill and self.iter_flags['do_comp_feat_distill'] \
+          and self.comp_unet_state_dict:
             print("Switching to comp distill unet weights")
             self.model.load_unet_state_dict(self.comp_unet_state_dict)
-        elif prev_do_comp_feat_distill and not self.iter_flags['do_comp_feat_distill']:
+        elif prev_do_comp_feat_distill and not self.iter_flags['do_comp_feat_distill'] \
+          and self.base_unet_state_dict:
             print("Switching to base unet weights")
             self.model.load_unet_state_dict(self.base_unet_state_dict)
 
