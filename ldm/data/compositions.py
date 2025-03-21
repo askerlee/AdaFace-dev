@@ -63,7 +63,8 @@ all_composition_regexs    = all_action_regexs    + all_dress_regexs
 static_composition_regexs = static_action_regexs + static_appearances
 
 # Removed "eye level shot", "close-up view", "zoomed-in view"; sometimes it generates a huge eye.
-all_shots = [ "side view", "zoomed-out view", "full body view", "middle shot", "long shot", "wide shot" ]
+# Removed "zoomed-out view", "long shot", "wide shot"; they generate very small subjects.
+all_shots = [ "side view", "full body view", "mid shot", "eye-level shot", "front view", ]
 
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
@@ -114,7 +115,7 @@ def sample_compositions(N, subj_type):
     # 0.75: option 0 (without certain components), 
     # 0.25: option 1 (with    certain components).
     option_probs     = [0.75, 0.25]
-    shot_probs       = [0.3,  0.7]
+    shot_probs       = [0.75, 0.25]
     # 0.4:  option 0 (without background),
     # 0.6:  option 1 (with    background).
     background_probs = [0.4,  0.6]

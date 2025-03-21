@@ -2921,10 +2921,10 @@ class LatentDiffusion(DDPM):
             # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
             # then we don't need to preserve the background as it will be highly 
             # challenging to match the background with the mc instance.
-            # If sc_fg_mask_percent <= 0.01, it means the face is too small (each edge <= 0.1),
+            # If sc_fg_mask_percent <= 0.0256, it means the face is too small (each edge <= 0.16),
             # then we don't need to preserve the fg.
             if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= 0.36) \
-              or (sc_fg_mask_percent <= 0.01):
+              or (sc_fg_mask_percent <= 0.0256):
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
             loss_comp_fg_bg_preserve_step = \
