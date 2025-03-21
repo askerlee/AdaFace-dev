@@ -122,6 +122,11 @@ class DDPM(pl.LightningModule):
                  q_lora_updates_query=False,
                  p_shrink_subj_attn=0.5,
                  cross_attn_shrink_factor=0.4,
+                 # res_hidden_states_gradscale: gradient scale for residual hidden states.
+                 # 0.2: 50% of cross_attn_shrink_factor=0.4, so that the gradient will impact
+                 # 50% less on the residual hidden states than the cross-attn 
+                 # hidden states (subject embeddings).
+                 res_hidden_states_gradscale=0.2,
                  log_attn_level=0,
                  ablate_img_embs=False
                 ):
@@ -211,8 +216,10 @@ class DDPM(pl.LightningModule):
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
         self.cross_attn_shrink_factor = cross_attn_shrink_factor
-        self.log_attn_level         = log_attn_level
+        self.res_hidden_states_gradscale = res_hidden_states_gradscale
+
         self.ablate_img_embs        = ablate_img_embs
+        self.log_attn_level         = log_attn_level
 
         if self.use_ldm_unet:
             self.model = DiffusionWrapper(unet_config)
@@ -1736,7 +1743,8 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    res_hidden_states_gradscale=0.2,
+                                    # res_hidden_states_gradscale: 0.2
+                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     use_attn_lora=enable_unet_attn_lora,
                                     # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
                                     use_ffn_lora=enable_unet_ffn_lora, 
@@ -1862,7 +1870,8 @@ class LatentDiffusion(DDPM):
                                         subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
-                                        res_hidden_states_gradscale=0.2,
+                                        # res_hidden_states_gradscale: 0.2
+                                        res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                         # Enable the attn lora in subject-compos batches, as long as 
                                         # attn lora is globally enabled.
                                         use_attn_lora=self.unet_uses_attn_lora,
@@ -2545,7 +2554,8 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    res_hidden_states_gradscale=0.2,
+                                    # res_hidden_states_gradscale: 0.2
+                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
