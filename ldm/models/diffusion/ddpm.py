@@ -122,7 +122,7 @@ class DDPM(pl.LightningModule):
                  p_shrink_subj_attn=0.5,
                  # Reduce the variance of the subject attention distribution by a factor of 3,
                  # so that the subject attention is more concentrated takes up a smaller area.
-                 sc_subj_attn_var_shrink_factor=2.,
+                 sc_subj_attn_shrink_factor=0.2,
                  log_attn_level=0,
                  ablate_img_embs=False
                 ):
@@ -211,7 +211,7 @@ class DDPM(pl.LightningModule):
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
-        self.sc_subj_attn_var_shrink_factor = sc_subj_attn_var_shrink_factor
+        self.sc_subj_attn_shrink_factor = sc_subj_attn_shrink_factor
         self.log_attn_level         = log_attn_level
         self.ablate_img_embs        = ablate_img_embs
 
@@ -229,7 +229,7 @@ class DDPM(pl.LightningModule):
                                               lora_rank=self.unet_lora_rank, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
                                               ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
-                                              subj_attn_var_shrink_factor=self.sc_subj_attn_var_shrink_factor,
+                                              subj_attn_shrink_factor=self.sc_subj_attn_shrink_factor,
                                               # q_lora_updates_query = True: q is updated by the LoRA layer.
                                               # False: q is not updated, and an additional q2 is updated and returned.
                                               q_lora_updates_query=self.q_lora_updates_query
@@ -1557,7 +1557,7 @@ class LatentDiffusion(DDPM):
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, 
-                       res_hidden_states_stopgrad=True,
+                       res_hidden_states_stopgrad=False,
                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1716,7 +1716,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    res_hidden_states_stopgrad=True,
+                                    res_hidden_states_stopgrad=False,
                                     use_attn_lora=enable_unet_attn_lora,
                                     # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
                                     use_ffn_lora=enable_unet_ffn_lora, 
@@ -1842,7 +1842,7 @@ class LatentDiffusion(DDPM):
                                         subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
-                                        res_hidden_states_stopgrad=True,
+                                        res_hidden_states_stopgrad=False,
                                         # Enable the attn lora in subject-compos batches, as long as 
                                         # attn lora is globally enabled.
                                         use_attn_lora=self.unet_uses_attn_lora,
@@ -2525,7 +2525,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    res_hidden_states_stopgrad=True,
+                                    res_hidden_states_stopgrad=False,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3349,7 +3349,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                  use_ffn_lora=True, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 subj_attn_var_shrink_factor=2., q_lora_updates_query=False):
+                 subj_attn_shrink_factor=2., q_lora_updates_query=False):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
 
@@ -3372,7 +3372,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             set_up_attn_processors(self.diffusion_model, self.use_attn_lora, 
                                    attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down,
-                                   subj_attn_var_shrink_factor=subj_attn_var_shrink_factor,
+                                   subj_attn_shrink_factor=subj_attn_shrink_factor,
                                    q_lora_updates_query=q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
 
@@ -3422,7 +3422,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
             unet_lora_modules = {}
             # attn_opt_modules and ffn_opt_modules have different depths of keys.
             # attn_opt_modules:
-            # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_subj_attn_var_shrink_factor,
+            # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_subj_attn_shrink_factor,
             # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_to_q_lora_lora_A, ...
             # ffn_opt_modules:
             # up_blocks_3_resnets_1_conv1_lora_A, ...

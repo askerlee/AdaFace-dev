@@ -57,21 +57,11 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
 
-def gaussian_pdf_2d(x, y, x0, y0, std_x, std_y):
-    """
-    Evaluate the uncorrelated 2D Gaussian PDF at coordinates (x, y).
-    x, y are torch tensors of the same shape.
-    We don't need to normalize the PDF in the traditional way, as we'll normalize the center to 1,
-    and the traditional normalization factor will be canceled out.
-    """
-    return torch.exp(-(((x - x0)**2)/(2*std_x**2) + ((y - y0)**2)/(2*std_y**2)))
-
-@torch.compile
 # Return a scale matrix, in which most elements are 1, and at the subject-embedding rows,
 # the scales decrease from 1 at the Gaussian center to something around 0.3 at the image boundary.
 # This scale matrix is intended to multiple with the attention prob matrix, so that the subject
 # embeddings won't dominate the whole image.
-def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor):
+def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_shrink_factor):
     # attn_score: [1, 8, 4096, 77]
     # subj_indices: 
     '''
@@ -80,8 +70,6 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
         22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
         20, 21, 22, 23], device='cuda:1'))    
     '''
-    if subj_attn_var_shrink_factor <= 1:
-        breakpoint()
 
     # attn_score2: [1, 8, 4096, 77] -> [1, 77, 8, 4096]
     attn_score2 = attn_score.permute(0, 3, 1, 2)
@@ -92,72 +80,11 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
     N_SUB, N_EMB = subj_attn.size(0), subj_attn.size(1)
     # Average over the heads. subj_attn: [1, 20, 4096]
     subj_attn = subj_attn.mean(dim=2)
-    # 1) Normalize subj_attn as a 2D probability distribution.
-    # To be precise, we should consider other tokens than the subject embeddings when computing subj_prob.
-    # However, after normalization, the subj_prob below should only differ from the precise subj_pro
-    # by a constant factor, which doesn't affect our estimation of the subject center and variances.
-    subj_prob = subj_attn.softmax(dim=2)
-    H = W = int(np.sqrt(attn_score2.size(-1)))
-    # subj_attn: [1, 20, 4096] -> [1, 20, 64, 64]
-    subj_prob_3d = subj_prob.view(N_SUB, N_EMB, H, W)
-    # 2) Compute y_center and x_center
-    # ys: [1, 64, 1]. xs: [1, 1, 64]
-    ys = torch.arange(H, device=subj_attn.device).view(1, H, 1)
-    xs = torch.arange(W, device=subj_attn.device).view(1, 1, W)
-    y_center = (subj_prob_3d * ys).sum(dim=(2,3))  # [N_SUB, N_EMB]
-    x_center = (subj_prob_3d * xs).sum(dim=(2,3))  # [N_SUB, N_EMB]
-    # 3) Variances
-    y_sq = (subj_prob_3d * ys**2).sum(dim=(2,3))   # E[Y^2]
-    x_sq = (subj_prob_3d * xs**2).sum(dim=(2,3))   # E[X^2]
 
-    var_y = y_sq - y_center**2
-    var_x = x_sq - x_center**2
-
-    # 4) 2D std
-    # y_center, x_center: [35.1875, 32.9062].  
-    # std_x is often slightly smaller than std_y, meaning the face is slightly taller than wider.
-    # std_x, std_y: [N_SUB, N_EMB]. The stds across embeddings are quite similar. 
-    # So using embedding-specific stds may not make much difference. But who knows?
-    '''
-    std_x: [[18.9531, 18.1719, 19.0000, 19.2031, 19.0469, 19.0469, 18.2969, 18.2969,
-             18.7969, 18.5000, 18.5000, 18.2031, 18.2031, 18.2031, 18.2031, 18.2031,
-             18.2031, 18.2344, 19.2812, 18.5781]]    
-    std_y: [[18.8750, 17.9375, 18.7188, 18.9062, 18.7344, 18.7344, 18.1719, 18.1875,
-             18.7344, 18.4219, 18.3906, 18.2188, 18.1875, 18.1875, 18.2188, 18.1875,
-             18.2188, 18.2188, 19.0000, 18.5469]]
-    '''
-    std_x  = var_x.sqrt()
-    std_y  = var_y.sqrt()
-
-    # BUG: the multiplication of the original subj attn probs with pdf_grid is incorrect.
-    # In particular, if subj_attn_var_shrink_factor = 2, then the new var_x or var_y is 
-    # 1/2 of the original, which is correct.
-    # But for other values, it doesn't lead to a new var of var_x / subj_attn_var_shrink_factor or 
-    # std_y / subj_attn_var_shrink_factor.
-    # Nonetheless, it does lead to smaller var_x and var_y, and 
-    # as subj_attn_var_shrink_factor increases,
-    # the new var_x or var_y decreases. So we'll still use this equation.
-    shrinker_std_x = std_x * 1 / (subj_attn_var_shrink_factor - 1)
-    shrinker_std_y = std_y * 1 / (subj_attn_var_shrink_factor - 1)
-    # Create 1D coordinate arrays (the range can be chosen as needed)
-    # Make a meshgrid. X: [64, 64, 1, 1], Y: [64, 64, 1, 1]
-    X, Y = torch.meshgrid(torch.arange(W, device=subj_attn.device), 
-                          torch.arange(H, device=subj_attn.device))
-    X = X.to(attn_score.dtype).unsqueeze(-1).unsqueeze(-1)
-    Y = Y.to(attn_score.dtype).unsqueeze(-1).unsqueeze(-1)
-    # shrinker_grid: [64, 64, 1, 20]
-    shrinker_grid = gaussian_pdf_2d(X, Y, x_center, y_center, shrinker_std_x, shrinker_std_y)
-    # Normalize shrinker_grid, so that the maximum value (at the point nearest to the center) 
-    # is always 1, i.e., the subject activation at this point is not scaled down.
-    # NOTE: shrinker_grid values are in the log scale. So most of them are negative.
-    # shrinker_grid.mean(): 0.2~0.4.
-    shrinker_grid = shrinker_grid / shrinker_grid.max().detach()
-    # shrinker_grid: [1, 20, X=64, Y=64] -> [1, 20, Y=64, X=64] -> [1, 20, 1, 4096]
-    shrinker_grid = shrinker_grid.permute(2, 3, 0, 1).reshape(N_SUB, N_EMB, 1, -1)
     # subj_attn_scales: [1, 77, 1, 4096]
     subj_attn_scales = torch.ones_like(attn_score2[:, :, :1])
     # subj_attn_scales[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.
-    subj_attn_scales[subj_indices] = shrinker_grid
+    subj_attn_scales[subj_indices] = subj_attn_shrink_factor
     # subj_attn_scales: [1, 1, 4096, 77]
     subj_attn_scales = subj_attn_scales.permute(0, 2, 3, 1)
     # print(f"shrinker_grid mean: {shrinker_grid.mean().item():.4f}")
@@ -165,7 +92,7 @@ def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_var_shrink_factor)
 
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                                 shrink_subj_attn=False, subj_indices=None, subj_attn_var_shrink_factor=2., 
+                                 shrink_subj_attn=False, subj_indices=None, subj_attn_shrink_factor=0.2, 
                                  is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     B, L, S = query.size(0), query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
@@ -192,7 +119,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     if shrink_subj_attn and subj_indices is not None:
         # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
         # for the subject embeddings indexed by subj_indices.
-        subj_attn_scales = calc_subj_attn_scales(attn_weight, subj_indices, subj_attn_var_shrink_factor)
+        subj_attn_scales = calc_subj_attn_scales(attn_weight, subj_indices, subj_attn_shrink_factor)
     else:
         subj_attn_scales = 1
 
@@ -219,7 +146,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  lora_uses_dora=True, lora_proj_layers=None, 
                  lora_rank: int = 192, lora_alpha: float = 16,
-                 subj_attn_var_shrink_factor: float = 2.,
+                 subj_attn_shrink_factor: float = 2.,
                  q_lora_updates_query=False, attn_proc_idx=-1):
         super().__init__()
 
@@ -231,7 +158,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
-        self.subj_attn_var_shrink_factor = subj_attn_var_shrink_factor
+        self.subj_attn_shrink_factor = subj_attn_shrink_factor
         self.q_lora_updates_query = q_lora_updates_query
 
         self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
@@ -376,7 +303,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
                                              dropout_p=0.0, shrink_subj_attn=self.shrink_subj_attn,
                                              subj_indices=subj_indices,
-                                             subj_attn_var_shrink_factor=self.subj_attn_var_shrink_factor)
+                                             subj_attn_shrink_factor=self.subj_attn_shrink_factor)
         else:
             # Use the faster implementation of scaled_dot_product_attention 
             # when not capturing the activations or suppressing the subject attention.
@@ -510,7 +437,7 @@ def CrossAttnUpBlock2D_forward_capture(
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
 def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
-                           lora_rank=192, lora_scale_down=8, subj_attn_var_shrink_factor=2.,
+                           lora_rank=192, lora_scale_down=8, subj_attn_shrink_factor=2.,
                            q_lora_updates_query=False):
     attn_procs = {}
     attn_capture_procs = {}
@@ -560,7 +487,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             lora_uses_dora=True, lora_proj_layers=lora_proj_layers,
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
-            subj_attn_var_shrink_factor=subj_attn_var_shrink_factor,
+            subj_attn_shrink_factor=subj_attn_shrink_factor,
             q_lora_updates_query=q_lora_updates_query, attn_proc_idx=attn_proc_idx)
         
         attn_proc_idx += 1
