@@ -155,6 +155,10 @@ def get_parser(**parser_kwargs):
         required=True,
         default="models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors",
         help="Path to model to actually resume from")
+    parser.add_argument("--comp_unet_weight_path", 
+        type=str,
+        default=None,
+        help="Path to model on compositional distillation iterations (default: None, same as base_model_path)")
 
     parser.add_argument("--data_roots", 
         type=str, 
@@ -232,7 +236,7 @@ def get_parser(**parser_kwargs):
                         help="Load these ffn adapters from the checkpoint")
     parser.add_argument("--p_shrink_subj_attn", type=float, default=argparse.SUPPRESS,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
-    parser.add_argument("--sc_subj_attn_shrink_factor", type=float, default=0.2,
+    parser.add_argument("--cross_attn_shrink_factor", type=float, default=0.4,
                         help="Shrink factor of the standard deviation of the subject attention")
     parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q', 'k', 'v', 'out'],
                         choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
@@ -718,7 +722,7 @@ if __name__ == "__main__":
 
         if hasattr(opt, 'p_shrink_subj_attn'):
             config.model.params.p_shrink_subj_attn = opt.p_shrink_subj_attn
-        config.model.params.sc_subj_attn_shrink_factor  = opt.sc_subj_attn_shrink_factor
+        config.model.params.cross_attn_shrink_factor  = opt.cross_attn_shrink_factor
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
         config.model.params.q_lora_updates_query = opt.q_lora_updates_query
         if hasattr(opt, 'cls_subj_mix_scheme'):
@@ -784,6 +788,8 @@ if __name__ == "__main__":
 
         if opt.base_model_path:
             config.model.params.base_model_path = opt.base_model_path
+            config.model.params.comp_unet_weight_path = opt.comp_unet_weight_path
+
         # model will be loaded by ddpm.init_from_ckpt(). No need to load manually.
         model = instantiate_from_config(config.model)
         # model: ldm.models.diffusion.ddpm.LatentDiffusion, inherits from LightningModule.

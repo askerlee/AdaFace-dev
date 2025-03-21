@@ -294,12 +294,12 @@ class AdaFaceWrapper(nn.Module):
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
                         use_attn_lora=True, use_ffn_lora=False, 
                         attn_lora_layer_names=['q', 'k', 'v', 'out'],
-                        shrink_subj_attn=False, subj_attn_shrink_factor=0.2,
+                        shrink_subj_attn=False, cross_attn_shrink_factor=0.4,
                         q_lora_updates_query=False):
         attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(unet, use_attn_lora=True, attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=192, lora_scale_down=8, 
-                                   subj_attn_shrink_factor=subj_attn_shrink_factor,
+                                   cross_attn_shrink_factor=cross_attn_shrink_factor,
                                    q_lora_updates_query=q_lora_updates_query)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
         if use_ffn_lora:

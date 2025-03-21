@@ -11,7 +11,7 @@ from pytorch_lightning.utilities import rank_zero_only
 from ldm.c_adamw import AdamW as CAdamW
 from diffusers import UNet2DConditionModel, StableDiffusionPipeline, AutoencoderKL
 
-from ldm.util import    exists, default, instantiate_from_config, disabled_train, \
+from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_distill_loss, save_grid, \
@@ -61,6 +61,7 @@ class DDPM(pl.LightningModule):
     def __init__(self,
                  unet_config,
                  base_model_path,
+                 comp_unet_weight_path=None,
                  lightning_auto_optimization=True,
                  timesteps=1000,
                  beta_schedule="linear",
@@ -85,7 +86,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
-                 comp_sc_subj_attn_cross_t_distill_loss_weight=10,
+                 comp_sc_subj_attn_cross_t_distill_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -120,9 +121,7 @@ class DDPM(pl.LightningModule):
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
                  p_shrink_subj_attn=0.5,
-                 # Reduce the variance of the subject attention distribution by a factor of 3,
-                 # so that the subject attention is more concentrated takes up a smaller area.
-                 sc_subj_attn_shrink_factor=0.2,
+                 cross_attn_shrink_factor=0.4,
                  log_attn_level=0,
                  ablate_img_embs=False
                 ):
@@ -211,7 +210,7 @@ class DDPM(pl.LightningModule):
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query   = q_lora_updates_query
         self.p_shrink_subj_attn     = p_shrink_subj_attn
-        self.sc_subj_attn_shrink_factor = sc_subj_attn_shrink_factor
+        self.cross_attn_shrink_factor = cross_attn_shrink_factor
         self.log_attn_level         = log_attn_level
         self.ablate_img_embs        = ablate_img_embs
 
@@ -229,12 +228,19 @@ class DDPM(pl.LightningModule):
                                               lora_rank=self.unet_lora_rank, 
                                               attn_lora_scale_down=self.unet_lora_scale_down,   # 8
                                               ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
-                                              subj_attn_shrink_factor=self.sc_subj_attn_shrink_factor,
+                                              cross_attn_shrink_factor=self.cross_attn_shrink_factor,
                                               # q_lora_updates_query = True: q is updated by the LoRA layer.
                                               # False: q is not updated, and an additional q2 is updated and returned.
                                               q_lora_updates_query=self.q_lora_updates_query
                                              )
             self.vae = self.model.pipeline.vae
+            if comp_unet_weight_path is not None:
+                # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
+                self.base_unet_state_dict = { k: v.cpu() for k, v in self.model.diffusion_model.state_dict().items() }
+                self.comp_unet_state_dict = load_ckpt(comp_unet_weight_path)
+            else:
+                self.base_unet_state_dict = None
+                self.comp_unet_state_dict = None
 
         count_params(self.model, verbose=True)
 
@@ -392,13 +398,17 @@ class DDPM(pl.LightningModule):
         raise NotImplementedError("shared_step() is not implemented in DDPM.")
 
     def training_step(self, batch, batch_idx):
+        prev_do_comp_feat_distill = self.iter_flags.get('do_comp_feat_distill', False)
         self.init_iteration_flags()
-        
+
         # If we use global_step to decide the iter type, then
         # ** due to grad accumulation (global_step increases 1 after 2 iterations), 
         # ** each type of iter is actually executed twice in a row,
-        # which is not ideal for optimization (iter types are not fully diversified across iterations).
-        if self.comp_distill_iter_gap > 0 and batch_idx % self.comp_distill_iter_gap == 0:
+        # which might not be ideal for optimization (iter types are not fully diversified across iterations).
+        # But since we need to switch unet weights according to the iter type during training, 
+        # it would be more efficient to take two consecutive accumulation steps 
+        # of the same type on the same weight.
+        if self.comp_distill_iter_gap > 0 and (self.global_step % self.comp_distill_iter_gap == 0):
             self.iter_flags['do_comp_feat_distill']     = True
             self.iter_flags['do_normal_recon']          = False
             self.iter_flags['do_unet_distill']          = False
@@ -418,6 +428,14 @@ class DDPM(pl.LightningModule):
                 self.iter_flags['do_unet_distill']      = False
                 self.iter_flags['do_prompt_emb_delta_reg'] = self.do_prompt_emb_delta_reg
                 self.normal_recon_iters_count += 1
+
+        # Switch model weights when switching between normal recon / unet distill and comp feat distill.
+        if not prev_do_comp_feat_distill and self.iter_flags['do_comp_feat_distill']:
+            print("Switching to comp distill unet weights")
+            self.model.load_unet_state_dict(self.comp_unet_state_dict)
+        elif prev_do_comp_feat_distill and not self.iter_flags['do_comp_feat_distill']:
+            print("Switching to base unet weights")
+            self.model.load_unet_state_dict(self.base_unet_state_dict)
 
         loss, mon_loss_dict = self.shared_step(batch)
         self.log_dict(mon_loss_dict, prog_bar=True, logger=True, on_step=True, on_epoch=True)
@@ -1557,7 +1575,7 @@ class LatentDiffusion(DDPM):
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, 
-                       res_hidden_states_stopgrad=False,
+                       res_hidden_states_gradscale=1,
                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         
         x_noisy = self.q_sample(x_start, t, noise)
@@ -1565,7 +1583,7 @@ class LatentDiffusion(DDPM):
 
         extra_info = cond_context[2]
         extra_info['capture_ca_activations']              = capture_ca_activations
-        extra_info['res_hidden_states_stopgrad']          = res_hidden_states_stopgrad
+        extra_info['res_hidden_states_gradscale']          = res_hidden_states_gradscale
         extra_info['img_mask']                            = img_mask
         extra_info['shrink_subj_attn']                    = shrink_subj_attn
         # subj_indices are not used if shrink_subj_attn is False.
@@ -1716,7 +1734,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', 
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=True,
-                                    res_hidden_states_stopgrad=False,
+                                    res_hidden_states_gradscale=0.2,
                                     use_attn_lora=enable_unet_attn_lora,
                                     # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
                                     use_ffn_lora=enable_unet_ffn_lora, 
@@ -1842,7 +1860,7 @@ class LatentDiffusion(DDPM):
                                         subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
-                                        res_hidden_states_stopgrad=False,
+                                        res_hidden_states_gradscale=0.2,
                                         # Enable the attn lora in subject-compos batches, as long as 
                                         # attn lora is globally enabled.
                                         use_attn_lora=self.unet_uses_attn_lora,
@@ -2299,7 +2317,7 @@ class LatentDiffusion(DDPM):
                         for i in range(len(fg_face_bboxes)):
                             x1, y1, x2, y2 = fg_face_bboxes[i]
                             recon_fg_mask[i, :, y1:y2, x1:x2] = 1
-                            print(f"Rank {self.trainer.global_rank} recon face coords {i}: {fg_face_bboxes[i]}.", end=' ')
+                            print(f"Rank {self.trainer.global_rank} recon face coords {i}: {fg_face_bboxes[i].detach().cpu().numpy()}.", end=' ')
 
                         fg_mask2 = fg_mask * recon_fg_mask
                         mask_overlap_ratio = fg_mask2.sum() / fg_mask.sum()
@@ -2525,7 +2543,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    res_hidden_states_stopgrad=False,
+                                    res_hidden_states_gradscale=0.2,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3349,7 +3367,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                  use_ffn_lora=True, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 subj_attn_shrink_factor=2., q_lora_updates_query=False):
+                 cross_attn_shrink_factor=0.4, q_lora_updates_query=False):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
 
@@ -3372,12 +3390,12 @@ class DiffusersUNetWrapper(pl.LightningModule):
             set_up_attn_processors(self.diffusion_model, self.use_attn_lora, 
                                    attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down,
-                                   subj_attn_shrink_factor=subj_attn_shrink_factor,
+                                   cross_attn_shrink_factor=cross_attn_shrink_factor,
                                    q_lora_updates_query=q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
 
-        self.res_hidden_states_stopgrad_blocks = self.diffusion_model.up_blocks[1:]
-        for block in self.res_hidden_states_stopgrad_blocks:
+        self.res_hidden_states_gradscale_blocks = self.diffusion_model.up_blocks[1:]
+        for block in self.res_hidden_states_gradscale_blocks:
             block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
 
         # Replace the forward() method of the last up block with a capturing method.
@@ -3422,7 +3440,6 @@ class DiffusersUNetWrapper(pl.LightningModule):
             unet_lora_modules = {}
             # attn_opt_modules and ffn_opt_modules have different depths of keys.
             # attn_opt_modules:
-            # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_subj_attn_shrink_factor,
             # up_blocks_3_attentions_1_transformer_blocks_0_attn2_processor_to_q_lora_lora_A, ...
             # ffn_opt_modules:
             # up_blocks_3_resnets_1_conv1_lora_A, ...
@@ -3439,6 +3456,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         else:
             self.ffn_lora_layers    = []
             self.unet_lora_modules  = None
+
+    def load_unet_state_dict(self, unet_state_dict):
+        inplace_model_copy(self.diffusion_model, unet_state_dict)
 
     def forward(self, x, t, cond_context, out_dtype=torch.float32):
         prompt_emb, prompt_in, extra_info = cond_context
@@ -3461,7 +3481,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         use_attn_lora          = extra_info.get('use_attn_lora', self.use_attn_lora) if extra_info is not None else self.use_attn_lora
         use_ffn_lora           = extra_info.get('use_ffn_lora',  self.use_ffn_lora)  if extra_info is not None else self.use_ffn_lora
         ffn_lora_adapter_name  = extra_info.get('ffn_lora_adapter_name', None) if extra_info is not None else None
-        res_hidden_states_stopgrad = extra_info.get('res_hidden_states_stopgrad', False) if extra_info is not None else False
+        res_hidden_states_gradscale = extra_info.get('res_hidden_states_gradscale', 1) if extra_info is not None else 1
 
         # set_lora_and_capture_flags() accesses self.attn_capture_procs and self.outfeat_capture_blocks.
         # The activation capture flags and caches in attn_capture_procs and outfeat_capture_blocks are set differently.
@@ -3469,9 +3489,9 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # use_attn_lora, capture_ca_activations, shrink_subj_attn are only applied to layers 
         # in self.attn_capture_procs.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
-                                   self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_stopgrad_blocks,
+                                   self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_gradscale_blocks,
                                    use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                                   shrink_subj_attn, res_hidden_states_stopgrad)
+                                   shrink_subj_attn, res_hidden_states_gradscale)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3499,7 +3519,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # Restore capture_ca_activations to False, and disable all attn loras. 
         # NOTE: FFN loras has been disabled above.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
-                                   self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_stopgrad_blocks,
+                                   self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_gradscale_blocks,
                                    False, False, None, False, False, False)
 
         out = out.to(out_dtype)

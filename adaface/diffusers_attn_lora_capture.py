@@ -21,6 +21,53 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 def dummy_func(*args, **kwargs):
     pass
 
+# Revised from RevGrad, by removing the grad negation.
+class ScaleGrad(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input_, alpha_, debug=False):
+        ctx.save_for_backward(alpha_, debug)
+        output = input_
+        if debug:
+            print(f"input: {input_.abs().mean().item()}")
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output):  # pragma: no cover
+        # saved_tensors returns a tuple of tensors.
+        alpha_, debug = ctx.saved_tensors
+        if ctx.needs_input_grad[0]:
+            grad_output2 = grad_output * alpha_
+            if debug:
+                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+        else:
+            grad_output2 = None
+        return grad_output2, None, None
+
+class GradientScaler(nn.Module):
+    def __init__(self, alpha=1., debug=False, *args, **kwargs):
+        """
+        A gradient scaling layer.
+        This layer has no parameters, and simply scales the gradient in the backward pass.
+        """
+        super().__init__(*args, **kwargs)
+
+        self._alpha = torch.tensor(alpha, requires_grad=False)
+        self._debug = torch.tensor(debug, requires_grad=False)
+
+    def forward(self, input_):
+        _debug = self._debug if hasattr(self, '_debug') else False
+        return ScaleGrad.apply(input_, self._alpha.to(input_.device), _debug)
+
+def gen_gradient_scaler(alpha, debug=False):
+    if alpha == 1:
+        return nn.Identity()
+    if alpha > 0:
+        return GradientScaler(alpha, debug=debug)
+    else:
+        assert alpha == 0
+        # Don't use lambda function here, otherwise the object can't be pickled.
+        return torch.detach
+
 def split_indices_by_instance(indices, as_dict=False):
     indices_B, indices_N = indices
     unique_indices_B = torch.unique(indices_B)
@@ -57,42 +104,9 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
     emb_attns = torch.cat(emb_attns, dim=0)
     return emb_attns
 
-# Return a scale matrix, in which most elements are 1, and at the subject-embedding rows,
-# the scales decrease from 1 at the Gaussian center to something around 0.3 at the image boundary.
-# This scale matrix is intended to multiple with the attention prob matrix, so that the subject
-# embeddings won't dominate the whole image.
-def calc_subj_attn_scales(attn_score, subj_indices, subj_attn_shrink_factor):
-    # attn_score: [1, 8, 4096, 77]
-    # subj_indices: 
-    '''
-    (tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1], device='cuda:1'), tensor([ 4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-        22, 23,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-        20, 21, 22, 23], device='cuda:1'))    
-    '''
-
-    # attn_score2: [1, 8, 4096, 77] -> [1, 77, 8, 4096]
-    attn_score2 = attn_score.permute(0, 3, 1, 2)
-    # subj_attn: [1, 20, 8, 4096]. 
-    # do_sum=True: the returned subj_attn is summed over subject embeddings.
-    subj_attn = sel_emb_attns_by_indices(attn_score2, subj_indices, do_sum=False)
-    # N_SUB: Number of subject instances
-    N_SUB, N_EMB = subj_attn.size(0), subj_attn.size(1)
-    # Average over the heads. subj_attn: [1, 20, 4096]
-    subj_attn = subj_attn.mean(dim=2)
-
-    # subj_attn_scales: [1, 77, 1, 4096]
-    subj_attn_scales = torch.ones_like(attn_score2[:, :, :1])
-    # subj_attn_scales[subj_indices]: [20, 1, 4096]. shrinker_grid will be broadcasted to them.
-    subj_attn_scales[subj_indices] = subj_attn_shrink_factor
-    # subj_attn_scales: [1, 1, 4096, 77]
-    subj_attn_scales = subj_attn_scales.permute(0, 2, 3, 1)
-    # print(f"shrinker_grid mean: {shrinker_grid.mean().item():.4f}")
-    return subj_attn_scales
-
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                                 shrink_subj_attn=False, subj_indices=None, subj_attn_shrink_factor=0.2, 
+                                 shrink_subj_attn=False, subj_indices=None, cross_attn_shrink_factor=0.4, 
                                  is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     B, L, S = query.size(0), query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
@@ -117,22 +131,18 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_weight = query @ key.transpose(-2, -1) * scale_factor
 
     if shrink_subj_attn and subj_indices is not None:
-        # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
-        # for the subject embeddings indexed by subj_indices.
-        subj_attn_scales = calc_subj_attn_scales(attn_weight, subj_indices, subj_attn_shrink_factor)
+        cross_attn_scale = cross_attn_shrink_factor
     else:
-        subj_attn_scales = 1
+        cross_attn_scale = 1
 
     # attn_bias: [1, 1, 4096, 77], the same size as a single-head attn_weight.
     attn_weight += attn_bias
     attn_score = attn_weight
     attn_weight = torch.softmax(attn_weight, dim=-1)
-    # subj_attn_scales: [1, 1, 4096, 77]. At the last dim, 1 everywhere except 
-    # for the subject embeddings indexed by subj_indices.
     # NOTE: After scaling, the "probabilities" of the subject embeddings will sum to < 1.
     # But this is intended, as we want to scale down the impact of the subject embeddings 
     # in the computed attention output tensors.
-    attn_weight = attn_weight * subj_attn_scales
+    attn_weight = attn_weight * cross_attn_scale
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     output = attn_weight @ value
     return output, attn_score, attn_weight
@@ -146,7 +156,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  lora_uses_dora=True, lora_proj_layers=None, 
                  lora_rank: int = 192, lora_alpha: float = 16,
-                 subj_attn_shrink_factor: float = 2.,
+                 cross_attn_shrink_factor: float = 0.4,
                  q_lora_updates_query=False, attn_proc_idx=-1):
         super().__init__()
 
@@ -158,7 +168,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
-        self.subj_attn_shrink_factor = subj_attn_shrink_factor
+        self.cross_attn_shrink_factor = cross_attn_shrink_factor
         self.q_lora_updates_query = q_lora_updates_query
 
         self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
@@ -303,7 +313,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
                                              dropout_p=0.0, shrink_subj_attn=self.shrink_subj_attn,
                                              subj_indices=subj_indices,
-                                             subj_attn_shrink_factor=self.subj_attn_shrink_factor)
+                                             cross_attn_shrink_factor=self.cross_attn_shrink_factor)
         else:
             # Use the faster implementation of scaled_dot_product_attention 
             # when not capturing the activations or suppressing the subject attention.
@@ -369,17 +379,19 @@ def CrossAttnUpBlock2D_forward_capture(
             logger.warning("Passing `scale` to `cross_attention_kwargs` is deprecated. `scale` will be ignored.")
 
     self.cached_outfeats = {}
-    res_hidden_states_stopgrad  = getattr(self, "res_hidden_states_stopgrad", False)
-    capture_outfeats            = getattr(self, "capture_outfeats",           False)
+    res_hidden_states_gradscale = getattr(self, "res_hidden_states_gradscale", 1)
+    capture_outfeats            = getattr(self, "capture_outfeats", False)
     layer_idx = 0
+    res_grad_scaler = gen_gradient_scaler(res_hidden_states_gradscale)
 
     for resnet, attn in zip(self.resnets, self.attentions):
         # pop res hidden states
         res_hidden_states = res_hidden_states_tuple[-1]
         res_hidden_states_tuple = res_hidden_states_tuple[:-1]
 
-        if res_hidden_states_stopgrad:
-            res_hidden_states = res_hidden_states.detach()
+        # Scale down the magnitudes of gradients to res_hidden_states 
+        # by res_hidden_states_gradscale=0.2, to match the scale of the cross-attn layer outputs.
+        res_hidden_states = res_grad_scaler(res_hidden_states)
 
         hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
@@ -437,7 +449,7 @@ def CrossAttnUpBlock2D_forward_capture(
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
 def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
-                           lora_rank=192, lora_scale_down=8, subj_attn_shrink_factor=2.,
+                           lora_rank=192, lora_scale_down=8, cross_attn_shrink_factor=0.4,
                            q_lora_updates_query=False):
     attn_procs = {}
     attn_capture_procs = {}
@@ -487,7 +499,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             lora_uses_dora=True, lora_proj_layers=lora_proj_layers,
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
-            subj_attn_shrink_factor=subj_attn_shrink_factor,
+            cross_attn_shrink_factor=cross_attn_shrink_factor,
             q_lora_updates_query=q_lora_updates_query, attn_proc_idx=attn_proc_idx)
         
         attn_proc_idx += 1
@@ -575,9 +587,9 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=1
     return ffn_lora_layers, ffn_opt_modules
 
 def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, 
-                               outfeat_capture_blocks, res_hidden_states_stopgrad_blocks,
+                               outfeat_capture_blocks, res_hidden_states_gradscale_blocks,
                                use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                               shrink_subj_attn, res_hidden_states_stopgrad):
+                               shrink_subj_attn, res_hidden_states_gradscale):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for attn_capture_proc in attn_capture_procs:
         attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_subj_attn, enable_lora=use_attn_lora)
@@ -586,8 +598,8 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs,
     for block in outfeat_capture_blocks:
         block.capture_outfeats           = capture_ca_activations
 
-    for block in res_hidden_states_stopgrad_blocks:
-        block.res_hidden_states_stopgrad = res_hidden_states_stopgrad
+    for block in res_hidden_states_gradscale_blocks:
+        block.res_hidden_states_gradscale = res_hidden_states_gradscale
 
     if not use_ffn_lora:
         unet.disable_adapters()

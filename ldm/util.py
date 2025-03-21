@@ -108,18 +108,26 @@ def instantiate_from_config(config, **kwargs):
         raise KeyError("Expected key `target` to instantiate.")
     return get_obj_from_str(config["target"])(**config.get("params", dict()), **kwargs)
 
-def load_model_from_config(config, ckpt, verbose=False):
-    print(f"Loading model from {ckpt}")
-    if ckpt.endswith(".ckpt"):
-        pl_sd = torch.load(ckpt, map_location="cpu")
+def load_ckpt(ckpt_path):
+    if re.match(r".*\.(pt|ckpt|pth|bin)", ckpt_path):
+        return torch.load(ckpt_path, map_location="cpu")
+    elif ckpt_path.endswith(".safetensors"):
+        return safetensors_load_file(ckpt_path)
+    else:
+        breakpoint()
+
+def load_model_from_config(config, ckpt_path, verbose=False):
+    print(f"Loading model from {ckpt_path}")
+    if ckpt_path.endswith(".ckpt"):
+        pl_sd = torch.load(ckpt_path, map_location="cpu")
         sd = pl_sd["state_dict"]
         if "global_step" in pl_sd:
             print(f"Global Step: {pl_sd['global_step']}")
-    elif ckpt.endswith(".safetensors"):
-        sd = safetensors_load_file(ckpt, device="cpu")
+    elif ckpt_path.endswith(".safetensors"):
+        sd = safetensors_load_file(ckpt_path, device="cpu")
         pl_sd = None
     else:
-        print(f"Unknown checkpoint format: {ckpt}")
+        print(f"Unknown checkpoint format: {ckpt_path}")
         sys.exit(1)
 
     model = instantiate_from_config(config.model)
@@ -133,6 +141,19 @@ def load_model_from_config(config, ckpt, verbose=False):
 
     model.eval()
     return model
+
+@torch.no_grad()
+def inplace_model_copy(model, source_state_dict):
+    model_state = model.state_dict()
+    for name, tensor in source_state_dict.items():
+        if name not in model_state:
+            name2 = re.sub(r"\.(weight|bias)$", ".base_layer.\\1", name)
+            if name2 in model_state:
+                # print(f"Renaming {name} to {name2}")
+                name = name2
+            else:
+                breakpoint()
+        model_state[name].copy_(tensor.to(model_state[name].device))
 
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
@@ -2022,6 +2043,7 @@ def calc_subj_attn_cross_t_distill_loss(ca_layers_activations, future_ca_layers_
         sc_subj_attn     = sc_attn[subj_indices_1b]
         sc_subj_attn2    = sc_attn2[subj_indices_1b]
         loss_subj_attn_cross_t_distill_layer = F.mse_loss(sc_subj_attn, sc_subj_attn2.detach())
+        # mse loss is very small, so we scale it up by 10.
         loss_subj_attn_cross_t_distill_layer *= 10
         loss_subj_attn_cross_t_distill += loss_subj_attn_cross_t_distill_layer * LAYER_W
 
