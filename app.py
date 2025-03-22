@@ -78,7 +78,7 @@ if not args.test_ui_only:
                              unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
                              unet_uses_attn_lora=args.unet_uses_attn_lora,
                              attn_lora_layer_names=args.attn_lora_layer_names,
-                             shrink_subj_attn=False,
+                             shrink_cross_attn=False,
                              q_lora_updates_query=args.q_lora_updates_query,
                              device='cpu')
 
@@ -238,7 +238,7 @@ def check_prompt_and_model_type(prompt, model_style_type, adaface_encoder_cfg_sc
                                     unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
                                     unet_uses_attn_lora=args.unet_uses_attn_lora,
                                     attn_lora_layer_names=args.attn_lora_layer_names,
-                                    shrink_subj_attn=False,
+                                    shrink_cross_attn=False,
                                     q_lora_updates_query=args.q_lora_updates_query,
                                     device='cpu')
 
