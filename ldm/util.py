@@ -15,7 +15,7 @@ from queue import Queue
 from inspect import isfunction
 from PIL import Image, ImageDraw, ImageFont
 from torchvision.utils import make_grid, draw_bounding_boxes
-import math, sys, re
+import math, sys, re, os
 
 from safetensors.torch import load_file as safetensors_load_file
 import asyncio
@@ -109,6 +109,9 @@ def instantiate_from_config(config, **kwargs):
     return get_obj_from_str(config["target"])(**config.get("params", dict()), **kwargs)
 
 def load_ckpt(ckpt_path):
+    if os.path.isdir(ckpt_path):
+        ckpt_path = os.path.join(ckpt_path, "diffusion_pytorch_model.safetensors")
+        
     if re.match(r".*\.(pt|ckpt|pth|bin)", ckpt_path):
         return torch.load(ckpt_path, map_location="cpu")
     elif ckpt_path.endswith(".safetensors"):

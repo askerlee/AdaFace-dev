@@ -234,7 +234,7 @@ def get_parser(**parser_kwargs):
                         default=['all'],
                         choices=['recon_loss', 'unet_distill', 'comp_distill', 'all'], 
                         help="Load these ffn adapters from the checkpoint")
-    parser.add_argument("--p_shrink_subj_attn", type=float, default=argparse.SUPPRESS,
+    parser.add_argument("--p_shrink_cross_attn", type=float, default=argparse.SUPPRESS,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
     parser.add_argument("--cross_attn_shrink_factor", type=float, default=argparse.SUPPRESS,
                         help="Shrink factor of the standard deviation of the subject attention")
@@ -720,8 +720,8 @@ if __name__ == "__main__":
             # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights_in_ensemble    = opt.unet_weights_in_ensemble
 
-        if hasattr(opt, 'p_shrink_subj_attn'):
-            config.model.params.p_shrink_subj_attn = opt.p_shrink_subj_attn
+        if hasattr(opt, 'p_shrink_cross_attn'):
+            config.model.params.p_shrink_cross_attn = opt.p_shrink_cross_attn
         if hasattr(opt, 'cross_attn_shrink_factor'):
             config.model.params.cross_attn_shrink_factor  = opt.cross_attn_shrink_factor
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names

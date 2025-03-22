@@ -258,7 +258,7 @@ def parse_args():
                         help="The scheduler name for the diffusers pipeline")
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use LoRA in the Diffusers UNet model")
-    parser.add_argument("--shrink_subj_attn", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--shrink_cross_attn", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
         
     args = parser.parse_args()
@@ -341,7 +341,7 @@ def main(opt):
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
         config.model.params.use_ldm_unet = opt.use_ldm_unet
         config.model.params.unet_uses_attn_lora = opt.unet_uses_attn_lora
-        config.model.params.shrink_subj_attn = opt.shrink_subj_attn
+        config.model.params.shrink_cross_attn = opt.shrink_cross_attn
         
         ldm_model = load_model_from_config(config, f"{opt.ckpt}")
         if opt.adaface_ckpt_paths is not None:
@@ -412,7 +412,7 @@ def main(opt):
                                       main_unet_filepath=opt.main_unet_filepath, extra_unet_dirpaths=opt.extra_unet_dirpaths, 
                                       unet_weights_in_ensemble=opt.unet_weights_in_ensemble, enable_static_img_suffix_embs=opt.enable_static_img_suffix_embs,
                                       unet_uses_attn_lora=opt.unet_uses_attn_lora,
-                                      shrink_subj_attn=opt.shrink_subj_attn,
+                                      shrink_cross_attn=opt.shrink_cross_attn,
                                       device=device)
             # adaface_subj_embs is not used. It is generated for the purpose of updating the text encoder (within this function call).
             adaface_subj_embs = \

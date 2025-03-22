@@ -32,5 +32,4 @@ deepface>=0.0.94
 ftfy
 peft
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
--e git+https://huggingface.co/spaces/adaface-neurips/ConsistentID@main#egg=ConsistentID
 -e .
