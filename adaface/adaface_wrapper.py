@@ -294,7 +294,7 @@ class AdaFaceWrapper(nn.Module):
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
                         use_attn_lora=True, use_ffn_lora=False, 
                         attn_lora_layer_names=['q', 'k', 'v', 'out'],
-                        shrink_cross_attn=False, cross_attn_shrink_factor=0.4,
+                        shrink_cross_attn=False, cross_attn_shrink_factor=0.5,
                         q_lora_updates_query=False):
         attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(unet, use_attn_lora=True, attn_lora_layer_names=attn_lora_layer_names,

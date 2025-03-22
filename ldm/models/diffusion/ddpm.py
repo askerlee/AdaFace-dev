@@ -121,12 +121,12 @@ class DDPM(pl.LightningModule):
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
                  p_shrink_cross_attn=0.5,
-                 cross_attn_shrink_factor=0.4,
+                 cross_attn_shrink_factor=0.5,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
-                 # 0.2: 50% of cross_attn_shrink_factor=0.4, so that the gradient will impact
+                 # 0.25: 50% of cross_attn_shrink_factor=0.5, so that the gradient will impact
                  # 50% less on the residual hidden states than the cross-attn 
                  # hidden states (subject embeddings).
-                 res_hidden_states_gradscale=0.2,
+                 res_hidden_states_gradscale=0.25,
                  log_attn_level=0,
                  ablate_img_embs=False
                 ):
@@ -3389,7 +3389,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                  use_attn_lora=False, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
                  use_ffn_lora=True, lora_rank=192, 
                  attn_lora_scale_down=8, ffn_lora_scale_down=8,
-                 cross_attn_shrink_factor=0.4, q_lora_updates_query=False):
+                 cross_attn_shrink_factor=0.5, q_lora_updates_query=False):
         super().__init__()
         self.pipeline = StableDiffusionPipeline.from_single_file(base_model_path, torch_dtype=torch_dtype)
 

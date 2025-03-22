@@ -106,7 +106,7 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
 
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                                 shrink_cross_attn=False, cross_attn_shrink_factor=0.4, 
+                                 shrink_cross_attn=False, cross_attn_shrink_factor=0.5, 
                                  is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     B, L, S = query.size(0), query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
@@ -156,7 +156,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  lora_uses_dora=True, lora_proj_layers=None, 
                  lora_rank: int = 192, lora_alpha: float = 16,
-                 cross_attn_shrink_factor: float = 0.4,
+                 cross_attn_shrink_factor: float = 0.5,
                  q_lora_updates_query=False, attn_proc_idx=-1):
         super().__init__()
 
@@ -452,7 +452,7 @@ def CrossAttnUpBlock2D_forward_capture(
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
 def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
-                           lora_rank=192, lora_scale_down=8, cross_attn_shrink_factor=0.4,
+                           lora_rank=192, lora_scale_down=8, cross_attn_shrink_factor=0.5,
                            q_lora_updates_query=False):
     attn_procs = {}
     attn_capture_procs = {}
