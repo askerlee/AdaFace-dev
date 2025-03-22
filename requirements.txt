@@ -1,6 +1,6 @@
 setuptools>=68.0.0
-torch>=2.4
-torchvision>=0.19.0
+torch
+torchvision
 pytorch-lightning==1.9.5
 albumentations>=1.4
 opencv-python>=4.10
@@ -12,8 +12,6 @@ pillow>=9.0.1
 einops>=0.4.1
 transformers>=4.44.2
 exrex
-tensorflow[and-cuda]>=2.17.0
-tf_keras
 nvidia-pyindex
 # For unknown reasons, installing nvidia-tensorrt hangs.
 tensorrt-lean
@@ -28,7 +26,6 @@ prodigyopt
 numpy>=1.24.0,<2.0
 onnxruntime-gpu
 insightface
-deepface>=0.0.94
 ftfy
 peft
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
