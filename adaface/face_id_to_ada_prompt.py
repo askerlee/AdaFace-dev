@@ -109,7 +109,7 @@ class FaceID2AdaPrompt(nn.Module):
         if isinstance(adaface_ckpt_path, (list, tuple, ListConfig)):
             adaface_ckpt_path = adaface_ckpt_path[0]
 
-        ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
+        ckpt = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
             print(f"Subject '{self.subject_string}' not found in the embedding manager.")
@@ -969,7 +969,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # This is only applicable to newest ckpts of Joint_FaceID2AdaPrompt, where 
         # the ckpt_subj_basis_generator is an nn.ModuleList of multiple subj_basis_generators. 
         # Therefore, no need to patch missing variables. 
-        ckpt = torch.load(adaface_ckpt_paths, map_location='cpu')
+        ckpt = torch.load(adaface_ckpt_paths, map_location='cpu', weights_only=False)
         string_to_subj_basis_generator_dict = ckpt["string_to_subj_basis_generator_dict"]
         if self.subject_string not in string_to_subj_basis_generator_dict:
             print(f"Subject '{self.subject_string}' not found in the embedding manager.")
