@@ -64,7 +64,8 @@ static_composition_regexs = static_action_regexs + static_appearances
 
 # Removed "eye level shot", "close-up view", "zoomed-in view"; sometimes it generates a huge eye.
 # Removed "zoomed-out view", "long shot", "wide shot"; they generate very small subjects.
-all_shots = [ "side view", "full body view", "mid shot", "eye-level shot", "front view", ]
+# Remove "side view"; it's not helping distillation much.
+all_shots = [ "full body view", "mid shot", "front view", ]
 
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
