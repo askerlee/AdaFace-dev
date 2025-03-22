@@ -1003,14 +1003,14 @@ class LatentDiffusion(DDPM):
         else:
             if self.iter_flags['do_comp_feat_distill']:
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
-                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt'
+                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
                 SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt'
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt'
                 # Sometimes the cls comp instances don't have clear faces.
                 # So use the fp trick on cls comp prompts at 50% of the time.
-                if self.global_step % 2 == 0:
+                if self.comp_iters_count % 2 == 0:
                     CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
                 else:
                     CLS_COMP_PROMPT    = 'cls_comp_mod_prompt'
@@ -1579,6 +1579,8 @@ class LatentDiffusion(DDPM):
     # if do_pixel_recon and cfg_scale > 1, apply classifier-free guidance. 
     # This is not used for the iter_type 'do_normal_recon'.
     # batch_part_has_grad: 'all', 'none', 'subject-compos'.
+    # shrink_cross_attn: only enabled on compositional distillation iterations, 
+    # not on normal recon / unet distillation iterations.
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, 
                        shrink_cross_attn=False, subj_indices=None, 
@@ -1623,7 +1625,7 @@ class LatentDiffusion(DDPM):
             # in the unet.
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['subj_indices']       = subj_indices
-            extra_info_ss['shrink_cross_attn']  = False
+            extra_info_ss['shrink_cross_attn']  = shrink_cross_attn
             #extra_info_ss['debug']  = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
