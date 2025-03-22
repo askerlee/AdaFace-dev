@@ -2359,11 +2359,14 @@ class LatentDiffusion(DDPM):
 
                 if loss_arcface_align_recon > 0:
                     losses_arcface_align_recon.append(loss_arcface_align_recon)
+                    # normal_recon_face_images_count and recon_face_image_ratio
+                    # will also incorporate the ratio of the 
+                    # face images among the recon_on_pure_noise recon images.
+                    self.normal_recon_face_images_count += face_detected_inst_mask.sum().item()
+
                     # If recon_on_pure_noise, then skip all other losses.
                     if recon_on_pure_noise:
                         continue
-
-                    self.normal_recon_face_images_count += face_detected_inst_mask.sum().item()
 
                     # If no face is detected in x_start, then loss_arcface_align_recon = 0 and 
                     # fg_face_bboxes = None. In such cases, it's meaningless to compute recon losses.
