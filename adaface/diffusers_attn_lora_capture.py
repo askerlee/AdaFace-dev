@@ -190,7 +190,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     # LoRA layers can be enabled/disabled dynamically.
     def reset_attn_cache_and_flags(self, capture_ca_activations, shrink_cross_attn, enable_lora):
         self.capture_ca_activations = capture_ca_activations
-        self.shrink_cross_attn     = shrink_cross_attn
+        self.shrink_cross_attn      = shrink_cross_attn
         self.cached_activations     = {}
         # Only enable LoRA for the next call(s) if global_enable_lora is set to True.
         self.enable_lora = enable_lora and self.global_enable_lora
@@ -204,6 +204,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         temb: Optional[torch.Tensor] = None,
         img_mask: Optional[torch.Tensor] = None,
         subj_indices: Optional[Tuple[torch.IntTensor, torch.IntTensor]] = None,
+        debug: bool = False,
         *args,
         **kwargs,
     ) -> torch.Tensor:
@@ -306,6 +307,9 @@ class AttnProcessor_LoRA_Capture(nn.Module):
 
         key   = key.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
         value = value.view(batch_size, -1, attn.heads, head_dim).transpose(1, 2)
+
+        if debug and self.attn_proc_idx >= 0:
+            breakpoint()
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
         if is_cross_attn and (self.capture_ca_activations or self.shrink_cross_attn):

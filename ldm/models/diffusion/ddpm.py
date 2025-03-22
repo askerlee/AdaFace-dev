@@ -1624,6 +1624,7 @@ class LatentDiffusion(DDPM):
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['subj_indices']       = subj_indices
             extra_info_ss['shrink_cross_attn']  = False
+            #extra_info_ss['debug']  = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
             noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
                                                     enable_grad=False, use_attn_lora=use_attn_lora,
@@ -1632,6 +1633,7 @@ class LatentDiffusion(DDPM):
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_cross_attn']  = shrink_cross_attn
+            #extra_info_sc['debug']  = True
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
@@ -2055,7 +2057,7 @@ class LatentDiffusion(DDPM):
             num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
             # Enable shrink_cross_attn 50% of the time during comp distillation iterations.
             # Same shrink_cross_attn for all denoising steps in a comp_distill_multistep_denoise call.
-            shrink_cross_attn = torch.rand(1) < self.p_shrink_cross_attn
+            shrink_cross_attn = (torch.rand(1) < self.p_shrink_cross_attn).item()
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -3492,6 +3494,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # layers 22, 23, 24, and only takes effect when subj_indices is not None.
         # Other layers will always have shrink_cross_attn = False.
         shrink_cross_attn = extra_info.get('shrink_cross_attn', False) if extra_info is not None else False
+        debug = extra_info.get('debug', False) if extra_info is not None else False
         #print(subj_indices)
 
         capture_ca_activations = extra_info.get('capture_ca_activations', False) if extra_info is not None else False
@@ -3520,7 +3523,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         with torch.amp.autocast("cuda", enabled=(self.dtype == torch.float16)):
             out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=prompt_emb, 
                                        cross_attention_kwargs={'img_mask': img_mask, 
-                                                               'subj_indices': subj_indices},
+                                                               'subj_indices': subj_indices,
+                                                               'debug': debug},
                                        return_dict=False)[0]
 
         # 3 output feature tensors of the three (resnet, attn) pairs in the last up block.
