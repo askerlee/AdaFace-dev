@@ -33,7 +33,7 @@ parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     choices=["arc2face", "consistentID"], 
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
 parser.add_argument('--model_style_type', type=str, default='photorealistic',
-                    choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
+                    choices=["realistic", "anime", "photorealistic", "ssr"], help="Type of the base model")
 parser.add_argument("--guidance_scale", type=float, default=5.0,
                     help="The guidance scale for the diffusion model. Default: 5.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
@@ -57,7 +57,8 @@ args = parser.parse_args()
 model_style_type2base_model_path = {
     "realistic": "models/rv51/realisticVisionV51_v51VAE_dste8.safetensors",
     "anime": "models/aingdiffusion/aingdiffusion_v170_ar.safetensors",
-    "photorealistic": "models/sar/sar.safetensors" # LDM format. Needs to be converted.
+    "photorealistic": "models/sar/sar.safetensors", # LDM format. Needs to be converted.
+    "ssr": "models/ssr/ssr.safetensors"
 }
 base_model_path = model_style_type2base_model_path[args.model_style_type]
 
@@ -339,7 +340,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, highlighted hair, futuristic silver armor suit, confident stance, living room, smiling, head tilted, perfect smooth skin",
                                     "portrait, walking on the beach, sunset, orange sky, front view",
                                     "portrait, in a white apron and chef hat, garnishing a gourmet dish",
-                                    "portrait, dancing pose among folks in a park, waving hands",
+                                    "portrait, waving hands, dancing pose among folks in a park",
                                     "portrait, in iron man costume, the sky ablaze with hues of orange and purple",
                                     "portrait, jedi wielding a lightsaber, star wars",
                                     "portrait, night view of tokyo street, neon light",
@@ -353,7 +354,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "on a horse"
                             ])
             
-            highlight_face = gr.Checkbox(label="Highlight face", value=False, 
+            highlight_face = gr.Checkbox(label="Highlight face", value=True, 
                                          info="Enhance the facial features by prepending 'face portrait' to the prompt")
             enhance_composition = \
                 gr.Slider(label="Enhance composition", visible=True,
