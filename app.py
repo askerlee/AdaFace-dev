@@ -105,7 +105,7 @@ def remove_back_to_files():
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, gender, highlight_face, 
                    ablate_prompt_embed_type, nonmix_prompt_emb_weight,
-                   enhance_composition, seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
+                   composition_level, seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
     global adaface
 
@@ -142,7 +142,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
             prompt = "face portrait, " + prompt
         else:
             prompt = prompt.replace("portrait", "face portrait")
-    if enhance_composition >= 2:
+    if composition_level >= 2:
         if "full body" not in prompt:
             prompt = prompt + ", full body view"
 
@@ -156,7 +156,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     samples = adaface(noise, prompt, negative_prompt=negative_prompt, 
                       guidance_scale=guidance_scale, 
                       out_image_count=num_images, generator=generator, 
-                      repeat_prompt_for_each_encoder=(enhance_composition >= 1),
+                      repeat_prompt_for_each_encoder=(composition_level >= 1),
                       ablate_prompt_no_placeholders=disable_adaface,
                       ablate_prompt_embed_type=ablate_prompt_embed_type,
                       nonmix_prompt_emb_weight=nonmix_prompt_emb_weight,
@@ -354,11 +354,11 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "on a horse"
                             ])
             
-            highlight_face = gr.Checkbox(label="Highlight face", value=True, 
+            highlight_face = gr.Checkbox(label="Highlight face", value=False, 
                                          info="Enhance the facial features by prepending 'face portrait' to the prompt")
-            enhance_composition = \
-                gr.Slider(label="Enhance composition", visible=True,
-                          info="Enhance the overall composition by two different tricks. 'In a wheelchair' or 'on a horse' etc. needs level 2",
+            composition_level = \
+                gr.Slider(label="Composition Level", visible=True,
+                          info="The degree of overall composition, 0~2. Challenging prompts like 'In a wheelchair' and 'on a horse' need level 2",
                           minimum=0, maximum=2, step=1, value=0)
 
             ablate_prompt_embed_type = gr.Dropdown(label="Ablate prompt embeddings type",
@@ -472,7 +472,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
                        negative_prompt, gender, highlight_face, ablate_prompt_embed_type, 
-                       nonmix_prompt_emb_weight, enhance_composition, seed, disable_adaface, subj_name_sig],
+                       nonmix_prompt_emb_weight, composition_level, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
