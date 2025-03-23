@@ -121,7 +121,7 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
-                 p_shrink_cross_attn=0.5,
+                 p_shrink_cross_attn_in_comp_iters=1,
                  cross_attn_shrink_factor=0.5,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  # 0.25: 50% of cross_attn_shrink_factor=0.5, so that the gradient will impact
@@ -214,7 +214,7 @@ class DDPM(pl.LightningModule):
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query   = q_lora_updates_query
-        self.p_shrink_cross_attn     = p_shrink_cross_attn
+        self.p_shrink_cross_attn_in_comp_iters  = p_shrink_cross_attn_in_comp_iters
         self.cross_attn_shrink_factor = cross_attn_shrink_factor
         self.res_hidden_states_gradscale = res_hidden_states_gradscale
 
@@ -2078,7 +2078,7 @@ class LatentDiffusion(DDPM):
             num_comp_denoising_steps = self.comp_iters_count % W + self.comp_distill_denoising_steps_range[0]
             # Enable shrink_cross_attn 50% of the time during comp distillation iterations.
             # Same shrink_cross_attn for all denoising steps in a comp_distill_multistep_denoise call.
-            shrink_cross_attn = (torch.rand(1) < self.p_shrink_cross_attn).item()
+            shrink_cross_attn_in_comp_iters = (torch.rand(1) < self.p_shrink_cross_attn_in_comp_iters).item()
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -2097,7 +2097,7 @@ class LatentDiffusion(DDPM):
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
                                                     uncond_emb=uncond_emb, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
-                                                    shrink_cross_attn=shrink_cross_attn,
+                                                    shrink_cross_attn=shrink_cross_attn_in_comp_iters,
                                                     cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
                                                     max_num_steps_with_grad=self.max_num_comp_distill_steps_with_grad)
 
