@@ -2323,7 +2323,7 @@ class LatentDiffusion(DDPM):
                                          do_adv_attack, DO_ADV_BS)
         
         losses_recon = []
-        losses_recon_scales = []
+        recon_loss_scales = []
         losses_recon_subj_mb_suppress = []
         losses_arcface_align_recon    = []
         losses_pred_l2 = []
@@ -2359,10 +2359,17 @@ class LatentDiffusion(DDPM):
                 self.normal_recon_images_count += BLOCK_SIZE
 
                 if loss_arcface_align_recon > 0:
+                    recon_loss_scale = 1.
                     losses_arcface_align_recon.append(loss_arcface_align_recon)
                     # If recon_on_pure_noise, then skip all other losses.
                     if recon_on_pure_noise:
                         continue
+
+                    face_detected_inst_weights = face_detected_inst_mask.clone()
+                    # In this branch, at least one face is detected in x_recon.
+                    # Set the weights of the instances without faces detected to 0.25, 
+                    # to downscale corresponding gradients which are more noisy than those with faces detected.
+                    face_detected_inst_weights[face_detected_inst_mask==0] = 0.25
 
                     # If no face is detected in x_start, then loss_arcface_align_recon = 0 and 
                     # fg_face_bboxes = None. In such cases, it's meaningless to compute recon losses.
@@ -2382,15 +2389,15 @@ class LatentDiffusion(DDPM):
                         fg_mask2 = fg_mask * recon_fg_mask
                         mask_overlap_ratio = fg_mask2.sum() / fg_mask.sum()
                         print(f"Recon face detected/segmented mask overlap: {mask_overlap_ratio:.2f}")
-                        loss_recon_scale = 1.
-                    else:
-                        # Scale down the recon loss by 0.25, since no face is detected in all instances,
-                        # and the gradients may be unstable.
-                        loss_recon_scale = 0.25
                 else:
-                    # Scale down the recon loss by 0.25, since no face is detected in all instances,
-                    # and the gradients may be unstable.
-                    loss_recon_scale = 0.25
+                    # face_detected_inst_weights set to all ones, i.e., we recon all instances equally.
+                    # After that, scale down the recon loss by 0.25, for the same purpose 
+                    # as part of face_detected_inst_weights being set to 0.25 above.
+                    # NOTE: if no faces are detected in x_recon and we set face_detected_inst_weights to 
+                    # all 0.25, then it's equivalent to setting face_detected_inst_weights to all ones,
+                    # since we normalize the pixel-wise recon losses by the number of weighted face pixels.
+                    recon_loss_scale = 0.25
+                    face_detected_inst_weights = torch.ones_like(face_detected_inst_mask)
 
                 # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
                 # bg loss is given a tiny weight to suppress multi-face artifacts.
@@ -2400,13 +2407,13 @@ class LatentDiffusion(DDPM):
                 # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
                 # If img_mask = None, then blank pixels are regularized as bg pixels.
                 loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
-                    calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_mask, 
+                    calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_weights, 
                                                    ca_layers_activations,
                                                    all_subj_indices, None, fg_mask2,
                                                    recon_bg_pixel_weight, x_start.shape[0])
                 
                 losses_recon.append(loss_recon)
-                losses_recon_scales.append(loss_recon_scale)
+                recon_loss_scales.append(recon_loss_scale)
                 losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
                 losses_pred_l2.append(loss_pred_l2)
 
@@ -2442,8 +2449,8 @@ class LatentDiffusion(DDPM):
                 loss_pred_l2 = torch.stack(losses_pred_l2).mean()
 
                 losses_recon = torch.stack(losses_recon)
-                losses_recon_scales = torch.tensor(losses_recon_scales, device=device)
-                loss_recon   = (losses_recon * losses_recon_scales).mean()
+                recon_loss_scales = torch.tensor(recon_loss_scales, device=device)
+                loss_recon   = (losses_recon * recon_loss_scales).mean()
                 v_loss_recon = loss_recon.detach().item()
 
                 # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
@@ -2657,7 +2664,7 @@ class LatentDiffusion(DDPM):
             # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
             loss_unet_distill, _ = \
                 calc_recon_loss(F.mse_loss, noise_pred, noise_gt.to(noise_pred.dtype), 
-                                img_mask, fg_mask, instance_mask=None, 
+                                img_mask, fg_mask, instance_weights=None, 
                                 fg_pixel_weight=1, bg_pixel_weight=recon_bg_pixel_weight)
 
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
