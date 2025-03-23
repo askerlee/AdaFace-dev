@@ -2387,6 +2387,10 @@ class LatentDiffusion(DDPM):
                         # Scale down the recon loss by 0.25, since no face is detected in all instances,
                         # and the gradients may be unstable.
                         loss_recon_scale = 0.25
+                else:
+                    # Scale down the recon loss by 0.25, since no face is detected in all instances,
+                    # and the gradients may be unstable.
+                    loss_recon_scale = 0.25
 
                 # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
                 # bg loss is given a tiny weight to suppress multi-face artifacts.
