@@ -116,7 +116,7 @@ class DDPM(pl.LightningModule):
                  pred_l2_loss_weight=5e-2,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
-                 recon_uses_ffn_lora=True,
+                 recon_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -1979,7 +1979,8 @@ class LatentDiffusion(DDPM):
             W = self.recon_num_denoising_steps_range[1] - self.recon_num_denoising_steps_range[0] + 1
             num_recon_denoising_steps = self.normal_recon_iters_count % W + self.recon_num_denoising_steps_range[0]
 
-            # Enable attn LoRAs on UNet 50% of the time during recon iterations.
+            # Enable attn LoRAs on UNet 50% of the time during recon iterations, to prevent
+            # attn LoRAs don't degerate in comp distillation iterations.
             enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
             # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 
             # 3 non-comp recon iterations.
