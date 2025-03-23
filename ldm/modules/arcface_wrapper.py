@@ -53,6 +53,7 @@ class ArcFaceWrapper(nn.Module):
         # the input tensor is preserved.
         # But the cropping operation is wrapped with torch.no_grad().
         # fg_face_bboxes: long tensor of [BS, 4].
+        # face_detected_inst_mask: binary tensor of [BS].
         fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_detected_inst_mask = \
             self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, bleed=bleed)
         

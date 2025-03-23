@@ -18,7 +18,8 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
-                        count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent
+                        count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
+                        RollingStats
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -36,7 +37,6 @@ from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 from ldm.modules.arcface_wrapper import ArcFaceWrapper
-from evaluation.clip_eval import CLIPEvaluator
 
 import sys
 import asyncio
@@ -191,11 +191,11 @@ class DDPM(pl.LightningModule):
 
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
+        self.unet_distill_iters_count                = 0
         self.normal_recon_iters_count                = 0
         self.normal_recon_images_count               = 0
-        self.normal_recon_face_images_count          = 0
-        self.unet_distill_iters_count                = 0
-        self.comp_iters_face_detected_count          = 0
+        self.normal_recon_face_images_stats          = RollingStats(num_values=2, window_size=600, stat_type='sum')
+        self.comp_iters_face_detected_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
@@ -2200,6 +2200,7 @@ class LatentDiffusion(DDPM):
         subj_recon_pixels = self.decode_first_stage_with_grad(x_recon)
 
         # recon_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
+        # recon_fg_face_detected_inst_mask: binary tensor of [BS]
         loss_arcface_align, loss_bg_faces_suppress, recon_fg_face_bboxes, recon_fg_face_detected_inst_mask = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, bleed=bleed,
                                                  suppress_bg_faces=True)
@@ -2347,8 +2348,9 @@ class LatentDiffusion(DDPM):
                 # since bg faces in recon iters are rare.
                 # If there is no face detected in any of the instances, then loss_arcface_align_recon is 0,
                 # and recon loss is skipped. 
-                # TODO: Ideally, we should still compute the recon loss on the "good" instances 
-                # with face detected. But it's a bit tricky to implement.
+                # We still compute the recon loss on the good instances with face detected, 
+                # which are indicated by face_detected_inst_mask.
+                # face_detected_inst_mask: binary tensor of [BS].
                 loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start, x_recon)
                 
@@ -2356,11 +2358,6 @@ class LatentDiffusion(DDPM):
 
                 if loss_arcface_align_recon > 0:
                     losses_arcface_align_recon.append(loss_arcface_align_recon)
-                    # normal_recon_face_images_count and recon_face_image_ratio
-                    # will also incorporate the ratio of the 
-                    # face images among the recon_on_pure_noise recon images.
-                    self.normal_recon_face_images_count += face_detected_inst_mask.sum().item()
-
                     # If recon_on_pure_noise, then skip all other losses.
                     if recon_on_pure_noise:
                         continue
@@ -2404,12 +2401,19 @@ class LatentDiffusion(DDPM):
                     losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
                     losses_pred_l2.append(loss_pred_l2)
 
+                # normal_recon_face_images_stats contain face_images_count and all_images_count.
+                # These two counts will also incorporate the
+                # face images among the recon_on_pure_noise recon images.
+                self.normal_recon_face_images_stats.update([face_detected_inst_mask.sum().item(),
+                                                            face_detected_inst_mask.shape[0]])
+
+        # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
+        recon_face_image_ratio = self.normal_recon_face_images_stats.sums[0] / (self.normal_recon_face_images_stats.sums[1] + 1e-2)
+        mon_loss_dict.update({f'{session_prefix}/recon_face_image_ratio': recon_face_image_ratio})
+
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
             if loss_arcface_align_recon > 0:
-                recon_face_image_ratio = self.normal_recon_face_images_count / (self.normal_recon_images_count + 1e-6)
-                mon_loss_dict.update({f'{session_prefix}/recon_face_image_ratio': recon_face_image_ratio})
-
                 if recon_on_pure_noise:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_noise': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_noise: {loss_arcface_align_recon.mean().item():.4f}")
@@ -2889,10 +2893,12 @@ class LatentDiffusion(DDPM):
                 
                 if loss_arcface_align_comp > 0:
                     # This iteration is counted as face detected, as long as the face is detected in one step.
-                    self.comp_iters_face_detected_count += 1
-                # Even if the face is not detected in this step, we still update comp_iters_face_detected_frac,
-                # because it's an accumulated value that's inherently continuous.
-                comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
+                    comp_iters_face_detected_frac = self.comp_iters_face_detected_frac.update(1)
+                else:
+                    # Even if the face is not detected in this step, we still update comp_iters_face_detected_frac,
+                    # because it's an accumulated value that's inherently continuous.
+                    comp_iters_face_detected_frac = self.comp_iters_face_detected_frac.update(0)
+
                 mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
                 # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 5e-3 => 0.0025-0.004.
@@ -3135,6 +3141,7 @@ class LatentDiffusion(DDPM):
                 if arcface_align_loss_count < max_arcface_align_loss_count:
                     # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
                     # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
+                    # sc_fg_face_detected_inst_mask: binary tensor of [BS].
                     loss_arcface_align_comp_step, loss_comp_bg_faces_suppress_step, \
                     sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=2)

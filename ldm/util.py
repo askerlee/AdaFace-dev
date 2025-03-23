@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
-from collections import abc
+from collections import abc, deque
 from functools import partial
 
 import multiprocessing as mp
@@ -290,6 +290,45 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
     print(f"Norms: min: {norms.min():.4f}, max: {norms.max():.4f}, mean: {norms.mean():.4f}, std: {norms.std():.4f}")
 
+class RollingStats:
+    def __init__(self, num_values=1, window_size=200, stat_type='mean'):
+        self.window_size = window_size
+        self.buffers = [ deque(maxlen=window_size) for _ in range(num_values) ]
+        self.sums  = [ 0 for _ in range(num_values) ]
+        self.means = [ 0 for _ in range(num_values) ]
+        self.num_values = num_values
+        self.stat_type = stat_type
+
+    def update(self, values):
+        if self.num_values == 1:
+            values = [ values ]
+
+        if len(self.buffers[0]) == self.window_size:
+            for i, buffer in enumerate(self.buffers):
+                self.sums[i] -= buffer[0]
+        for i, value in enumerate(values):
+            self.buffers[i].append(value)
+            self.sums[i] += value
+            self.means[i] = self.sums[i] / len(self.buffers[i])
+
+        if self.num_values == 1:
+            self.sum  = self.sums[0]
+            self.mean = self.means[0]
+            if self.stat_type == 'mean':
+                return self.mean
+            elif self.stat_type == 'sum':
+                return self.sum
+            else:
+                breakpoint()
+        else:
+            # self.sum and self.mean are undefined for multiple values.
+            if self.stat_type == 'mean':
+                return self.means
+            elif self.stat_type == 'sum':
+                return self.sums
+            else:
+                breakpoint()
+                    
 def split_string(input_string):
     pattern = r'"[^"]*"|\S+'
     substrings = re.findall(pattern, input_string)
