@@ -1695,9 +1695,7 @@ def calc_recon_and_suppress_losses(noise_pred, noise_gt, face_detected_inst_weig
         calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
                                           all_subj_indices, BLOCK_SIZE, fg_mask)
 
-    # Calc the L2 norm of noise_pred.
-    loss_pred_l2 = (noise_pred ** 2).mean()
-    return loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2
+    return loss_recon, loss_recon_subj_mb_suppress
 
 # calc_attn_norm_loss() is used by LatentDiffusion::calc_comp_feat_distill_loss().
 def calc_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):

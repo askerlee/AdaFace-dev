@@ -113,7 +113,7 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
                  pred_l2_threshold=0.95,
-                 pred_l2_loss_weight=5e-2,
+                 pred_l2_loss_weight=0.05,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=False,
@@ -2327,7 +2327,8 @@ class LatentDiffusion(DDPM):
         recon_loss_scales = []
         losses_recon_subj_mb_suppress = []
         losses_arcface_align_recon    = []
-        losses_pred_l2 = []
+        pred_l2s        = []
+        losses_pred_l2s = []
         latent_shape, device = x_start.shape, x_start.device
 
         for i in range(num_recon_priming_steps, num_denoising_steps):
@@ -2341,6 +2342,23 @@ class LatentDiffusion(DDPM):
                                 + i + 1 - num_recon_priming_steps
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
             fg_mask2 = fg_mask
+
+            # Calc the L2 norm of noise_pred.
+            pred_l2_step = (noise_pred ** 2).mean()
+            # When pred_l2_step is larger than pred_l2_threshold, loss_pred_l2_step is 0.
+            # When pred_l2_step is smaller than pred_l2_threshold, loss_pred_l2_step is positive.
+            loss_pred_l2_step = F.relu(self.pred_l2_threshold - pred_l2_step)   
+            pred_l2s.append(pred_l2_step)
+            losses_pred_l2s.append(loss_pred_l2_step)
+
+            # Count recon_on_pure_noise stats and non-pure-noise stats separately.
+            # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
+            if recon_on_pure_noise:
+                self.normal_recon_face_images_on_noise_stats.update([face_detected_inst_mask.sum().item(),
+                                                                     face_detected_inst_mask.shape[0]])
+            else:
+                self.normal_recon_face_images_on_image_stats.update([face_detected_inst_mask.sum().item(),
+                                                                     face_detected_inst_mask.shape[0]])
 
             # Only compute loss_recon and loss_recon_subj_mb_suppress when faces are detected in x_recon.
             # loss_arcface_align_recon > 0 implies there's a face detected in each instances in x_recon.
@@ -2407,7 +2425,7 @@ class LatentDiffusion(DDPM):
                 # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
                 # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
                 # If img_mask = None, then blank pixels are regularized as bg pixels.
-                loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
+                loss_recon, loss_recon_subj_mb_suppress = \
                     calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_weights, 
                                                    ca_layers_activations,
                                                    all_subj_indices, None, fg_mask2,
@@ -2416,16 +2434,6 @@ class LatentDiffusion(DDPM):
                 losses_recon.append(loss_recon)
                 recon_loss_scales.append(recon_loss_scale)
                 losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
-                losses_pred_l2.append(loss_pred_l2)
-
-                # Count recon_on_pure_noise stats and non-pure-noise stats separately.
-                # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
-                if recon_on_pure_noise:
-                    self.normal_recon_face_images_on_noise_stats.update([face_detected_inst_mask.sum().item(),
-                                                                         face_detected_inst_mask.shape[0]])
-                else:
-                    self.normal_recon_face_images_on_image_stats.update([face_detected_inst_mask.sum().item(),
-                                                                         face_detected_inst_mask.shape[0]])
 
         if recon_on_pure_noise:
             recon_face_image_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
@@ -2452,40 +2460,39 @@ class LatentDiffusion(DDPM):
                 # This loss is around 1/25 of recon/distill losses (0.05).
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
 
-            if not recon_on_pure_noise:
-                loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
-                loss_pred_l2 = torch.stack(losses_pred_l2).mean()
+        pred_l2 = torch.stack(pred_l2s).mean()
+        loss_pred_l2 = torch.stack(losses_pred_l2s).mean()
+        # pred_l2: 0.92~0.99.
+        mon_loss_dict.update({f'{session_prefix}/pred_l2': pred_l2.mean().detach().item()})
+        if self.pred_l2_loss_weight > 0:
+            # pred_l2_loss_weight: 0.05
+            loss_normal_recon += loss_pred_l2 * self.pred_l2_loss_weight
 
-                losses_recon = torch.stack(losses_recon)
-                recon_loss_scales = torch.tensor(recon_loss_scales, device=device)
-                loss_recon   = (losses_recon * recon_loss_scales).mean()
-                v_loss_recon = loss_recon.detach().item()
+        if not recon_on_pure_noise:
+            loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
 
-                # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
-                if loss_recon_subj_mb_suppress > 0:
-                    mon_loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
-                if recon_on_comp_prompt:
-                    mon_loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
-                else:
-                    mon_loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+            losses_recon = torch.stack(losses_recon)
+            recon_loss_scales = torch.tensor(recon_loss_scales, device=device)
+            loss_recon   = (losses_recon * recon_loss_scales).mean()
+            v_loss_recon = loss_recon.detach().item()
 
-                ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
-                print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
-                # loss_recon: ~0.1
-                loss_normal_recon += loss_recon
+            # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
+            if loss_recon_subj_mb_suppress > 0:
+                mon_loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
+            if recon_on_comp_prompt:
+                mon_loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
+            else:
+                mon_loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
 
-                # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.2 -> 0.04, 
-                # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/3 of recon loss.
-                recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[recon_on_comp_prompt]
-                loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
+            ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
+            print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
+            # loss_recon: ~0.1
+            loss_normal_recon += loss_recon
 
-                # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
-                mon_loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
-                if self.pred_l2_loss_weight > 0:
-                    # When loss_pred_l2 is larger than pred_l2_threshold, loss_pred_l2 is 0.
-                    # When loss_pred_l2 is smaller than pred_l2_threshold, loss_pred_l2 is positive.
-                    # pred_l2_loss_weight: 1e-4.
-                    loss_normal_recon += F.relu(self.pred_l2_threshold - loss_pred_l2) * self.pred_l2_loss_weight
+            # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.2 -> 0.04, 
+            # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/3 of recon loss.
+            recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[recon_on_comp_prompt]
+            loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
 
             v_loss_normal_recon = loss_normal_recon.mean().detach().item()
             mon_loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
@@ -2862,7 +2869,8 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_subj_v      = []
         losses_comp_rep_distill_nonsubj_v   = []
         losses_subj_attn_cross_t_distill    = []
-        losses_pred_l2                      = []
+        pred_l2s                            = []
+        losses_pred_l2s                     = []
 
         device = x_start_ss.device
         dtype  = x_start_ss.dtype
@@ -2963,8 +2971,12 @@ class LatentDiffusion(DDPM):
         
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
             # Calc the L2 norm of noise_pred.
-            loss_pred_l2 = (noise_preds[step_idx] ** 2).mean()
-            losses_pred_l2.append(loss_pred_l2)
+            pred_l2_step = (noise_preds[step_idx] ** 2).mean()
+            # When pred_l2_step is larger than pred_l2_threshold, loss_pred_l2_step is 0.
+            # When pred_l2_step is smaller than pred_l2_threshold, loss_pred_l2_step is positive.
+            loss_pred_l2_step = F.relu(self.pred_l2_threshold - pred_l2_step)       
+            pred_l2s.append(pred_l2_step)     
+            losses_pred_l2s.append(loss_pred_l2_step)
             # NOTE: loss_subj_attn_norm_distill is disabled. Since we use L2 loss for loss_sc_recon_mc,
             # the subj attn values are learned to not overly express in the background tokens, so no need to suppress them. 
             # Actually, explicitly discouraging the subject attn values from being too large will reduce subject authenticity.
@@ -3109,14 +3121,13 @@ class LatentDiffusion(DDPM):
         if v_loss_comp_feat_distill > 0:
             mon_loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
 
-        loss_pred_l2 = torch.stack(losses_pred_l2).mean()
+        pred_l2      = torch.stack(pred_l2s).mean()
+        loss_pred_l2 = torch.stack(losses_pred_l2s).mean()
         # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
-        mon_loss_dict.update({f'{session_prefix}/pred_l2': loss_pred_l2.mean().detach().item()})
+        mon_loss_dict.update({f'{session_prefix}/pred_l2': pred_l2.mean().detach().item()})
         if self.pred_l2_loss_weight > 0:
-            # When loss_pred_l2 is larger than pred_l2_threshold, loss_pred_l2 is 0.
-            # When loss_pred_l2 is smaller than pred_l2_threshold, loss_pred_l2 is positive.
-            # pred_l2_loss_weight: 1e-4.
-            loss_comp_feat_distill += F.relu(self.pred_l2_threshold - loss_pred_l2) * self.pred_l2_loss_weight
+            # pred_l2_loss_weight: 0.05
+            loss_comp_feat_distill += loss_pred_l2 * self.pred_l2_loss_weight
 
         return loss_comp_feat_distill            
 
