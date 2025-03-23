@@ -194,7 +194,8 @@ class DDPM(pl.LightningModule):
         self.unet_distill_iters_count                = 0
         self.normal_recon_iters_count                = 0
         self.normal_recon_images_count               = 0
-        self.normal_recon_face_images_stats          = RollingStats(num_values=2, window_size=600, stat_type='sum')
+        self.normal_recon_face_images_on_image_stats = RollingStats(num_values=2, window_size=600, stat_type='sum')
+        self.normal_recon_face_images_on_noise_stats = RollingStats(num_values=2, window_size=200, stat_type='sum')
         self.comp_iters_face_detected_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
@@ -2417,27 +2418,34 @@ class LatentDiffusion(DDPM):
                 losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
                 losses_pred_l2.append(loss_pred_l2)
 
-                # normal_recon_face_images_stats contain face_images_count and all_images_count.
-                # These two counts will also incorporate the
-                # face images among the recon_on_pure_noise recon images.
-                self.normal_recon_face_images_stats.update([face_detected_inst_mask.sum().item(),
-                                                            face_detected_inst_mask.shape[0]])
+                # Count recon_on_pure_noise stats and non-pure-noise stats separately.
+                # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
+                if recon_on_pure_noise:
+                    self.normal_recon_face_images_on_noise_stats.update([face_detected_inst_mask.sum().item(),
+                                                                         face_detected_inst_mask.shape[0]])
+                else:
+                    self.normal_recon_face_images_on_image_stats.update([face_detected_inst_mask.sum().item(),
+                                                                         face_detected_inst_mask.shape[0]])
 
-        # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
-        recon_face_image_ratio = self.normal_recon_face_images_stats.sums[0] / (self.normal_recon_face_images_stats.sums[1] + 1e-2)
-        mon_loss_dict.update({f'{session_prefix}/recon_face_image_ratio': recon_face_image_ratio})
+        if recon_on_pure_noise:
+            recon_face_image_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
+            mon_loss_dict.update({f'{session_prefix}/recon_face_image_on_noise_frac': recon_face_image_on_noise_frac})
+        else:
+            # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
+            recon_face_image_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
+            mon_loss_dict.update({f'{session_prefix}/recon_face_image_on_image_frac': recon_face_image_on_image_frac})
 
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
             if loss_arcface_align_recon > 0:
                 if recon_on_pure_noise:
-                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_noise': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_noise: {loss_arcface_align_recon.mean().item():.4f}")
+                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon.mean().detach().item() })
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.mean().item():.4f}")
                     # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, so we scale it up.
                     arcface_align_recon_loss_scale = 2
                 else:
-                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
+                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.mean().item():.4f}")
                     arcface_align_recon_loss_scale = 1
 
                 # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.005 => 0.002-0.0025.
