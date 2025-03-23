@@ -34,16 +34,15 @@ static_action_regexs = \
   # Split a regex with too many candidate patterns into two lines, 
   # to avoid under-representation of the patterns, as the regexs are unifomly sampled.
   "on (an airplane|a bus|a busy street|a grass|a roof|an escalator|a train)",
-  "on (a boat|a bike|a roller coaster|a scooter)",
+  "on (a boat|a bike|a scooter)",
   "in (a car|a meeting|a class|a wedding|a dinner|a concert|a gym|a library|a park)",
-  "in (a mall|a movie theater|a hotel room|Hong Kong|Tokyo|New York)",
-  "at (a beach|a table|a park|a concert|a gym|a library|a mall|a movie theater|a hotel room|a theme park)",
-  "next to (a tree|a car|a river|a lake|a mountain|an ocean|a playground|a statue|a panda)",
+  "in (Hong Kong|Tokyo|New York|Shanghai|Paris)",
+  "at (a beach|a table|a park|a concert|a gym|a library|a mall|a hotel room|a theme park)",
   "made of (metal|stainless steel|fractal flame|marble|rubber|bronze|ice)",
   # Prompts below are from DreamBooth evaluation dataset
   #LINK - https://github.com/google/dreambooth/blob/main/dataset/prompts_and_classes.txt
-  "(in the jungle|in the snow|on a cobblestone street|floating on top of water|floating in an ocean of milk)",
-  "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|a mirror|the sidewalk in a crowded street|a dirt road|a white rug|a purple rug in a forest)",
+  "(in the jungle|in the snow|on a cobblestone street)",
+  "on top of (pink fabric|a wooden floor|green grass with sunflowers around it|the sidewalk in a crowded street|a dirt road|a white rug)",
 ]
 
 static_appearances = [

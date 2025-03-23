@@ -196,10 +196,6 @@ class DDPM(pl.LightningModule):
         self.normal_recon_face_images_count          = 0
         self.unet_distill_iters_count                = 0
         self.comp_iters_face_detected_count          = 0
-        # If recent_comp_iters_face_detected_frac < comp_iters_face_detected_frac_thres,
-        # then we add more compositional steps until it reaches comp_iters_face_detected_frac_thres.
-        self.comp_iters_face_detected_frac_thres     = 0.55
-        self.recent_comp_iters_face_detected_count   = 0
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
@@ -2414,11 +2410,26 @@ class LatentDiffusion(DDPM):
                 recon_face_image_ratio = self.normal_recon_face_images_count / (self.normal_recon_images_count + 1e-6)
                 mon_loss_dict.update({f'{session_prefix}/recon_face_image_ratio': recon_face_image_ratio})
 
-                mon_loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
-                print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
-                # loss_arcface_align_recon: 0.5-0.8. arcface_align_loss_weight: 0.005 => 0.0025 - 0.004.
-                # This loss is around 1/30 of recon/distill losses (0.1).
-                loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight
+                if recon_on_pure_noise:
+                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_noise': loss_arcface_align_recon.mean().detach().item() })
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_noise: {loss_arcface_align_recon.mean().item():.4f}")
+                    # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, so we scale it up.
+                    arcface_align_recon_loss_scale = 2
+                else:
+                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon': loss_arcface_align_recon.mean().detach().item() })
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
+                    arcface_align_recon_loss_scale = 1
+
+                # Usually recon_face_image_ratio >= 0.8. If recon_face_image_ratio < 0.7, 
+                # then the model has severely degraded.
+                # If recon_face_image_ratio becomes smaller over time, 
+                # then gradually increase the weight of loss_arcface_align_recon through arcface_align_recon_loss_scale.
+                # If recon_face_image_ratio=0.7, then arcface_align_recon_loss_scale=2.
+                # If recon_face_image_ratio=0.5, then arcface_align_recon_loss_scale=4. （should never happen）
+                arcface_align_recon_loss_scale *= min(4, 1 / (recon_face_image_ratio ** 2 + 0.01))
+                # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.005 => 0.002-0.0025.
+                # This loss is around 1/25 of recon/distill losses (0.05).
+                loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
 
             if not recon_on_pure_noise:
                 loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
@@ -2875,15 +2886,29 @@ class LatentDiffusion(DDPM):
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE)
+                
+                if loss_arcface_align_comp > 0:
+                    # This iteration is counted as face detected, as long as the face is detected in one step.
+                    self.comp_iters_face_detected_count += 1
+                # Even if the face is not detected in this step, we still update comp_iters_face_detected_frac,
+                # because it's an accumulated value that's inherently continuous.
+                comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
+                mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+
                 # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 5e-3 => 0.0025-0.004.
                 # This loss is around 1/300 of comp distill losses (0.1).
-                # If do_comp_feat_distill is less frequent, then increase the weight of loss_arcface_align_comp.
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
+                # If comp_iters_face_detected_frac becomes smaller over time, 
+                # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
+                # If comp_iters_face_detected_frac=0.7, then arcface_align_comp_loss_scale=3.
+                # If comp_iters_face_detected_frac=0.5, then arcface_align_comp_loss_scale=6 (maximum).
+                arcface_align_comp_loss_scale = 1.5 * min(4, 1 / (comp_iters_face_detected_frac**2 + 0.01))
                 # loss_comp_bg_faces_suppress is a mean L2 loss, only ~0.02. * 50 * 4 * 5e-3 => 0.02.
                 # Although this is 15x~20x of loss_arcface_align_comp, it's very infraquently triggered.
-                comp_bg_faces_suppress_scale = 50
-                loss_comp_feat_distill += (loss_arcface_align_comp + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_scale) \
+                comp_bg_faces_suppress_loss_scale = 50
+                loss_comp_feat_distill += (loss_arcface_align_comp * arcface_align_comp_loss_scale 
+                                           + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_loss_scale) \
                                           * self.arcface_align_loss_weight
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
@@ -2952,7 +2977,7 @@ class LatentDiffusion(DDPM):
             # If sc_face_detected_at_step == -1, then in all steps, sc_face is not detected.
             # So we skip all the steps.
             # We also skip loss_comp_fg_bg_preserve on all steps if ss_fg_mask is None, 
-            # i.e., no faces are detected in the subject-single instance. But this should be very rare.
+            # i.e., no faces are detected in the subject-single instance. But this should be rare.
             if ss_fg_mask is None or sc_face_detected_at_step == -1:
                 continue
 
@@ -2966,10 +2991,10 @@ class LatentDiffusion(DDPM):
             # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
             # then we don't need to preserve the background as it will be highly 
             # challenging to match the background with the mc instance.
-            # If sc_fg_mask_percent <= 0.0256, it means the face is too small (each edge <= 0.16),
+            # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels),
             # then we don't need to preserve the fg.
             if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= 0.36) \
-              or (sc_fg_mask_percent <= 0.0256):
+              or (sc_fg_mask_percent <= 0.0225):
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
             loss_comp_fg_bg_preserve_step = \
@@ -3154,10 +3179,6 @@ class LatentDiffusion(DDPM):
             if arcface_align_loss_count > 0:
                 loss_arcface_align_comp = loss_arcface_align_comp / arcface_align_loss_count
                 mon_loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
-                # This iteration is counted as face detected, as long as the face is detected in one step.
-                self.comp_iters_face_detected_count += 1
-                comp_iters_face_detected_frac = self.comp_iters_face_detected_count / self.comp_iters_count
-                mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
             if comp_sc_subj_mb_suppress_loss_count > 0:
                 loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / comp_sc_subj_mb_suppress_loss_count
