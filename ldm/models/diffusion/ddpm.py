@@ -2339,6 +2339,7 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 \
                                 + i + 1 - num_recon_priming_steps
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+            fg_mask2 = fg_mask
 
             # Only compute loss_recon and loss_recon_subj_mb_suppress when faces are detected in x_recon.
             # loss_arcface_align_recon > 0 implies there's a face detected in each instances in x_recon.
@@ -2385,7 +2386,6 @@ class LatentDiffusion(DDPM):
                     else:
                         # Scale down the recon loss by 0.25, since no face is detected in all instances,
                         # and the gradients may be unstable.
-                        fg_mask2 = fg_mask
                         loss_recon_scale = 0.25
 
                 # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
