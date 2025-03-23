@@ -1971,16 +1971,16 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
       loss_sc_to_ssfg_sparse_attns_distill, loss_sc_to_mc_sparse_attns_distill = \
         [ local_loss_dict[loss_name] for loss_name in effective_loss_names ] 
 
-    # loss_sc_recon_ssfg_min: 0.2  -> 0.04
-    sc_recon_ssfg_loss_scale                    = 0.2
-    # loss_sc_recon_mc:       0.25 -> 0.05
-    sc_recon_mc_loss_scale                      = 0.2
+    # loss_sc_recon_ssfg_min: 0.2 -> 0.02
+    sc_recon_ssfg_loss_scale                    = 0.1
+    # loss_sc_recon_mc:       0.2 -> 0.02
+    sc_recon_mc_loss_scale                      = 0.1
     # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
     sc_to_ssfg_sparse_attns_distill_loss_scale  = 0 #20
     # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.008~0.01.
     sc_to_mc_sparse_attns_distill_loss_scale    = 0 #20
 
-    loss_comp_fg_bg_preserve =  loss_sc_recon_ssfg_min                * sc_recon_ssfg_loss_scale \
+    loss_comp_fg_bg_preserve =  loss_sc_recon_ssfg_min                 * sc_recon_ssfg_loss_scale \
                                 + loss_sc_recon_mc_min                 * sc_recon_mc_loss_scale \
                                 + loss_sc_to_ssfg_sparse_attns_distill * sc_to_ssfg_sparse_attns_distill_loss_scale \
                                 + loss_sc_to_mc_sparse_attns_distill   * sc_to_mc_sparse_attns_distill_loss_scale

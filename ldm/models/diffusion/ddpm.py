@@ -2323,6 +2323,7 @@ class LatentDiffusion(DDPM):
                                          do_adv_attack, DO_ADV_BS)
         
         losses_recon = []
+        losses_recon_scales = []
         losses_recon_subj_mb_suppress = []
         losses_arcface_align_recon    = []
         losses_pred_l2 = []
@@ -2380,26 +2381,30 @@ class LatentDiffusion(DDPM):
                         fg_mask2 = fg_mask * recon_fg_mask
                         mask_overlap_ratio = fg_mask2.sum() / fg_mask.sum()
                         print(f"Recon face detected/segmented mask overlap: {mask_overlap_ratio:.2f}")
+                        loss_recon_scale = 1.
                     else:
+                        # Scale down the recon loss by 0.25, since no face is detected in all instances,
+                        # and the gradients may be unstable.
                         fg_mask2 = fg_mask
+                        loss_recon_scale = 0.25
 
-
-                    # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
-                    # bg loss is given a tiny weight to suppress multi-face artifacts.
-                    # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0, i.e., 
-                    # we don't penalize the bg errors to allow the bg to be compositional patterns.
-                    # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
-                    # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
-                    # If img_mask = None, then blank pixels are regularized as bg pixels.
-                    loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
-                        calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_mask, 
-                                                       ca_layers_activations,
-                                                       all_subj_indices, None, fg_mask2,
-                                                       recon_bg_pixel_weight, x_start.shape[0])
-                    
-                    losses_recon.append(loss_recon)
-                    losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
-                    losses_pred_l2.append(loss_pred_l2)
+                # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
+                # bg loss is given a tiny weight to suppress multi-face artifacts.
+                # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0, i.e., 
+                # we don't penalize the bg errors to allow the bg to be compositional patterns.
+                # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
+                # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
+                # If img_mask = None, then blank pixels are regularized as bg pixels.
+                loss_recon, loss_recon_subj_mb_suppress, loss_pred_l2 = \
+                    calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_mask, 
+                                                   ca_layers_activations,
+                                                   all_subj_indices, None, fg_mask2,
+                                                   recon_bg_pixel_weight, x_start.shape[0])
+                
+                losses_recon.append(loss_recon)
+                losses_recon_scales.append(loss_recon_scale)
+                losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
+                losses_pred_l2.append(loss_pred_l2)
 
                 # normal_recon_face_images_stats contain face_images_count and all_images_count.
                 # These two counts will also incorporate the
@@ -2424,13 +2429,6 @@ class LatentDiffusion(DDPM):
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon: {loss_arcface_align_recon.mean().item():.4f}")
                     arcface_align_recon_loss_scale = 1
 
-                # Usually recon_face_image_ratio >= 0.8. If recon_face_image_ratio < 0.7, 
-                # then the model has severely degraded.
-                # If recon_face_image_ratio becomes smaller over time, 
-                # then gradually increase the weight of loss_arcface_align_recon through arcface_align_recon_loss_scale.
-                # If recon_face_image_ratio=0.7, then arcface_align_recon_loss_scale=2.
-                # If recon_face_image_ratio=0.5, then arcface_align_recon_loss_scale=4. （should never happen）
-                arcface_align_recon_loss_scale *= min(4, 1 / (recon_face_image_ratio ** 2 + 0.01))
                 # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.005 => 0.002-0.0025.
                 # This loss is around 1/25 of recon/distill losses (0.05).
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
@@ -2440,7 +2438,8 @@ class LatentDiffusion(DDPM):
                 loss_pred_l2 = torch.stack(losses_pred_l2).mean()
 
                 losses_recon = torch.stack(losses_recon)
-                loss_recon   = losses_recon.mean()
+                losses_recon_scales = torch.tensor(losses_recon_scales, device=device)
+                loss_recon   = (losses_recon * losses_recon_scales).mean()
                 v_loss_recon = loss_recon.detach().item()
 
                 # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
@@ -3043,17 +3042,17 @@ class LatentDiffusion(DDPM):
         if len(losses_comp_fg_bg_preserve) > 0:
             loss_comp_fg_bg_preserve = torch.stack(losses_comp_fg_bg_preserve).mean()
             mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
-            # loss_comp_fg_bg_preserve: 0.07~0.1.
+            # loss_comp_fg_bg_preserve: 0.04~0.05.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
 
         if len(losses_subj_attn_cross_t_distill) > 0:
             loss_subj_attn_cross_t_distill = torch.stack(losses_subj_attn_cross_t_distill).mean()
             mon_loss_dict.update({f'{session_prefix}/subj_attn_cross_t_distill': loss_subj_attn_cross_t_distill.mean().detach().item() })
-            # loss_subj_attn_cross_t_distill: 1e-5~2e-5 * 10 => 1e-4~2e-4.
+            # loss_subj_attn_cross_t_distill: 1e-5~2e-5 * 0 => DISABLED.
             loss_comp_feat_distill += loss_subj_attn_cross_t_distill * self.comp_sc_subj_attn_cross_t_distill_loss_weight
 
-        # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled.
+        # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled, and just for monitoring.
         if loss_subj_attn_norm_distill > 0:
             mon_loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
 
@@ -3081,6 +3080,7 @@ class LatentDiffusion(DDPM):
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             subj_comp_rep_distill_loss_scale = fg_percent_rep_distill_scale
 
+            # The right side term should be < 0.01.
             loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + loss_comp_rep_distill_subj_v + \
                                        loss_comp_rep_distill_nonsubj_k * comp_rep_distill_nonsubj_k_loss_scale + \
                                        loss_comp_rep_distill_nonsubj_v * comp_rep_distill_nonsubj_v_loss_scale) \
