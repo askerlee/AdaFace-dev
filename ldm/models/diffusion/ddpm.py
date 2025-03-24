@@ -1732,12 +1732,13 @@ class LatentDiffusion(DDPM):
         
         return noise_pred, x_recon, ca_layers_activations
 
+    # If not do_adv_attack, then mon_loss_dict and session_prefix are not used and could be set to None.
     def recon_multistep_denoise(self, mon_loss_dict, session_prefix,
                                 x_start0, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, 
                                 num_denoising_steps, num_recon_priming_steps,
                                 recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora, 
-                                do_adv_attack, DO_ADV_BS):
+                                ffn_lora_adapter_name, do_adv_attack, DO_ADV_BS):
 
         assert num_denoising_steps <= 10
         
@@ -1756,21 +1757,20 @@ class LatentDiffusion(DDPM):
             is_post_priming = (i >= num_recon_priming_steps)
 
             # Only enable gradients after num_recon_priming_steps.
-            with torch.set_grad_enabled(is_post_priming):
-                noise_pred, x_recon, ca_layers_activations = \
-                    self.guided_denoise(x_start, noise, t, cond_context,
-                                        uncond_emb, img_mask, 
-                                        shrink_cross_attn=False,
-                                        subj_indices=None, 
-                                        batch_part_has_grad='all', 
-                                        do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                        capture_ca_activations=is_post_priming,
-                                        # res_hidden_states_gradscale: 0.2
-                                        res_hidden_states_gradscale=self.res_hidden_states_gradscale,
-                                        use_attn_lora=enable_unet_attn_lora,
-                                        # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
-                                        use_ffn_lora=enable_unet_ffn_lora, 
-                                        ffn_lora_adapter_name='recon_loss')
+            noise_pred, x_recon, ca_layers_activations = \
+                self.guided_denoise(x_start, noise, t, cond_context,
+                                    uncond_emb, img_mask, 
+                                    shrink_cross_attn=False,
+                                    subj_indices=None, 
+                                    batch_part_has_grad='all' if is_post_priming else 'none',
+                                    do_pixel_recon=True, cfg_scale=cfg_scale, 
+                                    capture_ca_activations=is_post_priming,
+                                    # res_hidden_states_gradscale: 0.2
+                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                    use_attn_lora=enable_unet_attn_lora,
+                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
+                                    use_ffn_lora=enable_unet_ffn_lora, 
+                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
             
             noise_preds.append(noise_pred)
             # The predicted x0 is used as the x_start in the next denoising step.
@@ -2336,6 +2336,7 @@ class LatentDiffusion(DDPM):
                                          x_start0, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, num_recon_priming_steps,
                                          recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
+                                         'recon_loss',  # ffn_lora_adapter_name
                                          do_adv_attack, DO_ADV_BS)
         
         losses_recon = []
@@ -2523,27 +2524,48 @@ class LatentDiffusion(DDPM):
                                img_mask, fg_mask, subj_indices, 
                                num_unet_denoising_steps, unet_distill_on_pure_noise):
         BLOCK_SIZE = x_start.shape[0]
-
+        uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
+        x_start_pixels = self.decode_first_stage(x_start)
+        
         # Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:
-            x_start0 = torch.randn_like(x_start)
-            t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
-                              (x_start.shape[0],), device=x_start.device).long()
             # num_unet_priming_steps: 2 ~ 4.
             num_unet_priming_steps = self.unet_distill_iters_count % 3 + 2
+
+            x_start0  = torch.randn_like(x_start)
+            noise0    = torch.randn_like(noise)
+            t0        = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                                     (x_start.shape[0],), device=x_start.device).long()
+            # img_mask is used to mask the blank areas around the augmented images.
+            # As unet_distill_on_pure_noise, we set img_mask = None.
+            img_mask0 = None
+            fg_mask0  = torch.ones_like(fg_mask)
+
+            # Since not do_adv_attack, mon_loss_dict and session_prefix are not used and could be set to None.
+            # We set num_denoising_steps = num_unet_priming_steps, i.e., we only do priming steps 
+            # in recon_multistep_denoise().
+            noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
+                self.recon_multistep_denoise(None, None, 
+                                             x_start0, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
+                                             cfg_scale=2, num_denoising_steps=num_unet_priming_steps, 
+                                             num_recon_priming_steps=num_unet_priming_steps,
+                                             recon_on_pure_noise=True, enable_unet_attn_lora=False, 
+                                             # ffn_lora_adapter_name is 'unet_distill', 
+                                             # to get an x_start compatible with the teacher.
+                                             ffn_lora_adapter_name='unet_distill',  
+                                             enable_unet_ffn_lora=True, do_adv_attack=False, DO_ADV_BS=-1)
+            x_start = x_starts[-1]
             # 6: pink
             log_color_idx = 6
         else:
-            x_start0 = x_start
-            t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
-                              (x_start.shape[0],), device=x_start.device).long()
             num_unet_priming_steps = 0
             # 2: red
             log_color_idx = 2
 
-        num_unet_denoising_steps += num_unet_priming_steps
+        # Regenerate a smaller t for unet distillation.
+        t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+                            (x_start.shape[0],), device=x_start.device).long()
 
-        x_start_pixels = self.decode_first_stage(x_start)
         # log_image_colors: a list of 0-6, indexing colors 
         # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
         # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
@@ -2642,7 +2664,7 @@ class LatentDiffusion(DDPM):
 
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
-                self.unet_teacher(self, x_start0, noise, t, teacher_contexts, 
+                self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
                                   num_denoising_steps=num_unet_denoising_steps)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
@@ -2656,10 +2678,7 @@ class LatentDiffusion(DDPM):
         noise_preds = []
         #all_recon_images = []
 
-        uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
-
-        # Skip the first num_unet_priming_steps steps, which are used to prime the teacher UNet.
-        for s in range(num_unet_priming_steps, num_unet_denoising_steps):
+        for s in range(num_unet_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
             # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
             # used to seed the second denoising step. 
@@ -2703,14 +2722,14 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * log_color_idx
             self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
-        print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation ({num_unet_priming_steps}-step priming):")
+        iter_type_str = f'on {num_unet_priming_steps}-step primed noise' if unet_distill_on_pure_noise else 'on image'
+        print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation ({iter_type_str}):")
         losses_unet_distill = []
 
         # noise_preds only contains the student predicted noises, not including the priming steps.
         # Therefore we don't need to exclude the results of the first num_unet_priming_steps steps.
         for s in range(len(noise_preds)):
-            # noise_gts contains the priming steps, so we offset the index by num_unet_priming_steps.
-            noise_pred, noise_gt = noise_preds[s], noise_gts[s + num_unet_priming_steps]
+            noise_pred, noise_gt = noise_preds[s], noise_gts[s]
 
             # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
