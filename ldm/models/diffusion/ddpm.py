@@ -105,6 +105,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.2,
                  p_recon_on_pure_noise=0.2,
+                 p_unet_distill_on_pure_noise=0.3,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=3,
                  recon_adv_mod_mag_range=[0.001, 0.003],
@@ -163,6 +164,8 @@ class DDPM(pl.LightningModule):
         self.p_unet_teacher_uses_cfg                = p_unet_teacher_uses_cfg
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
+        self.p_unet_distill_on_pure_noise           = p_unet_distill_on_pure_noise
+
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
         self.max_num_comp_distill_steps_with_grad   = max_num_comp_distill_steps_with_grad
         self.recon_num_denoising_steps_range        = recon_num_denoising_steps_range
@@ -396,6 +399,7 @@ class DDPM(pl.LightningModule):
                             'do_comp_feat_distill':             False,
                             'do_prompt_emb_delta_reg':          False,
                             'unet_distill_uses_comp_prompt':    False,
+                            'unet_distill_on_pure_noise':       False,
                             'use_fp_trick':                     False,
                             'recon_on_comp_prompt':             False,
                             'recon_on_pure_noise':              False,
@@ -945,9 +949,15 @@ class LatentDiffusion(DDPM):
             p_recon_on_comp_prompt = 0
             p_recon_on_pure_noise  = 0
 
+        if self.iter_flags['do_unet_distill']:
+            p_unet_distill_on_pure_noise = self.p_unet_distill_on_pure_noise
+        else:
+            p_unet_distill_on_pure_noise = 0
+
         self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < p_recon_on_comp_prompt).item()
         self.iter_flags['recon_on_pure_noise']  = (torch.rand(1) < p_recon_on_pure_noise).item()
-
+        self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
+        
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
         if self.use_fp_trick and 'subj_single_prompt_fp' in batch:
@@ -2013,7 +2023,9 @@ class LatentDiffusion(DDPM):
             loss_unet_distill = \
                 self.calc_unet_distill_loss(mon_loss_dict, session_prefix,
                                             x_start, noise, cond_context, extra_info, 
-                                            img_mask, fg_mask, all_subj_indices)
+                                            img_mask, fg_mask, all_subj_indices, 
+                                            self.iter_flags['num_unet_denoising_steps'], 
+                                            self.iter_flags['unet_distill_on_pure_noise'])
             # loss_unet_distill: < 0.01, so we use a very large unet_distill_weight==8 to
             # make it comparable to the recon loss. Otherwise, loss_unet_distill will 
             # be dominated by the recon loss.
@@ -2508,14 +2520,29 @@ class LatentDiffusion(DDPM):
 
     def calc_unet_distill_loss(self, mon_loss_dict, session_prefix, 
                                x_start, noise, cond_context, extra_info, 
-                               img_mask, fg_mask, subj_indices):
-        t = torch.randint(self.num_timesteps // 2, self.num_timesteps, (x_start.shape[0],), 
-                          device=self.device).long()
-        prompt_emb, prompt_in, extra_info = cond_context
+                               img_mask, fg_mask, subj_indices, 
+                               num_unet_denoising_steps, unet_distill_on_pure_noise):
         BLOCK_SIZE = x_start.shape[0]
 
-        # num_unet_denoising_steps > 1 implies do_unet_distill, but not vice versa.
-        num_unet_denoising_steps = self.iter_flags['num_unet_denoising_steps']
+        # Use totally random x_start as the input latent images.
+        if unet_distill_on_pure_noise:
+            x_start = torch.randn_like(x_start)
+            t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                              (x_start.shape[0],), device=x_start.device).long()
+            # num_unet_priming_steps: 2 ~ 4.
+            num_unet_priming_steps = self.unet_distill_iters_count % 3 + 2
+            # 6: pink
+            log_color_idx = 6
+        else:
+            t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+                              (x_start.shape[0],), device=x_start.device).long()
+            num_unet_priming_steps = 0
+            # 2: red
+            log_color_idx = 2
+
+        num_unet_denoising_steps += num_unet_priming_steps
+
+        prompt_emb, prompt_in, extra_info = cond_context
         # student_prompt_embs is the prompt embedding of the student model.
         student_prompt_embs = cond_context[0]
         # ** OBSOLETE ** NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
@@ -2622,7 +2649,8 @@ class LatentDiffusion(DDPM):
 
         uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
 
-        for s in range(num_unet_denoising_steps):
+        # Skip the first num_unet_priming_steps steps, which are used to prime the teacher UNet.
+        for s in range(num_unet_priming_steps, num_unet_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
             # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
             # used to seed the second denoising step. 
@@ -2659,16 +2687,21 @@ class LatentDiffusion(DDPM):
             noise_preds.append(noise_pred_s)
 
             recon_images_s = self.decode_first_stage(x_recon_s)
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
-            # all of them are 2, indicating red.
-            log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * 2
+            # log_image_colors: a list of 0-6, indexing colors 
+            # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
+            # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
+            # If unet_distill_on_image:      all of them are 2, indicating red.
+            log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * log_color_idx
             self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
-        print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation:")
+        print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation ({num_unet_priming_steps}-step priming):")
         losses_unet_distill = []
 
+        # noise_preds only contains the student predicted noises, not including the priming steps.
+        # Therefore we don't need to exclude the results of the first num_unet_priming_steps steps.
         for s in range(len(noise_preds)):
-            noise_pred, noise_gt = noise_preds[s], noise_gts[s]
+            # noise_gts contains the priming steps, so we offset the index by num_unet_priming_steps.
+            noise_pred, noise_gt = noise_preds[s], noise_gts[s + num_unet_priming_steps]
 
             # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
@@ -2687,12 +2720,7 @@ class LatentDiffusion(DDPM):
                                 fg_pixel_weight=1, bg_pixel_weight=recon_bg_pixel_weight)
 
             print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
-            
             losses_unet_distill.append(loss_unet_distill)
-
-            # Try hard to release memory after each step. But since they are part of the computation graph,
-            # doing so may not have any effect :(
-            noise_preds[s], noise_gts[s] = None, None
 
         # If num_unet_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
         # In order not to dilute the large loss_unet_distill, we don't divide by num_unet_denoising_steps.
@@ -2700,7 +2728,10 @@ class LatentDiffusion(DDPM):
         loss_unet_distill = sum(losses_unet_distill) / np.sqrt(num_unet_denoising_steps)
 
         v_loss_unet_distill = loss_unet_distill.mean().detach().item()
-        mon_loss_dict.update({f'{session_prefix}/loss_unet_distill': v_loss_unet_distill})
+        if unet_distill_on_pure_noise:
+            mon_loss_dict.update({f'{session_prefix}/unet_distill_on_noise': v_loss_unet_distill})
+        else:
+            mon_loss_dict.update({f'{session_prefix}/unet_distill_on_image': v_loss_unet_distill})
 
         return loss_unet_distill
 
@@ -3237,7 +3268,7 @@ class LatentDiffusion(DDPM):
     # or a list of 3D [C, H, W] torch tensors.
     # Data type of samples could be uint (0-25), or float (-1, 1) or (0, 1).
     # If (-1, 1), then we should set do_normalize=True.
-    # img_colors: a single 1D torch tensor, indexing colors = [ None, 'green', 'red', 'purple' ]
+    # img_colors: a single 1D torch tensor, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
     # For raw output from raw output from SD decode_first_stage(),
     # samples are be between [-1, 1], so we set do_normalize=True, which will convert and clamp to [0, 1].
     @rank_zero_only
