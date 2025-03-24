@@ -19,6 +19,7 @@ import math, sys, re, os
 
 from safetensors.torch import load_file as safetensors_load_file
 import asyncio
+EnableCompile = True
 
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
@@ -852,10 +853,35 @@ def gen_gradient_scaler(alpha, debug=False):
         # Don't use lambda function here, otherwise the object can't be pickled.
         return torch.detach
 
+smooth_kernel_3x3s = { 
+                        4: torch.tensor([[1, 1, 1], [1, 4, 1], [1, 1, 1]], dtype=torch.float32) / 12,
+                        3: torch.tensor([[1, 1, 1], [1, 3, 1], [1, 1, 1]], dtype=torch.float32) / 11,
+                        2: torch.tensor([[1, 1, 1], [1, 2, 1], [1, 1, 1]], dtype=torch.float32) / 10,
+                        1: torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype=torch.float32) / 9
+                     }
+
+@conditional_compile(enable_compile=EnableCompile)
+# H and W have to be provided if ts is 3D.
+def smooth_tensor_34d(ts, kernel_center_weight=2, H=-1, W=-1):
+    ts_shape = ts.shape
+    if ts.ndim == 3:
+        # ts: [B, D, H*W] -> [B, D, H, W]
+        ts = ts.reshape(*ts_shape[:2], H, W)
+    # Smooth the attention map using a 2D convolution.
+    # The kernel size is fixed to 3. But the center weight can be adjusted.
+    smooth_kernel = smooth_kernel_3x3s[kernel_center_weight].reshape(1, 1, 3, 3).to(ts.device)
+    smooth_kernel = smooth_kernel.repeat(ts.shape[1], 1, 1, 1)
+    ts = F.conv2d(ts, smooth_kernel, padding=1, groups=ts.shape[1])
+    # ts: [B, D, H, W] -> [B, D, H*W]. 
+    # If the original ts is 4D (e.g. the optical flow), then no change is made.
+    ts = ts.reshape(*ts_shape)
+    return ts
+
+# We assume input_ is a 4D tensor. Otherwise smooth_tensor_34d() will fail.
 class SmoothGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input_, kernel_size=3, debug=False):
-        ctx.save_for_backward(kernel_size, debug)
+    def forward(ctx, input_, kernel_center_weight=2, debug=False):
+        ctx.save_for_backward(kernel_center_weight, debug)
         output = input_
         if debug:
             print(f"input: {input_.abs().mean().item()}")
@@ -863,10 +889,9 @@ class SmoothGrad(torch.autograd.Function):
     
     @staticmethod
     def backward(ctx, grad_output):  # pragma: no cover
-        kernel_size, debug = ctx.saved_tensors
+        kernel_center_weight, debug = ctx.saved_tensors
         if ctx.needs_input_grad[0]:
-            grad_output2 = F.avg_pool2d(grad_output, kernel_size.item(), stride=1, 
-                                        padding=kernel_size.item() // 2)
+            grad_output2 = smooth_tensor_34d(grad_output, kernel_center_weight=kernel_center_weight.item())
             if debug:
                 print(f"grad_output2: {grad_output2.abs().mean().item()}")
         else:
@@ -874,29 +899,24 @@ class SmoothGrad(torch.autograd.Function):
         return grad_output2, None, None
     
 class SmoothGradLayer(nn.Module):
-    def __init__(self, kernel_size=3, debug=False, *args, **kwargs):
+    def __init__(self, kernel_center_weight=2, debug=False, *args, **kwargs):
         """
         A smooth gradient layer.
         This layer has no parameters, and simply smooths the gradient in the backward pass.
         """
         super().__init__(*args, **kwargs)
 
-        self._kernel_size = torch.tensor(kernel_size, requires_grad=False)
+        self._kernel_center_weight = torch.tensor(kernel_center_weight, requires_grad=False)
         self._debug = torch.tensor(debug, requires_grad=False)
 
     def forward(self, input_):
         _debug = self._debug if hasattr(self, '_debug') else False
-        return SmoothGrad.apply(input_, self._kernel_size, _debug)
+        return SmoothGrad.apply(input_, self._kernel_center_weight, _debug)
     
-def gen_smooth_grad_layer(kernel_size=3, debug=False):
-    if kernel_size == 1:
-        return nn.Identity()
-    if kernel_size > 1:
-        return SmoothGradLayer(kernel_size, debug=debug)
-    else:
-        assert kernel_size == 0
-        # Don't use lambda function here, otherwise the object can't be pickled.
-        return torch.detach
+def gen_smooth_grad_layer(kernel_center_weight=2, debug=False):
+    if kernel_center_weight > 4 or kernel_center_weight <= 0:
+        breakpoint()
+    return SmoothGradLayer(kernel_center_weight, debug=debug)
     
 def get_clip_tokens_for_string(clip_tokenizer, string, force_single_token=False):
     '''
@@ -2166,7 +2186,6 @@ def backward_warp_by_flow_np(image2, flow1to2):
     return image1_recovered
 '''
 
-EnableCompile = True
 @conditional_compile(enable_compile=EnableCompile)
 def backward_warp_by_flow(image2, flow1to2):
     # Assuming image2 is a PyTorch tensor of shape (B, C, H, W)
@@ -2195,29 +2214,6 @@ def backward_warp_by_flow(image2, flow1to2):
     image1_recovered = F.grid_sample(image2, flow_grid, mode='bilinear', padding_mode='zeros', align_corners=True)
 
     return image1_recovered
-
-smooth_kernel_3x3s = { 
-                        4: torch.tensor([[1, 1, 1], [1, 4, 1], [1, 1, 1]], dtype=torch.float32) / 12,
-                        3: torch.tensor([[1, 1, 1], [1, 3, 1], [1, 1, 1]], dtype=torch.float32) / 11,
-                        2: torch.tensor([[1, 1, 1], [1, 2, 1], [1, 1, 1]], dtype=torch.float32) / 10,
-                        1: torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]], dtype=torch.float32) / 9
-                     }
-
-@conditional_compile(enable_compile=EnableCompile)
-def smooth_attn_mat(attn_mat, H, W, kernel_center_weight=2):
-    attn_mat_shape = attn_mat.shape
-    if attn_mat.ndim == 3:
-        # attn_mat: [B, D, H*W] -> [B, D, H, W]
-        attn_mat = attn_mat.reshape(*attn_mat_shape[:2], H, W)
-    # Smooth the attention map using a 2D convolution.
-    # The kernel size is fixed to 3. But the center weight can be adjusted.
-    smooth_kernel = smooth_kernel_3x3s[kernel_center_weight].reshape(1, 1, 3, 3).to(attn_mat.device)
-    smooth_kernel = smooth_kernel.repeat(attn_mat.shape[1], 1, 1, 1)
-    attn_mat = F.conv2d(attn_mat, smooth_kernel, padding=1, groups=attn_mat.shape[1])
-    # attn_mat: [B, D, H, W] -> [B, D, H*W]. 
-    # If the original attn_mat is 4D (e.g. the optical flow), then no change is made.
-    attn_mat = attn_mat.reshape(*attn_mat_shape)
-    return attn_mat
 
 # Convert an optical flow to an equivalent attention matrix.
 @conditional_compile(enable_compile=EnableCompile)
@@ -2264,7 +2260,7 @@ def reconstruct_feat_with_matching_flow(flow_model, ss2sc_flow, ss_q, sc_q, sc_f
                                                         corr_normalized_by_sqrt_dim=False)
 
             # Use a smooth kernel center weight 2 to smooth the flow.
-            ss2sc_flow = smooth_attn_mat(ss2sc_flow, -1, -1, kernel_center_weight=2)
+            ss2sc_flow = smooth_tensor_34d(ss2sc_flow, kernel_center_weight=2)
             # Ignore small motions which are noisy.
             if small_motion_ignore_thres > 0:
                 ss2sc_flow[ss2sc_flow.abs() < small_motion_ignore_thres] = 0

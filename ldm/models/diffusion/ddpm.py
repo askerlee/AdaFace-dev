@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
-                        RollingStats
+                        RollingStats, gen_smooth_grad_layer
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -2329,6 +2329,7 @@ class LatentDiffusion(DDPM):
         pred_l2s        = []
         losses_pred_l2s = []
         latent_shape, device = x_start.shape, x_start.device
+        x_recon_grad_smoother = gen_smooth_grad_layer(kernel_center_weight=2)
 
         for i in range(num_recon_priming_steps, num_denoising_steps):
             noise, noise_pred, x_recon, ca_layers_activations = \
@@ -2351,18 +2352,20 @@ class LatentDiffusion(DDPM):
             losses_pred_l2s.append(loss_pred_l2_step)
 
             # Only compute loss_recon and loss_recon_subj_mb_suppress when faces are detected in x_recon.
-            # loss_arcface_align_recon > 0 implies there's a face detected in each instances in x_recon.
+            # loss_arcface_align_recon_step > 0 implies there's a face detected in each instances in x_recon.
             if self.arcface is not None:
-                # We can only afford doing arcface_align_loss on two instances. Otherwise, OOM.
+                # Smooth the gradients flowing into x_recon, to reduce high-frequency 
+                # noise from loss_arcface_align_recon_step.
+                x_recon = x_recon_grad_smoother(x_recon)
                 # If no faces are detected in x_recon, loss_arcface_align is 0, and fg_face_bboxes is None.
-                # NOTE: In normal recon iters, we ignore loss_bg_faces_suppress, 
+                # In normal recon iters, we ignore loss_bg_faces_suppress, 
                 # since bg faces in recon iters are rare.
-                # If there is no face detected in any of the instances, then loss_arcface_align_recon is 0,
+                # If there is no face detected in any of the instances, then loss_arcface_align_recon_step is 0,
                 # and recon loss is skipped. 
                 # We still compute the recon loss on the good instances with face detected, 
                 # which are indicated by face_detected_inst_mask.
                 # face_detected_inst_mask: binary tensor of [BS].
-                loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
+                loss_arcface_align_recon_step, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start, x_recon)
 
                 # Count recon_on_pure_noise stats and non-pure-noise stats separately.
@@ -2374,9 +2377,9 @@ class LatentDiffusion(DDPM):
                     self.normal_recon_face_images_on_image_stats.update([face_detected_inst_mask.sum().item(),
                                                                          face_detected_inst_mask.shape[0]])
 
-                if loss_arcface_align_recon > 0:
+                if loss_arcface_align_recon_step > 0:
                     recon_loss_scale = 1.
-                    losses_arcface_align_recon.append(loss_arcface_align_recon)
+                    losses_arcface_align_recon.append(loss_arcface_align_recon_step)
                     # If recon_on_pure_noise, then skip all other losses.
                     if recon_on_pure_noise:
                         continue
@@ -2387,7 +2390,7 @@ class LatentDiffusion(DDPM):
                     # to downscale corresponding gradients which are more noisy than those with faces detected.
                     face_detected_inst_weights[face_detected_inst_mask==0] = 0.25
 
-                    # If no face is detected in x_start, then loss_arcface_align_recon = 0 and 
+                    # If no face is detected in x_start, then loss_arcface_align_recon_step = 0 and 
                     # fg_face_bboxes = None. In such cases, it's meaningless to compute recon losses.
                     # Only compute losses when all instances have faces detected.
                     if (1 - face_detected_inst_mask).sum() == 0:
@@ -3144,13 +3147,17 @@ class LatentDiffusion(DDPM):
         loss_comp_sc_subj_mb_suppress = zero_losses[0]
         loss_arcface_align_comp       = zero_losses[1]
         loss_comp_bg_faces_suppress   = zero_losses[2]
+        x_recon_grad_smoother = gen_smooth_grad_layer(kernel_center_weight=2)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # Trying to calc arcface_align_loss from easy to difficult steps.
             # sel_step: 2~0. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
             # Reverse the steps, so we start from the clearest face image, and get the most accurate sc_fg_mask.
             for sel_step in range(len(x_recons) - 1, -1, -1):
-                x_recon  = x_recons[sel_step]
+                x_recon = x_recons[sel_step]
+                # Smooth the gradients flowing into x_recon, to reduce high-frequency 
+                # noise from loss_arcface_align_recon_step.                
+                x_recon = x_recon_grad_smoother(x_recon)
                 # We have checked that x_start_ss is always a valid face image.
                 # Align subj_comp_recon to x_start_ss.
                 # Only optimize subj comp instances w.r.t. arcface_align_loss. 
