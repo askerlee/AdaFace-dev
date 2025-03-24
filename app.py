@@ -33,7 +33,7 @@ parser.add_argument("--enabled_encoders", type=str, nargs="+", default=None,
                     choices=["arc2face", "consistentID"], 
                     help="List of enabled encoders (among the list of adaface_encoder_types). Default: None (all enabled)")
 parser.add_argument('--model_style_type', type=str, default='photorealistic',
-                    choices=["realistic", "anime", "photorealistic", "ssr"], help="Type of the base model")
+                    choices=["realistic", "anime", "photorealistic"], help="Type of the base model")
 parser.add_argument("--guidance_scale", type=float, default=5.0,
                     help="The guidance scale for the diffusion model. Default: 5.0")
 parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=False,
@@ -58,7 +58,6 @@ model_style_type2base_model_path = {
     "realistic": "models/rv51/realisticVisionV51_v51VAE_dste8.safetensors",
     "anime": "models/aingdiffusion/aingdiffusion_v170_ar.safetensors",
     "photorealistic": "models/sar/sar.safetensors", # LDM format. Needs to be converted.
-    "ssr": "models/ssr/ssr.safetensors"
 }
 base_model_path = model_style_type2base_model_path[args.model_style_type]
 
