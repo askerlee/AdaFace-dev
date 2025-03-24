@@ -193,7 +193,6 @@ class DDPM(pl.LightningModule):
         self.non_comp_iters_count                    = 0
         self.unet_distill_iters_count                = 0
         self.normal_recon_iters_count                = 0
-        self.normal_recon_images_count               = 0
         self.normal_recon_face_images_on_image_stats = RollingStats(num_values=2, window_size=600, stat_type='sum')
         self.normal_recon_face_images_on_noise_stats = RollingStats(num_values=2, window_size=200, stat_type='sum')
         self.comp_iters_face_detected_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
@@ -2351,15 +2350,6 @@ class LatentDiffusion(DDPM):
             pred_l2s.append(pred_l2_step)
             losses_pred_l2s.append(loss_pred_l2_step)
 
-            # Count recon_on_pure_noise stats and non-pure-noise stats separately.
-            # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
-            if recon_on_pure_noise:
-                self.normal_recon_face_images_on_noise_stats.update([face_detected_inst_mask.sum().item(),
-                                                                     face_detected_inst_mask.shape[0]])
-            else:
-                self.normal_recon_face_images_on_image_stats.update([face_detected_inst_mask.sum().item(),
-                                                                     face_detected_inst_mask.shape[0]])
-
             # Only compute loss_recon and loss_recon_subj_mb_suppress when faces are detected in x_recon.
             # loss_arcface_align_recon > 0 implies there's a face detected in each instances in x_recon.
             if self.arcface is not None:
@@ -2374,8 +2364,15 @@ class LatentDiffusion(DDPM):
                 # face_detected_inst_mask: binary tensor of [BS].
                 loss_arcface_align_recon, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start, x_recon)
-                
-                self.normal_recon_images_count += BLOCK_SIZE
+
+                # Count recon_on_pure_noise stats and non-pure-noise stats separately.
+                # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
+                if recon_on_pure_noise:
+                    self.normal_recon_face_images_on_noise_stats.update([face_detected_inst_mask.sum().item(),
+                                                                         face_detected_inst_mask.shape[0]])
+                else:
+                    self.normal_recon_face_images_on_image_stats.update([face_detected_inst_mask.sum().item(),
+                                                                         face_detected_inst_mask.shape[0]])
 
                 if loss_arcface_align_recon > 0:
                     recon_loss_scale = 1.
