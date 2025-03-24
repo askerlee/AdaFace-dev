@@ -2526,7 +2526,7 @@ class LatentDiffusion(DDPM):
 
         # Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:
-            x_start = torch.randn_like(x_start)
+            x_start0 = torch.randn_like(x_start)
             t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
                               (x_start.shape[0],), device=x_start.device).long()
             # num_unet_priming_steps: 2 ~ 4.
@@ -2534,6 +2534,7 @@ class LatentDiffusion(DDPM):
             # 6: pink
             log_color_idx = 6
         else:
+            x_start0 = x_start
             t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
                               (x_start.shape[0],), device=x_start.device).long()
             num_unet_priming_steps = 0
@@ -2541,6 +2542,14 @@ class LatentDiffusion(DDPM):
             log_color_idx = 2
 
         num_unet_denoising_steps += num_unet_priming_steps
+
+        x_start_pixels = self.decode_first_stage(x_start)
+        # log_image_colors: a list of 0-6, indexing colors 
+        # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
+        # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
+        # If unet_distill_on_image:      all of them are 2, indicating red.
+        log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
+        self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
 
         prompt_emb, prompt_in, extra_info = cond_context
         # student_prompt_embs is the prompt embedding of the student model.
@@ -2633,7 +2642,7 @@ class LatentDiffusion(DDPM):
 
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
-                self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
+                self.unet_teacher(self, x_start0, noise, t, teacher_contexts, 
                                   num_denoising_steps=num_unet_denoising_steps)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
