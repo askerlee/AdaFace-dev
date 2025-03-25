@@ -82,7 +82,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
                  # Disable pause_comp_iters by setting pause_comp_iters_on_face_frac_lower_than to -1.
-                 pause_comp_iters_on_face_frac_lower_than=0.8,
+                 pause_comp_iters_on_face_frac_lower_than=0.75,
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
@@ -150,10 +150,10 @@ class DDPM(pl.LightningModule):
         self.comp_unet_weight_path                  = comp_unet_weight_path
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         # When the model degenerates, we pause the compositional iterations, and resumes
-        # after recon_face_images_on_noise_frac >= 0.8.
+        # after recon_face_images_on_noise_frac >= 0.75.
         self.pause_comp_iters_on_face_frac_lower_than = pause_comp_iters_on_face_frac_lower_than
-        # A margin of 0.03 is used to avoid frequent pausing and resuming.
-        self.resume_comp_iters_on_face_frac_higher_than = min(self.pause_comp_iters_on_face_frac_lower_than + 0.03, 0.9)
+        # A margin of 0.02 is used to avoid frequent pausing and resuming.
+        self.resume_comp_iters_on_face_frac_higher_than = min(self.pause_comp_iters_on_face_frac_lower_than + 0.02, 0.9)
         self.comp_iters_paused                       = False
 
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
@@ -2465,12 +2465,12 @@ class LatentDiffusion(DDPM):
         if recon_on_pure_noise:
             recon_face_images_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
             mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_noise_frac': recon_face_images_on_noise_frac})
-            # pause_comp_iters_on_face_frac_lower_than = 0.8
+            # pause_comp_iters_on_face_frac_lower_than = 0.75
             if recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than:
                 self.comp_iters_paused = True
                 print(f"Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                       "PAUSE COMPOSITIONAL ITERATIONS until it recovers.")
-            # resume_comp_iters_on_face_frac_higher_than = 0.83
+                       "PAUSE COMPOSITIONAL ITERATIONS.")
+            # resume_comp_iters_on_face_frac_higher_than = 0.77
             # A margin of 0.03 is used to avoid frequent pausing and resuming.
             elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
                 self.comp_iters_paused = False
