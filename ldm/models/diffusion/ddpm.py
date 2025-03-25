@@ -2474,7 +2474,7 @@ class LatentDiffusion(DDPM):
             # A margin of 0.03 is used to avoid frequent pausing and resuming.
             elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
                 self.comp_iters_paused = False
-                print(f"Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} > {self.pause_comp_iters_on_face_frac_higher_than}. "
+                print(f"Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
                        "RESUME COMPOSITIONAL ITERATIONS.")
         else:
             # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
