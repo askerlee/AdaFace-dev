@@ -105,7 +105,7 @@ class DDPM(pl.LightningModule):
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.2,
                  p_recon_on_pure_noise=0.2,
-                 p_unet_distill_on_pure_noise=0.3,
+                 p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=3,
                  recon_adv_mod_mag_range=[0.001, 0.003],
@@ -2535,16 +2535,16 @@ class LatentDiffusion(DDPM):
             # Alternate between priming using Adaface and priming using the teacher.
             priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
             self.unet_distill_on_noise_iters_count += 1
+            x_start   = torch.randn_like(x_start)
 
             if priming_using_adaface:
                 num_adaface_priming_steps = num_distill_priming_steps
                 # 6: pink
                 log_color_idx = 6            
 
-                x_start0  = torch.randn_like(x_start)
-                noise0    = torch.randn_like(noise)
-                t0        = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
-                                        (x_start.shape[0],), device=x_start.device).long()
+                noise0 = torch.randn_like(noise)
+                t0     = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                                       (x_start.shape[0],), device=x_start.device).long()
                 # img_mask is used to mask the blank areas around the augmented images.
                 # As unet_distill_on_pure_noise, we set img_mask = None.
                 img_mask0 = None
@@ -2555,14 +2555,14 @@ class LatentDiffusion(DDPM):
                 # i.e., we only do priming steps in recon_multistep_denoise().
                 noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                     self.recon_multistep_denoise(None, None, 
-                                                x_start0, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
-                                                cfg_scale=2, num_denoising_steps=num_adaface_priming_steps, 
-                                                num_recon_priming_steps=num_adaface_priming_steps,
-                                                recon_on_pure_noise=True, enable_unet_attn_lora=False, 
-                                                # ffn_lora_adapter_name is 'unet_distill', 
-                                                # to get an x_start compatible with the teacher.
-                                                ffn_lora_adapter_name='unet_distill',  
-                                                enable_unet_ffn_lora=True, do_adv_attack=False, DO_ADV_BS=-1)
+                                                 x_start, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
+                                                 cfg_scale=2, num_denoising_steps=num_adaface_priming_steps, 
+                                                 num_recon_priming_steps=num_adaface_priming_steps,
+                                                 recon_on_pure_noise=True, enable_unet_attn_lora=False, 
+                                                 # ffn_lora_adapter_name is 'unet_distill', 
+                                                 # to get an x_start compatible with the teacher.
+                                                 ffn_lora_adapter_name='unet_distill',  
+                                                 enable_unet_ffn_lora=True, do_adv_attack=False, DO_ADV_BS=-1)
                 x_start = x_starts[-1]
                 num_teacher_priming_steps = 0
             else:
@@ -2578,7 +2578,7 @@ class LatentDiffusion(DDPM):
 
         # Regenerate a smaller t for unet distillation.
         t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
-                            (x_start.shape[0],), device=x_start.device).long()
+                          (x_start.shape[0],), device=x_start.device).long()
 
         # log_image_colors: a list of 0-6, indexing colors 
         # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
