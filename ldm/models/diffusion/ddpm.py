@@ -2543,7 +2543,7 @@ class LatentDiffusion(DDPM):
                 log_color_idx = 6            
 
                 noise0 = torch.randn_like(noise)
-                t0     = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                t0     = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 0.9), 
                                        (x_start.shape[0],), device=x_start.device).long()
                 # img_mask is used to mask the blank areas around the augmented images.
                 # As unet_distill_on_pure_noise, we set img_mask = None.
@@ -2577,7 +2577,7 @@ class LatentDiffusion(DDPM):
             log_color_idx = 2
 
         # Regenerate a smaller t for unet distillation.
-        t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
+        t = torch.randint(int(self.num_timesteps * 0.6), int(self.num_timesteps * 0.85), 
                           (x_start.shape[0],), device=x_start.device).long()
 
         # log_image_colors: a list of 0-6, indexing colors 
@@ -2680,7 +2680,7 @@ class LatentDiffusion(DDPM):
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
                 self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
                                   num_denoising_steps=num_unet_denoising_steps,
-                                  num_priming_steps=num_teacher_priming_steps)
+                                  force_uses_cfg=unet_distill_on_pure_noise)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
         # noise_gts: replaced as the reconstructed x0 by the teacher UNet.
@@ -2901,6 +2901,13 @@ class LatentDiffusion(DDPM):
         else:
             # cls_comp_prompt_emb2 + the SAR checkpoint will 
             # generate good compositional images. 
+            # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
+            # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
+            # (subj single, subj comp,    cls single,  cls comp).
+            # NOTE "cls mix comp" is used to initialize subj comp   and cls comp   instance denoising.
+            #      "subj single"  is used to initialize subj single and cls single instance denoising.
+            # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
+            # So this should be fine.
             teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
 
         with torch.no_grad():

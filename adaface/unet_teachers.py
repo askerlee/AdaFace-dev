@@ -62,12 +62,12 @@ class UNetTeacher(nn.Module):
     # t: the initial t. We will sample additional (num_denoising_steps - 1) smaller t.
     # same_t_noise_across_instances: when sampling t and noise, use the same t and noise for all instances.
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, negative_context=None,
-                num_denoising_steps=1, num_priming_steps=0, same_t_noise_across_instances=False,
+                num_denoising_steps=1, force_uses_cfg=False, same_t_noise_across_instances=False,
                 global_t_lb=0, global_t_ub=1000):
         assert num_denoising_steps <= 10
 
-        # If doing priming, we always use CFG.
-        if num_priming_steps > 0:
+        # force_uses_cfg overrides p_uses_cfg.
+        if force_uses_cfg > 0:
             self.uses_cfg = True
         elif self.p_uses_cfg > 0:
             self.uses_cfg = np.random.rand() < self.p_uses_cfg
