@@ -195,6 +195,7 @@ class DDPM(pl.LightningModule):
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
         self.unet_distill_iters_count                = 0
+        self.unet_distill_on_noise_iters_count       = 0
         self.normal_recon_iters_count                = 0
         self.normal_recon_face_images_on_image_stats = RollingStats(num_values=2, window_size=600, stat_type='sum')
         self.normal_recon_face_images_on_noise_stats = RollingStats(num_values=2, window_size=200, stat_type='sum')
@@ -2117,11 +2118,11 @@ class LatentDiffusion(DDPM):
 
             # Log x_start0 (augmented version of the input images),
             # x_start_primed (pure noise denoised for a few steps), and the denoised images for diagnosis.
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # All of them are 1, indicating green.
             x_start0_ss = x_start0[:BLOCK_SIZE]
             input_image = self.decode_first_stage(x_start0_ss)
-            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+            # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # All of them are 1, indicating green.
             log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
             self.cache_and_log_generations(input_image, log_image_colors, do_normalize=True)
@@ -2135,7 +2136,7 @@ class LatentDiffusion(DDPM):
             
             for i, x_recon in enumerate(x_recons):
                 recon_images = self.decode_first_stage(x_recon)
-                # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple' ]
+                # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
                 log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * (i % 4)
 
@@ -2320,7 +2321,7 @@ class LatentDiffusion(DDPM):
         recon_bg_pixel_weight = recon_bg_pixel_weights[recon_on_comp_prompt]
 
         input_images = self.decode_first_stage(x_start)
-        # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
+        # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
         # All of them are 3, indicating purple.
         log_image_colors = torch.ones(input_images.shape[0], dtype=int, device=x_start.device) * 3
         self.cache_and_log_generations(input_images, log_image_colors, do_normalize=True)
@@ -2352,7 +2353,7 @@ class LatentDiffusion(DDPM):
                 noises[i], noise_preds[i], x_recons[i], ca_layers_activations_list[i]
 
             recon_images = self.decode_first_stage(x_recon)
-            # log_image_colors: a list of 4 or 5, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue' ]
+            # log_image_colors: a list of 4 or 5, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # 4 or 5: orange for the first denoising step, blue for the second denoising step.
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 \
                                 + i + 1 - num_recon_priming_steps
@@ -2529,13 +2530,17 @@ class LatentDiffusion(DDPM):
         
         # Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:
-            # num_unet_priming_steps: 2 ~ 4.
-            num_unet_priming_steps = self.unet_distill_iters_count % 3 + 2
-            # 6: pink
-            log_color_idx = 6            
+            # num_distill_priming_steps: 2 ~ 4.
+            num_distill_priming_steps = self.unet_distill_iters_count % 3 + 2
             # Alternate between priming using Adaface and priming using the teacher.
-            priming_using_adaface = (self.unet_distill_iters_count % 2 == 0)
+            priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
+            self.unet_distill_on_noise_iters_count += 1
+
             if priming_using_adaface:
+                num_adaface_priming_steps = num_distill_priming_steps
+                # 6: pink
+                log_color_idx = 6            
+
                 x_start0  = torch.randn_like(x_start)
                 noise0    = torch.randn_like(noise)
                 t0        = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
@@ -2546,24 +2551,28 @@ class LatentDiffusion(DDPM):
                 fg_mask0  = torch.ones_like(fg_mask)
 
                 # Since not do_adv_attack, mon_loss_dict and session_prefix are not used and could be set to None.
-                # We set num_denoising_steps = num_unet_priming_steps, i.e., we only do priming steps 
-                # in recon_multistep_denoise().
+                # We set num_denoising_steps = num_recon_priming_steps = num_adaface_priming_steps, 
+                # i.e., we only do priming steps in recon_multistep_denoise().
                 noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                     self.recon_multistep_denoise(None, None, 
                                                 x_start0, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
-                                                cfg_scale=2, num_denoising_steps=num_unet_priming_steps, 
-                                                num_recon_priming_steps=num_unet_priming_steps,
+                                                cfg_scale=2, num_denoising_steps=num_adaface_priming_steps, 
+                                                num_recon_priming_steps=num_adaface_priming_steps,
                                                 recon_on_pure_noise=True, enable_unet_attn_lora=False, 
                                                 # ffn_lora_adapter_name is 'unet_distill', 
                                                 # to get an x_start compatible with the teacher.
                                                 ffn_lora_adapter_name='unet_distill',  
                                                 enable_unet_ffn_lora=True, do_adv_attack=False, DO_ADV_BS=-1)
                 x_start = x_starts[-1]
+                num_teacher_priming_steps = 0
             else:
-                num_unet_denoising_steps += num_unet_priming_steps
+                num_teacher_priming_steps = num_distill_priming_steps 
+                num_unet_denoising_steps += num_teacher_priming_steps
+                # 7: magenta
+                log_color_idx = 7
         else:
             priming_using_adaface = False
-            num_unet_priming_steps = 0
+            num_teacher_priming_steps = 0
             # 2: red
             log_color_idx = 2
 
@@ -2572,7 +2581,7 @@ class LatentDiffusion(DDPM):
                             (x_start.shape[0],), device=x_start.device).long()
 
         # log_image_colors: a list of 0-6, indexing colors 
-        # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
+        # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
         # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
         # If unet_distill_on_image:      all of them are 2, indicating red.
         log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
@@ -2683,7 +2692,7 @@ class LatentDiffusion(DDPM):
         noise_preds = []
         #all_recon_images = []
 
-        for s in range(num_unet_priming_steps, num_unet_denoising_steps):
+        for s in range(num_teacher_priming_steps, num_unet_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
             # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
             # used to seed the second denoising step. 
@@ -2721,20 +2730,20 @@ class LatentDiffusion(DDPM):
 
             recon_images_s = self.decode_first_stage(x_recon_s)
             # log_image_colors: a list of 0-6, indexing colors 
-            # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
+            # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
             # If unet_distill_on_image:      all of them are 2, indicating red.
             log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * log_color_idx
             self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
 
-        iter_type_str = f'on {num_unet_priming_steps}-step primed noise' if unet_distill_on_pure_noise else 'on image'
+        iter_type_str = f'on {num_distill_priming_steps}-step primed noise' if unet_distill_on_pure_noise else 'on image'
         print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation ({iter_type_str}):")
         losses_unet_distill = []
 
         # noise_preds only contains the student predicted noises, not including the priming steps.
-        # Therefore we don't need to exclude the results of the first num_unet_priming_steps steps.
+        # Therefore we don't need to exclude the results of the first num_teacher_priming_steps steps.
         for s in range(len(noise_preds)):
-            noise_pred, noise_gt = noise_preds[s], noise_gts[s+num_unet_priming_steps]
+            noise_pred, noise_gt = noise_preds[s], noise_gts[s+num_teacher_priming_steps]
 
             # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
@@ -3301,7 +3310,7 @@ class LatentDiffusion(DDPM):
     # or a list of 3D [C, H, W] torch tensors.
     # Data type of samples could be uint (0-25), or float (-1, 1) or (0, 1).
     # If (-1, 1), then we should set do_normalize=True.
-    # img_colors: a single 1D torch tensor, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink' ]
+    # img_colors: a single 1D torch tensor, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
     # For raw output from raw output from SD decode_first_stage(),
     # samples are be between [-1, 1], so we set do_normalize=True, which will convert and clamp to [0, 1].
     @rank_zero_only
