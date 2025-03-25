@@ -1737,7 +1737,7 @@ class LatentDiffusion(DDPM):
     def recon_multistep_denoise(self, mon_loss_dict, session_prefix,
                                 x_start0, noise, t, cond_context, 
                                 uncond_emb, img_mask, fg_mask, cfg_scale, 
-                                num_denoising_steps, num_recon_priming_steps,
+                                num_denoising_steps, num_priming_steps,
                                 recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora, 
                                 ffn_lora_adapter_name, do_adv_attack, DO_ADV_BS):
 
@@ -1755,9 +1755,9 @@ class LatentDiffusion(DDPM):
             x_start = x_starts[i]
             t       = ts[i]
             noise   = noises[i]
-            is_post_priming = (i >= num_recon_priming_steps)
+            is_post_priming = (i >= num_priming_steps)
 
-            # Only enable gradients after num_recon_priming_steps.
+            # Only enable gradients after num_priming_steps.
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, cond_context,
                                     uncond_emb, img_mask, 
@@ -2530,8 +2530,7 @@ class LatentDiffusion(DDPM):
         
         # Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:
-            # num_distill_priming_steps: 3 ~ 4.
-            num_distill_priming_steps = self.unet_distill_iters_count % 2 + 3
+            num_distill_priming_steps = 4
             # Alternate between priming using Adaface and priming using the teacher.
             priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
             self.unet_distill_on_noise_iters_count += 1
@@ -2557,12 +2556,13 @@ class LatentDiffusion(DDPM):
                     self.recon_multistep_denoise(None, None, 
                                                  x_start, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
                                                  cfg_scale=2, num_denoising_steps=num_adaface_priming_steps, 
-                                                 num_recon_priming_steps=num_adaface_priming_steps,
+                                                 num_priming_steps=num_adaface_priming_steps,
                                                  recon_on_pure_noise=True, enable_unet_attn_lora=False, 
+                                                 enable_unet_ffn_lora=True, 
                                                  # ffn_lora_adapter_name is 'unet_distill', 
                                                  # to get an x_start compatible with the teacher.
                                                  ffn_lora_adapter_name='unet_distill',  
-                                                 enable_unet_ffn_lora=True, do_adv_attack=False, DO_ADV_BS=-1)
+                                                 do_adv_attack=False, DO_ADV_BS=-1)
                 x_start = x_starts[-1]
                 num_teacher_priming_steps = 0
             else:
