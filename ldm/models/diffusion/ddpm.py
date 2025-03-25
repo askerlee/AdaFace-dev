@@ -2576,8 +2576,8 @@ class LatentDiffusion(DDPM):
             # 2: red
             log_color_idx = 2
 
-        # Regenerate a smaller t for unet distillation.
-        t = torch.randint(int(self.num_timesteps * 0.6), int(self.num_timesteps * 0.85), 
+        # Regenerate a slightly smaller t for unet distillation.
+        t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
                           (x_start.shape[0],), device=x_start.device).long()
 
         # log_image_colors: a list of 0-6, indexing colors 
@@ -2812,83 +2812,19 @@ class LatentDiffusion(DDPM):
         # Update masks to be a 1-repeat-4 structure.
         masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
 
-        # If num_primed_denoising_steps > 1, then we split the denoising steps into
-        # shared denoising steps and separate denoising steps.
-        # This is to make sure the subj init x_start and cls init x_start do not deviate too much.
-        # num_primed_denoising_steps: 2 -> (1, 1). 3 -> (1, 2). 4 -> (1, 3), 5 -> (2, 3).
-        # MAX_N_SHARED is at most num_primed_denoising_steps / 2.4.
-        MAX_N_SHARED = max(int(num_primed_denoising_steps / 2.4), 1)
-        # The number of separate denoising steps is around 2/3 of num_primed_denoising_steps, and at least 1.
-        num_sep_denoising_steps     = max(num_primed_denoising_steps - MAX_N_SHARED, 1)
-        num_shared_denoising_steps  = num_primed_denoising_steps - num_sep_denoising_steps
         all_t_list = []
 
         uncond_emb = self.uncond_context[0]
 
-        # ** Do num_shared_denoising_steps of shared denoising steps with the subj-mix-cls comp prompts.
-        if num_shared_denoising_steps > 0:
-            # Class priming denoising: Denoise x_start_1 with the comp prompts 
-            # for num_shared_denoising_steps times, using self.comp_distill_priming_unet.
-            x_start_1   = x_start.chunk(4)[0]
-            noise_1     = noise.chunk(4)[0]
-            t_1         = t.chunk(4)[0]
-
-            if self.cls_subj_mix_scheme == 'unet':
-                teacher_context=[subj_comp_prompt_emb, cls_comp_prompt_emb]
-            else:
-                # cls_comp_prompt_emb2 + the SAR checkpoint will 
-                # generate good compositional images.
-                teacher_context=[cls_comp_prompt_emb2]
-
-            # Since we always use CFG for class priming denoising,
-            # we need to pass the negative prompt as well.
-            # cfg_scale_range of comp_distill_priming_unet is [2, 4].
-            # primed_noises: the noises that have been used in the denoising.
-            with torch.no_grad():
-                primed_noise_preds, primed_x_starts, primed_noises, all_t = \
-                    self.comp_distill_priming_unet(self, x_start_1, noise_1, t_1, 
-                                                   # In each timestep, the unet ensemble will do denoising on the same x_start_1 
-                                                   # with subj_single_prompt_emb, subj_comp_prompt_emb and cls_comp_prompt_emb, then average the results.
-                                                   # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                                   # From the outside, the unet ensemble is transparent, like a single unet.
-                                                   teacher_context=teacher_context, 
-                                                   negative_context=uncond_emb,
-                                                   num_denoising_steps=num_shared_denoising_steps,
-                                                   # Same t and noise across instances.
-                                                   same_t_noise_across_instances=True,
-                                                   global_t_lb=400)
-                
-            # Repeat the 1-instance denoised x_start_1 to 2-instance x_start_2, i.e., 
-            # one for the single instance, one for the comp instance.
-            x_start_2 = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-            # If num_shared_denoising_steps == 1, then all_t[-1] == t_1. In this case, we need to resample t_2.
-            if num_shared_denoising_steps > 1:
-                t_2 = all_t[-1].repeat(2)
-            else:
-                # If there are more sep denoising steps, then t_lb/t_1 is closer to 1, i.e., 
-                # shrinking with a ~1 ratio. If there are fewer sep denoising steps, 
-                # then t_lb/t_1 is closer to 0.5.
-                t_lb = t_1 * np.power(0.65, np.power(num_sep_denoising_steps + 1, -0.3))
-                t_ub = t_1 * np.power(0.8,  np.power(num_sep_denoising_steps + 1, -0.3))
-                t_lb = torch.clamp(t_lb, min=400)
-                t_2  = (t_ub - t_lb) * torch.rand(1, device=t_1.device) + t_lb
-                t_2  = t_2.long().repeat(2)
-
-            all_t_list  += [ ti[0].item() for ti in all_t ]
-        else:
-            # Class priming denoising: Denoise x_start_2 with the class single/comp prompts 
-            # for num_sep_denoising_steps times, using self.comp_distill_priming_unet.
-            # We only use half of the batch for faster class priming denoising.
-            # x_start and t are initialized as 1-repeat-4 at above, so the half is 1-repeat-2.
-            # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
-            x_start_2   = x_start.chunk(2)[0]
-            t_2         = t.chunk(2)[1]
-
-        # We've made sure they use the same x_start and t.
-        # Here we ensure the two instances (one single, one comp) use the same noise,
-        # since the third block is the subj-comp-rep instance, using different noise 
-        # will lead to multiple-face artifacts.
-        noise_2 = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(2, 1, 1, 1)
+        # Class priming denoising: Denoise x_start_2 with the class single/comp prompts 
+        # for num_sep_denoising_steps times, using self.comp_distill_priming_unet.
+        # We only use half of the batch for faster class priming denoising.
+        # x_start, t and noise are initialized as 1-repeat-4 at above, so the half is 1-repeat-2.
+        # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
+        x_start_2   = x_start.chunk(2)[0]
+        t_2         = t.chunk(2)[1]
+        noise_2     = noise.chunk(2)[0]
+        
         subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
@@ -2919,7 +2855,7 @@ class LatentDiffusion(DDPM):
                                                # From the outside, the unet ensemble is transparent, like a single unet.
                                                teacher_context=teacher_context, 
                                                negative_context=uncond_emb,
-                                               num_denoising_steps=num_sep_denoising_steps,
+                                               num_denoising_steps=num_primed_denoising_steps,
                                                # Same t and noise across instances.
                                                same_t_noise_across_instances=True)
         
