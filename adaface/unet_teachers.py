@@ -62,45 +62,40 @@ class UNetTeacher(nn.Module):
     # t: the initial t. We will sample additional (num_denoising_steps - 1) smaller t.
     # same_t_noise_across_instances: when sampling t and noise, use the same t and noise for all instances.
     def forward(self, ddpm_model, x_start, noise, t, teacher_context, negative_context=None,
-                num_denoising_steps=1, same_t_noise_across_instances=False,
+                num_denoising_steps=1, num_priming_steps=0, same_t_noise_across_instances=False,
                 global_t_lb=0, global_t_ub=1000):
         assert num_denoising_steps <= 10
 
         if self.p_uses_cfg > 0:
             self.uses_cfg = np.random.rand() < self.p_uses_cfg
-            if self.uses_cfg:
-                # Randomly sample a cfg_scale from cfg_scale_range.
-                self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
-                if self.cfg_scale == 1:
-                    self.uses_cfg = False
-
-            if self.uses_cfg:
-                print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
-                if negative_context is not None:
-                    negative_context = negative_context[:1].repeat(x_start.shape[0], 1, 1)
-
-                # if negative_context is None, then teacher_context is a combination of
-                # (one or multiple if unet_ensemble) pos_context and neg_context.
-                # If negative_context is not None, then teacher_context is only pos_context.
-            else:
-                self.cfg_scale = 1
-                print("Teacher does not use CFG.")
-
-                # If negative_context is None, then teacher_context is a combination of 
-                # (one or multiple if unet_ensemble) pos_context and neg_context.
-                # Since not uses_cfg, we only need pos_context.
-                # If negative_context is not None, then teacher_context is only pos_context.
-                if negative_context is None:
-                    teacher_context = self.extract_pos_context(teacher_context, x_start.shape[0])
+        # If doing priming, we always use CFG.
+        elif num_priming_steps > 0:
+            self.uses_cfg = True
         else:
             # p_uses_cfg = 0. Never use CFG. 
             self.uses_cfg = False
-            # In this case, the student only passes pos_context to the teacher,
-            # so no need to split teacher_context into pos_context and neg_context.
-            # self.cfg_scale will be accessed by the student,
-            # so we need to make sure it is always set correctly, 
-            # in case someday we want to switch from CFG to non-CFG during runtime.
             self.cfg_scale = 1
+
+        if self.uses_cfg:
+            # Randomly sample a cfg_scale from cfg_scale_range.
+            self.cfg_scale = np.random.uniform(*self.cfg_scale_range)
+            print(f"Teacher samples CFG scale {self.cfg_scale:.1f}.")
+            if negative_context is not None:
+                negative_context = negative_context[:1].repeat(x_start.shape[0], 1, 1)
+
+            # if negative_context is None, then teacher_context is a combination of
+            # (one or multiple if unet_ensemble) pos_context and neg_context.
+            # If negative_context is not None, then teacher_context is only pos_context.
+        else:
+            self.cfg_scale = 1
+            print("Teacher does not use CFG.")
+
+            # If negative_context is None, then teacher_context is either a combination of 
+            # (one or multiple if unet_ensemble) pos_context and neg_context, or only pos_context.
+            # Since not uses_cfg, we only need pos_context.
+            # If negative_context is not None, then teacher_context is only pos_context.
+            if negative_context is None:
+                teacher_context = self.extract_pos_context(teacher_context, x_start.shape[0])
 
         is_context_doubled = 2 if (self.uses_cfg and negative_context is None) else 1
         if self.name == 'unet_ensemble':
@@ -199,14 +194,20 @@ class UNetTeacher(nn.Module):
             teacher_pos_contexts = []
             # teacher_context is a list of teacher contexts.
             for teacher_context_i in teacher_context:
-                pos_context, neg_context = torch.chunk(teacher_context_i, 2, dim=0)
-                if pos_context.shape[0] != BS:
-                    breakpoint()             
+                if teacher_context_i.shape[0] == BS * 2:
+                    pos_context, neg_context = torch.chunk(teacher_context_i, 2, dim=0)
+                elif teacher_context_i.shape[0] == BS:
+                    pos_context = teacher_context_i
+                else:
+                    breakpoint()
                 teacher_pos_contexts.append(pos_context)
             teacher_context = teacher_pos_contexts       
         else:
-            pos_context, neg_context = torch.chunk(teacher_context, 2, dim=0)
-            if pos_context.shape[0] != BS:
+            if teacher_context.shape[0] == BS * 2:
+                pos_context, neg_context = torch.chunk(teacher_context, 2, dim=0)
+            elif teacher_context.shape[0] == BS:
+                pos_context = teacher_context
+            else:
                 breakpoint()
             teacher_context = pos_context
 

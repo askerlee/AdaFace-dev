@@ -99,7 +99,7 @@ class DDPM(pl.LightningModule):
                  recon_num_denoising_steps_range=[2, 2],
                  comp_distill_denoising_steps_range=[4, 4],
                  p_unet_teacher_uses_cfg=0.6,
-                 unet_teacher_cfg_scale_range=[1.3, 2],
+                 unet_teacher_cfg_scale_range=[1.5, 2.5],
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
@@ -2530,8 +2530,8 @@ class LatentDiffusion(DDPM):
         
         # Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:
-            # num_distill_priming_steps: 2 ~ 4.
-            num_distill_priming_steps = self.unet_distill_iters_count % 3 + 2
+            # num_distill_priming_steps: 3 ~ 4.
+            num_distill_priming_steps = self.unet_distill_iters_count % 2 + 3
             # Alternate between priming using Adaface and priming using the teacher.
             priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
             self.unet_distill_on_noise_iters_count += 1
@@ -2679,7 +2679,8 @@ class LatentDiffusion(DDPM):
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
                 self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
-                                  num_denoising_steps=num_unet_denoising_steps)
+                                  num_denoising_steps=num_unet_denoising_steps,
+                                  num_priming_steps=num_teacher_priming_steps)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
         # noise_gts: replaced as the reconstructed x0 by the teacher UNet.
