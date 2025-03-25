@@ -2466,15 +2466,17 @@ class LatentDiffusion(DDPM):
             recon_face_images_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
             mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_noise_frac': recon_face_images_on_noise_frac})
             # pause_comp_iters_on_face_frac_lower_than = 0.75
-            if recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than:
+            # If comp iters are already paused, then we don't resume until recon_face_images_on_noise_frac >= 0.77.
+            if recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than \
+              or self.comp_iters_paused and recon_face_images_on_noise_frac < self.resume_comp_iters_on_face_frac_higher_than:
                 self.comp_iters_paused = True
-                print(f"Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
+                print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
                        "PAUSE COMPOSITIONAL ITERATIONS.")
             # resume_comp_iters_on_face_frac_higher_than = 0.77
-            # A margin of 0.03 is used to avoid frequent pausing and resuming.
+            # A margin of 0.02 is used to avoid frequent pausing and resuming.
             elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
                 self.comp_iters_paused = False
-                print(f"Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
+                print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
                        "RESUME COMPOSITIONAL ITERATIONS.")
         else:
             # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
