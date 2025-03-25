@@ -66,11 +66,11 @@ class UNetTeacher(nn.Module):
                 global_t_lb=0, global_t_ub=1000):
         assert num_denoising_steps <= 10
 
-        if self.p_uses_cfg > 0:
-            self.uses_cfg = np.random.rand() < self.p_uses_cfg
         # If doing priming, we always use CFG.
-        elif num_priming_steps > 0:
+        if num_priming_steps > 0:
             self.uses_cfg = True
+        elif self.p_uses_cfg > 0:
+            self.uses_cfg = np.random.rand() < self.p_uses_cfg
         else:
             # p_uses_cfg = 0. Never use CFG. 
             self.uses_cfg = False
