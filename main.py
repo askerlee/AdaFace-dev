@@ -232,7 +232,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to load the attn LoRA modules from the checkpoint")
     parser.add_argument("--load_unet_ffn_adapters_from_ckpt", type=str, nargs="*", 
                         default=['all'],
-                        choices=['recon_loss', 'unet_distill', 'comp_distill', 'all'], 
+                        choices=['recon_loss', 'unet_distill', 'comp_distill', 'all', 'none'], 
                         help="Load these ffn adapters from the checkpoint")
     parser.add_argument("--p_shrink_cross_attn_in_comp_iters", type=float, default=argparse.SUPPRESS,
                         help="Whether to suppress the subject attention in the subject-compositional instances")
@@ -699,7 +699,10 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.prompt2token_proj_ext_attention_perturb_ratio = opt.prompt2token_proj_ext_attention_perturb_ratio
         config.model.params.personalization_config.params.load_unet_attn_lora_from_ckpt = opt.load_unet_attn_lora_from_ckpt
-        config.model.params.personalization_config.params.load_unet_ffn_adapters_from_ckpt  = opt.load_unet_ffn_adapters_from_ckpt
+        if opt.load_unet_ffn_adapters_from_ckpt == ['none']:
+            config.model.params.personalization_config.params.load_unet_ffn_adapters_from_ckpt = []
+        else:
+            config.model.params.personalization_config.params.load_unet_ffn_adapters_from_ckpt = opt.load_unet_ffn_adapters_from_ckpt
         
         if hasattr(opt, 'unet_distill_iter_gap'):
             config.model.params.unet_distill_iter_gap = opt.unet_distill_iter_gap

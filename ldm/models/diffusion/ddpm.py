@@ -116,7 +116,8 @@ class DDPM(pl.LightningModule):
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=5e-3,
                  pred_l2_threshold=0.95,
-                 pred_l2_loss_weight=0.05,
+                 # loss_pred_l2 hurts ID without lowering pred L2, so we disable and just monitor it.
+                 pred_l2_loss_weight=0, #0.05,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=False,
@@ -2508,7 +2509,7 @@ class LatentDiffusion(DDPM):
         # pred_l2: 0.92~0.99.
         mon_loss_dict.update({f'{session_prefix}/pred_l2': pred_l2.mean().detach().item()})
         if self.pred_l2_loss_weight > 0:
-            # pred_l2_loss_weight: 0.05
+            # pred_l2_loss_weight: 0, DISABLED.
             loss_normal_recon += loss_pred_l2 * self.pred_l2_loss_weight
 
         if not recon_on_pure_noise:
@@ -3176,7 +3177,7 @@ class LatentDiffusion(DDPM):
         # loss_pred_l2: 0.92~0.99. But we don't optimize it; instead, it's just for monitoring.
         mon_loss_dict.update({f'{session_prefix}/pred_l2': pred_l2.mean().detach().item()})
         if self.pred_l2_loss_weight > 0:
-            # pred_l2_loss_weight: 0.05
+            # pred_l2_loss_weight: 0, DISABLED.
             loss_comp_feat_distill += loss_pred_l2 * self.pred_l2_loss_weight
 
         return loss_comp_feat_distill            
