@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
                  p_recon_on_comp_prompt=0.2,
-                 p_recon_on_pure_noise=0.2,
+                 p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
                  recon_with_adv_attack_iter_gap=3,
