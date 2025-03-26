@@ -155,7 +155,8 @@ class DDPM(pl.LightningModule):
         self.pause_comp_iters_on_face_frac_lower_than = pause_comp_iters_on_face_frac_lower_than
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
         self.resume_comp_iters_on_face_frac_higher_than = min(self.pause_comp_iters_on_face_frac_lower_than + 0.02, 0.9)
-        self.comp_iters_paused                       = False
+        self.comp_iters_paused                      = False
+        self.arcface_loss_on_noise_paused           = False
 
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
@@ -2361,6 +2362,7 @@ class LatentDiffusion(DDPM):
         pred_l2s        = []
         losses_pred_l2s = []
         latent_shape, device = x_start.shape, x_start.device
+        arcface_loss_has_grad = (not recon_on_pure_noise) or self.arcface_loss_on_noise_paused
 
         for i in range(num_recon_priming_steps, num_denoising_steps):
             noise, noise_pred, x_recon, ca_layers_activations = \
@@ -2393,8 +2395,9 @@ class LatentDiffusion(DDPM):
                 # We still compute the recon loss on the good instances with face detected, 
                 # which are indicated by face_detected_inst_mask.
                 # face_detected_inst_mask: binary tensor of [BS].
-                loss_arcface_align_recon_step, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
-                    self.calc_arcface_align_loss(x_start, x_recon, bleed=0, do_grad_smoothing=True)
+                with torch.set_grad_enabled(arcface_loss_has_grad):
+                    loss_arcface_align_recon_step, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
+                        self.calc_arcface_align_loss(x_start, x_recon, bleed=0, do_grad_smoothing=True)
 
                 # Count recon_on_pure_noise stats and non-pure-noise stats separately.
                 # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
@@ -2470,18 +2473,21 @@ class LatentDiffusion(DDPM):
             # If comp iters are already paused, then we don't resume until recon_face_images_on_noise_frac >= 0.77.
             if (recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than):
                 self.comp_iters_paused = True
+                self.arcface_loss_on_noise_paused = True
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                       "PAUSE COMPOSITIONAL ITERATIONS.")
+                       "PAUSE COMPOSITIONAL ITERATIONS. Pause noise-based face loss.")
             elif self.comp_iters_paused and recon_face_images_on_noise_frac < self.resume_comp_iters_on_face_frac_higher_than:
                 self.comp_iters_paused = True
+                self.arcface_loss_on_noise_paused = True
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than}. "
-                       "KEEP COMPOSITIONAL ITERATIONS PAUSED.")
+                       "KEEP COMPOSITIONAL ITERATIONS and noise-based face loss learning PAUSED.")
             # resume_comp_iters_on_face_frac_higher_than = 0.77
             # A margin of 0.02 is used to avoid frequent pausing and resuming.
             elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
                 self.comp_iters_paused = False
+                self.arcface_loss_on_noise_paused = False
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
-                       "RESUME COMPOSITIONAL ITERATIONS.")
+                       "RESUME COMPOSITIONAL ITERATIONS and noise-based face loss.")
         else:
             # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
             recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
@@ -2493,8 +2499,9 @@ class LatentDiffusion(DDPM):
                 if recon_on_pure_noise:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.mean().item():.4f}")
-                    # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, so we scale it up.
-                    arcface_align_recon_loss_scale = 2
+                    # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
+                    # without being stablized by the recon loss, so we scale it down.
+                    arcface_align_recon_loss_scale = 0.5
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.mean().item():.4f}")
