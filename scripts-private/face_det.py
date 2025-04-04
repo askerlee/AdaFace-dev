@@ -3,7 +3,7 @@ import cv2
 import sys
 
 detector = insightface.model_zoo.get_model('models/insightface/models/antelopev2/scrfd_10g_bnkps.onnx')
-detector.prepare(ctx_id=0, input_size=(640, 640))
+detector.prepare(ctx_id=0, input_size=(256, 256))
 
 img = cv2.imread(sys.argv[1])
 faces = detector.detect(img)

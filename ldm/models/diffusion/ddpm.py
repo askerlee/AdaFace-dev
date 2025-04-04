@@ -157,7 +157,6 @@ class DDPM(pl.LightningModule):
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
         self.resume_comp_iters_on_face_frac_higher_than = min(self.pause_comp_iters_on_face_frac_lower_than + 0.02, 0.9)
         self.comp_iters_paused                      = False
-        self.arcface_loss_on_noise_paused           = False
 
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
@@ -1787,7 +1786,7 @@ class LatentDiffusion(DDPM):
                                     # res_hidden_states_gradscale: 0.2
                                     res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     use_attn_lora=enable_unet_attn_lora,
-                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
+                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = False.
                                     use_ffn_lora=enable_unet_ffn_lora, 
                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
             
@@ -1795,7 +1794,9 @@ class LatentDiffusion(DDPM):
             # The predicted x0 is used as the x_start in the next denoising step.
             pred_x0 = x_recon
 
-            if recon_on_pure_noise:
+            # In our current implementation, num_priming_steps > 0 only if recon_on_pure_noise.
+            # So no need to check (i < num_priming_steps).
+            if recon_on_pure_noise or (i < num_priming_steps):
                 ## NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
                 x_starts.append(pred_x0.detach())
             else:
@@ -2225,7 +2226,7 @@ class LatentDiffusion(DDPM):
 
         return loss, mon_loss_dict
 
-    def are_faces_present(self, latents):
+    def are_faces_present_in_latents(self, latents):
         # images: [4, 3, 512, 512].
         images = self.decode_first_stage(latents)
         images = torch.clamp(images, -1, 1)
@@ -2237,7 +2238,7 @@ class LatentDiffusion(DDPM):
             are_face_detected.append(len(faces) > 0)
 
         are_face_detected = torch.tensor(are_face_detected, device=latents.device)
-        return are_face_detected
+        return are_face_detected, images
     
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_bboxes is None.
     def calc_arcface_align_loss(self, x_start, x_recon, bleed=0, do_grad_smoothing=False):
@@ -2310,6 +2311,8 @@ class LatentDiffusion(DDPM):
 
         return adv_grad
 
+    # enable_unet_attn_lora: randomly set to True 50% of the time.
+    # enable_unet_ffn_lora: False.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, cond_context, 
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
@@ -2319,7 +2322,7 @@ class LatentDiffusion(DDPM):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
 
         BLOCK_SIZE = x_start.shape[0]
-        # The t at the first denoising step are sampled from the middle 0.5 ~ 0.8 of the timesteps.
+        # The t at the first denoising step are sampled from the middle rear 0.5 ~ 0.8 of the timesteps.
         # In the subsequent denoising steps, the timesteps become gradually earlier.
         if recon_on_pure_noise:
             t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
@@ -2327,12 +2330,9 @@ class LatentDiffusion(DDPM):
             x_start0 = torch.randn_like(x_start)
             num_recon_priming_steps = 4
             num_denoising_steps += num_recon_priming_steps
-            # No fg_mask available since the reconstructions are from pure noise.
-            img_mask = None
-            fg_mask  = torch.ones_like(fg_mask)
         else:
             t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
-                            (x_start.shape[0],), device=self.device).long()
+                              (x_start.shape[0],), device=self.device).long()
             x_start0 = x_start
             num_recon_priming_steps = 0
 
@@ -2342,9 +2342,14 @@ class LatentDiffusion(DDPM):
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
             cfg_scale  = 2
-            # Don't limit the image area to img_mask, to boost the compositional patterns in the background.
-            img_mask = None
-            # print(f"Rank {self.trainer.global_rank} recon_on_comp_prompt cfg_scale: {cfg_scale:.2f}")
+            if recon_on_comp_prompt or recon_on_pure_noise:
+                # If recon_on_comp_prompt, don't limit the image area to img_mask, 
+                # to boost the compositional patterns in the background.
+                # If recon_on_pure_noise, img_mask is meaningless, so set it to None.
+                img_mask = None
+            if recon_on_pure_noise:
+                # If recon_on_pure_noise, fg_mask is meaningless, so set it to None.
+                fg_mask  = torch.ones_like(fg_mask)
         else:
             # Use the default negative prompts.
             # Don't do CFG. So uncond_emb is None.
@@ -2357,10 +2362,11 @@ class LatentDiffusion(DDPM):
 
         input_images = self.decode_first_stage(x_start)
         # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
-        # All of them are 3, indicating purple.
+        # All of them are 3, purple.
         log_image_colors = torch.ones(input_images.shape[0], dtype=int, device=x_start.device) * 3
         self.cache_and_log_generations(input_images, log_image_colors, do_normalize=True)
 
+        # mon_loss_dict is used to log adv_attack stats.
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
@@ -2382,8 +2388,8 @@ class LatentDiffusion(DDPM):
         pred_l2s        = []
         losses_pred_l2s = []
         latent_shape, device = x_start.shape, x_start.device
-        arcface_loss_has_grad = (not recon_on_pure_noise) or self.arcface_loss_on_noise_paused
 
+        # Skip the first num_recon_priming_steps denoising steps from the recon loss computation.
         for i in range(num_recon_priming_steps, num_denoising_steps):
             noise, noise_pred, x_recon, ca_layers_activations = \
                 noises[i], noise_preds[i], x_recons[i], ca_layers_activations_list[i]
@@ -2398,7 +2404,7 @@ class LatentDiffusion(DDPM):
 
             # Calc the L2 norm of noise_pred.
             pred_l2_step = (noise_pred ** 2).mean()
-            # When pred_l2_step is larger than pred_l2_threshold, loss_pred_l2_step is 0.
+            # When pred_l2_step is larger  than pred_l2_threshold, loss_pred_l2_step is 0.
             # When pred_l2_step is smaller than pred_l2_threshold, loss_pred_l2_step is positive.
             loss_pred_l2_step = F.relu(self.pred_l2_threshold - pred_l2_step)   
             pred_l2s.append(pred_l2_step)
@@ -2415,9 +2421,8 @@ class LatentDiffusion(DDPM):
                 # We still compute the recon loss on the good instances with face detected, 
                 # which are indicated by face_detected_inst_mask.
                 # face_detected_inst_mask: binary tensor of [BS].
-                with torch.set_grad_enabled(arcface_loss_has_grad):
-                    loss_arcface_align_recon_step, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
-                        self.calc_arcface_align_loss(x_start, x_recon, bleed=0, do_grad_smoothing=True)
+                loss_arcface_align_recon_step, loss_bg_faces_suppress, fg_face_bboxes, face_detected_inst_mask = \
+                    self.calc_arcface_align_loss(x_start, x_recon, bleed=0, do_grad_smoothing=True)
 
                 # Count recon_on_pure_noise stats and non-pure-noise stats separately.
                 # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
@@ -2493,19 +2498,16 @@ class LatentDiffusion(DDPM):
             # If comp iters are already paused, then we don't resume until recon_face_images_on_noise_frac >= 0.77.
             if (recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than):
                 self.comp_iters_paused = True
-                self.arcface_loss_on_noise_paused = True
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
                        "PAUSE COMPOSITIONAL ITERATIONS. Pause noise-based face loss.")
             elif self.comp_iters_paused and recon_face_images_on_noise_frac < self.resume_comp_iters_on_face_frac_higher_than:
                 self.comp_iters_paused = True
-                self.arcface_loss_on_noise_paused = True
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than}. "
                        "KEEP COMPOSITIONAL ITERATIONS and noise-based face loss learning PAUSED.")
             # resume_comp_iters_on_face_frac_higher_than = 0.77
             # A margin of 0.02 is used to avoid frequent pausing and resuming.
             elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
                 self.comp_iters_paused = False
-                self.arcface_loss_on_noise_paused = False
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
                        "RESUME COMPOSITIONAL ITERATIONS and noise-based face loss.")
         else:
@@ -2705,16 +2707,18 @@ class LatentDiffusion(DDPM):
             num_priming_trials = 3
 
             self.unet_distill_on_noise_iters_count += 1
-            x_start = torch.randn_like(x_start)
-            noise0  = torch.randn_like(noise)
-            t0      = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 0.9), 
-                                    (x_start.shape[0],), device=x_start.device).long()
             # img_mask is used to mask the blank areas around the augmented images.
             # As unet_distill_on_pure_noise, we set img_mask = None.
             img_mask0 = None
             fg_mask0  = torch.ones_like(fg_mask)
 
             for trial_idx in range(num_priming_trials):
+                # Regenerate x_start, noise0 and t0 for each trial.
+                x_start = torch.randn_like(x_start)
+                noise0  = torch.randn_like(noise)
+                t0      = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 0.9), 
+                                        (x_start.shape[0],), device=x_start.device).long()
+
                 if priming_using_adaface:
                     # Since not do_adv_attack, mon_loss_dict and session_prefix are not used and could be set to None.
                     # We set num_denoising_steps = num_distill_priming_steps, 
@@ -2740,15 +2744,20 @@ class LatentDiffusion(DDPM):
                                               force_uses_cfg=True)
 
                 x_start = x_starts[-1]
-                are_face_detected = self.are_faces_present(x_start)
-                priming_model_name = 'Adaface' if priming_using_adaface else 'unet_teacher'
+                are_face_detected, x_start_pixels = self.are_faces_present_in_latents(x_start)
+                priming_model_name = 'Adaface' if priming_using_adaface else 'Teacher'
                 if torch.all(are_face_detected):
                     # If all instances contain faces, then we can stop the priming trials.
                     print(f"Rank {self.trainer.global_rank} {priming_model_name} distill priming trial {trial_idx+1}/{num_priming_trials} succeeded. Stop.")
                     break
                 else:
-                    print(f"Rank {self.trainer.global_rank} {priming_model_name} distill priming trial {trial_idx+1}/{num_priming_trials} failed. "
+                    continue_or_give_up = 'continue' if trial_idx < num_priming_trials - 1 else 'give up'
+                    print(f"Rank {self.trainer.global_rank} {priming_model_name} distill priming trial {trial_idx+1}/{num_priming_trials} failed. {continue_or_give_up}."
                           f"Face detected: {are_face_detected.sum().item()}/{are_face_detected.shape[0]}.")
+
+            # Log the primed x_start images.
+            log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
+            self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
 
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
