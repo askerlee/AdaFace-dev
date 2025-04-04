@@ -232,8 +232,8 @@ def create_consistentid_pipeline(base_model_path="models/sd15-dste8-vae.safetens
     # consistentID specific modules are still in fp32. Will be converted to fp16 
     # later with .to(device, torch_dtype) by the caller.
     pipe.load_ConsistentID_model(
-        consistentID_weight_path="ConsistentID/models/ConsistentID-v1.bin",
-        bise_net_weight_path="ConsistentID/models/BiSeNet_pretrained_for_ConsistentID.pth",
+        consistentID_weight_path="models/ConsistentID/ConsistentID-v1.bin",
+        bise_net_weight_path="models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth",
     )
     # Avoid passing dtype to ConsistentIDPipeline.from_single_file(),
     # because we've overloaded .to() to convert consistentID specific modules as well, 

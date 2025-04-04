@@ -738,8 +738,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             # but diffusers will call .to(dtype) in .from_single_file(), 
             # and at that moment, the consistentID specific modules are not loaded yet.            
             pipe = ConsistentIDPipeline.from_single_file(base_model_path)
-            pipe.load_ConsistentID_model(consistentID_weight_path="ConsistentID/models/ConsistentID-v1.bin",
-                                         bise_net_weight_path="ConsistentID/models/BiSeNet_pretrained_for_ConsistentID.pth")
+            pipe.load_ConsistentID_model(consistentID_weight_path="models/ConsistentID/ConsistentID-v1.bin",
+                                         bise_net_weight_path="models/ConsistentID/BiSeNet_pretrained_for_ConsistentID.pth")
             pipe.to(dtype=self.dtype)
             # Since the passed-in pipe is None, this should be called during inference,
             # when the teacher ConsistentIDPipeline is not initialized. 
