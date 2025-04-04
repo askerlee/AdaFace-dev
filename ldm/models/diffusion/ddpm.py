@@ -2581,60 +2581,18 @@ class LatentDiffusion(DDPM):
                                x_start, noise, cond_context, extra_info, 
                                img_mask, fg_mask, subj_indices, 
                                num_unet_denoising_steps, unet_distill_on_pure_noise):
+        if unet_distill_on_pure_noise:
+            # Alternate between priming using Adaface and priming using the teacher.
+            priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
+            # 6: pink, 7: magenta
+            log_color_idx = 6 if priming_using_adaface else 7
+        else:
+            log_color_idx = 2
+
         BLOCK_SIZE = x_start.shape[0]
         uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
         x_start_pixels = self.decode_first_stage(x_start)
         
-        # Use totally random x_start as the input latent images.
-        if unet_distill_on_pure_noise:
-            num_distill_priming_steps = 4
-            # Alternate between priming using Adaface and priming using the teacher.
-            priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
-            self.unet_distill_on_noise_iters_count += 1
-            x_start   = torch.randn_like(x_start)
-
-            if priming_using_adaface:
-                num_adaface_priming_steps = num_distill_priming_steps
-                # 6: pink
-                log_color_idx = 6            
-
-                noise0 = torch.randn_like(noise)
-                t0     = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 0.9), 
-                                       (x_start.shape[0],), device=x_start.device).long()
-                # img_mask is used to mask the blank areas around the augmented images.
-                # As unet_distill_on_pure_noise, we set img_mask = None.
-                img_mask0 = None
-                fg_mask0  = torch.ones_like(fg_mask)
-
-                # Since not do_adv_attack, mon_loss_dict and session_prefix are not used and could be set to None.
-                # We set num_denoising_steps = num_recon_priming_steps = num_adaface_priming_steps, 
-                # i.e., we only do priming steps in recon_multistep_denoise().
-                noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-                    self.recon_multistep_denoise(None, None, 
-                                                 x_start, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
-                                                 cfg_scale=2, num_denoising_steps=num_adaface_priming_steps, 
-                                                 num_priming_steps=num_adaface_priming_steps,
-                                                 recon_on_pure_noise=True, enable_unet_attn_lora=False, 
-                                                 enable_unet_ffn_lora=True, 
-                                                 # ffn_lora_adapter_name is 'unet_distill', 
-                                                 # to get an x_start compatible with the teacher.
-                                                 ffn_lora_adapter_name='unet_distill',  
-                                                 do_adv_attack=False, DO_ADV_BS=-1)
-                x_start = x_starts[-1]
-                are_face_detected = self.are_faces_present(x_start)
-                
-                num_teacher_priming_steps = 0
-            else:
-                num_teacher_priming_steps = num_distill_priming_steps 
-                num_unet_denoising_steps += num_teacher_priming_steps
-                # 7: magenta
-                log_color_idx = 7
-        else:
-            priming_using_adaface = False
-            num_teacher_priming_steps = 0
-            # 2: red
-            log_color_idx = 2
-
         # Regenerate a slightly smaller t for unet distillation.
         t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
                           (x_start.shape[0],), device=x_start.device).long()
@@ -2649,9 +2607,11 @@ class LatentDiffusion(DDPM):
         prompt_emb, prompt_in, extra_info = cond_context
         # student_prompt_embs is the prompt embedding of the student model.
         student_prompt_embs = cond_context[0]
+
+        ####### Begin of Preparing the teacher context #######
         # ** OBSOLETE ** NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
         # extra_unet_dirpaths (finetuned unets on the original SD unet); 
-        # in this case they are surely not 'arc2face' or 'consistentID'.
+        # In this case, they are surely not 'arc2face' or 'consistentID'.
         # The same student_prompt_embs is used by all unet_teachers.
         if self.unet_teacher_types == ['unet_ensemble']:
             teacher_contexts = [student_prompt_embs]
@@ -2730,16 +2690,71 @@ class LatentDiffusion(DDPM):
                         teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
 
                 teacher_contexts.append(teacher_context)
+
             # If there's only one teacher, then self.unet_teacher is not a UNetEnsembleTeacher.
             # So we dereference the list.
             if len(teacher_contexts) == 1:
                 teacher_contexts = teacher_contexts[0]
+        ####### End of Preparing the teacher context #######
+
+        # unet_distill_on_pure_noise: Use totally random x_start as the input latent images.
+        if unet_distill_on_pure_noise:
+            num_distill_priming_steps = 4
+            # If all num_priming_trials of priming trials fail (no face detected),
+            # then we stop trying and go with the last x_start.
+            num_priming_trials = 3
+
+            self.unet_distill_on_noise_iters_count += 1
+            x_start = torch.randn_like(x_start)
+            noise0  = torch.randn_like(noise)
+            t0      = torch.randint(int(self.num_timesteps * 0.75), int(self.num_timesteps * 0.9), 
+                                    (x_start.shape[0],), device=x_start.device).long()
+            # img_mask is used to mask the blank areas around the augmented images.
+            # As unet_distill_on_pure_noise, we set img_mask = None.
+            img_mask0 = None
+            fg_mask0  = torch.ones_like(fg_mask)
+
+            for trial_idx in range(num_priming_trials):
+                if priming_using_adaface:
+                    # Since not do_adv_attack, mon_loss_dict and session_prefix are not used and could be set to None.
+                    # We set num_denoising_steps = num_distill_priming_steps, 
+                    # i.e., we only do priming steps in recon_multistep_denoise().
+                    # recon_multistep_denoise() always uses CFG.
+                    noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
+                        self.recon_multistep_denoise(None, None, 
+                                                     x_start, noise0, t0, cond_context, uncond_emb, img_mask0, fg_mask0,
+                                                     cfg_scale=2, num_denoising_steps=num_distill_priming_steps, 
+                                                     num_priming_steps=num_distill_priming_steps,
+                                                     recon_on_pure_noise=True, enable_unet_attn_lora=False, 
+                                                     enable_unet_ffn_lora=True, 
+                                                     # ffn_lora_adapter_name is 'unet_distill', 
+                                                     # to get an x_start compatible with the teacher.
+                                                     ffn_lora_adapter_name='unet_distill',  
+                                                     do_adv_attack=False, DO_ADV_BS=-1)
+                else:
+                    with torch.no_grad():
+                        # force_uses_cfg=True: unet_teacher() always uses CFG.
+                        noise_preds, x_starts, noises, ts = \
+                            self.unet_teacher(self, x_start, noise0, t0, teacher_contexts, 
+                                              num_denoising_steps=num_distill_priming_steps,
+                                              force_uses_cfg=True)
+
+                x_start = x_starts[-1]
+                are_face_detected = self.are_faces_present(x_start)
+                priming_model_name = 'Adaface' if priming_using_adaface else 'unet_teacher'
+                if torch.all(are_face_detected):
+                    # If all instances contain faces, then we can stop the priming trials.
+                    print(f"Rank {self.trainer.global_rank} {priming_model_name} distill priming trial {trial_idx+1}/{num_priming_trials} succeeded. Stop.")
+                    break
+                else:
+                    print(f"Rank {self.trainer.global_rank} {priming_model_name} distill priming trial {trial_idx+1}/{num_priming_trials} failed. "
+                          f"Face detected: {are_face_detected.sum().item()}/{are_face_detected.shape[0]}.")
 
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
                 self.unet_teacher(self, x_start, noise, t, teacher_contexts, 
                                   num_denoising_steps=num_unet_denoising_steps,
-                                  force_uses_cfg=unet_distill_on_pure_noise)
+                                  force_uses_cfg=False)
         
         # **Objective 2**: Align student noise predictions with teacher noise predictions.
         # noise_gts: replaced as the reconstructed x0 by the teacher UNet.
@@ -2750,12 +2765,15 @@ class LatentDiffusion(DDPM):
 
         # The outputs of the remaining denoising steps will be appended to noise_preds.
         noise_preds = []
-        #all_recon_images = []
 
-        for s in range(num_teacher_priming_steps, num_unet_denoising_steps):
+        for s in range(num_unet_denoising_steps):
             # Predict the noise with t_s (a set of earlier t).
             # When s > 1, x_start_s is the unet_teacher predicted images in the previous step,
             # used to seed the second denoising step. 
+            # Some unet_teacher_x_starts used CFG and some did not.
+            # NOTE: CFG only changes unet_teacher_x_starts and x_recon_s, 
+            # not the predicted noises noise_pred_s, on which we compute the distillation loss.
+            # Therefore, using CFG or not doesn't impact the distillation loss.
             x_start_s = unet_teacher_x_starts[s].to(x_start.dtype)
             # noise_t, t_s are the s-th noise/t used to by unet_teacher.
             noise_t   = unet_teacher_noises[s].to(x_start.dtype)
@@ -2775,6 +2793,7 @@ class LatentDiffusion(DDPM):
                                     uncond_emb=uncond_emb, img_mask=None,
                                     shrink_cross_attn=False,
                                     subj_indices=subj_indices,
+                                    # do_pixel_recon implies using CFG to get x_recon_s.
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
@@ -2800,10 +2819,8 @@ class LatentDiffusion(DDPM):
         print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation ({iter_type_str}):")
         losses_unet_distill = []
 
-        # noise_preds only contains the student predicted noises, not including the priming steps.
-        # Therefore we don't need to exclude the results of the first num_teacher_priming_steps steps.
         for s in range(len(noise_preds)):
-            noise_pred, noise_gt = noise_preds[s], noise_gts[s+num_teacher_priming_steps]
+            noise_pred, noise_gt = noise_preds[s], noise_gts[s]
 
             # In the compositional iterations, unet_distill_uses_comp_prompt is always False.
             # If we use comp_prompt as condition, then the background is compositional, and 
