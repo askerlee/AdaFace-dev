@@ -6,6 +6,21 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+def latent_to_numpy(latent):
+    """
+    Convert latent tensor to numpy array.
+
+    Args:
+        latent (torch.Tensor): Latent tensor to convert.
+
+    Returns:
+        np.ndarray: Converted numpy array.
+    """
+    latent = latent.detach().cpu().numpy().transpose(1, 2, 0)
+    latent = np.clip(latent, -1, 1)
+    image_np = ((latent + 1) * 127.5).astype(np.uint8)
+    return image_np
+
 # Copied from deepface/models/Detector.py
 class FacialAreaRegion:
     x: int
@@ -138,10 +153,8 @@ class RetinaFaceClient(nn.Module):
         bg_face_crops_flat  = []
     
         for i, image_ts in enumerate(images_ts):
-            # [3, H, W] -> [H, W, 3]
-            image_np = image_ts.detach().cpu().numpy().transpose(1, 2, 0)
-            # [-1, 1] -> [0, 255]
-            image_np = ((image_np + 1) * 127.5).astype(np.uint8)
+            # [3, H, W] -> [H, W, 3], [-1, 1] -> [0, 255]
+            image_np = latent_to_numpy(image_ts)
 
             # .detect_faces() doesn't require grad. So we convert the image tensor to numpy.
             faces = self.detect_faces(image_np, T=T)

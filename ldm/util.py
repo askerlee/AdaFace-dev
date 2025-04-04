@@ -433,6 +433,22 @@ def demean(x, demean_dims=[-1]):
             breakpoint()
     return x - x.mean(dim=demean_dims, keepdim=True)
 
+# latent: a single 3D latent in [-1, 1], cannot be a batch.
+def latent_to_numpy(latent):
+    """
+    Convert latent tensor to numpy array.
+
+    Args:
+        latent (torch.Tensor): Latent tensor to convert.
+
+    Returns:
+        np.ndarray: Converted numpy array.
+    """
+    latent = latent.detach().cpu().numpy().transpose(1, 2, 0)
+    latent = np.clip(latent, -1, 1)
+    image_np = ((latent + 1) * 127.5).astype(np.uint8)
+    return image_np
+
 # Eq.(2) in the StyleGAN-NADA paper.
 # delta, ref_delta: [2, 16, 77, 768].
 # emb_mask: [2, 77, 1]. Could be fractional, e.g., 0.5, to weight different tokens.

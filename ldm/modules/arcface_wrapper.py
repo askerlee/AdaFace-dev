@@ -88,8 +88,8 @@ class ArcFaceWrapper(nn.Module):
         return fg_faces_emb, bg_faces_emb, fg_face_bboxes, face_detected_inst_mask
 
     # T: minimal face height/width to be detected.
-    # ref_images:     the groundtruth images.
-    # aligned_images: the generated   images.
+    # ref_images:     the groundtruth images, roughly normalized to [-1, 1] (could go beyond).
+    # aligned_images: the generated   images, roughly normalized to [-1, 1] (could go beyond).
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, bleed=2, 
                                 suppress_bg_faces=True):
         # ref_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.

@@ -43,6 +43,7 @@ import asyncio
 torch.set_printoptions(precision=4, sci_mode=False)
 import cv2
 import platform
+import insightface
 
 # Check the architecture
 arch = platform.machine()
@@ -262,6 +263,10 @@ class DDPM(pl.LightningModule):
             else:
                 self.base_unet_state_dict = None
                 self.comp_unet_state_dict = None
+
+        # face_detector is a light weight and highly efficient face detector.
+        self.face_detector = insightface.model_zoo.get_model('models/insightface/models/antelopev2/scrfd_10g_bnkps.onnx')
+        self.face_detector.prepare(ctx_id=0, input_size=(640, 640))
 
         count_params(self.model, verbose=True)
 
@@ -894,7 +899,7 @@ class LatentDiffusion(DDPM):
 
         return z
 
-    # output: -1 ~ 1.
+    # output: roughly -1 ~ 1, but sometimes it could go beyond [-1, 1].
     @torch.no_grad()
     def decode_first_stage(self, z):
         if self.use_ldm_unet:
@@ -906,12 +911,13 @@ class LatentDiffusion(DDPM):
             # Revised from StableDiffusionPipeline::decode_latents().
             z = z.to(self.model.pipeline.dtype)
             z = 1 / self.vae.config.scaling_factor * z
-            # image: [-1, 1]
+            # NOTE: vae.decode() doesn't clip the output to [-1, 1].
+            # image: roughly [-1, 1], but sometimes it could go beyond [-1, 1].
             image = self.vae.decode(z, return_dict=False)[0]
             return image
         
     # same as decode_first_stage() but without torch.no_grad() decorator
-    # output: -1 ~ 1.
+    # output: roughly -1 ~ 1, but sometimes it could go beyond [-1, 1].
     def decode_first_stage_with_grad(self, z):
         if self.use_ldm_unet:
             z = 1. / self.scale_factor * z
@@ -2219,6 +2225,20 @@ class LatentDiffusion(DDPM):
 
         return loss, mon_loss_dict
 
+    def are_faces_present(self, latents):
+        # images: [4, 3, 512, 512].
+        images = self.decode_first_stage(latents)
+        images = torch.clamp(images, -1, 1)
+        are_face_detected = []
+        for image in images:
+            image = (image + 1) * 127.5
+            image = image.permute(1, 2, 0).cpu().numpy().astype('uint8')
+            faces = self.face_detector.detect(image)
+            are_face_detected.append(len(faces) > 0)
+
+        are_face_detected = torch.tensor(are_face_detected, device=latents.device)
+        return are_face_detected
+    
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_bboxes is None.
     def calc_arcface_align_loss(self, x_start, x_recon, bleed=0, do_grad_smoothing=False):
         # If there are faceless input images, then do_comp_feat_distill is always False.
@@ -2601,6 +2621,8 @@ class LatentDiffusion(DDPM):
                                                  ffn_lora_adapter_name='unet_distill',  
                                                  do_adv_attack=False, DO_ADV_BS=-1)
                 x_start = x_starts[-1]
+                are_face_detected = self.are_faces_present(x_start)
+                
                 num_teacher_priming_steps = 0
             else:
                 num_teacher_priming_steps = num_distill_priming_steps 

@@ -14,7 +14,7 @@ from pytorch_lightning import seed_everything
 from torch import autocast
 from contextlib import nullcontext
 
-from ldm.util import save_grid_sync, load_model_from_config
+from ldm.util import save_grid_sync, load_model_from_config, latent_to_numpy
 from ldm.models.diffusion.ddim import DDIMSampler
 from evaluation.eval_utils import compare_folders, compare_face_folders, \
                                   init_evaluators, set_tf_gpu
@@ -675,8 +675,8 @@ def main(opt):
                                 sample_file_path = os.path.join(sample_dir, f"{base_count:05}.jpg")
 
                             if not opt.diffusers:
-                                x_sample = 255. * rearrange(x_sample.cpu().numpy(), 'c h w -> h w c')
-                                Image.fromarray(x_sample.astype(np.uint8)).save(sample_file_path)
+                                x_sample_np = latent_to_numpy(x_sample)
+                                Image.fromarray(x_sample_np).save(sample_file_path)
                             else:
                                 # diffusers. x_sample is already a PIL image.
                                 x_sample.save(sample_file_path)

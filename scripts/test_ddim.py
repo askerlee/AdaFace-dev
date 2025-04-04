@@ -47,6 +47,7 @@ def test_enc_dec(pipeline, input, output):
     latents = pipeline.vae.encode(input_image).latent_dist.mode()
     with torch.no_grad():
         recon_image = pipeline.vae.decode(latents, return_dict=False)[0]
+        recon_image = torch.clamp(recon_image, -1, 1)
         recon_image = ((recon_image[0].detach().cpu() + 1) / 2 * 255).numpy().astype("uint8")
         recon_image = np.transpose(recon_image, (1, 2, 0))
         recon_image = Image.fromarray(recon_image)
