@@ -601,6 +601,8 @@ def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs,
     for block in outfeat_capture_blocks:
         block.capture_outfeats           = capture_ca_activations
 
+    # res_hidden_states_gradscale_blocks contain the second to the last up blocks, up_blocks[1:].
+    # It's only used to set res_hidden_states_gradscale, and doesn't capture anything.
     for block in res_hidden_states_gradscale_blocks:
         block.res_hidden_states_gradscale = res_hidden_states_gradscale
 
@@ -639,6 +641,7 @@ def get_captured_activations(capture_ca_activations, attn_capture_procs, outfeat
         block.cached_outfeats = {}
         block.capture_outfeats = False
 
+    
     for layer_idx in captured_layer_indices:
         # Subtract 22 to ca_layer_idx to match the layer index in up_blocks[3].cached_outfeats.
         # 23, 24 -> 1, 2 (!! not 0, 1 !!)

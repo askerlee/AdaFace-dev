@@ -573,6 +573,7 @@ class EmbeddingManager(nn.Module):
             saved_dict["unet_lora_modules"] = self.unet_lora_modules.state_dict()
 
         torch.save(saved_dict, adaface_ckpt_path)
+        print(f"Embedding manager ckpt saved to {adaface_ckpt_path}")
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
     def load(self, adaface_ckpt_paths, load_unet_attn_lora_from_ckpt=True, load_unet_ffn_adapters_from_ckpt=['recon_loss', 'unet_distill']):
@@ -613,7 +614,7 @@ class EmbeddingManager(nn.Module):
             else:
                 placeholder_mapper = None
 
-            ckpt = torch.load(adaface_ckpt_path, map_location='cpu')
+            ckpt = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
 
             if "placeholder_strings" in ckpt:
                 for token_idx, km in enumerate(ckpt["placeholder_strings"]):

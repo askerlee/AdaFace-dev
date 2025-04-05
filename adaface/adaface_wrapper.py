@@ -360,7 +360,7 @@ class AdaFaceWrapper(nn.Module):
             adaface_ckpt_paths = self.adaface_ckpt_paths
 
         for adaface_ckpt_path in adaface_ckpt_paths:
-            ckpt_dict = torch.load(adaface_ckpt_path, map_location='cpu')
+            ckpt_dict = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
             if 'unet_lora_modules' in ckpt_dict:
                 unet_lora_modules_state_dict = ckpt_dict['unet_lora_modules']                
                 print(f"{len(unet_lora_modules_state_dict)} LoRA weights found in {adaface_ckpt_path}.")

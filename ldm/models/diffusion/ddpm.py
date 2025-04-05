@@ -10,6 +10,7 @@ from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 from ldm.c_adamw import AdamW as CAdamW
 from diffusers import UNet2DConditionModel, StableDiffusionPipeline, AutoencoderKL
+import torch.distributed as dist
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
@@ -83,7 +84,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
                  # Disable pause_comp_iters by setting pause_comp_iters_on_face_frac_lower_than to -1.
-                 pause_comp_iters_on_face_frac_lower_than=0.75,
+                 pause_comp_iters_on_face_frac_lower_than=-1, #0.75,
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
@@ -254,6 +255,7 @@ class DDPM(pl.LightningModule):
                                               # False: q is not updated, and an additional q2 is updated and returned.
                                               q_lora_updates_query=self.q_lora_updates_query
                                              )
+            self.model.setup_hooks_and_loras()
             self.vae = self.model.pipeline.vae
             if comp_unet_weight_path is not None:
                 # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
@@ -719,6 +721,7 @@ class LatentDiffusion(DDPM):
         assert config != '__is_unconditional__'
         # cond_stage_model: ldm.modules.encoders.modules.FrozenCLIPEmbedder
         self.cond_stage_model = instantiate_from_config(config)
+        self.cond_stage_model.initialize_hooks()
         
     def instantiate_embedding_manager(self, config, text_embedder):
         if not self.use_ldm_unet:
@@ -2499,17 +2502,17 @@ class LatentDiffusion(DDPM):
             if (recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than):
                 self.comp_iters_paused = True
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                       "PAUSE COMPOSITIONAL ITERATIONS. Pause noise-based face loss.")
+                       "PAUSE COMPOSITIONAL ITERATIONS.")
             elif self.comp_iters_paused and recon_face_images_on_noise_frac < self.resume_comp_iters_on_face_frac_higher_than:
                 self.comp_iters_paused = True
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than}. "
-                       "KEEP COMPOSITIONAL ITERATIONS and noise-based face loss learning PAUSED.")
+                       "KEEP COMPOSITIONAL ITERATIONS PAUSED.")
             # resume_comp_iters_on_face_frac_higher_than = 0.77
             # A margin of 0.02 is used to avoid frequent pausing and resuming.
             elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
                 self.comp_iters_paused = False
                 print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
-                       "RESUME COMPOSITIONAL ITERATIONS and noise-based face loss.")
+                       "RESUME COMPOSITIONAL ITERATIONS.")
         else:
             # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
             recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
@@ -3542,13 +3545,15 @@ class LatentDiffusion(DDPM):
     # Called by modelcheckpoint in config.yaml.
     @rank_zero_only
     def on_save_checkpoint(self, checkpoint):
+
         print(self.trainer.global_rank, "Saving checkpoint...")
     
         checkpoint.clear()
         
         if os.path.isdir(self.trainer.checkpoint_callback.dirpath): 
             if self.embedding_manager_trainable:
-                self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
+                emb_man_ckpt_path = os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt")
+                self.embedding_manager.save(emb_man_ckpt_path)
 
             if self.unfreeze_unet:
                 # Save the UNetModel state_dict.
@@ -3609,18 +3614,23 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # _DeviceDtypeModuleMixin class sets self.dtype = torch_dtype.
         self.to(torch_dtype)
 
-        self.use_attn_lora  = use_attn_lora
-        self.use_ffn_lora   = use_ffn_lora
-        self.lora_rank      = lora_rank
-        self.attn_lora_layer_names = attn_lora_layer_names
+        self.use_attn_lora              = use_attn_lora
+        self.use_ffn_lora               = use_ffn_lora
+        self.lora_rank                  = lora_rank
+        self.attn_lora_scale_down       = attn_lora_scale_down
+        self.ffn_lora_scale_down        = ffn_lora_scale_down
+        self.cross_attn_shrink_factor   = cross_attn_shrink_factor
+        self.q_lora_updates_query       = q_lora_updates_query
+        self.attn_lora_layer_names      = attn_lora_layer_names
 
+    def setup_hooks_and_loras(self):
         # Keep a reference to self.attn_capture_procs to change their flags later.
         attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(self.diffusion_model, self.use_attn_lora, 
-                                   attn_lora_layer_names=attn_lora_layer_names,
-                                   lora_rank=lora_rank, lora_scale_down=attn_lora_scale_down,
-                                   cross_attn_shrink_factor=cross_attn_shrink_factor,
-                                   q_lora_updates_query=q_lora_updates_query)
+                                   attn_lora_layer_names=self.attn_lora_layer_names,
+                                   lora_rank=self.lora_rank, lora_scale_down=self.attn_lora_scale_down,
+                                   cross_attn_shrink_factor=self.cross_attn_shrink_factor,
+                                   q_lora_updates_query=self.q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
 
         self.res_hidden_states_gradscale_blocks = self.diffusion_model.up_blocks[1:]
@@ -3659,8 +3669,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
             # By default, ffn_lora_scale_down = 16, i.e., the impact of LoRA is 1/16.
             ffn_lora_layers, ffn_opt_modules = \
                 set_up_ffn_loras(self.diffusion_model, target_modules_pat=target_modules_pat,
-                                 lora_uses_dora=True, lora_rank=lora_rank, 
-                                 lora_alpha=lora_rank // ffn_lora_scale_down,
+                                 lora_uses_dora=True, lora_rank=self.lora_rank, 
+                                 lora_alpha=self.lora_rank // self.ffn_lora_scale_down,
                                 )
             self.ffn_lora_layers = list(ffn_lora_layers.values())
 

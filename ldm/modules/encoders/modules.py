@@ -174,6 +174,194 @@ class SpatialRescaler(nn.Module):
     def encode(self, x):
         return self(x)
 
+
+# When calling self.embeddings(args), it will call embeddings_forward(obj, args) instead.
+# Therefore, the method is intercepted without modifying the implicit object "embeddings".
+def embeddings_forward(
+        self,
+        input_ids = None,
+        position_ids = None,
+        inputs_embeds = None,
+        embedding_manager = None,
+    ) -> torch.Tensor:
+
+        if inputs_embeds is None:
+            inputs_embeds = self.token_embedding(input_ids)
+
+        # The two lines of embedding_manager are newly added. Other code pieces 
+        # are the same as the original CLIPTextEmbeddings.forward().
+        # EmbeddingManager::forward() patches inputs_embeds by replacing CLIP embeddings of placeholder
+        # tokens with the learned embeddings. 
+        if embedding_manager is not None:
+            inputs_embeds = embedding_manager(input_ids, inputs_embeds)
+
+        if position_ids is None:
+            # seq_length = input_ids.shape[-1] if input_ids is not None else inputs_embeds.shape[-2]
+            seq_length = inputs_embeds.shape[-2]
+            if input_ids.shape[-1] != seq_length:
+                print(f"input_ids = {input_ids.shape[-1]}, seq_length = {seq_length}")
+            position_ids = self.position_ids[:, :seq_length]
+
+        position_embeddings = self.position_embedding(position_ids)
+        embeddings = inputs_embeds + position_embeddings
+        
+        return embeddings
+
+# When calling self.encoder(args), it will call encoder_forward(obj, args) instead.
+# Therefore, the method is intercepted without modifying the implicit object "encoder".
+def encoder_forward(
+    self,
+    inputs_embeds,
+    attention_mask = None,
+    causal_attention_mask = None,
+    output_attentions = None,       # default: None
+    output_hidden_states = None,    # default: None
+    return_dict = None,
+    last_layers_skip_weights = [0.5, 0.5],
+):
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+
+    # NovalAI modification: skip the last 1-2 layers to make the 
+    # text embeddings more accurate, at the cost of slight performance reduction.
+    if last_layers_skip_weights is not None:
+        do_output_hidden_states = True
+    else:
+        do_output_hidden_states = (output_hidden_states is not None)
+
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    encoder_states = () if do_output_hidden_states else None
+    all_attentions = () if output_attentions else None
+
+    hidden_states = inputs_embeds
+
+    for idx, encoder_layer in enumerate(self.layers):
+        if do_output_hidden_states:
+            encoder_states = encoder_states + (hidden_states,)
+
+        layer_outputs = encoder_layer(
+            hidden_states,
+            attention_mask,
+            causal_attention_mask,
+            output_attentions=output_attentions,
+        )
+
+        # Only keep the last layer's hidden states
+        hidden_states = layer_outputs[0]
+
+        # output_attentions: None
+        if output_attentions:
+            all_attentions = all_attentions + (layer_outputs[1],)
+
+    # output_hidden_states: None
+    if do_output_hidden_states:
+        encoder_states = encoder_states + (hidden_states,)
+
+    # Only return the last layer's and the second last layer's hidden states
+    return (encoder_states, hidden_states)
+
+
+# when calling text_model(args), it will call text_model_forward(obj, args) instead.
+# Therefore, the method is intercepted without modifying the implicit object "text_model".
+def text_model_forward(
+    self,
+    input_ids = None,
+    attention_mask = None,
+    position_ids = None,
+    output_attentions = None,
+    output_hidden_states = None,
+    return_dict = None,
+    embedding_manager = None,
+):
+    output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+    output_hidden_states = (
+        output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+    )
+    return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+    if input_ids is None:
+        raise ValueError("You have to specify either input_ids")
+
+    input_shape = input_ids.size()
+    input_ids = input_ids.view(-1, input_shape[-1])
+    # self.embeddings() redirected to embeddings_forward() above.
+    hidden_states \
+        = self.embeddings(input_ids=input_ids, position_ids=position_ids, 
+                            embedding_manager=embedding_manager)
+    
+    # the batch size could be modified by embedding_manager
+    bsz = hidden_states.shape[0]
+    # seq_len = input_shape[1]
+    seq_len = hidden_states.shape[1]
+    # CLIP's text model uses causal mask, prepare it here.
+    # causal_attention_mask: [bsz, 1, seq_len, seq_len].
+    # https://github.com/openai/CLIP/blob/cfcffb90e69f37bf2ff1e988237a0fbe41f33c04/clip/model.py#L324
+    causal_attention_mask = _build_causal_attention_mask(bsz, seq_len, hidden_states.dtype).to(
+        hidden_states.device
+    )
+
+    # expand attention_mask
+    if attention_mask is not None:
+        # [bsz, seq_len] -> [bsz, 1, seq_len, seq_len]
+        attention_mask = _expand_mask(attention_mask, hidden_states.dtype)
+
+    # self.encoder: transformers.models.clip.modeling_clip.CLIPEncoder, 
+    # consisting of multiple CLIPEncoderLayer.
+    # https://huggingface.co/transformers/v4.6.0/_modules/transformers/models/clip/modeling_clip.html
+    last_hidden_states = self.encoder(
+        inputs_embeds=hidden_states,
+        attention_mask=attention_mask,
+        causal_attention_mask=causal_attention_mask,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+        last_layers_skip_weights=self.last_layers_skip_weights,
+    )
+
+    # encoder() returns a tuple of (encoder_states, last_hidden_states).
+    # If self.last_layers_skip_weights is None, then encoder_states is None.
+    encoder_states, last_hidden_states = last_hidden_states
+    # Note that the original implementation in huggingface transformers
+    # returns a tuple of (last_hidden_state, encoder_states, all_attentions).
+    # However, this overloaded text_model_forward() only returns
+    # last_hidden_states. So it's passed to the final_layer_norm() directly.
+    if self.last_layers_skip_weights is not None:
+        last_layers_encoder_states = encoder_states[-len(self.last_layers_skip_weights):]
+        last_layers_encoder_states = torch.stack(last_layers_encoder_states, dim=0)
+        last_layers_skip_weights   = torch.tensor(self.last_layers_skip_weights, 
+                                                    dtype=last_layers_encoder_states.dtype, 
+                                                    device=last_layers_encoder_states.device).view(-1, 1, 1, 1)
+        # last_hidden_states: Weighted sum of the last layers' hidden states
+        last_hidden_states = (last_layers_skip_weights * last_layers_encoder_states).sum(dim=0)
+
+    last_hidden_states = self.final_layer_norm(last_hidden_states)
+    return last_hidden_states
+
+# when calling self.transformer(args), it will call transformer_forward(obj, args) instead.
+# Therefore, the method is intercepted without modifying the implicit object "transformer".
+def transformer_forward(
+    self,
+    input_ids = None,
+    attention_mask = None,
+    position_ids = None,
+    output_attentions = None,
+    output_hidden_states = None,
+    return_dict = None,
+    embedding_manager = None,
+):
+    # In the original implementation in huggingface, transformer.forward()
+    # simply calls text_model.forward(). Here it's the same, except that 
+    # we pass the embedding_manager to text_model_forward.forward().
+    return self.text_model(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        position_ids=position_ids,
+        output_attentions=output_attentions,
+        output_hidden_states=output_hidden_states,
+        return_dict=return_dict,
+        embedding_manager = embedding_manager,
+    )
+
 class FrozenCLIPEmbedder(AbstractEncoder):
     """Uses the CLIP transformer encoder for text (from Hugging Face)"""
     def __init__(self, version="openai/clip-vit-large-patch14", device="cpu", max_length=77,
@@ -201,98 +389,13 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         self.set_last_layers_skip_weights(last_layers_skip_weights, 
                                           use_as_dirichlet_weights=randomize_clip_skip_weights)
 
-        # When calling self.embeddings(args), it will call embeddings_forward(obj, args) instead.
-        # Therefore, the method is intercepted without modifying the implicit object "embeddings".
-        def embeddings_forward(
-                self,
-                input_ids = None,
-                position_ids = None,
-                inputs_embeds = None,
-                embedding_manager = None,
-            ) -> torch.Tensor:
-
-                if inputs_embeds is None:
-                    inputs_embeds = self.token_embedding(input_ids)
-
-                # The two lines of embedding_manager are newly added. Other code pieces 
-                # are the same as the original CLIPTextEmbeddings.forward().
-                # EmbeddingManager::forward() patches inputs_embeds by replacing CLIP embeddings of placeholder
-                # tokens with the learned embeddings. 
-                if embedding_manager is not None:
-                    inputs_embeds = embedding_manager(input_ids, inputs_embeds)
-
-                if position_ids is None:
-                    # seq_length = input_ids.shape[-1] if input_ids is not None else inputs_embeds.shape[-2]
-                    seq_length = inputs_embeds.shape[-2]
-                    if input_ids.shape[-1] != seq_length:
-                        print(f"input_ids = {input_ids.shape[-1]}, seq_length = {seq_length}")
-                    position_ids = self.position_ids[:, :seq_length]
-
-                position_embeddings = self.position_embedding(position_ids)
-                embeddings = inputs_embeds + position_embeddings
-                
-                return embeddings
-
+    def initialize_hooks(self):
         # embeddings: CLIPTextEmbeddings
         # embeddings.forward = embeddings_forward.__get__(obj)
         # when calling self.embeddings(args), it will call embeddings_forward(obj, args) instead.
         # i.e., obj is used as self.
         # Therefore, the method is intercepted without modifying the implicit object "embeddings".
         self.transformer.text_model.embeddings.forward = embeddings_forward.__get__(self.transformer.text_model.embeddings)
-
-        # When calling self.encoder(args), it will call encoder_forward(obj, args) instead.
-        # Therefore, the method is intercepted without modifying the implicit object "encoder".
-        def encoder_forward(
-            self,
-            inputs_embeds,
-            attention_mask = None,
-            causal_attention_mask = None,
-            output_attentions = None,       # default: None
-            output_hidden_states = None,    # default: None
-            return_dict = None,
-            last_layers_skip_weights = [0.5, 0.5],
-        ):
-            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-
-            # NovalAI modification: skip the last 1-2 layers to make the 
-            # text embeddings more accurate, at the cost of slight performance reduction.
-            if last_layers_skip_weights is not None:
-                do_output_hidden_states = True
-            else:
-                do_output_hidden_states = (output_hidden_states is not None)
-
-            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-            encoder_states = () if do_output_hidden_states else None
-            all_attentions = () if output_attentions else None
-
-            hidden_states = inputs_embeds
-
-            for idx, encoder_layer in enumerate(self.layers):
-                if do_output_hidden_states:
-                    encoder_states = encoder_states + (hidden_states,)
-
-                layer_outputs = encoder_layer(
-                    hidden_states,
-                    attention_mask,
-                    causal_attention_mask,
-                    output_attentions=output_attentions,
-                )
-
-                # Only keep the last layer's hidden states
-                hidden_states = layer_outputs[0]
-
-                # output_attentions: None
-                if output_attentions:
-                    all_attentions = all_attentions + (layer_outputs[1],)
-
-            # output_hidden_states: None
-            if do_output_hidden_states:
-                encoder_states = encoder_states + (hidden_states,)
-
-            # Only return the last layer's and the second last layer's hidden states
-            return (encoder_states, hidden_states)
-
 
         # encoder: CLIPEncoder
         # encoder.forward = encoder_forward.__get__(obj)
@@ -304,112 +407,11 @@ class FrozenCLIPEmbedder(AbstractEncoder):
         # the CLIPTextTransformer.forward() in huggingface transformers).
         self.transformer.text_model.encoder.forward = encoder_forward.__get__(self.transformer.text_model.encoder)
 
-        # when calling text_model(args), it will call text_model_forward(obj, args) instead.
-        # Therefore, the method is intercepted without modifying the implicit object "text_model".
-        def text_model_forward(
-            self,
-            input_ids = None,
-            attention_mask = None,
-            position_ids = None,
-            output_attentions = None,
-            output_hidden_states = None,
-            return_dict = None,
-            embedding_manager = None,
-        ):
-            output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
-            output_hidden_states = (
-                output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
-            )
-            return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-            if input_ids is None:
-                raise ValueError("You have to specify either input_ids")
-
-            input_shape = input_ids.size()
-            input_ids = input_ids.view(-1, input_shape[-1])
-            # self.embeddings() redirected to embeddings_forward() above.
-            hidden_states \
-                = self.embeddings(input_ids=input_ids, position_ids=position_ids, 
-                                  embedding_manager=embedding_manager)
-           
-            # the batch size could be modified by embedding_manager
-            bsz = hidden_states.shape[0]
-            # seq_len = input_shape[1]
-            seq_len = hidden_states.shape[1]
-            # CLIP's text model uses causal mask, prepare it here.
-            # causal_attention_mask: [bsz, 1, seq_len, seq_len].
-            # https://github.com/openai/CLIP/blob/cfcffb90e69f37bf2ff1e988237a0fbe41f33c04/clip/model.py#L324
-            causal_attention_mask = _build_causal_attention_mask(bsz, seq_len, hidden_states.dtype).to(
-                hidden_states.device
-            )
-
-            # expand attention_mask
-            if attention_mask is not None:
-                # [bsz, seq_len] -> [bsz, 1, seq_len, seq_len]
-                attention_mask = _expand_mask(attention_mask, hidden_states.dtype)
-
-            # self.encoder: transformers.models.clip.modeling_clip.CLIPEncoder, 
-            # consisting of multiple CLIPEncoderLayer.
-            # https://huggingface.co/transformers/v4.6.0/_modules/transformers/models/clip/modeling_clip.html
-            last_hidden_states = self.encoder(
-                inputs_embeds=hidden_states,
-                attention_mask=attention_mask,
-                causal_attention_mask=causal_attention_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                last_layers_skip_weights=self.last_layers_skip_weights,
-            )
-
-            # encoder() returns a tuple of (encoder_states, last_hidden_states).
-            # If self.last_layers_skip_weights is None, then encoder_states is None.
-            encoder_states, last_hidden_states = last_hidden_states
-            # Note that the original implementation in huggingface transformers
-            # returns a tuple of (last_hidden_state, encoder_states, all_attentions).
-            # However, this overloaded text_model_forward() only returns
-            # last_hidden_states. So it's passed to the final_layer_norm() directly.
-            if self.last_layers_skip_weights is not None:
-                last_layers_encoder_states = encoder_states[-len(self.last_layers_skip_weights):]
-                last_layers_encoder_states = torch.stack(last_layers_encoder_states, dim=0)
-                last_layers_skip_weights   = torch.tensor(self.last_layers_skip_weights, 
-                                                          dtype=last_layers_encoder_states.dtype, 
-                                                          device=last_layers_encoder_states.device).view(-1, 1, 1, 1)
-                # last_hidden_states: Weighted sum of the last layers' hidden states
-                last_hidden_states = (last_layers_skip_weights * last_layers_encoder_states).sum(dim=0)
-
-            last_hidden_states = self.final_layer_norm(last_hidden_states)
-            return last_hidden_states
-
         # text_model: CLIPTextTransformer
         # text_model.forward = text_model_forward.__get__(obj)
         # when calling text_model(args), it will call text_model_forward(obj, args) instead.
         # Therefore, the method is intercepted without modifying the implicit object "text_model".
         self.transformer.text_model.forward = text_model_forward.__get__(self.transformer.text_model)
-
-        # when calling self.transformer(args), it will call transformer_forward(obj, args) instead.
-        # Therefore, the method is intercepted without modifying the implicit object "transformer".
-        def transformer_forward(
-            self,
-            input_ids = None,
-            attention_mask = None,
-            position_ids = None,
-            output_attentions = None,
-            output_hidden_states = None,
-            return_dict = None,
-            embedding_manager = None,
-        ):
-            # In the original implementation in huggingface, transformer.forward()
-            # simply calls text_model.forward(). Here it's the same, except that 
-            # we pass the embedding_manager to text_model_forward.forward().
-            return self.text_model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-                embedding_manager = embedding_manager,
-            )
 
         # transformer: CLIPTextModel
         # transformer.forward = transformer_forward.__get__(obj)
