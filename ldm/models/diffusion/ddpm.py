@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
                  # To disable pause_comp_iters, set pause_comp_iters_on_face_frac_lower_than to -1.
-                 pause_comp_iters_on_face_frac_lower_than=0.75,
+                 pause_comp_iters_on_face_frac_lower_than=0.8,
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
@@ -107,7 +107,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0,  # DISABLED
+                 p_recon_on_comp_prompt=0.2,
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
@@ -116,7 +116,7 @@ class DDPM(pl.LightningModule):
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
-                 arcface_align_loss_weight=5e-3,
+                 arcface_align_loss_weight=2e-3,
                  pred_l2_threshold=0.95,
                  # loss_pred_l2 hurts ID without lowering pred L2, so we disable and just monitor it.
                  pred_l2_loss_weight=0, #0.05,
@@ -153,12 +153,12 @@ class DDPM(pl.LightningModule):
         self.comp_unet_weight_path                  = comp_unet_weight_path
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         # When the model degenerates, we pause the compositional iterations, and resumes
-        # after recon_face_images_on_noise_frac >= 0.75.
+        # after recon_face_images_min_frac >= 0.75.
         self.pause_comp_iters_on_face_frac_lower_than = pause_comp_iters_on_face_frac_lower_than
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
         self.resume_comp_iters_on_face_frac_higher_than = min(self.pause_comp_iters_on_face_frac_lower_than + 0.02, 0.9)
         self.comp_iters_paused                      = False
-
+        self.recon_on_image_face_loss_paused        = False
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
@@ -2045,7 +2045,7 @@ class LatentDiffusion(DDPM):
             # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
                 self.calc_unet_distill_loss(mon_loss_dict, session_prefix,
-                                            x_start, noise, cond_context, extra_info, 
+                                            x_start, noise, cond_context, 
                                             img_mask, fg_mask, all_subj_indices, 
                                             self.iter_flags['num_unet_denoising_steps'], 
                                             self.iter_flags['unet_distill_on_pure_noise'])
@@ -2494,29 +2494,33 @@ class LatentDiffusion(DDPM):
                 recon_loss_scales.append(recon_loss_scale)
                 losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
 
-        if recon_on_pure_noise:
-            recon_face_images_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
-            mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_noise_frac': recon_face_images_on_noise_frac})
-            # pause_comp_iters_on_face_frac_lower_than = 0.75
-            # If comp iters are already paused, then we don't resume until recon_face_images_on_noise_frac >= 0.77.
-            if (recon_face_images_on_noise_frac < self.pause_comp_iters_on_face_frac_lower_than):
-                self.comp_iters_paused = True
-                print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                       "PAUSE COMPOSITIONAL ITERATIONS.")
-            elif self.comp_iters_paused and recon_face_images_on_noise_frac < self.resume_comp_iters_on_face_frac_higher_than:
-                self.comp_iters_paused = True
-                print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than}. "
-                       "KEEP COMPOSITIONAL ITERATIONS PAUSED.")
-            # resume_comp_iters_on_face_frac_higher_than = 0.77
-            # A margin of 0.02 is used to avoid frequent pausing and resuming.
-            elif recon_face_images_on_noise_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
-                self.comp_iters_paused = False
-                print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_on_noise_frac: {recon_face_images_on_noise_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
-                       "RESUME COMPOSITIONAL ITERATIONS.")
-        else:
-            # recon_face_image_ratio: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
-            recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
-            mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_image_frac': recon_face_images_on_image_frac})
+        # recon_face_images_on_noise_frac: the window-accumulated ratio of (num of noise recon face images / num of all recon images).
+        recon_face_images_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
+        mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_noise_frac': recon_face_images_on_noise_frac})
+        # recon_face_images_on_image_frac: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
+        recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
+        mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_image_frac': recon_face_images_on_image_frac})
+        recon_face_images_min_frac = min(recon_face_images_on_noise_frac, recon_face_images_on_image_frac)
+
+        # pause_comp_iters_on_face_frac_lower_than = 0.75
+        # If comp iters are already paused, then we don't resume until recon_face_images_min_frac >= 0.77.
+        if (recon_face_images_min_frac < self.pause_comp_iters_on_face_frac_lower_than):
+            self.comp_iters_paused = True
+            self.recon_on_image_face_loss_paused = True
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_min_frac: {recon_face_images_min_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
+                    "PAUSE COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
+        elif self.comp_iters_paused and recon_face_images_min_frac < self.resume_comp_iters_on_face_frac_higher_than:
+            self.comp_iters_paused = True
+            self.recon_on_image_face_loss_paused = True
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_min_frac: {recon_face_images_min_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than}. "
+                    "KEEP COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations PAUSED.")
+        # resume_comp_iters_on_face_frac_higher_than = 0.77
+        # A margin of 0.02 is used to avoid frequent pausing and resuming.
+        elif recon_face_images_min_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
+            self.comp_iters_paused = False
+            self.recon_on_image_face_loss_paused = False
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_min_frac: {recon_face_images_min_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
+                    "RESUME COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
 
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
@@ -2526,14 +2530,16 @@ class LatentDiffusion(DDPM):
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.mean().item():.4f}")
                     # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
                     # without being stablized by the recon loss, so we scale it down.
-                    arcface_align_recon_loss_scale = 0.5
+                    arcface_align_recon_loss_scale = 1
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.mean().item():.4f}")
-                    arcface_align_recon_loss_scale = 1
+                    # If recon_on_image_face_loss_paused and it's recon on images, 
+                    # then we don't apply loss_arcface_align_recon.
+                    arcface_align_recon_loss_scale = 1 if not self.recon_on_image_face_loss_paused else 0
 
-                # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.005 => 0.002-0.0025.
-                # This loss is around 1/25 of recon/distill losses (0.05).
+                # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.002 => 0.001-0.00125.
+                # This loss is around 1/25 of recon/distill losses (0.1).
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
 
         pred_l2 = torch.stack(pred_l2s).mean()
@@ -2582,8 +2588,107 @@ class LatentDiffusion(DDPM):
 
         return loss_normal_recon
 
+    def prepare_teacher_context(self, cond_context, uncond_context, BLOCK_SIZE, 
+                                id2img_prompt_embs, id2img_neg_prompt_embs, img_prompt_prefix_embs,
+                                unet_teacher_types, encoders_num_id_vecs, 
+                                p_unet_teacher_uses_cfg, unet_distill_uses_comp_prompt):
+
+        prompt_emb, prompt_in, extra_info = cond_context
+        # student_prompt_embs is the prompt embedding of the student model.
+        student_prompt_embs = cond_context[0]
+
+        ####### Begin of Preparing the teacher context #######
+        # ** OBSOLETE ** NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
+        # extra_unet_dirpaths (finetuned unets on the original SD unet); 
+        # In this case, they are surely not 'arc2face' or 'consistentID'.
+        # The same student_prompt_embs is used by all unet_teachers.
+        if unet_teacher_types == ['unet_ensemble']:
+            teacher_contexts = [student_prompt_embs]
+        else:
+            # The whole set of teachers have been initialized,
+            # if id2ada_prompt_encoder.name == 'jointIDs' by setting 
+            # personalization_config.params.adaface_encoder_types = ['consistentID', 'arc2face']).
+            # But some may be disabled by setting
+            # personalization_config.params.enabled_encoders = ['consistentID'] or ['arc2face'].
+            teacher_contexts = []
+            # If id2ada_prompt_encoder.name == 'jointIDs',         then encoders_num_id_vecs is not None.
+            # Otherwise, id2ada_prompt_encoder is a single encoder, and encoders_num_id_vecs is None.
+            if encoders_num_id_vecs is not None:
+                all_id2img_prompt_embs      = id2img_prompt_embs.split(encoders_num_id_vecs, dim=1)
+                all_id2img_neg_prompt_embs  = id2img_neg_prompt_embs.split(encoders_num_id_vecs, dim=1)
+                # If id2ada_prompt_encoder.name == 'jointIDs', the img_prompt_embs are ordered as such.
+                encoder_name2idx = { 'consistentID': 0, 'arc2face': 1 }
+            else:
+                # Single FaceID2AdaPrompt encoder. No need to split id2img_prompt_embs/id2img_neg_prompt_embs.
+                all_id2img_prompt_embs      = [ id2img_prompt_embs ]
+                all_id2img_neg_prompt_embs  = [ id2img_neg_prompt_embs ]
+                encoder_name2idx = { unet_teacher_types[0]: 0 }
+                
+            for unet_teacher_type in unet_teacher_types:
+                if unet_teacher_type not in ['consistentID', 'arc2face']:
+                    breakpoint()
+                
+                teacher_idx = encoder_name2idx[unet_teacher_type]
+                if unet_teacher_type == 'arc2face':
+                    # img_prompt_prefix_embs: the embeddings of a template prompt "photo of a"
+                    # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
+                    img_prompt_prefix_embs = img_prompt_prefix_embs.repeat(BLOCK_SIZE, 1, 1)
+                    # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
+                    teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[teacher_idx]], dim=1)
+
+                    if p_unet_teacher_uses_cfg > 0:
+                        # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
+                        # to the teacher.
+                        # uncond_context is a tuple of (uncond_embs, uncond_prompt_in, extra_info).
+                        # Truncate the uncond_embs to the same length as teacher_context.
+                        LEN_POS_PROMPT = teacher_context.shape[1]
+                        # NOTE: Since arc2face doesn't respond to compositional prompts, 
+                        # even if unet_distill_uses_comp_prompt,
+                        # we don't need to set teacher_neg_context as the negative compositional prompts.
+                        teacher_neg_context = uncond_context[0][:, :LEN_POS_PROMPT].repeat(BLOCK_SIZE, 1, 1)
+                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
+
+                elif unet_teacher_type == 'consistentID':
+                    global_id_embeds = all_id2img_prompt_embs[teacher_idx]
+                    # global_id_embeds: [BS, 4,  768]
+                    # cls_prompt_embs:  [BS, 77, 768]
+                    if unet_distill_uses_comp_prompt:
+                        cls_emb_key = 'cls_comp_emb'  
+                    else:
+                        cls_emb_key = 'cls_single_emb'
+
+                    cls_prompt_embs = extra_info[cls_emb_key]
+                    # Always append the ID prompt embeddings to the class (general) prompt embeddings.
+                    # teacher_context: [BS, 81, 768]
+                    teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
+                    if p_unet_teacher_uses_cfg > 0:
+                        # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
+                        # to the teacher.
+                        global_neg_id_embs = all_id2img_neg_prompt_embs[teacher_idx]
+                        # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
+                        # uncond_context[0]: [1, 77, 768] -> [BS, 77, 768]
+                        cls_neg_prompt_embs = uncond_context[0].repeat(teacher_context.shape[0], 1, 1)
+
+                        # teacher_neg_context: [BS, 81, 768]
+                        teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
+                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
+                        # This is kind of arbitrary (we can also concate them on dim 1), 
+                        # since we always chunk(2) on the same dimension to restore the two parts.
+                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
+
+                teacher_contexts.append(teacher_context)
+
+            # If there's only one teacher, then self.unet_teacher is not a UNetEnsembleTeacher.
+            # So we dereference the list.
+            if len(teacher_contexts) == 1:
+                teacher_contexts = teacher_contexts[0]
+        ####### End of Preparing the teacher context #######
+
+        return teacher_contexts
+    
     def calc_unet_distill_loss(self, mon_loss_dict, session_prefix, 
-                               x_start, noise, cond_context, extra_info, 
+                               x_start, noise, cond_context, 
                                img_mask, fg_mask, subj_indices, 
                                num_unet_denoising_steps, unet_distill_on_pure_noise):
         if unet_distill_on_pure_noise:
@@ -2604,104 +2709,19 @@ class LatentDiffusion(DDPM):
 
         # log_image_colors: a list of 0-6, indexing colors 
         # = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
-        # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
-        # If unet_distill_on_image:      all of them are 2, indicating red.
+        # If unet_distill_on_pure_noise: all of them are 6 or 7, indicating pink or magenta.
+        # If unet_distill_on_image:      all of them are 2,      indicating red.
         log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
         self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
-
-        prompt_emb, prompt_in, extra_info = cond_context
-        # student_prompt_embs is the prompt embedding of the student model.
-        student_prompt_embs = cond_context[0]
-
-        ####### Begin of Preparing the teacher context #######
-        # ** OBSOLETE ** NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
-        # extra_unet_dirpaths (finetuned unets on the original SD unet); 
-        # In this case, they are surely not 'arc2face' or 'consistentID'.
-        # The same student_prompt_embs is used by all unet_teachers.
-        if self.unet_teacher_types == ['unet_ensemble']:
-            teacher_contexts = [student_prompt_embs]
-        else:
-            # The whole set of teachers have been initialized,
-            # if id2ada_prompt_encoder.name == 'jointIDs' by setting 
-            # personalization_config.params.adaface_encoder_types = ['consistentID', 'arc2face']).
-            # But some may be disabled by setting
-            # personalization_config.params.enabled_encoders = ['consistentID'] or ['arc2face'].
-            teacher_contexts = []
-            encoders_num_id_vecs = self.iter_flags['encoders_num_id_vecs']
-            # If id2ada_prompt_encoder.name == 'jointIDs',         then encoders_num_id_vecs is not None.
-            # Otherwise, id2ada_prompt_encoder is a single encoder, and encoders_num_id_vecs is None.
-            if encoders_num_id_vecs is not None:
-                all_id2img_prompt_embs      = self.iter_flags['id2img_prompt_embs'].split(encoders_num_id_vecs, dim=1)
-                all_id2img_neg_prompt_embs  = self.iter_flags['id2img_neg_prompt_embs'].split(encoders_num_id_vecs, dim=1)
-                # If id2ada_prompt_encoder.name == 'jointIDs', the img_prompt_embs are ordered as such.
-                encoder_name2idx = { 'consistentID': 0, 'arc2face': 1 }
-            else:
-                # Single FaceID2AdaPrompt encoder. No need to split id2img_prompt_embs/id2img_neg_prompt_embs.
-                all_id2img_prompt_embs      = [ self.iter_flags['id2img_prompt_embs'] ]
-                all_id2img_neg_prompt_embs  = [ self.iter_flags['id2img_neg_prompt_embs'] ]
-                encoder_name2idx = { self.unet_teacher_types[0]: 0 }
-                
-            for unet_teacher_type in self.unet_teacher_types:
-                if unet_teacher_type not in ['consistentID', 'arc2face']:
-                    breakpoint()
-                
-                teacher_idx = encoder_name2idx[unet_teacher_type]
-                if unet_teacher_type == 'arc2face':
-                    # img_prompt_prefix_embs: the embeddings of a template prompt "photo of a"
-                    # For arc2face, p_unet_teacher_uses_cfg is always 0. So we only pass pos_prompt_embs.
-                    img_prompt_prefix_embs = self.img_prompt_prefix_embs.repeat(BLOCK_SIZE, 1, 1)
-                    # teacher_context: [BS, 4+16, 768] = [BS, 20, 768]
-                    teacher_context = torch.cat([img_prompt_prefix_embs, all_id2img_prompt_embs[teacher_idx]], dim=1)
-
-                    if self.p_unet_teacher_uses_cfg > 0:
-                        # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
-                        # to the teacher.
-                        # self.uncond_context is a tuple of (uncond_embs, uncond_prompt_in, extra_info).
-                        # Truncate the uncond_embs to the same length as teacher_context.
-                        LEN_POS_PROMPT = teacher_context.shape[1]
-                        # NOTE: Since arc2face doesn't respond to compositional prompts, 
-                        # even if unet_distill_uses_comp_prompt,
-                        # we don't need to set teacher_neg_context as the negative compositional prompts.
-                        teacher_neg_context = self.uncond_context[0][:, :LEN_POS_PROMPT].repeat(BLOCK_SIZE, 1, 1)
-                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
-                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)
-
-                elif unet_teacher_type == 'consistentID':
-                    global_id_embeds = all_id2img_prompt_embs[teacher_idx]
-                    # global_id_embeds: [BS, 4,  768]
-                    # cls_prompt_embs:  [BS, 77, 768]
-                    if self.iter_flags['unet_distill_uses_comp_prompt']:
-                        cls_emb_key = 'cls_comp_emb'  
-                    else:
-                        cls_emb_key = 'cls_single_emb'
-
-                    cls_prompt_embs = extra_info[cls_emb_key]
-                    # Always append the ID prompt embeddings to the class (general) prompt embeddings.
-                    # teacher_context: [BS, 81, 768]
-                    teacher_context = torch.cat([cls_prompt_embs, global_id_embeds], dim=1)    
-                    if self.p_unet_teacher_uses_cfg > 0:
-                        # When p_unet_teacher_uses_cfg > 0, we provide both pos_prompt_embs and neg_prompt_embs 
-                        # to the teacher.
-                        global_neg_id_embs = all_id2img_neg_prompt_embs[teacher_idx]
-                        # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
-                        # uncond_context[0]: [1, 77, 768] -> [BS, 77, 768]
-                        cls_neg_prompt_embs = self.uncond_context[0].repeat(teacher_context.shape[0], 1, 1)
-
-                        # teacher_neg_context: [BS, 81, 768]
-                        teacher_neg_context = torch.cat([cls_neg_prompt_embs, global_neg_id_embs], dim=1)
-                        # The concatenation of teacher_context and teacher_neg_context is done on dim 0.
-                        # This is kind of arbitrary (we can also concate them on dim 1), 
-                        # since we always chunk(2) on the same dimension to restore the two parts.
-                        teacher_context = torch.cat([teacher_context, teacher_neg_context], dim=0)            
-
-                teacher_contexts.append(teacher_context)
-
-            # If there's only one teacher, then self.unet_teacher is not a UNetEnsembleTeacher.
-            # So we dereference the list.
-            if len(teacher_contexts) == 1:
-                teacher_contexts = teacher_contexts[0]
-        ####### End of Preparing the teacher context #######
-
+        teacher_contexts = self.prepare_teacher_context(cond_context, self.uncond_context, BLOCK_SIZE,
+                                                        self.iter_flags['id2img_prompt_embs'],
+                                                        self.iter_flags['id2img_neg_prompt_embs'],
+                                                        self.img_prompt_prefix_embs,
+                                                        self.unet_teacher_types,
+                                                        self.iter_flags['encoders_num_id_vecs'],
+                                                        self.p_unet_teacher_uses_cfg,
+                                                        self.iter_flags['unet_distill_uses_comp_prompt'])
+        
         # unet_distill_on_pure_noise: Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:
             num_distill_priming_steps = 4
@@ -2746,6 +2766,7 @@ class LatentDiffusion(DDPM):
                                               num_denoising_steps=num_distill_priming_steps,
                                               force_uses_cfg=True)
 
+                # x_starts are denoised image latents, and x_start is the last denoised image latent.
                 x_start = x_starts[-1]
                 are_face_detected, x_start_pixels = self.are_faces_present_in_latents(x_start)
                 priming_model_name = 'Adaface' if priming_using_adaface else 'Teacher'
