@@ -932,28 +932,33 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
 # samples:   a (B, C, H, W) tensor.
 # img_flags: a tensor of (B,) ints.
 # samples should be between [0, 255] (uint8).
-def save_grid_sync(samples, img_flags, grid_filepath, nrow):
-    # img_box indicates the whole image region.
-    img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
+def save_grid(samples, img_flags, grid_filepath, nrow):
+    try:
+        # img_box indicates the whole image region.
+        img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
 
-    colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
-    if img_flags is not None:
-        # Highlight the teachable samples.
-        for i, img_flag in enumerate(img_flags):
-            if img_flag > 0:
-                # Draw a 12-pixel wide bounding box around the image.
-                samples[i] = draw_bounding_boxes(samples[i], img_box, colors=colors[img_flag], width=12)
+        colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
+        if img_flags is not None:
+            # Highlight the teachable samples.
+            for i, img_flag in enumerate(img_flags):
+                if img_flag > 0:
+                    # Draw a 12-pixel wide bounding box around the image.
+                    samples[i] = draw_bounding_boxes(samples[i], img_box, colors=colors[img_flag], width=12)
 
-    # grid_samples is a 3D np array: (C, H2, W2)
-    grid_samples = make_grid(samples, nrow=nrow).cpu().numpy()
-    # Transpose to (H2, W2, C)
-    grid_img = Image.fromarray(grid_samples.transpose([1, 2, 0]))
-    if grid_filepath is not None:
-        grid_img.save(grid_filepath)
+        # grid_samples is a 3D np array: (C, H2, W2)
+        grid_samples = make_grid(samples, nrow=nrow).cpu().numpy()
+        # Transpose to (H2, W2, C)
+        grid_img = Image.fromarray(grid_samples.transpose([1, 2, 0]))
+        if grid_filepath is not None:
+            grid_img.save(grid_filepath)
+            print(f"{len(samples)} generations saved to {grid_filepath}")
+
+    except Exception as e:
+        print(f"Error saving grid image: {e}")
+        raise e
+    
+    # grid_img: PIL image
     return grid_img
-
-async def save_grid(samples, img_flags, grid_filepath, nrow):
-    return await asyncio.to_thread(save_grid_sync, samples, img_flags, grid_filepath, nrow)
 
 def chunk_list(lst, num_chunks):
     chunk_size = int(np.ceil(len(lst) / num_chunks))

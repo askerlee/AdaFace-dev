@@ -10,17 +10,18 @@ from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 from ldm.c_adamw import AdamW as CAdamW
 from diffusers import UNet2DConditionModel, StableDiffusionPipeline, AutoencoderKL
-import torch.distributed as dist
+import queue
+from threading import Thread
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
-                        calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_distill_loss, save_grid, \
+                        calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_distill_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
-                        RollingStats, gen_smooth_grad_layer
+                        RollingStats, gen_smooth_grad_layer, save_grid
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -33,14 +34,13 @@ from adaface.unet_teachers import create_unet_teacher
 from gma.network import GMA
 from gma.utils.utils import load_checkpoint as gma_load_checkpoint
 
-import copy, math
+import copy
 from functools import partial
 from safetensors.torch import load_file as safetensors_load_file
 from safetensors.torch import save_file as safetensors_save_file
 from ldm.modules.arcface_wrapper import ArcFaceWrapper
 
 import sys
-import asyncio
 torch.set_printoptions(precision=4, sci_mode=False)
 import cv2
 import platform
@@ -666,10 +666,12 @@ class LatentDiffusion(DDPM):
         else:
             self.arcface = None
 
-        self.generation_cache = []
-        self.generation_cache_img_colors = []
+        self.sample_image_queue = queue.Queue(maxsize=120)
         self.cache_start_iter = 0
-        self.num_cached_generations = 0
+        if self.global_rank == 0:
+            self.sample_save_thread = Thread(target=self.save_samples_worker, args=(60,), daemon=True)
+            self.sample_save_thread.start()
+            print("Started individual Sample Saving thread...")
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
@@ -3367,7 +3369,7 @@ class LatentDiffusion(DDPM):
     # For raw output from raw output from SD decode_first_stage(),
     # samples are be between [-1, 1], so we set do_normalize=True, which will convert and clamp to [0, 1].
     @rank_zero_only
-    def cache_and_log_generations(self, samples, img_colors, do_normalize=True, max_cache_size=60):
+    def cache_and_log_generations(self, samples, img_colors, do_normalize=True):
         if isinstance(samples, np.ndarray):
             samples = torch.from_numpy(samples)
 
@@ -3385,30 +3387,45 @@ class LatentDiffusion(DDPM):
         if img_colors is None:
             img_colors = torch.zeros(samples.size(0), dtype=torch.int, device=samples.device)
 
-        self.generation_cache.append(samples)
-        self.generation_cache_img_colors.append(img_colors)
-        self.num_cached_generations += len(samples)
+        self.sample_image_queue.put((samples.cpu(), img_colors.cpu()))
 
+    def save_samples_worker(self, max_cache_size=60):
         # max_cache_size = 60, nrow=12, so we save a 4*12 grid of samples.
         # Each sample is 512*512*3, so the grid is 512*512*3*4*12*4 bytes = 37.7M * 4 = 150M.
-        if self.num_cached_generations >= max_cache_size:
-            grid_folder = self.logger._save_dir + f'/samples'
-            os.makedirs(grid_folder, exist_ok=True)
-            grid_filename = grid_folder + f'/{self.cache_start_iter:04d}-{self.global_step:04d}.png'
-            cached_images     = torch.cat(self.generation_cache,            0)
-            cached_img_colors = torch.cat(self.generation_cache_img_colors, 0)
-            # samples:    a (B, C, H, W) tensor.
-            # img_colors: a tensor of (B,) ints.
-            # samples should be between [0, 255] (uint8).
-            asyncio.run(save_grid(cached_images, cached_img_colors, grid_filename, nrow=12))
-            print(f"{self.num_cached_generations} generations saved to {grid_filename}")
-            
-            # Clear the cache. If num_cached_generations > max_cache_size,
-            # some samples at the end of the cache will be discarded.
-            self.generation_cache = []
-            self.generation_cache_img_colors = []
-            self.num_cached_generations = 0
-            self.cache_start_iter = self.global_step + 1
+        """Worker that saves images only when pending_samples has at least max_cache_size items"""
+        pending_samples = []
+        pending_sample_colors = []
+        pending_sample_count = 0
+
+        while True:
+            try:
+                # samples:    a (B, C, H, W) tensor.
+                # img_colors: a tensor of (B,) ints.
+                # samples should be between [0, 255] (uint8).
+                samples, img_colors = self.sample_image_queue.get(timeout=1)
+                # Not enough items yet, mark this one as done and continue waiting
+                self.sample_image_queue.task_done()                
+                pending_samples.append(samples)
+                pending_sample_colors.append(img_colors)
+                pending_sample_count += len(samples)
+            except queue.Empty:
+                continue
+
+            if pending_sample_count >= max_cache_size:
+                grid_folder = os.path.join(self.logger._save_dir, 'samples')
+                os.makedirs(grid_folder, exist_ok=True)
+                grid_filename = os.path.join(grid_folder, f'{self.cache_start_iter:04d}-{self.global_step:04d}.png')
+                pending_images     = torch.cat(pending_samples,       0)
+                pending_img_colors = torch.cat(pending_sample_colors, 0)
+                save_grid(pending_images, pending_img_colors, grid_filename, 12)   
+                
+                # Clear the cache. If num_cached_generations > max_cache_size,
+                # some samples at the end of the cache will be discarded.
+                pending_samples.clear()
+                pending_sample_colors.clear()
+                pending_sample_count  = 0
+                self.cache_start_iter = self.global_step
+
 
     # configure_optimizers() is called later as a hook function by pytorch_lightning.
     # call stack: main.py: trainer.fit()
