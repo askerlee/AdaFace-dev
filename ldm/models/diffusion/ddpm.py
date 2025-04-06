@@ -84,7 +84,7 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
                  # To disable pause_comp_iters, set pause_comp_iters_on_face_frac_lower_than to -1.
-                 pause_comp_iters_on_face_frac_lower_than=0.8,
+                 pause_comp_iters_on_face_frac_lower_than=[0.8, 0.9],
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
@@ -107,7 +107,7 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0.2,
+                 p_recon_on_comp_prompt=0,
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
@@ -152,13 +152,6 @@ class DDPM(pl.LightningModule):
 
         self.comp_unet_weight_path                  = comp_unet_weight_path
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
-        # When the model degenerates, we pause the compositional iterations, and resumes
-        # after recon_face_images_min_frac >= 0.75.
-        self.pause_comp_iters_on_face_frac_lower_than = pause_comp_iters_on_face_frac_lower_than
-        # A margin of 0.02 is used to avoid frequent pausing and resuming.
-        self.resume_comp_iters_on_face_frac_higher_than = min(self.pause_comp_iters_on_face_frac_lower_than + 0.02, 0.9)
-        self.comp_iters_paused                      = False
-        self.recon_on_image_face_loss_paused        = False
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
@@ -204,6 +197,14 @@ class DDPM(pl.LightningModule):
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
         self.recon_bg_pixel_weights                 = recon_bg_pixel_weights
 
+        # When the model degenerates, we pause the compositional iterations, and resumes
+        # after recon_face_images_frac >= 0.8 (on noise) or 0.9 (on image).
+        self.pause_comp_iters_on_face_frac_lower_than = np.array(pause_comp_iters_on_face_frac_lower_than)
+        # A margin of 0.02 is used to avoid frequent pausing and resuming.
+        self.resume_comp_iters_on_face_frac_higher_than = np.clip(self.pause_comp_iters_on_face_frac_lower_than + 0.02, None, 0.95)
+        self.comp_iters_paused                      = False
+        self.recon_on_image_face_loss_paused        = False
+        self.recon_on_comp_prompt_paused            = False
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
         self.unet_distill_iters_count                = 0
@@ -966,7 +967,7 @@ class LatentDiffusion(DDPM):
         x_start = self.get_input(batch, self.first_stage_key)
 
         if self.iter_flags['do_normal_recon']:
-            p_recon_on_comp_prompt = self.p_recon_on_comp_prompt
+            p_recon_on_comp_prompt = self.p_recon_on_comp_prompt if not self.recon_on_comp_prompt_paused else 0
             p_recon_on_pure_noise  = self.p_recon_on_pure_noise
         else:
             p_recon_on_comp_prompt = 0
@@ -2502,27 +2503,35 @@ class LatentDiffusion(DDPM):
         # recon_face_images_on_image_frac: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
         recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
         mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_image_frac': recon_face_images_on_image_frac})
-        recon_face_images_min_frac = min(recon_face_images_on_noise_frac, recon_face_images_on_image_frac)
+        if recon_on_pure_noise:
+            recon_on_type_idx = 0
+            recon_face_images_frac = recon_face_images_on_noise_frac
+        else:
+            recon_on_type_idx = 1
+            recon_face_images_frac = recon_face_images_on_image_frac
 
-        # pause_comp_iters_on_face_frac_lower_than = 0.75
-        # If comp iters are already paused, then we don't resume until recon_face_images_min_frac >= 0.77.
-        if (recon_face_images_min_frac < self.pause_comp_iters_on_face_frac_lower_than):
-            self.comp_iters_paused = True
+        # pause_comp_iters_on_face_frac_lower_than = [0.8, 0.9]
+        # If comp iters are already paused, then we don't resume until recon_face_images_frac >= 0.82 or 0.92.
+        if recon_face_images_frac < self.pause_comp_iters_on_face_frac_lower_than[recon_on_type_idx]:
+            self.comp_iters_paused               = True
             self.recon_on_image_face_loss_paused = True
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_min_frac: {recon_face_images_min_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                    "PAUSE COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
-        elif self.comp_iters_paused and recon_face_images_min_frac < self.resume_comp_iters_on_face_frac_higher_than:
-            self.comp_iters_paused = True
+            self.recon_on_comp_prompt_paused     = True
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than[recon_on_type_idx]}. "
+                   "PAUSE COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
+        elif self.comp_iters_paused and recon_face_images_frac < self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx]:
+            self.comp_iters_paused               = True
             self.recon_on_image_face_loss_paused = True
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_min_frac: {recon_face_images_min_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than}. "
-                    "KEEP COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations PAUSED.")
+            self.recon_on_comp_prompt_paused     = True
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx]}. "
+                   "KEEP COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations PAUSED.")
         # resume_comp_iters_on_face_frac_higher_than = 0.77
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
-        elif recon_face_images_min_frac >= self.resume_comp_iters_on_face_frac_higher_than and self.comp_iters_paused:
-            self.comp_iters_paused = False
+        elif recon_face_images_frac >= self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx] and self.comp_iters_paused:
+            self.comp_iters_paused               = False
             self.recon_on_image_face_loss_paused = False
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_min_frac: {recon_face_images_min_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
-                    "RESUME COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
+            self.recon_on_comp_prompt_paused     = False
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx]}. "
+                   "RESUME COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
 
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
