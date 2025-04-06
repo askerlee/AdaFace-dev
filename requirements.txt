@@ -1,6 +1,6 @@
 setuptools>=68.0.0
-torch
-torchvision
+torch==2.4.1
+torchvision==0.19.0
 pytorch-lightning==1.9.5
 albumentations>=1.4
 opencv-python>=4.10
@@ -14,12 +14,12 @@ transformers>=4.44.2
 exrex
 nvidia-pyindex
 # For unknown reasons, installing nvidia-tensorrt hangs.
-tensorrt-lean
+tensorrt_lean_cu12
 tensorrt-dispatch
 safetensors
 wandb
 gradio
-diffusers==0.29.2
+diffusers
 webdataset
 bitsandbytes
 prodigyopt

@@ -83,8 +83,8 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
-                 # Disable pause_comp_iters by setting pause_comp_iters_on_face_frac_lower_than to -1.
-                 pause_comp_iters_on_face_frac_lower_than=-1, #0.75,
+                 # To disable pause_comp_iters, set pause_comp_iters_on_face_frac_lower_than to -1.
+                 pause_comp_iters_on_face_frac_lower_than=0.75,
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
