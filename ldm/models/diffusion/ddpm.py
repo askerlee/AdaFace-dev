@@ -2503,34 +2503,30 @@ class LatentDiffusion(DDPM):
         # recon_face_images_on_image_frac: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
         recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
         mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_image_frac': recon_face_images_on_image_frac})
-        if recon_on_pure_noise:
-            recon_on_type_idx = 0
-            recon_face_images_frac = recon_face_images_on_noise_frac
-        else:
-            recon_on_type_idx = 1
-            recon_face_images_frac = recon_face_images_on_image_frac
+        recon_face_images_fracs = np.array([recon_face_images_on_noise_frac, recon_face_images_on_image_frac])
+        recon_face_images_fracs_str = np.array2string(recon_face_images_fracs, precision=3, floatmode='fixed')
 
         # pause_comp_iters_on_face_frac_lower_than = [0.8, 0.9]
-        # If comp iters are already paused, then we don't resume until recon_face_images_frac >= 0.82 or 0.92.
-        if recon_face_images_frac < self.pause_comp_iters_on_face_frac_lower_than[recon_on_type_idx]:
+        # If comp iters are already paused, then we don't resume until recon_face_images_fracs >= [0.82, 0.92].
+        if (recon_face_images_fracs < self.pause_comp_iters_on_face_frac_lower_than).any():
             self.comp_iters_paused               = True
             self.recon_on_image_face_loss_paused = True
             self.recon_on_comp_prompt_paused     = True
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_frac:.4f} < {self.pause_comp_iters_on_face_frac_lower_than[recon_on_type_idx]}. "
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} < {self.pause_comp_iters_on_face_frac_lower_than}. "
                    "PAUSE COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
-        elif self.comp_iters_paused and recon_face_images_frac < self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx]:
+        elif self.comp_iters_paused and (recon_face_images_fracs < self.resume_comp_iters_on_face_frac_higher_than).any():
             self.comp_iters_paused               = True
             self.recon_on_image_face_loss_paused = True
             self.recon_on_comp_prompt_paused     = True
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_frac:.4f} < {self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx]}. "
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_fracs_str} < {self.resume_comp_iters_on_face_frac_higher_than}. "
                    "KEEP COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations PAUSED.")
         # resume_comp_iters_on_face_frac_higher_than = 0.77
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
-        elif recon_face_images_frac >= self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx] and self.comp_iters_paused:
+        elif (recon_face_images_fracs >= self.resume_comp_iters_on_face_frac_higher_than).all() and self.comp_iters_paused:
             self.comp_iters_paused               = False
             self.recon_on_image_face_loss_paused = False
             self.recon_on_comp_prompt_paused     = False
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_frac:.4f} >= {self.resume_comp_iters_on_face_frac_higher_than[recon_on_type_idx]}. "
+            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
                    "RESUME COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
 
         if len(losses_arcface_align_recon) > 0:
