@@ -14,7 +14,7 @@ from torchvision.utils import make_grid, draw_bounding_boxes
 import math, sys, re, os
 
 from safetensors.torch import load_file as safetensors_load_file
-import asyncio
+import random
 EnableCompile = True
 
 def disabled_train(self, mode=True):
@@ -502,6 +502,14 @@ def calc_and_print_stats(ts, ts_name=None):
     if ts_name is not None:
         print(f"{ts_name}: ", end='')
     print("max: %.4f, min: %.4f, mean: %.4f, std: %.4f" %(ts.max(), ts.min(), ts.abs().mean(), ts.std()))
+
+def set_seed_per_rank_and_batch(rank, epoch, iteration, base_seed=42):
+    seed = base_seed + epoch * 10**6 + iteration + rank * 10**8
+
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed + 1)
+    random.seed(seed + 2)
 
 # Generate random tensors with the same mean and std as the input tensor.
 def rand_like(x):

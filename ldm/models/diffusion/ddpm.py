@@ -21,7 +21,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
-                        RollingStats, gen_smooth_grad_layer, save_grid
+                        RollingStats, gen_smooth_grad_layer, save_grid, set_seed_per_rank_and_batch
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -676,6 +676,12 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
+        epoch = self.trainer.current_epoch
+        # For reproducibility, fix the seed for each batch.
+        # Don't use global_step to set the seed, as it repeats when using grad accumulation.
+        # Use batch_idx to set the seed, as it is different for each batch.
+        set_seed_per_rank_and_batch(self.trainer.global_rank, epoch, batch_idx)
+
         if self.global_step == 0:
             # Make the behavior deterministic for debugging purposes.
             # In normal runs, disable this statement.
