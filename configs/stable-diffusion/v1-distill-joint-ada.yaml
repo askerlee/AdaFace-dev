@@ -30,7 +30,7 @@ model:
     # unet_distill_iter_gap = 2 means at 50% of the non-compositional iters, 
     # we use the unet teacher's output as the target (do_unet_distill).
     # at the other 50%, we use the original image as the target (do_normal_recon).
-    unet_distill_iter_gap:            2
+    unet_distill_iter_gap:            3
     unet_distill_weight:              8
     # randomly generated face IDs seem not to make sense for joint ID encoders, since the two parts
     # of the IDs (belonging to two face detectors) are not consistent. However, a small proportion

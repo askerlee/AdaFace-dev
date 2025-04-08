@@ -94,7 +94,7 @@ class DDPM(pl.LightningModule):
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
-                 unet_distill_iter_gap=2,
+                 unet_distill_iter_gap=3,
                  unet_distill_weight=8, # Boost up the unet distillation loss by 8 times.
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
@@ -107,11 +107,11 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0,
+                 p_recon_on_comp_prompt=0,  # DISABLED
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
-                 recon_with_adv_attack_iter_gap=3,
+                 p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -122,7 +122,7 @@ class DDPM(pl.LightningModule):
                  pred_l2_loss_weight=0, #0.05,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
-                 recon_uses_ffn_lora=False,
+                 recon_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -133,7 +133,9 @@ class DDPM(pl.LightningModule):
                  # 0.25: 50% of cross_attn_shrink_factor=0.5, so that the gradient will impact
                  # 50% less on the residual hidden states than the cross-attn 
                  # hidden states (subject embeddings).
-                 res_hidden_states_gradscale=0.25,
+                 # NOTE: Even setting to 0.25, lots of artifacts will still appear. 
+                 # Therefore, we set it to 0.0.
+                 res_hidden_states_gradscale=0.0,
                  log_attn_level=0,
                  ablate_img_embs=False
                 ):
@@ -193,7 +195,7 @@ class DDPM(pl.LightningModule):
         self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.p_recon_on_pure_noise                  = p_recon_on_pure_noise
         self.subj_rep_prompts_count                 = subj_rep_prompts_count
-        self.recon_with_adv_attack_iter_gap         = recon_with_adv_attack_iter_gap
+        self.p_do_adv_attack_when_recon_on_images   = p_do_adv_attack_when_recon_on_images
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
         self.recon_bg_pixel_weights                 = recon_bg_pixel_weights
 
@@ -205,6 +207,8 @@ class DDPM(pl.LightningModule):
         self.comp_iters_paused                      = False
         self.recon_on_image_face_loss_paused        = False
         self.recon_on_comp_prompt_paused            = False
+        self.recon_on_pure_noise_paused             = False
+        self.unet_distill_paused                    = False
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
         self.unet_distill_iters_count                = 0
@@ -432,6 +436,12 @@ class DDPM(pl.LightningModule):
         prev_do_comp_feat_distill = self.iter_flags.get('do_comp_feat_distill', False)
         self.init_iteration_flags()
 
+        epoch = self.trainer.current_epoch
+        # For reproducibility, fix the seed for each batch.
+        # Don't use global_step to set the seed, as it repeats when using grad accumulation.
+        # Use batch_idx to set the seed, as it is different for each batch.
+        set_seed_per_rank_and_batch(self.trainer.global_rank, epoch, batch_idx)
+
         # If we use global_step to decide the iter type, then
         # ** due to grad accumulation (global_step increases 1 after 2 iterations), 
         # ** each type of iter is actually executed twice in a row,
@@ -449,7 +459,8 @@ class DDPM(pl.LightningModule):
         else:
             self.iter_flags['do_comp_feat_distill']     = False
             self.non_comp_iters_count += 1
-            if self.unet_distill_iter_gap > 0 and self.non_comp_iters_count % self.unet_distill_iter_gap == 0:
+            if (not self.unet_distill_paused) and self.unet_distill_iter_gap > 0 and \
+              (self.non_comp_iters_count % self.unet_distill_iter_gap == 0):
                 self.iter_flags['do_normal_recon']      = False
                 self.iter_flags['do_unet_distill']      = True
                 # Disable do_prompt_emb_delta_reg during unet distillation.
@@ -676,18 +687,7 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
-        epoch = self.trainer.current_epoch
-        # For reproducibility, fix the seed for each batch.
-        # Don't use global_step to set the seed, as it repeats when using grad accumulation.
-        # Use batch_idx to set the seed, as it is different for each batch.
-        set_seed_per_rank_and_batch(self.trainer.global_rank, epoch, batch_idx)
-
         if self.global_step == 0:
-            # Make the behavior deterministic for debugging purposes.
-            # In normal runs, disable this statement.
-            #random.seed(10000)
-            self.num_teachable_iters = 0
-            self.num_reuse_teachable_iters = 0
             # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
             # uncond_context[0]: [1, 77, 768].
             with torch.no_grad():
@@ -697,7 +697,7 @@ class LatentDiffusion(DDPM):
             # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
             self.img_prompt_prefix_embs = img_prompt_prefix_context[0][:1, :4]
 
-        # only for very first batch
+        # only for the very first batch
         if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
             assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
             # set rescale weight to 1./std of encodings
@@ -974,7 +974,7 @@ class LatentDiffusion(DDPM):
 
         if self.iter_flags['do_normal_recon']:
             p_recon_on_comp_prompt = self.p_recon_on_comp_prompt if not self.recon_on_comp_prompt_paused else 0
-            p_recon_on_pure_noise  = self.p_recon_on_pure_noise
+            p_recon_on_pure_noise  = self.p_recon_on_pure_noise  if not self.recon_on_pure_noise_paused  else 0
         else:
             p_recon_on_comp_prompt = 0
             p_recon_on_pure_noise  = 0
@@ -1638,9 +1638,9 @@ class LatentDiffusion(DDPM):
 
         extra_info = cond_context[2]
         extra_info['capture_ca_activations']              = capture_ca_activations
-        extra_info['res_hidden_states_gradscale']          = res_hidden_states_gradscale
+        extra_info['res_hidden_states_gradscale']         = res_hidden_states_gradscale
         extra_info['img_mask']                            = img_mask
-        extra_info['shrink_cross_attn']                    = shrink_cross_attn
+        extra_info['shrink_cross_attn']                   = shrink_cross_attn
         # subj_indices are not used if shrink_cross_attn is False.
         extra_info['subj_indices']                        = subj_indices
 
@@ -1795,10 +1795,12 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all' if is_post_priming else 'none',
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=is_post_priming,
-                                    # res_hidden_states_gradscale: 0.2
+                                    # res_hidden_states_gradscale: 0, gradients don't flow back through 
+                                    # UNet skip connections.
                                     res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                    # enable_unet_attn_lora: randomly set to True 50% of the time.
                                     use_attn_lora=enable_unet_attn_lora,
-                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = False.
+                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
                                     use_ffn_lora=enable_unet_ffn_lora, 
                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
             
@@ -1927,7 +1929,8 @@ class LatentDiffusion(DDPM):
                                         subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
-                                        # res_hidden_states_gradscale: 0.2
+                                        # res_hidden_states_gradscale: 0, gradients don't flow back through 
+                                        # UNet skip connections.
                                         res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                         # Enable the attn lora in subject-compos batches, as long as 
                                         # attn lora is globally enabled.
@@ -2028,10 +2031,8 @@ class LatentDiffusion(DDPM):
             # That is 80% / 3 = 26.67% of recon iterations. Almost the same as before.
             # Doing adversarial attack on the input images seems to introduce high-frequency noise 
             # to the whole image (not just the face area), so we only do it after the first denoise step.
-            do_adv_attack = (self.recon_with_adv_attack_iter_gap > 0) \
-                            and (self.normal_recon_iters_count % self.recon_with_adv_attack_iter_gap == 0) \
-                            and not self.iter_flags['recon_on_comp_prompt'] \
-                            and not self.iter_flags['recon_on_pure_noise']
+            do_adv_attack = (torch.rand(1) < self.p_do_adv_attack_when_recon_on_images) \
+                            and not (self.iter_flags['recon_on_comp_prompt'] or self.iter_flags['recon_on_pure_noise'])
             # LDM VAE uses fp32, and we can only afford a DO_ADV_BS=1.
             if self.use_ldm_unet:
                 DO_ADV_BS = 1
@@ -2324,7 +2325,7 @@ class LatentDiffusion(DDPM):
         return adv_grad
 
     # enable_unet_attn_lora: randomly set to True 50% of the time.
-    # enable_unet_ffn_lora: False.
+    # enable_unet_ffn_lora: True.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, cond_context, 
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
@@ -2348,25 +2349,25 @@ class LatentDiffusion(DDPM):
             x_start0 = x_start
             num_recon_priming_steps = 0
 
-        if num_denoising_steps > 1 or recon_on_comp_prompt or recon_on_pure_noise:
+        if num_denoising_steps > 1 or recon_on_pure_noise:
             # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
             # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
-            cfg_scale  = 2
-            if recon_on_comp_prompt or recon_on_pure_noise:
-                # If recon_on_comp_prompt, don't limit the image area to img_mask, 
-                # to boost the compositional patterns in the background.
-                # If recon_on_pure_noise, img_mask is meaningless, so set it to None.
-                img_mask = None
+            cfg_scale = 2
             if recon_on_pure_noise:
-                # If recon_on_pure_noise, fg_mask is meaningless, so set it to None.
+                img_mask = None
                 fg_mask  = torch.ones_like(fg_mask)
         else:
             # Use the default negative prompts.
             # Don't do CFG. So uncond_emb is None.
             uncond_emb = None
             cfg_scale  = -1
+            if recon_on_comp_prompt:
+                # If recon_on_comp_prompt, don't limit the image area to img_mask, 
+                # to boost the compositional patterns in the background.
+                # If recon_on_pure_noise, img_mask is meaningless, so set it to None.
+                img_mask = None
 
         # if recon_on_comp_prompt, then recon_bg_pixel_weight == 0, no penalty on bg errors.
         # otherwise, recon_bg_pixel_weight == 0.01, a tiny penalty on bg errors.
@@ -2389,6 +2390,8 @@ class LatentDiffusion(DDPM):
                                          # fg_mask is used to confine adv_grad to the foreground area.
                                          x_start0, noise, t, cond_context, uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, num_recon_priming_steps,
+                                         # enable_unet_attn_lora: randomly set to True 50% of the time.
+                                         # enable_unet_ffn_lora: True.
                                          recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
                                          'recon_loss',  # ffn_lora_adapter_name
                                          do_adv_attack, DO_ADV_BS)
@@ -2456,7 +2459,7 @@ class LatentDiffusion(DDPM):
                     # In this branch, at least one face is detected in x_recon.
                     # Set the weights of the instances without faces detected to 0.25, 
                     # to downscale corresponding gradients which are more noisy than those with faces detected.
-                    face_detected_inst_weights[face_detected_inst_mask==0] = 0.25
+                    face_detected_inst_weights[face_detected_inst_mask==0] = 0.1
 
                     # If no face is detected in x_start, then loss_arcface_align_recon_step = 0 and 
                     # fg_face_bboxes = None. In such cases, it's meaningless to compute recon losses.
@@ -2477,13 +2480,14 @@ class LatentDiffusion(DDPM):
                         mask_overlap_ratio = fg_mask2.sum() / fg_mask.sum()
                         print(f"Recon face detected/segmented mask overlap: {mask_overlap_ratio:.2f}")
                 else:
+                    # No faces detected in x_recon.
                     # face_detected_inst_weights set to all ones, i.e., we recon all instances equally.
-                    # After that, scale down the recon loss by 0.25, for the same purpose 
-                    # as part of face_detected_inst_weights being set to 0.25 above.
+                    # After that, scale down the recon loss by 0.1, for the same purpose 
+                    # as part of face_detected_inst_weights being set to 0.1 above.
                     # NOTE: if no faces are detected in x_recon and we set face_detected_inst_weights to 
-                    # all 0.25, then it's equivalent to setting face_detected_inst_weights to all ones,
+                    # all 0.1, then it's equivalent to setting face_detected_inst_weights to all ones,
                     # since we normalize the pixel-wise recon losses by the number of weighted face pixels.
-                    recon_loss_scale = 0.25
+                    recon_loss_scale = 0.1
                     face_detected_inst_weights = torch.ones_like(face_detected_inst_mask)
 
                 # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
@@ -2516,24 +2520,30 @@ class LatentDiffusion(DDPM):
         # If comp iters are already paused, then we don't resume until recon_face_images_fracs >= [0.82, 0.92].
         if (recon_face_images_fracs < self.pause_comp_iters_on_face_frac_lower_than).any():
             self.comp_iters_paused               = True
-            self.recon_on_image_face_loss_paused = True
+            #self.recon_on_image_face_loss_paused = True
             self.recon_on_comp_prompt_paused     = True
+            #self.recon_on_pure_noise_paused      = True
+            self.unet_distill_paused             = True
             print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                   "PAUSE COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
+                   "PAUSE COMPOSITIONAL ITERATIONS and unet distillation iterations.")
         elif self.comp_iters_paused and (recon_face_images_fracs < self.resume_comp_iters_on_face_frac_higher_than).any():
             self.comp_iters_paused               = True
-            self.recon_on_image_face_loss_paused = True
+            #self.recon_on_image_face_loss_paused = True
             self.recon_on_comp_prompt_paused     = True
+            #self.recon_on_pure_noise_paused      = True
+            self.unet_distill_paused             = True
             print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_fracs_str} < {self.resume_comp_iters_on_face_frac_higher_than}. "
-                   "KEEP COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations PAUSED.")
+                   "KEEP COMPOSITIONAL ITERATIONS and unet distillation PAUSED.")
         # resume_comp_iters_on_face_frac_higher_than = 0.77
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
         elif (recon_face_images_fracs >= self.resume_comp_iters_on_face_frac_higher_than).all() and self.comp_iters_paused:
             self.comp_iters_paused               = False
-            self.recon_on_image_face_loss_paused = False
+            #self.recon_on_image_face_loss_paused = False
             self.recon_on_comp_prompt_paused     = False
+            #self.recon_on_pure_noise_paused      = False
+            self.unet_distill_paused             = False
             print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
-                   "RESUME COMPOSITIONAL ITERATIONS and arcface align loss in recon-on-image iterations.")
+                   "RESUME COMPOSITIONAL ITERATIONS and unet distillation.")
 
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
@@ -2547,9 +2557,10 @@ class LatentDiffusion(DDPM):
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.mean().item():.4f}")
-                    # If recon_on_image_face_loss_paused and it's recon on images, 
+                    # If recon_on_image_face_loss_paused (set to always True now) 
+                    # and it's recon on images, 
                     # then we don't apply loss_arcface_align_recon.
-                    arcface_align_recon_loss_scale = 1 if not self.recon_on_image_face_loss_paused else 0
+                    arcface_align_recon_loss_scale = 0 if self.recon_on_image_face_loss_paused else 1
 
                 # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.002 => 0.001-0.00125.
                 # This loss is around 1/25 of recon/distill losses (0.1).
@@ -2769,7 +2780,7 @@ class LatentDiffusion(DDPM):
                                                      enable_unet_ffn_lora=True, 
                                                      # ffn_lora_adapter_name is 'unet_distill', 
                                                      # to get an x_start compatible with the teacher.
-                                                     ffn_lora_adapter_name='unet_distill',  
+                                                     ffn_lora_adapter_name='recon_loss',  
                                                      do_adv_attack=False, DO_ADV_BS=-1)
                 else:
                     with torch.no_grad():
@@ -2843,7 +2854,8 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    # res_hidden_states_gradscale: 0.2
+                                    # res_hidden_states_gradscale: 0, gradients don't flow back through 
+                                    # UNet skip connections.
                                     res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
@@ -3682,6 +3694,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
                                    q_lora_updates_query=self.q_lora_updates_query)
         self.attn_capture_procs = list(attn_capture_procs.values())
 
+        # up_blocks[0] is a different type of block, so we skip it.
         self.res_hidden_states_gradscale_blocks = self.diffusion_model.up_blocks[1:]
         for block in self.res_hidden_states_gradscale_blocks:
             block.forward = CrossAttnUpBlock2D_forward_capture.__get__(block)
@@ -3810,7 +3823,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # NOTE: FFN loras has been disabled above.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_gradscale_blocks,
-                                   False, False, None, False, False, False)
+                                   False, False, None, False, False, res_hidden_states_gradscale)
 
         out = out.to(out_dtype)
         return out
