@@ -436,16 +436,6 @@ class SetupCallback(Callback):
             OmegaConf.save(OmegaConf.create({"lightning": self.lightning_config}),
                            os.path.join(self.cfgdir, "{}-lightning.yaml".format(self.timesig)))
 
-        else:
-            # ModelCheckpoint callback created log directory --- remove it
-            if not self.resume and os.path.exists(self.logdir):
-                dst, name = os.path.split(self.logdir)
-                dst = os.path.join(dst, "child_runs", name)
-                os.makedirs(os.path.split(dst)[0], exist_ok=True)
-                try:
-                    os.rename(self.logdir, dst)
-                except FileNotFoundError:
-                    pass
 
 class CUDACallback(Callback):
     # see https://github.com/SeanNaren/minGPT/blob/master/mingpt/callback.py
@@ -469,24 +459,22 @@ class CUDACallback(Callback):
         except AttributeError:
             pass
 
-# The primary purpose of ModeSwapCallback is to dynamically switch the optimizer 
-# during training based on a specified swap_step.
-# ModeSwapCallback is never used in the code.
-class ModeSwapCallback(Callback):
+class CustomCheckpointSaver(Callback):
+    def __init__(self, save_dir, every_n_steps=500):
+        self.save_dir = save_dir
+        self.every_n_steps = every_n_steps
 
-    def __init__(self, swap_step=2000):
-        super().__init__()
-        self.is_frozen = False
-        self.swap_step = swap_step
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        if trainer.global_rank == 0:
+            os.makedirs(self.save_dir, exist_ok=True)
 
-    def on_train_epoch_start(self, trainer, pl_module):
-        if trainer.global_step < self.swap_step and not self.is_frozen:
-            self.is_frozen = True
-            trainer.optimizers = [pl_module.configure_opt_embedding()]
+        # Save a reference to itself, so that I can refer to it in ddpm.py:on_save_checkpoint().
+        pl_module.custom_checkpoint_saver = self        
+        # Get current global step
+        global_step = trainer.global_step
 
-        if trainer.global_step > self.swap_step and self.is_frozen:
-            self.is_frozen = False
-            trainer.optimizers = [pl_module.configure_opt_model()]
+        if global_step % self.every_n_steps == 0 and global_step > 0 and trainer.global_rank == 0:
+            pl_module.on_save_checkpoint({})
 
 if __name__ == "__main__":
     # custom parser to specify config files, train, test and debug mode,
@@ -831,32 +819,11 @@ if __name__ == "__main__":
         logger_cfg = OmegaConf.merge(default_logger_cfg, logger_cfg)
         trainer_kwargs["logger"] = instantiate_from_config(logger_cfg)
 
-        # modelcheckpoint - use monitor to specify which metric is used to determine best models
-        default_modelckpt_cfg = {
-            "target": "pytorch_lightning.callbacks.ModelCheckpoint",
-            "params": {
-                "dirpath": ckptdir,
-                "filename": "{epoch:06}",
-                "verbose": True,
-                "save_last": True,
-                "save_top_k": 0,
-            }
-        }
-
-        if "modelcheckpoint" in lightning_config:
-            modelckpt_cfg = lightning_config.modelcheckpoint
-        else:
-            modelckpt_cfg =  OmegaConf.create()
-        modelckpt_cfg = OmegaConf.merge(default_modelckpt_cfg, modelckpt_cfg)
-
-        if hasattr(model, "monitor"):
-            print(f"Monitoring {model.monitor} as checkpoint metric.")
-            modelckpt_cfg["params"]["monitor"] = model.monitor
-            modelckpt_cfg["params"]["save_top_k"] = 0
-
         # Maintain the same frequency of saving checkpoints when accumulate_grad_batches > 1.
         # modelckpt_cfg.params.every_n_train_steps //= config.model.params.accumulate_grad_batches
-        print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
+        # print(f"Merged modelckpt-cfg: \n{modelckpt_cfg}")
+
+        save_ckpt_every_n_steps = lightning_config.modelcheckpoint.params.every_n_train_steps
 
         # add callback which sets up log directory
         default_callbacks_cfg = {
@@ -882,8 +849,15 @@ if __name__ == "__main__":
             "cuda_callback": {
                 "target": "main.CUDACallback"
             },
+            "custom_checkpoint_saver": {
+                "target": "main.CustomCheckpointSaver",
+                "params": {
+                    "every_n_steps": save_ckpt_every_n_steps,
+                    "save_dir": ckptdir,
+                }
+            },
         }
-        default_callbacks_cfg.update({'checkpoint_callback': modelckpt_cfg})
+        # default_callbacks_cfg.update({'checkpoint_callback': modelckpt_cfg})
 
         if "callbacks" in lightning_config:
             callbacks_cfg = lightning_config.callbacks

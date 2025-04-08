@@ -13,9 +13,9 @@ model:
     first_stage_key:  image
     cond_stage_key:   caption
     channels:         4
-    # Since we want to train the embedding manager, we set embedding_manager_trainable = True.
-    embedding_manager_trainable:      True
-    monitor:                          train/loss
+    # Since we want to train the embedding manager, we set is_embedding_manager_trainable = True.
+    is_embedding_manager_trainable:      True
+    #monitor:                          train/loss
     scale_factor:                     0.18215
     unfreeze_unet:                    False
     unet_lr:                          0.0
@@ -122,7 +122,7 @@ model:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
-        monitor: train/loss_recon
+        #monitor: train/loss_recon
         ddconfig:
           double_z: true
           z_channels: 4
@@ -176,7 +176,8 @@ lightning:
     limit_val_batches:    0  # Disable doing validation.
     deterministic: False
     replace_sampler_ddp: False
-    accumulate_grad_batches: 4
+    accumulate_grad_batches: 2
     # clip gradients' global norm to <=0.5 using gradient_clip_algorithm='norm' by default    
     gradient_clip_val: 0.5
-    
+    # Custom checkpointing is used, so disable the default checkpointing.
+    enable_checkpointing: False    

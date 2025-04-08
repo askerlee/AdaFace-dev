@@ -604,11 +604,12 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         # Use the same model as ID2AdaPrompt does.
         # FaceAnalysis will try to find the ckpt in: models/insightface/models/antelopev2. 
         # Note there's a second "model" in the path.        
-        # Note DON'T use CUDAExecutionProvider, as it will hang DDP training. 
-        # Seems when loading insightface onto the GPU, it will only reside on the first GPU. 
-        # Then the process on the second GPU has issue to communicate with insightface on the first GPU, causing hanging.
+        # Note DO use CUDAExecutionProvider during training and CPUExecutionProvider during inference.
+        # Otherwise, CPUExecutionProvider will hang DDP training,
+        # and CUDAExecutionProvider will cause OOM on huggingface spaces.
+        self.onnx_providers = ['CUDAExecutionProvider'] if self.is_training else ['CPUExecutionProvider']
         self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
-                                            providers=['CPUExecutionProvider'])
+                                     providers=self.onnx_providers)
         self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         print(f'Arc2Face Face encoder loaded on CPU.')
 
@@ -656,13 +657,13 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         
         if str(device) == 'cpu':
             self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
-                                        providers=['CPUExecutionProvider'])
+                                         providers=['CPUExecutionProvider'])
             self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         else:
             device_id = device.index
             self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
-                                        providers=['CUDAExecutionProvider'],
-                                        provider_options=[{"device_id": str(device_id)}])
+                                         providers=['CUDAExecutionProvider'],
+                                         provider_options=[{"device_id": device_id}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
         self.device = device
@@ -801,13 +802,13 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
 
         if str(device) == 'cpu':
             self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
-                                        providers=['CPUExecutionProvider'])
+                                         providers=['CPUExecutionProvider'])
             self.face_app.prepare(ctx_id=0, det_size=(512, 512))
         else:
             device_id = device.index
             self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
-                                        providers=['CUDAExecutionProvider'],
-                                        provider_options=[{"device_id": str(device_id)}])
+                                         providers=['CUDAExecutionProvider'],
+                                         provider_options=[{"device_id": device_id}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
         self.device = device

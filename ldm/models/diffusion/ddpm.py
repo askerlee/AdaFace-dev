@@ -510,7 +510,7 @@ class LatentDiffusion(DDPM):
                  cond_stage_config,
                  personalization_config,
                  cond_stage_key="image",
-                 embedding_manager_trainable=True,
+                 is_embedding_manager_trainable=True,
                  concat_mode=True,
                  cond_stage_forward=None,
                  scale_factor=1.0,
@@ -535,7 +535,7 @@ class LatentDiffusion(DDPM):
 
         self.concat_mode = concat_mode
         self.cond_stage_key = cond_stage_key
-        self.embedding_manager_trainable = embedding_manager_trainable
+        self.is_embedding_manager_trainable = is_embedding_manager_trainable
 
         try:
             self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
@@ -649,7 +649,7 @@ class LatentDiffusion(DDPM):
                 param.requires_grad = False
 
         self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
-        if self.embedding_manager_trainable:
+        if self.is_embedding_manager_trainable:
             # embedding_manager contains subj_basis_generator, which is based on extended CLIP image encoder,
             # which has attention dropout. Therefore setting embedding_manager.train() is necessary.
             self.embedding_manager.train()
@@ -680,14 +680,16 @@ class LatentDiffusion(DDPM):
 
         self.sample_image_queue = queue.Queue(maxsize=120)
         self.cache_start_iter = 0
-        if self.global_rank == 0:
-            self.sample_save_thread = Thread(target=self.save_samples_worker, args=(60,), daemon=True)
-            self.sample_save_thread.start()
-            print("Started individual Sample Saving thread...")
+        self.sample_save_thread = None
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
         if self.global_step == 0:
+            if self.trainer.global_rank == 0 and self.sample_save_thread is None:
+                self.sample_save_thread = Thread(target=self.save_samples_worker, args=(60,), daemon=True)
+                self.sample_save_thread.start()
+                print("Started individual Sample Saving thread...")
+
             # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
             # uncond_context[0]: [1, 77, 768].
             with torch.no_grad():
@@ -3483,7 +3485,7 @@ class LatentDiffusion(DDPM):
 
         opt_params_with_lrs = []
         opt_params = []
-        if self.embedding_manager_trainable:
+        if self.is_embedding_manager_trainable:
             embedding_params = self.embedding_manager.optimized_parameters()
             embedding_params_with_lrs = [ {'params': embedding_params, 'lr': lr} ]
             opt_params_with_lrs += embedding_params_with_lrs
@@ -3606,14 +3608,13 @@ class LatentDiffusion(DDPM):
     # Called by modelcheckpoint in config.yaml.
     @rank_zero_only
     def on_save_checkpoint(self, checkpoint):
+        checkpoint.clear()
 
         print(self.trainer.global_rank, "Saving checkpoint...")
-    
-        checkpoint.clear()
-        
-        if os.path.isdir(self.trainer.checkpoint_callback.dirpath): 
-            if self.embedding_manager_trainable:
-                emb_man_ckpt_path = os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt")
+
+        if os.path.isdir(self.custom_checkpoint_saver.save_dir): 
+            if self.is_embedding_manager_trainable:
+                emb_man_ckpt_path = os.path.join(self.custom_checkpoint_saver.save_dir, f"embeddings_gs-{self.global_step}.pt")
                 self.embedding_manager.save(emb_man_ckpt_path)
 
             if self.unfreeze_unet:
@@ -3634,8 +3635,8 @@ class LatentDiffusion(DDPM):
                     else:
                         state_dict2[k] = state_dict[k]
 
-                unet_save_path = os.path.join(self.trainer.checkpoint_callback.dirpath, 
-                                              f"unet-{self.global_step}.safetensors")
+                unet_save_path = os.path.join(self.custom_checkpoint_saver.save_dir, 
+                                            f"unet-{self.global_step}.safetensors")
                 safetensors_save_file(state_dict2, unet_save_path)
                 print(f"Saved {unet_save_path}")
 
