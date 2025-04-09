@@ -2459,7 +2459,7 @@ class LatentDiffusion(DDPM):
 
                     face_detected_inst_weights = face_detected_inst_mask.clone()
                     # In this branch, at least one face is detected in x_recon.
-                    # Set the weights of the instances without faces detected to 0.25, 
+                    # Set the weights of the instances without faces detected to 0.1, 
                     # to downscale corresponding gradients which are more noisy than those with faces detected.
                     face_detected_inst_weights[face_detected_inst_mask==0] = 0.1
 
@@ -2521,15 +2521,15 @@ class LatentDiffusion(DDPM):
         # pause_comp_iters_on_face_frac_lower_than = [0.8, 0.9]
         # If comp iters are already paused, then we don't resume until recon_face_images_fracs >= [0.82, 0.92].
         if (recon_face_images_fracs < self.pause_comp_iters_on_face_frac_lower_than).any():
-            self.comp_iters_paused               = True
+            #self.comp_iters_paused               = True
             #self.recon_on_image_face_loss_paused = True
             self.recon_on_comp_prompt_paused     = True
             #self.recon_on_pure_noise_paused      = True
             self.unet_distill_paused             = True
             print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} < {self.pause_comp_iters_on_face_frac_lower_than}. "
                    "PAUSE COMPOSITIONAL ITERATIONS and unet distillation iterations.")
-        elif self.comp_iters_paused and (recon_face_images_fracs < self.resume_comp_iters_on_face_frac_higher_than).any():
-            self.comp_iters_paused               = True
+        elif self.unet_distill_paused and (recon_face_images_fracs < self.resume_comp_iters_on_face_frac_higher_than).any():
+            #self.comp_iters_paused               = True
             #self.recon_on_image_face_loss_paused = True
             self.recon_on_comp_prompt_paused     = True
             #self.recon_on_pure_noise_paused      = True
@@ -2538,8 +2538,8 @@ class LatentDiffusion(DDPM):
                    "KEEP COMPOSITIONAL ITERATIONS and unet distillation PAUSED.")
         # resume_comp_iters_on_face_frac_higher_than = 0.77
         # A margin of 0.02 is used to avoid frequent pausing and resuming.
-        elif (recon_face_images_fracs >= self.resume_comp_iters_on_face_frac_higher_than).all() and self.comp_iters_paused:
-            self.comp_iters_paused               = False
+        elif (recon_face_images_fracs >= self.resume_comp_iters_on_face_frac_higher_than).all() and self.unet_distill_paused:
+            #self.comp_iters_paused               = False
             #self.recon_on_image_face_loss_paused = False
             self.recon_on_comp_prompt_paused     = False
             #self.recon_on_pure_noise_paused      = False
