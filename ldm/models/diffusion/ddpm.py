@@ -117,7 +117,7 @@ class DDPM(pl.LightningModule):
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
-                 arcface_align_loss_weight=2e-3,
+                 arcface_align_loss_weight=1e-2,
                  pred_l2_threshold=0.95,
                  # loss_pred_l2 hurts ID without lowering pred L2, so we disable and just monitor it.
                  pred_l2_loss_weight=0, #0.05,
@@ -2554,8 +2554,8 @@ class LatentDiffusion(DDPM):
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.mean().item():.4f}")
                     # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
-                    # without being stablized by the recon loss, so we scale it down.
-                    arcface_align_recon_loss_scale = 1
+                    # so we scale it up to 4x.
+                    arcface_align_recon_loss_scale = 4
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.mean().item():.4f}")
@@ -2564,8 +2564,9 @@ class LatentDiffusion(DDPM):
                     # then we don't apply loss_arcface_align_recon.
                     arcface_align_recon_loss_scale = 0 if self.recon_on_image_face_loss_paused else 1
 
-                # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.002 => 0.001-0.00125.
-                # This loss is around 1/25 of recon/distill losses (0.1).
+                # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.01 => 0.004-0.005.
+                # This loss is around 1/20 of recon/distill losses (0.1).
+                # If recon_on_pure_noise, then loss_arcface_align_recon => 0.016-0.02.
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
 
         pred_l2 = torch.stack(pred_l2s).mean()
