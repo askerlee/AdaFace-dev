@@ -3093,7 +3093,7 @@ class LatentDiffusion(DDPM):
                 arcface_align_comp_loss_scale = 1.5 * min(4, 1 / (comp_iters_face_detected_frac**2 + 0.01))
                 # loss_comp_bg_faces_suppress is a mean L2 loss, only ~0.02. * 50 * 4 * 5e-3 => 0.02.
                 # Although this is 15x~20x of loss_arcface_align_comp, it's very infraquently triggered.
-                comp_bg_faces_suppress_loss_scale = 50
+                comp_bg_faces_suppress_loss_scale = 200
                 loss_comp_feat_distill += (loss_arcface_align_comp * arcface_align_comp_loss_scale 
                                            + loss_comp_bg_faces_suppress * comp_bg_faces_suppress_loss_scale) \
                                           * self.arcface_align_loss_weight
