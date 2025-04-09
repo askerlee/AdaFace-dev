@@ -178,6 +178,6 @@ lightning:
     replace_sampler_ddp: False
     accumulate_grad_batches: 2
     # clip gradients' global norm to <=0.01, using gradient_clip_algorithm='norm' by default    
-    gradient_clip_val: 0.01
+    gradient_clip_val: 0.05
     # Custom checkpointing is used, so disable the default checkpointing.
     enable_checkpointing: False    
