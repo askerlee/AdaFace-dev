@@ -877,9 +877,6 @@ if __name__ == "__main__":
         else:
             trainer_kwargs["precision"]     = opt.precision
         
-        if hasattr(trainer_opt, 'grad_clip'):
-            trainer_kwargs["gradient_clip_val"] = trainer_opt.grad_clip
-        
         trainer = Trainer.from_argparse_args(trainer_opt, **trainer_kwargs)
         trainer.logdir = logdir  ###
 
