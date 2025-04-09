@@ -179,6 +179,15 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
     print(f"Norms: min: {norms.min():.4f}, max: {norms.max():.4f}, mean: {norms.mean():.4f}, std: {norms.std():.4f}")
 
+def get_grad_norm(params, norm_type=2):
+    total_norm = 0.0
+    for p in params:
+        if p.grad is not None:
+            param_norm = p.grad.detach().data.norm(norm_type)
+            total_norm += param_norm.item() ** norm_type
+    total_norm = total_norm ** (1. / norm_type)
+    return total_norm
+
 class RollingStats:
     def __init__(self, num_values=1, window_size=200, stat_type='mean'):
         self.window_size = window_size

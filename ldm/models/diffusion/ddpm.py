@@ -21,7 +21,8 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
-                        RollingStats, gen_smooth_grad_layer, save_grid, set_seed_per_rank_and_batch
+                        RollingStats, gen_smooth_grad_layer, save_grid, set_seed_per_rank_and_batch, \
+                        get_grad_norm
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -712,7 +713,6 @@ class LatentDiffusion(DDPM):
             self.register_buffer('scale_factor', 1. / z.flatten().std())
             print(f"setting self.scale_factor to {self.scale_factor}")
             print("### USING STD-RESCALING ###")
-
 
     def register_schedule(self,
                           given_betas=None, beta_schedule="linear", timesteps=1000,
@@ -3501,7 +3501,8 @@ class LatentDiffusion(DDPM):
             opt_params += model_params
 
         count_optimized_params(opt_params_with_lrs)
-
+        self._params_being_optimized = opt_params 
+        
         if 'adam' in self.optimizer_type.lower():
             if self.optimizer_type == 'CAdamW':
                 # CAdamW doesn't support individual LRs.
@@ -3605,6 +3606,12 @@ class LatentDiffusion(DDPM):
 
         return optimizers
 
+    def on_after_backward(self):
+        grad_norm = get_grad_norm(self._params_being_optimized, norm_type=2)
+        max_grad  = max((p.grad.abs().max().item() for p in self._params_being_optimized if p.grad is not None), default=0)
+        self.log("grad_norm", grad_norm)
+        self.log("max_grad", max_grad)
+        
     # Called by modelcheckpoint in config.yaml.
     @rank_zero_only
     def on_save_checkpoint(self, checkpoint):
