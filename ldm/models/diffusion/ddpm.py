@@ -2606,11 +2606,8 @@ class LatentDiffusion(DDPM):
             recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[recon_on_comp_prompt]
             loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
 
-            v_loss_normal_recon = loss_normal_recon.mean().detach().item()
-            mon_loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
-
-        else:
-            loss_normal_recon = torch.tensor(0.0, device=x_start.device)
+        v_loss_normal_recon = loss_normal_recon.mean().detach().item()
+        mon_loss_dict.update({f'{session_prefix}/normal_recon_total': v_loss_normal_recon})
 
         return loss_normal_recon
 
