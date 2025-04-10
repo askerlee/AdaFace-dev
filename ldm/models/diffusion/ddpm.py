@@ -89,7 +89,7 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
-                 recon_subj_mb_suppress_loss_weights=[0.4, 0.4],
+                 recon_subj_mb_suppress_loss_weight=0.4,
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_attn_cross_t_distill_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
@@ -153,7 +153,7 @@ class DDPM(pl.LightningModule):
         self.comp_unet_weight_path                  = comp_unet_weight_path
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
-        self.recon_subj_mb_suppress_loss_weights    = recon_subj_mb_suppress_loss_weights
+        self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
         self.comp_sc_subj_attn_cross_t_distill_loss_weight = comp_sc_subj_attn_cross_t_distill_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
@@ -2486,15 +2486,15 @@ class LatentDiffusion(DDPM):
                 # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
                 # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
                 # If img_mask = None, then blank pixels are regularized as bg pixels.
-                loss_recon, loss_recon_subj_mb_suppress = \
+                loss_recon_step, loss_recon_subj_mb_suppress_step = \
                     calc_recon_and_suppress_losses(noise_pred, noise, face_detected_inst_weights, 
                                                    ca_layers_activations,
                                                    all_subj_indices, None, fg_mask2,
                                                    recon_bg_pixel_weight, x_start.shape[0])
                 
-                losses_recon.append(loss_recon)
+                losses_recon.append(loss_recon_step)
                 recon_loss_scales.append(recon_loss_scale)
-                losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress)
+                losses_recon_subj_mb_suppress.append(loss_recon_subj_mb_suppress_step)
 
         # recon_face_images_on_noise_frac: the window-accumulated ratio of (num of noise recon face images / num of all recon images).
         recon_face_images_on_noise_frac = self.normal_recon_face_images_on_noise_stats.sums[0] / (self.normal_recon_face_images_on_noise_stats.sums[1] + 1e-2)
@@ -2565,10 +2565,9 @@ class LatentDiffusion(DDPM):
         if loss_recon_subj_mb_suppress > 0:
             mon_loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
 
-        # loss_recon_subj_mb_suppress: 0.2, recon_subj_mb_suppress_loss_weights: 0.2 -> 0.04, 
-        # recon loss: 0.12, loss_recon_subj_mb_suppress is 1/3 of recon loss.
-        recon_subj_mb_suppress_loss_weight = self.recon_subj_mb_suppress_loss_weights[recon_on_comp_prompt]
-        loss_normal_recon += loss_recon_subj_mb_suppress * recon_subj_mb_suppress_loss_weight
+        # loss_recon_subj_mb_suppress: 0.15, recon_subj_mb_suppress_loss_weight: 0.4 -> 0.06, 
+        # recon loss: 0.1, loss_recon_subj_mb_suppress is 1/2 of recon loss.
+        loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
 
         if not recon_on_pure_noise:
             losses_recon = torch.stack(losses_recon)
