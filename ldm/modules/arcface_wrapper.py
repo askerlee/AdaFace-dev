@@ -127,12 +127,12 @@ class ArcFaceWrapper(nn.Module):
         # Mask out the losses of instances that have no face detected.
         # aligned_face_detected_inst_mask: binary tensor of [BS].
         loss_arcface_align = (losses_arcface_align * aligned_face_detected_inst_mask).sum() / aligned_face_detected_inst_mask.sum()
-        print(f"loss_arcface_align: {loss_arcface_align.item():.2f}")
+        print(f"loss_arcface_align: {loss_arcface_align.detach().item():.2f}")
 
         if suppress_bg_faces and aligned_bg_faces_emb is not None:
             # Suppress background faces by pushing their embeddings towards zero.
             loss_bg_faces_suppress = (aligned_bg_faces_emb**2).mean()
-            print(f"loss_bg_faces_suppress: {loss_bg_faces_suppress.item():.2f}")
+            print(f"loss_bg_faces_suppress: {loss_bg_faces_suppress.detach().item():.2f}")
         else:
             if suppress_bg_faces and aligned_bg_faces_emb is None:
                 pass

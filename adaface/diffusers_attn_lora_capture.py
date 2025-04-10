@@ -28,7 +28,7 @@ class ScaleGrad(torch.autograd.Function):
         ctx.save_for_backward(alpha_, debug)
         output = input_
         if debug:
-            print(f"input: {input_.abs().mean().item()}")
+            print(f"input: {input_.abs().mean().detach().item()}")
         return output
 
     @staticmethod
@@ -38,7 +38,7 @@ class ScaleGrad(torch.autograd.Function):
         if ctx.needs_input_grad[0]:
             grad_output2 = grad_output * alpha_
             if debug:
-                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+                print(f"grad_output2: {grad_output2.abs().mean().detach().item()}")
         else:
             grad_output2 = None
         return grad_output2, None, None

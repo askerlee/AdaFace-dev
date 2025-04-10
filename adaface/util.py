@@ -48,7 +48,7 @@ def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=Fals
         ts = ts + noise
     
     if verbose:
-        print(f"Correlations between new and original tensors: {F.cosine_similarity(ts.flatten(), orig_ts.flatten(), dim=0).item():.03f}")
+        print(f"Correlations between new and original tensors: {F.cosine_similarity(ts.flatten(), orig_ts.flatten(), dim=0).detach().item():.03f}")
         
     return ts
 
@@ -69,7 +69,7 @@ def calc_stats(emb_name, embeddings, mean_dim=-1):
     # Compute it manually.
     l2_loss = ((embeddings - emb_mean) ** 2).mean().sqrt()
     norms = torch.norm(embeddings, dim=1).detach().cpu().numpy()
-    print("L1: %.4f, L2: %.4f" %(l1_loss.item(), l2_loss.item()))
+    print("L1: %.4f, L2: %.4f" %(l1_loss.detach().item(), l2_loss.detach().item()))
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
 
@@ -80,7 +80,7 @@ class ScaleGrad(torch.autograd.Function):
         ctx.save_for_backward(alpha_, debug)
         output = input_
         if debug:
-            print(f"input: {input_.abs().mean().item()}")
+            print(f"input: {input_.abs().mean().detach().item()}")
         return output
 
     @staticmethod
@@ -90,7 +90,7 @@ class ScaleGrad(torch.autograd.Function):
         if ctx.needs_input_grad[0]:
             grad_output2 = grad_output * alpha_
             if debug:
-                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+                print(f"grad_output2: {grad_output2.abs().mean().detach().item()}")
         else:
             grad_output2 = None
         return grad_output2, None, None

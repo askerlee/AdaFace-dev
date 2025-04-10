@@ -176,7 +176,7 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     # We compute it manually by taking sqrt.
     l2_loss = ((embeddings - emb_mean) ** 2).mean().sqrt()
     norms = torch.norm(embeddings, dim=norm_dim).detach().cpu().numpy()
-    print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
+    print(f"{emb_name}: L1 {l1_loss.detach().item():.4f}, L2 {l2_loss.detach().item():.4f}", end=", ")
     print(f"Norms: min: {norms.min():.4f}, max: {norms.max():.4f}, mean: {norms.mean():.4f}, std: {norms.std():.4f}")
 
 class RollingStats:
@@ -650,7 +650,7 @@ def scan_cls_delta_strings(tokenized_text, placeholder_indices_1st,
                 M = len(cls_delta_tokens)
 
                 if (tokenized_text_i[start_N:start_N+M] == cls_delta_tokens).all():
-                    cls_delta_string_indices.append((batch_i, start_N.item(), M, subj_name))
+                    cls_delta_string_indices.append((batch_i, start_N.detach().item(), M, subj_name))
                     found = True
                     break
             
@@ -725,7 +725,7 @@ class ScaleGrad(torch.autograd.Function):
         ctx.save_for_backward(alpha_, debug)
         output = input_
         if debug:
-            print(f"input: {input_.abs().mean().item()}")
+            print(f"input: {input_.abs().mean().detach().item()}")
         return output
 
     @staticmethod
@@ -735,7 +735,7 @@ class ScaleGrad(torch.autograd.Function):
         if ctx.needs_input_grad[0]:
             grad_output2 = grad_output * alpha_
             if debug:
-                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+                print(f"grad_output2: {grad_output2.abs().mean().detach().item()}")
         else:
             grad_output2 = None
         return grad_output2, None, None
@@ -796,16 +796,16 @@ class SmoothGrad(torch.autograd.Function):
         ctx.save_for_backward(kernel_center_weight, debug)
         output = input_
         if debug:
-            print(f"input: {input_.abs().mean().item()}")
+            print(f"input: {input_.abs().mean().detach().item()}")
         return output
     
     @staticmethod
     def backward(ctx, grad_output):  # pragma: no cover
         kernel_center_weight, debug = ctx.saved_tensors
         if ctx.needs_input_grad[0]:
-            grad_output2 = smooth_tensor_34d(grad_output, kernel_center_weight=kernel_center_weight.item())
+            grad_output2 = smooth_tensor_34d(grad_output, kernel_center_weight=kernel_center_weight.detach().item())
             if debug:
-                print(f"grad_output2: {grad_output2.abs().mean().item()}")
+                print(f"grad_output2: {grad_output2.abs().mean().detach().item()}")
         else:
             grad_output2 = None
         return grad_output2, None, None
@@ -1426,7 +1426,7 @@ def calc_dyn_loss_scale(loss, base_loss_and_scale, ref_loss_and_scale, valid_sca
 
 def to_float(x):
     if isinstance(x, torch.Tensor):
-        return x.item()
+        return x.detach().item()
     else:
         return x
 
@@ -1465,7 +1465,7 @@ def perturb_tensor(ts, perturb_std, perturb_std_is_relative=True, keep_norm=Fals
         ts = ts + noise
     
     if verbose:
-        print(f"Correlations between new and original tensors: {F.cosine_similarity(ts.flatten(), orig_ts.flatten(), dim=0).item():.03f}")
+        print(f"Correlations between new and original tensors: {F.cosine_similarity(ts.flatten(), orig_ts.flatten(), dim=0).detach().item():.03f}")
         
     return ts
 
@@ -1519,7 +1519,7 @@ def init_x_with_fg_from_training_image(x_start, fg_mask,
         # faces (usually around 20%-50%) too small.
         # fg_mask_percent = 0.3, extra_scale = (2/3) ** 0.35 = 0.87 => face ratio = 0.3 * 0.87 = 0.261.
         # fg_mask_percent = 0.5, extra_scale = (2/5) ** 0.35 = 0.73 => face ratio = 0.5 * 0.73 = 0.365.
-        extra_scale = math.pow(0.2 / fg_mask_percent.item(), 0.35)
+        extra_scale = math.pow(0.2 / fg_mask_percent.detach().item(), 0.35)
         scale_range_lb = base_scale_range_lb * extra_scale
         # scale_range_ub is at least 0.5.
         scale_range_ub = max(0.5, base_scale_range_ub * extra_scale)
@@ -1632,7 +1632,7 @@ def calc_recon_and_suppress_losses(noise_pred, noise_gt, face_detected_inst_weig
         # If recon_on_pure_noise is True, then we don't need to do image reconstruction.
         # We only need to do background suppression.
         loss_recon = torch.tensor(0., device=noise_pred.device)
-        
+
     loss_recon_subj_mb_suppress = \
         calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
                                           all_subj_indices, BLOCK_SIZE, fg_mask)
@@ -2591,7 +2591,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
             else:
                 # loss_scale: the scale of the loss. If the loss is too large, scale it down.
                 # Always 1 >= loss_scale > 0.0001 = 1 / recon_max_scale_of_threses.
-                loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1].item() + 1e-6)
+                loss_scale = recon_scaled_loss_threses[feat_name] / (losses[-1].detach().item() + 1e-6)
                 # If the original loss is already <= recon_scaled_loss_threses[feat_name], we set loss_scale = 1.
                 loss_scale = min(loss_scale, 1)
                 losses = losses * loss_scale

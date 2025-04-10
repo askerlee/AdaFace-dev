@@ -1852,13 +1852,13 @@ class LatentDiffusion(DDPM):
                     self.adaface_adv_iters_count += 1
                     if adv_grad is not None:
                         # adv_grad_max: 1e-3
-                        adv_grad_max = adv_grad.abs().max().item()
+                        adv_grad_max = adv_grad.abs().max().detach().item()
                         mon_loss_dict.update({f'{session_prefix}/adv_grad_max': adv_grad_max})
                         # adv_grad_mean is always 4~5e-6.
-                        # mon_loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().item()})
+                        # mon_loss_dict.update({f'{session_prefix}/adv_grad_mean': adv_grad.abs().mean().detach().item()})
                         faceloss_fg_mask = fg_mask[:DO_ADV_BS].repeat(1, 4, 1, 1)
                         # adv_grad_fg_mean: 8~9e-6.
-                        adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().item()
+                        adv_grad_fg_mean = adv_grad[faceloss_fg_mask.bool()].abs().mean().detach().item()
                         mon_loss_dict.update({f'{session_prefix}/adv_grad_fg_mean': adv_grad_fg_mean})
                         # adv_grad_mag: ~1e-4.
                         adv_grad_mag = np.sqrt(adv_grad_max * adv_grad_fg_mean)
@@ -1888,7 +1888,8 @@ class LatentDiffusion(DDPM):
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_cross_attn=False,
-                                       cfg_scale=2.5, num_denoising_steps=4, max_num_steps_with_grad=3):
+                                       cfg_scale=2.5, num_denoising_steps=4, max_num_steps_with_grad=3,
+                                       use_comp_distill_weights=False):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -1902,7 +1903,6 @@ class LatentDiffusion(DDPM):
         noise_preds = []
         x_recons    = []
         ca_layers_activations_list = []
-
         for i in range(num_denoising_steps):
             x_start = x_starts[i]
             t       = ts[i]
@@ -1936,7 +1936,9 @@ class LatentDiffusion(DDPM):
                                         # Enable the attn lora in subject-compos batches, as long as 
                                         # attn lora is globally enabled.
                                         use_attn_lora=self.unet_uses_attn_lora,
-                                        use_ffn_lora=False, ffn_lora_adapter_name='comp_distill')
+                                        # If using default weights, then do not use ffn lora.
+                                        use_ffn_lora=use_comp_distill_weights, 
+                                        ffn_lora_adapter_name='comp_distill')
             
             noise_preds.append(noise_pred)
             x_starts.append(x_recon.detach())
@@ -2144,7 +2146,8 @@ class LatentDiffusion(DDPM):
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     shrink_cross_attn=shrink_cross_attn_in_comp_iters,
                                                     cfg_scale=2.5, num_denoising_steps=num_comp_denoising_steps,
-                                                    max_num_steps_with_grad=self.max_num_comp_distill_steps_with_grad)
+                                                    max_num_steps_with_grad=self.max_num_comp_distill_steps_with_grad,
+                                                    use_comp_distill_weights=self.iter_flags['use_comp_distill_weights'])
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {num_comp_denoising_steps}, ts: {ts_1st}")
@@ -2545,13 +2548,13 @@ class LatentDiffusion(DDPM):
             if loss_arcface_align_recon > 0:
                 if recon_on_pure_noise:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.mean().item():.4f}")
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.detach().item():.4f}")
                     # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
                     # so we scale it up to 4x.
                     arcface_align_recon_loss_scale = 4
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.mean().item():.4f}")
+                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.detach().item():.4f}")
                     # If recon_on_image_face_loss_paused (set to always True now) 
                     # and it's recon on images, 
                     # then we don't apply loss_arcface_align_recon.
@@ -2565,7 +2568,7 @@ class LatentDiffusion(DDPM):
         if len(losses_bg_faces_suppress) > 0:
             loss_bg_faces_suppress = torch.stack(losses_bg_faces_suppress).mean()
             if loss_bg_faces_suppress > 0:
-                mon_loss_dict.update({f'{session_prefix}/bg_faces_suppress': loss_bg_faces_suppress.mean().detach().item() })
+                mon_loss_dict.update({f'{session_prefix}/recon_bg_faces_suppress': loss_bg_faces_suppress.mean().detach().item() })
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 2 => 0.04,
                 # same scale as loss_bg_faces_suppress_comp.
                 # Although this is ~10x of loss_arcface_align_recon, it's very infraquently triggered.
@@ -2893,7 +2896,7 @@ class LatentDiffusion(DDPM):
                                 img_mask, fg_mask, instance_weights=None, 
                                 fg_pixel_weight=1, bg_pixel_weight=recon_bg_pixel_weight)
 
-            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.item():.4f}")
+            print(f"Rank {self.trainer.global_rank} Step {s}: {all_t[s].tolist()}, {loss_unet_distill.detach().item():.4f}")
             losses_unet_distill.append(loss_unet_distill)
 
         # If num_unet_denoising_steps > 1, most loss_unet_distill are usually 0.001~0.005, but sometimes there are a few large loss_unet_distill.
@@ -3236,11 +3239,11 @@ class LatentDiffusion(DDPM):
             mon_loss_dict.update({f'{session_prefix}/subj_attn_norm_distill': loss_subj_attn_norm_distill.mean().detach().item() })
 
         if loss_comp_rep_distill_subj_attn > 0:
-            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.item() })
-            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_k':     loss_comp_rep_distill_subj_k.item() })
-            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.item() })
-            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_v':     loss_comp_rep_distill_subj_v.item() })
-            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_v':  loss_comp_rep_distill_nonsubj_v.item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_attn':  loss_comp_rep_distill_subj_attn.detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_k':     loss_comp_rep_distill_subj_k.detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_v':     loss_comp_rep_distill_subj_v.detach().item() })
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_v':  loss_comp_rep_distill_nonsubj_v.detach().item() })
             # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
             # valid_scale_range=(0.02, 1): If sc_fg_mask_percent = 0.19, then fg_percent_rep_distill_scale = 0.02.
