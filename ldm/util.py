@@ -179,15 +179,6 @@ def calc_stats(emb_name, embeddings, mean_dim=0, norm_dim=1):
     print(f"{emb_name}: L1 {l1_loss.item():.4f}, L2 {l2_loss.item():.4f}", end=", ")
     print(f"Norms: min: {norms.min():.4f}, max: {norms.max():.4f}, mean: {norms.mean():.4f}, std: {norms.std():.4f}")
 
-def calc_total_grad_norm(params, norm_type=2):
-    total_norm = 0.0
-    for p in params:
-        if p.grad is not None:
-            param_norm = p.grad.detach().data.norm(norm_type)
-            total_norm += param_norm.item() ** norm_type
-    total_norm = total_norm ** (1. / norm_type)
-    return total_norm
-
 class RollingStats:
     def __init__(self, num_values=1, window_size=200, stat_type='mean'):
         self.window_size = window_size
@@ -1630,13 +1621,18 @@ def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask,
 def calc_recon_and_suppress_losses(noise_pred, noise_gt, face_detected_inst_weights,
                                    ca_layers_activations,
                                    all_subj_indices, img_mask, fg_mask, 
-                                   bg_pixel_weight, BLOCK_SIZE):
+                                   bg_pixel_weight, BLOCK_SIZE, recon_on_pure_noise):
 
-    # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
-    loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, 
-                                    img_mask, fg_mask, face_detected_inst_weights,
-                                    fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
-
+    if not recon_on_pure_noise:
+        # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
+        loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, 
+                                        img_mask, fg_mask, face_detected_inst_weights,
+                                        fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
+    else:
+        # If recon_on_pure_noise is True, then we don't need to do image reconstruction.
+        # We only need to do background suppression.
+        loss_recon = torch.tensor(0., device=noise_pred.device)
+        
     loss_recon_subj_mb_suppress = \
         calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
                                           all_subj_indices, BLOCK_SIZE, fg_mask)

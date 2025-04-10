@@ -645,7 +645,6 @@ class SubjectSampler(Sampler):
         self.rank = dist.get_rank()
         print(f"SubjectSampler rank {self.rank}, initialized on {self.num_subjects} subjects, "
               f"batches: {self.batch_size}*{self.num_batches}")
-        self.prefetch_buffer = Queue()
         self.curr_subj_idx = 0
 
     def __len__(self):
