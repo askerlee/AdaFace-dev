@@ -2551,6 +2551,7 @@ class LatentDiffusion(DDPM):
             print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
                    "RESUME unet distillation.")
 
+        #### loss_arcface_align_recon ####
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
             if loss_arcface_align_recon > 0:
@@ -2573,6 +2574,7 @@ class LatentDiffusion(DDPM):
                 # If recon_on_pure_noise, then loss_arcface_align_recon => 0.016-0.02.
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
 
+        #### loss_bg_faces_suppress ####
         if len(losses_bg_faces_suppress) > 0:
             loss_bg_faces_suppress = torch.stack(losses_bg_faces_suppress).mean()
             if loss_bg_faces_suppress > 0:
@@ -2583,10 +2585,12 @@ class LatentDiffusion(DDPM):
                 recon_bg_faces_suppress_loss_scale = 2 * arcface_align_recon_loss_scale
                 loss_normal_recon += loss_bg_faces_suppress * recon_bg_faces_suppress_loss_scale
 
+        #### pred_l2 ####
         pred_l2 = torch.stack(pred_l2s).mean()
         # pred_l2: 0.92~0.99.
         mon_loss_dict.update({f'{session_prefix}/pred_l2': pred_l2.mean().detach().item()})
 
+        #### loss_recon_subj_mb_suppress ####
         loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
         # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
         # If recon_on_pure_noise, then loss_recon_subj_mb_suppress is not optimized, and is only for monitoring.
@@ -2594,6 +2598,7 @@ class LatentDiffusion(DDPM):
             mon_loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
         recon_loss_scales = torch.tensor(recon_loss_scales, device=device)
 
+        #### loss_recon ####
         if not recon_on_pure_noise:
             losses_recon = torch.stack(losses_recon)
             loss_recon   = (losses_recon * recon_loss_scales).mean()
@@ -2618,6 +2623,7 @@ class LatentDiffusion(DDPM):
         else:
             print(f"Rank {self.trainer.global_rank} recon_on_pure_noise.")
 
+        #### loss_recon_cls ####
         losses_recon_cls = torch.stack(losses_recon_cls)
         loss_recon_cls   = (losses_recon_cls * recon_loss_scales).mean()
         loss_normal_recon += loss_recon_cls
