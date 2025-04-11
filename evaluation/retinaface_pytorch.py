@@ -191,8 +191,9 @@ class RetinaFaceClient(nn.Module):
                     face_crop = image_ts
                     face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
                     fg_face_crops.append(face_crop)
+                    # If no face is detected, we set the bbox to the full image size.
                     fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
-                    # No face detected
+                    # Mark no face detected
                     face_detected_inst_mask.append(0)
                     continue
 

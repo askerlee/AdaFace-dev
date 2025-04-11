@@ -910,6 +910,7 @@ if __name__ == "__main__":
 
         # model.create_clip_evaluator(f"cuda:{trainer.strategy.root_device.index}")
 
+        '''
         # allow checkpointing via USR1
         def melk(*args, **kwargs):
             # run all checkpoint hooks
@@ -918,6 +919,7 @@ if __name__ == "__main__":
                 ckpt_path = os.path.join(ckptdir, "last.ckpt")
                 trainer.save_checkpoint(ckpt_path)
 
+        '''
 
         def divein(*args, **kwargs):
             if trainer.global_rank == 0:
@@ -927,7 +929,7 @@ if __name__ == "__main__":
 
         import signal
 
-        signal.signal(signal.SIGUSR1, melk)
+        #signal.signal(signal.SIGUSR1, melk)
         signal.signal(signal.SIGUSR2, divein)
 
         # run
@@ -935,9 +937,11 @@ if __name__ == "__main__":
             try:
                 # trainer: pytorch_lightning.trainer.trainer.Trainer
                 trainer.fit(model, data)
-            except Exception:
-                melk()
-                raise
+            except Exception as e:
+                print(f"Exception caught: {type(e).__name__}: {str(e)}")
+                import traceback
+                traceback.print_exc()  # Print the full stack trace
+
         if not opt.no_test and not trainer.interrupted:
             trainer.test(model, data)
     except Exception:

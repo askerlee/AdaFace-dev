@@ -1625,11 +1625,10 @@ def calc_recon_loss(loss_func, noise_pred, noise_gt, img_mask, fg_mask,
 
 # Major losses for normal_recon iterations (loss_recon, loss_recon_subj_mb_suppress, etc.).
 # (But there are still other losses used after calling this function.)
-def calc_recon_and_suppress_losses(noise_pred, noise_gt, face_detected_inst_weights,
+def calc_recon_and_suppress_losses(noise_gt, noise_pred, noise_pred_cls, face_detected_inst_weights,
                                    ca_layers_activations,
                                    all_subj_indices, img_mask, fg_mask, 
                                    bg_pixel_weight, BLOCK_SIZE, recon_on_pure_noise):
-
     if not recon_on_pure_noise:
         # Ordinary image reconstruction loss under the guidance of subj_single_prompts.
         loss_recon, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_gt, 
@@ -1640,11 +1639,27 @@ def calc_recon_and_suppress_losses(noise_pred, noise_gt, face_detected_inst_weig
         # We only need to do background suppression.
         loss_recon = torch.tensor(0., device=noise_pred.device)
 
+    if noise_pred_cls is not None:
+        bg_mask = (1 - fg_mask)
+        if bg_mask.sum() == 0:
+            # No background pixels. Do bg recon to noise_pred_cls on every pixel, 
+            # but with a smaller instance-level recon_loss_scale of 0.1.
+            bg_mask = torch.ones_like(noise_pred_cls)
+        if img_mask is not None:
+            bg_mask = bg_mask * img_mask
+
+        # Image reconstruction loss on bg pixels only, under the guidance of cls_single_prompts.
+        loss_recon_cls, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_pred_cls,
+                                            img_mask, bg_mask, face_detected_inst_weights,
+                                            fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
+    else:
+        loss_recon_cls = torch.tensor(0., device=noise_pred.device)
+
     loss_recon_subj_mb_suppress = \
         calc_subj_masked_bg_suppress_loss(ca_layers_activations['attn'],
                                           all_subj_indices, BLOCK_SIZE, fg_mask)
 
-    return loss_recon, loss_recon_subj_mb_suppress
+    return loss_recon, loss_recon_cls, loss_recon_subj_mb_suppress
 
 # calc_attn_norm_loss() is used by LatentDiffusion::calc_comp_feat_distill_loss().
 def calc_attn_norm_loss(ca_outfeats, ca_attns, subj_indices_2b, BLOCK_SIZE):
