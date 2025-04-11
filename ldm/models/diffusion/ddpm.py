@@ -14,7 +14,7 @@ from diffusers import UNet2DConditionModel, StableDiffusionPipeline, Autoencoder
 import queue
 from threading import Thread
 
-from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt, inplace_model_copy, \
+from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt_to_cpu, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_distill_loss, \
@@ -80,7 +80,6 @@ class DDPM(pl.LightningModule):
                  unet_lr=0.,
                  parameterization="eps",  # all assuming fixed variance schedules
                  optimizer_type='CAdamW',
-                 grad_clip=0.5,
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
@@ -263,7 +262,7 @@ class DDPM(pl.LightningModule):
             if comp_unet_weight_path is not None:
                 # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
                 self.base_unet_state_dict = { k: v.cpu() for k, v in self.model.diffusion_model.state_dict().items() }
-                self.comp_unet_state_dict = load_ckpt(comp_unet_weight_path)
+                self.comp_unet_state_dict = load_ckpt_to_cpu(comp_unet_weight_path, pinned=True)
             else:
                 self.base_unet_state_dict = None
                 self.comp_unet_state_dict = None
@@ -276,7 +275,6 @@ class DDPM(pl.LightningModule):
 
         self.optimizer_type = optimizer_type
         self.adam_config = adam_config
-        self.grad_clip = grad_clip
         self.use_face_flow_for_sc_matching_loss = use_face_flow_for_sc_matching_loss
         self.arcface_align_loss_weight = arcface_align_loss_weight
 
@@ -472,7 +470,7 @@ class DDPM(pl.LightningModule):
         # Switch model weights when switching between normal recon / unet distill and comp feat distill.
         # ** Only switch half of the time ** to avoid feature space degeneration.
         if not prev_iter_use_comp_distill_weights and self.iter_flags['do_comp_feat_distill'] \
-          and self.comp_unet_state_dict and torch.rand(1) < 0.5:
+          and self.comp_unet_state_dict: # and torch.rand(1) < 0.5:
             print("Switching to comp distill unet weights")
             self.iter_flags['use_comp_distill_weights'] = True
             self.model.load_unet_state_dict(self.comp_unet_state_dict)
@@ -493,7 +491,8 @@ class DDPM(pl.LightningModule):
 
         if not self.lightning_auto_optimization:
             self.manual_backward(loss)
-            self.clip_gradients(optimizer, gradient_clip_val=self.grad_clip, gradient_clip_algorithm="norm")
+            self.clip_gradients(optimizer, gradient_clip_val=self.trainer.gradient_clip_val, 
+                                gradient_clip_algorithm=self.trainer.gradient_clip_algorithm)
 
             if (batch_idx + 1) % 2 == 0:
                 optimizer.step()
@@ -517,7 +516,7 @@ class LatentDiffusion(DDPM):
                  scale_by_std=False,
                  *args, **kwargs):
 
-        self.scale_by_std = scale_by_std
+        self.scale_by_std = scale_by_std    # Always False
         # for backwards compatibility after implementation of DiffusionWrapper
 
         # cond_stage_config is a dict:
@@ -682,39 +681,22 @@ class LatentDiffusion(DDPM):
         self.cache_start_iter = 0
         self.sample_save_thread = None
 
-    @torch.no_grad()
-    def on_train_batch_start(self, batch, batch_idx):
-        if self.global_step == 0:
-            if self.trainer.global_rank == 0 and self.sample_save_thread is None:
-                self.sample_save_thread = Thread(target=self.save_samples_worker, args=(60,), daemon=True)
-                self.sample_save_thread.start()
-                print("Started individual Sample Saving thread...")
+    def on_train_start(self):
+        if self.trainer.global_rank == 0 and self.sample_save_thread is None:
+            self.sample_save_thread = Thread(target=self.save_samples_worker, args=(60,), daemon=True)
+            self.sample_save_thread.start()
+            print("Started individual sample saving thread...")
 
-            # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
-            # uncond_context[0]: [1, 77, 768].
-            with torch.no_grad():
-                self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
-                # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
-                img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
-            # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
-            self.img_prompt_prefix_embs = img_prompt_prefix_context[0][:1, :4]
+        # uncond_context is a tuple of (uncond_emb, uncond_prompt_in, extra_info).
+        # uncond_context[0]: [1, 77, 768].
+        with torch.no_grad():
+            self.uncond_context         = self.get_text_conditioning([""], text_conditioning_iter_type='plain_text_iter')
+            # "photo of a" is the template of Arc2face. Including an extra BOS token, the length is 4.
+            img_prompt_prefix_context   = self.get_text_conditioning(["photo of a"], text_conditioning_iter_type='plain_text_iter')
+        # img_prompt_prefix_context: [1, 4, 768]. Abandon the remaining text paddings.
+        self.img_prompt_prefix_embs = img_prompt_prefix_context[0][:1, :4]
 
-        # only for the very first batch
-        if self.scale_by_std and self.current_epoch == 0 and self.global_step == 0 and batch_idx == 0 and not self.restarted_from_ckpt:
-            assert self.scale_factor == 1., 'rather not use custom rescaling and std-rescaling simultaneously'
-            # set rescale weight to 1./std of encodings
-            print("### USING STD-RESCALING ###")
-            x = super().get_input(batch, self.first_stage_key)
-            x = x.to(self.device)
-            encoder_posterior = self.encode_first_stage(x)
-            z = self.get_first_stage_encoding(encoder_posterior).detach()
-            del self.scale_factor
-            self.register_buffer('scale_factor', 1. / z.flatten().std())
-            print(f"setting self.scale_factor to {self.scale_factor}")
-            print("### USING STD-RESCALING ###")
-
-    def register_schedule(self,
-                          given_betas=None, beta_schedule="linear", timesteps=1000,
+    def register_schedule(self, given_betas=None, beta_schedule="linear", timesteps=1000,
                           linear_start=1e-4, linear_end=2e-2, cosine_s=8e-3):
         super().register_schedule(given_betas, beta_schedule, timesteps, linear_start, linear_end, cosine_s)
 
@@ -1368,7 +1350,8 @@ class LatentDiffusion(DDPM):
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
 
         loss = self(x_start, captions)
-
+        # Release temporary variables stored in iter_flags.
+        self.init_iteration_flags()
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
@@ -2572,7 +2555,7 @@ class LatentDiffusion(DDPM):
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 2 => 0.04,
                 # same scale as loss_bg_faces_suppress_comp.
                 # Although this is ~10x of loss_arcface_align_recon, it's very infraquently triggered.
-                recon_bg_faces_suppress_loss_scale = 2
+                recon_bg_faces_suppress_loss_scale = 2 * arcface_align_recon_loss_scale
                 loss_normal_recon += loss_bg_faces_suppress * recon_bg_faces_suppress_loss_scale
 
         pred_l2 = torch.stack(pred_l2s).mean()

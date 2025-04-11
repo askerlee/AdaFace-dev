@@ -38,7 +38,6 @@ model:
 
     # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
     optimizer_type:           CAdamW 
-    grad_clip:  0.5
     adam_config:
       betas:    [0.9,  0.993]  # 0.993 corresponds to a half life of 99. 0.999 corresponds to a half life of 693.        
       scheduler_config:
@@ -149,6 +148,9 @@ lightning:
     deterministic: False
     replace_sampler_ddp: False
     accumulate_grad_batches: 8
-    # clip gradients' global norm to <=0.5 using gradient_clip_algorithm='norm' by default    
-    gradient_clip_val: 0.5
+    # clip individual gradients' norm to <=0.01, using gradient_clip_algorithm='norm' by default    
+    gradient_clip_val: 0.01
+    gradient_clip_algorithm: 'value'
+    # Custom checkpointing is used, so disable the default checkpointing.
+    enable_checkpointing: False    
    

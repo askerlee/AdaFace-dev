@@ -105,16 +105,23 @@ def instantiate_from_config(config, **kwargs):
         raise KeyError("Expected key `target` to instantiate.")
     return get_obj_from_str(config["target"])(**config.get("params", dict()), **kwargs)
 
-def load_ckpt(ckpt_path):
+def load_ckpt_to_cpu(ckpt_path, pinned=False):
     if os.path.isdir(ckpt_path):
         ckpt_path = os.path.join(ckpt_path, "diffusion_pytorch_model.safetensors")
         
     if re.match(r".*\.(pt|ckpt|pth|bin)", ckpt_path):
-        return torch.load(ckpt_path, map_location="cpu")
+        ckpt = torch.load(ckpt_path, map_location="cpu")
     elif ckpt_path.endswith(".safetensors"):
-        return safetensors_load_file(ckpt_path)
+        ckpt = safetensors_load_file(ckpt_path)
     else:
         breakpoint()
+    
+    if pinned:
+        for k, v in ckpt.items():
+            if isinstance(v, torch.Tensor) and v.device.type == 'cpu':
+                ckpt[k] = v.pin_memory()
+                
+    return ckpt
 
 def load_model_from_config(config, ckpt_path, verbose=False):
     print(f"Loading model from {ckpt_path}")
