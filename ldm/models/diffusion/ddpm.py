@@ -112,7 +112,6 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
-                 recon_bg_aligns_to_class_cond=True,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -194,7 +193,6 @@ class DDPM(pl.LightningModule):
         self.p_recon_on_pure_noise                  = p_recon_on_pure_noise
         self.subj_rep_prompts_count                 = subj_rep_prompts_count
         self.p_do_adv_attack_when_recon_on_images   = p_do_adv_attack_when_recon_on_images
-        self.recon_bg_aligns_to_class_cond          = recon_bg_aligns_to_class_cond
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
         self.recon_bg_pixel_weights                 = recon_bg_pixel_weights
 
@@ -2049,13 +2047,10 @@ class LatentDiffusion(DDPM):
                 # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
                 DO_ADV_BS = min(x_start.shape[0], 2)
 
-            if self.recon_bg_aligns_to_class_cond:
-                if not self.iter_flags['recon_on_comp_prompt']:
-                    cls_context = (extra_info['cls_single_emb'], prompt_in, extra_info)
-                else:
-                    cls_context = (extra_info['cls_comp_emb'],   prompt_in, extra_info)
+            if not self.iter_flags['recon_on_comp_prompt']:
+                cls_context = (extra_info['cls_single_emb'], prompt_in, extra_info)
             else:
-                cls_context = None
+                cls_context = (extra_info['cls_comp_emb'],   prompt_in, extra_info)
 
             loss_normal_recon = \
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
@@ -2063,7 +2058,6 @@ class LatentDiffusion(DDPM):
                                             self.num_recon_denoising_steps, x_start, noise, 
                                             cond_context, cls_context,
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights, 
-                                            self.recon_bg_aligns_to_class_cond,
                                             self.iter_flags['recon_on_comp_prompt'], self.iter_flags['recon_on_pure_noise'], 
                                             enable_unet_attn_lora, self.recon_uses_ffn_lora, 
                                             do_adv_attack, DO_ADV_BS)
@@ -2347,7 +2341,6 @@ class LatentDiffusion(DDPM):
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, cond_context, cls_context,
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
-                               recon_bg_aligns_to_class_cond,
                                recon_on_comp_prompt, recon_on_pure_noise, 
                                enable_unet_attn_lora, enable_unet_ffn_lora, 
                                do_adv_attack, DO_ADV_BS):
@@ -2625,14 +2618,13 @@ class LatentDiffusion(DDPM):
         else:
             print(f"Rank {self.trainer.global_rank} recon_on_pure_noise.")
 
-        if recon_bg_aligns_to_class_cond:
-            losses_recon_cls = torch.stack(losses_recon_cls)
-            loss_recon_cls   = (losses_recon_cls * recon_loss_scales).mean()
-            loss_normal_recon += loss_recon_cls
-            loss_recon_cls_unscaled = losses_recon_cls.mean()
-            v_loss_recon_cls = loss_recon_cls_unscaled.detach().item()
-            mon_loss_dict.update({f'{session_prefix}/loss_recon_cls': v_loss_recon_cls})
-            print(f"Rank {self.trainer.global_rank} loss_recon_cls: {v_loss_recon_cls:.4f}")
+        losses_recon_cls = torch.stack(losses_recon_cls)
+        loss_recon_cls   = (losses_recon_cls * recon_loss_scales).mean()
+        loss_normal_recon += loss_recon_cls
+        loss_recon_cls_unscaled = losses_recon_cls.mean()
+        v_loss_recon_cls = loss_recon_cls_unscaled.detach().item()
+        mon_loss_dict.update({f'{session_prefix}/loss_recon_cls': v_loss_recon_cls})
+        print(f"Rank {self.trainer.global_rank} loss_recon_cls: {v_loss_recon_cls:.4f}")
 
         mon_loss_dict.update({f'{session_prefix}/normal_recon_total': loss_normal_recon.mean().detach().item()})
 
