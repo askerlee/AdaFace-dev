@@ -2336,6 +2336,12 @@ class LatentDiffusion(DDPM):
 
         return adv_grad
 
+    # cls_context: class single embeddings or class comp embeddings (when recon_on_comp_prompt).
+    # NOTE: cls_context is used to align the background denoised using ada embeddings 
+    # with images denoised using the class embeddings. This is an important trick
+    # *** to mitigate that the subject gradually dominates the whole image and a lot of artifacts
+    # *** are generated in the background.
+    # With this trick, we can be reassured to use arcface align loss without worrying its side effects.
     # enable_unet_attn_lora: randomly set to True 50% of the time.
     # enable_unet_ffn_lora: True.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
@@ -2444,7 +2450,7 @@ class LatentDiffusion(DDPM):
                 # which are indicated by face_detected_inst_mask.
                 # face_detected_inst_mask: binary tensor of [BS].
                 loss_arcface_align_recon_step, loss_bg_faces_suppress_step, fg_face_bboxes, face_detected_inst_mask = \
-                    self.calc_arcface_align_loss(x_start, x_recon, bleed=0, do_grad_smoothing=True)
+                    self.calc_arcface_align_loss(x_start, x_recon, bleed=0, do_grad_smoothing=False)
 
                 # Count recon_on_pure_noise stats and non-pure-noise stats separately.
                 # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
@@ -3347,7 +3353,7 @@ class LatentDiffusion(DDPM):
                     loss_arcface_align_comp_step, loss_bg_faces_suppress_comp_step, \
                     sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, bleed=0,
-                                                     do_grad_smoothing=True)
+                                                     do_grad_smoothing=False)
                     # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                     if loss_arcface_align_comp_step > 0:
                         print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
