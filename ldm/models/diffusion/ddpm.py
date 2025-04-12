@@ -987,8 +987,14 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
+        # NOTE: If recon_on_pure_noise, there are no ground truth images, and we use 
+        # subj_single_prompt to reconstruct the foreground face, and use cls_single_prompt
+        # to reconstruct the background. Therefore, modifiers could be added to the prompts.
+        # So in such cases, we use the mod prompts. 
+        # Otherwise, there are ground truth images, and we can only use prompts without modifiers.
         if self.iter_flags['use_fp_trick']:
-            if self.iter_flags['do_comp_feat_distill']:
+            if self.iter_flags['do_comp_feat_distill'] or \
+              (self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_pure_noise']):
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
@@ -1009,11 +1015,9 @@ class LatentDiffusion(DDPM):
                 # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta loss.
                 CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
 
-        # Either do_comp_feat_distill but not use_fp_trick_iter, 
-        # or recon/unet_distill iters (not do_comp_feat_distill).
-        # We don't use_fp_trick on training images. 
         else:
-            if self.iter_flags['do_comp_feat_distill']:
+            if self.iter_flags['do_comp_feat_distill'] or \
+              (self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_pure_noise']):
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt'
                 SUBJ_COMP_PROMPT    = 'subj_comp_mod_prompt'
@@ -1097,7 +1101,7 @@ class LatentDiffusion(DDPM):
         if self.iter_flags['do_comp_feat_distill']:
             self.iter_flags['same_subject_in_batch'] = True
             # Change the batch to have the (1 subject image) * BS strcture.
-            # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+            # "delta_prompts" don't change, as different subjects share the same placeholder "z".
             # After image_unnorm is repeated, the extracted zs_clip_fgbg_features and face_id_embs, extracted from image_unnorm,
             # will be repeated automatically. Therefore, we don't need to manually repeat them later.
             batch['subject_name'], batch["image_path"], batch["image_unnorm"], x_start, img_mask, fg_mask = \
@@ -1218,7 +1222,7 @@ class LatentDiffusion(DDPM):
                 # As the embeddings are coupled with x_start and fg_mask, we need to change them to 
                 # those of the first subject as well.
                 # Change the batch to have the (1 subject image) * BS strcture.
-                # "captions" and "delta_prompts" don't change, as different subjects share the same placeholder "z".
+                # "delta_prompts" don't change, as different subjects share the same placeholder "z".
                 # clip_bg_features is used by adaface encoder, so we repeat zs_clip_fgbg_features accordingly.
                 # We don't repeat id2img_neg_prompt_embs, as it's constant and identical for different instances.
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
@@ -1246,22 +1250,6 @@ class LatentDiffusion(DDPM):
                                          perturb_prob=1, perturb_std_is_relative=True, 
                                          keep_norm=True, verbose=True)
 
-        if self.iter_flags['recon_on_comp_prompt']:
-            captions = subj_comp_prompts
-        elif self.iter_flags['do_unet_distill'] and (torch.rand(1) < self.p_unet_distill_uses_comp_prompt):
-            # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
-            # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
-            # never use the compositional instances as the distillation target of arc2face.
-            # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
-            # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
-            # NOTE: 'recon_on_comp_prompt' is applicable to all teachers.
-            # While 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
-            # They are exclusive to each other, and are never enabled at the same time.
-            self.iter_flags['unet_distill_uses_comp_prompt'] = True
-            captions = subj_comp_prompts
-        else:
-            captions = subj_single_prompts
-
         if self.iter_flags['do_unet_distill']:
             # Iterate among 3 ~ 5. We don't draw random numbers, so that different ranks have the same num_unet_denoising_steps,
             # which would be faster for synchronization.
@@ -1269,6 +1257,17 @@ class LatentDiffusion(DDPM):
             # Otherwise, some values, e.g., 0 and 3, will never be chosen.
             num_unet_denoising_steps = self.unet_distill_iters_count % 3 + 2
             self.iter_flags['num_unet_denoising_steps'] = num_unet_denoising_steps
+
+            if (torch.rand(1) < self.p_unet_distill_uses_comp_prompt):
+                # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
+                # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
+                # never use the compositional instances as the distillation target of arc2face.
+                # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
+                # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
+                # NOTE: 'recon_on_comp_prompt' is applicable to all teachers.
+                # While 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
+                # They are exclusive to each other, and are never enabled at the same time.
+                self.iter_flags['unet_distill_uses_comp_prompt'] = True
 
             if num_unet_denoising_steps > 1:
                 # If denoising steps are a few, then reduce batch size to avoid OOM.
@@ -1290,13 +1289,13 @@ class LatentDiffusion(DDPM):
                 x_start, batch_images_unnorm, img_mask, fg_mask, \
                 self.batch_subject_names, zs_clip_fgbg_features, \
                 id2img_prompt_embs, id2img_neg_prompt_embs, \
-                captions, subj_single_prompts, subj_comp_prompts, \
+                subj_single_prompts, subj_comp_prompts, \
                 cls_single_prompts, cls_comp_prompts \
                     = select_and_repeat_instances(slice(0, HALF_BS), 1, 
                                                   x_start, batch_images_unnorm, img_mask, fg_mask, 
                                                   self.batch_subject_names, zs_clip_fgbg_features,
                                                   id2img_prompt_embs, id2img_neg_prompt_embs,
-                                                  captions, subj_single_prompts, subj_comp_prompts,
+                                                  subj_single_prompts, subj_comp_prompts,
                                                   cls_single_prompts, cls_comp_prompts)
                     
                 # Update delta_prompts to have the first HALF_BS prompts.
@@ -1335,25 +1334,19 @@ class LatentDiffusion(DDPM):
 
         self.embedding_manager.set_curr_batch_subject_names(self.batch_subject_names)
 
-        loss = self(x_start, captions)
+        loss = self(x_start)
         # Release temporary variables stored in iter_flags.
         self.init_iteration_flags()
         return loss
 
     # LatentDiffusion.forward() is only called during training, by shared_step().
     #LINK #shared_step
-    def forward(self, x_start, captions):
+    def forward(self, x_start):
         ORIG_BS  = len(x_start)
 
         # Use >=, i.e., assign decay in all iterations after the first 100.
         # This is in case there are skips of iterations of global_step 
         # (shouldn't happen but just in case).
-
-        assert captions is not None
-        # get_text_conditioning(): convert captions to a [BS, 77, 768] tensor.
-        # captions: plain prompts like ['an illustration of a dirty z', 'an illustration of the cool z']
-        # When do_unet_distill and distilling on ConsistentID, we still
-        # need to provide cls_comp_prompts embeddings to the UNet teacher as condition.
 
         # iter_flags['delta_prompts'] is a tuple of 4 lists. No need to split them.
         delta_prompts           = self.iter_flags['delta_prompts']
@@ -1373,10 +1366,10 @@ class LatentDiffusion(DDPM):
 
         # Only keep the first BLOCK_SIZE of batched prompts.
         subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts, \
-        compos_partial_prompt, prompt_modifier, captions = \
+        compos_partial_prompt, prompt_modifier = \
             select_and_repeat_instances(slice(0, BLOCK_SIZE), 1, 
             subj_single_prompts, subj_comp_prompts, cls_single_prompts, cls_comp_prompts,
-            compos_partial_prompt, prompt_modifier, captions)
+            compos_partial_prompt, prompt_modifier)
 
         # Repeat the compositional prompts, to further highlight the compositional features.
         # NOTE: the prompt_modifier is repeated at most once, no matter subj_rep_prompts_count.
@@ -1523,19 +1516,12 @@ class LatentDiffusion(DDPM):
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
         else:
             # do_normal_recon or do_unet_distill.
-            prompt_in = captions
-            # Use the original "captions" prompts and embeddings.
-            # captions == subj_single_prompts doesn't hold when unet_distill_uses_comp_prompt.
-            # it holds in all other cases.
-            if not self.iter_flags['unet_distill_uses_comp_prompt'] \
-              and not self.iter_flags['recon_on_comp_prompt']:
-                assert captions == subj_single_prompts
-                # captions is subj_single_prompts, so prompt_emb = subj_single_emb.
-                prompt_emb = subj_single_emb
+            if self.iter_flags['unet_distill_uses_comp_prompt'] or self.iter_flags['recon_on_comp_prompt']:
+                prompt_in   = subj_comp_prompts
+                prompt_emb  = subj_comp_emb
             else:
-                assert captions == subj_comp_prompts
-                # captions is subj_comp_prompts, so prompt_emb = subj_comp_emb.
-                prompt_emb = subj_comp_emb
+                prompt_in   = subj_single_prompts
+                prompt_emb  = subj_single_emb
 
             # The blocks as input to get_text_conditioning() are not halved. 
             # So BLOCK_SIZE = ORIG_BS = 2. Therefore, for the two instances, we use *_1b.
