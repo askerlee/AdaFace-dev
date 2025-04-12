@@ -83,12 +83,10 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
-                 # To disable pause_comp_iters, set pause_comp_iters_on_face_frac_lower_than to -1.
-                 pause_comp_iters_on_face_frac_lower_than=[0.8, 0.9],
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
-                 recon_subj_mb_suppress_loss_weight=0.4,
+                 recon_subj_mb_suppress_loss_weight=0.05,
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_attn_cross_t_distill_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
@@ -111,7 +109,7 @@ class DDPM(pl.LightningModule):
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
-                 p_do_adv_attack_when_recon_on_images=0,
+                 p_do_adv_attack_when_recon_on_images=0.2,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
@@ -196,16 +194,6 @@ class DDPM(pl.LightningModule):
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
         self.recon_bg_pixel_weights                 = recon_bg_pixel_weights
 
-        # When the model degenerates, we pause the compositional iterations, and resumes
-        # after recon_face_images_frac >= 0.8 (on noise) or 0.9 (on image).
-        self.pause_comp_iters_on_face_frac_lower_than = np.array(pause_comp_iters_on_face_frac_lower_than)
-        # A margin of 0.02 is used to avoid frequent pausing and resuming.
-        self.resume_comp_iters_on_face_frac_higher_than = np.clip(self.pause_comp_iters_on_face_frac_lower_than + 0.02, None, 0.95)
-        self.comp_iters_paused                      = False
-        self.recon_on_image_face_loss_paused        = False
-        self.recon_on_comp_prompt_paused            = False
-        self.recon_on_pure_noise_paused             = False
-        self.unet_distill_paused                    = False
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
         self.unet_distill_iters_count                = 0
@@ -444,8 +432,7 @@ class DDPM(pl.LightningModule):
         # But since we need to switch unet weights according to the iter type during training, 
         # it would be more efficient to take two consecutive accumulation steps 
         # of the same type on the same weight.
-        if self.comp_distill_iter_gap > 0 and (not self.comp_iters_paused) \
-          and (self.global_step % self.comp_distill_iter_gap == 0):
+        if self.comp_distill_iter_gap > 0 and (self.global_step % self.comp_distill_iter_gap == 0):
             self.iter_flags['do_comp_feat_distill']     = True
             self.iter_flags['do_normal_recon']          = False
             self.iter_flags['do_unet_distill']          = False
@@ -454,8 +441,7 @@ class DDPM(pl.LightningModule):
         else:
             self.iter_flags['do_comp_feat_distill']     = False
             self.non_comp_iters_count += 1
-            if (not self.unet_distill_paused) and self.unet_distill_iter_gap > 0 and \
-              (self.non_comp_iters_count % self.unet_distill_iter_gap == 0):
+            if self.unet_distill_iter_gap > 0 and (self.non_comp_iters_count % self.unet_distill_iter_gap == 0):
                 self.iter_flags['do_normal_recon']      = False
                 self.iter_flags['do_unet_distill']      = True
                 # Disable do_prompt_emb_delta_reg during unet distillation.
@@ -956,8 +942,8 @@ class LatentDiffusion(DDPM):
         x_start = self.get_input(batch, self.first_stage_key)
 
         if self.iter_flags['do_normal_recon']:
-            p_recon_on_comp_prompt = self.p_recon_on_comp_prompt if not self.recon_on_comp_prompt_paused else 0
-            p_recon_on_pure_noise  = self.p_recon_on_pure_noise  if not self.recon_on_pure_noise_paused  else 0
+            p_recon_on_comp_prompt = self.p_recon_on_comp_prompt
+            p_recon_on_pure_noise  = self.p_recon_on_pure_noise
         else:
             p_recon_on_comp_prompt = 0
             p_recon_on_pure_noise  = 0
@@ -2341,7 +2327,8 @@ class LatentDiffusion(DDPM):
     # with images denoised using the class embeddings. This is an important trick
     # *** to mitigate that the subject gradually dominates the whole image and a lot of artifacts
     # *** are generated in the background.
-    # With this trick, we can be reassured to use arcface align loss without worrying its side effects.
+    # With this trick, we can be reassured to use arcface align loss without worrying it bringing a lot
+    # of high-frequency noise to the background.
     # enable_unet_attn_lora: randomly set to True 50% of the time.
     # enable_unet_ffn_lora: True.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
@@ -2528,35 +2515,6 @@ class LatentDiffusion(DDPM):
         recon_face_images_fracs = np.array([recon_face_images_on_noise_frac, recon_face_images_on_image_frac])
         recon_face_images_fracs_str = np.array2string(recon_face_images_fracs, precision=3, floatmode='fixed')
 
-        # pause_comp_iters_on_face_frac_lower_than = [0.8, 0.9]
-        # If comp iters are already paused, then we don't resume until recon_face_images_fracs >= [0.82, 0.92].
-        if (recon_face_images_fracs < self.pause_comp_iters_on_face_frac_lower_than).any():
-            #self.comp_iters_paused               = True
-            #self.recon_on_image_face_loss_paused = True
-            self.recon_on_comp_prompt_paused     = True
-            #self.recon_on_pure_noise_paused      = True
-            self.unet_distill_paused             = True
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} < {self.pause_comp_iters_on_face_frac_lower_than}. "
-                   "PAUSE unet distillation iterations.")
-        elif self.unet_distill_paused and (recon_face_images_fracs < self.resume_comp_iters_on_face_frac_higher_than).any():
-            #self.comp_iters_paused               = True
-            #self.recon_on_image_face_loss_paused = True
-            self.recon_on_comp_prompt_paused     = True
-            #self.recon_on_pure_noise_paused      = True
-            self.unet_distill_paused             = True
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_frac: {recon_face_images_fracs_str} < {self.resume_comp_iters_on_face_frac_higher_than}. "
-                   "KEEP unet distillation PAUSED.")
-        # resume_comp_iters_on_face_frac_higher_than = 0.77
-        # A margin of 0.02 is used to avoid frequent pausing and resuming.
-        elif (recon_face_images_fracs >= self.resume_comp_iters_on_face_frac_higher_than).all() and self.unet_distill_paused:
-            #self.comp_iters_paused               = False
-            #self.recon_on_image_face_loss_paused = False
-            self.recon_on_comp_prompt_paused     = False
-            #self.recon_on_pure_noise_paused      = False
-            self.unet_distill_paused             = False
-            print(f"{self.trainer.global_step} Rank {self.trainer.global_rank} recon_face_images_fracs: {recon_face_images_fracs_str} >= {self.resume_comp_iters_on_face_frac_higher_than}. "
-                   "RESUME unet distillation.")
-
         #### loss_arcface_align_recon ####
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
@@ -2570,10 +2528,7 @@ class LatentDiffusion(DDPM):
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
                     print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.detach().item():.4f}")
-                    # If recon_on_image_face_loss_paused (set to always True now) 
-                    # and it's recon on images, 
-                    # then we don't apply loss_arcface_align_recon.
-                    arcface_align_recon_loss_scale = 0 if self.recon_on_image_face_loss_paused else 1
+                    arcface_align_recon_loss_scale = 1
 
                 # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.01 => 0.004-0.005.
                 # This loss is around 1/20 of recon/distill losses (0.1).
@@ -2623,8 +2578,8 @@ class LatentDiffusion(DDPM):
             print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
             # loss_recon: ~0.1
             loss_normal_recon += loss_recon
-            # loss_recon_subj_mb_suppress: 0.15, recon_subj_mb_suppress_loss_weight: 0.4 -> 0.06, 
-            # recon loss: 0.1, loss_recon_subj_mb_suppress is 1/2 of recon loss.
+            # loss_recon_subj_mb_suppress: 0.1, recon_subj_mb_suppress_loss_weight: 0.05 -> 0.005.
+            # recon loss: 0.1, loss_recon_subj_mb_suppress is 1/20 of recon loss.
             loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
         else:
             print(f"Rank {self.trainer.global_rank} recon_on_pure_noise.")
