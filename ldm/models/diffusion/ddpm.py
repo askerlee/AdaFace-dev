@@ -86,7 +86,7 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
-                 recon_subj_mb_suppress_loss_weight=0.05,
+                 recon_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_attn_cross_t_distill_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
@@ -1738,18 +1738,24 @@ class LatentDiffusion(DDPM):
 
         if cls_context is not None:
             noise_preds_cls = []
+            x_recons_cls    = []
         else:
             noise_preds_cls = None
+            x_recons_cls    = None
 
         for i in range(num_denoising_steps):
             x_start = x_starts[i]
             t       = ts[i]
             noise   = noises[i]
             has_priming_finished = (i >= num_priming_steps)
+            if not has_priming_finished and cls_context is not None:
+                context = cls_context
+            else:
+                context = cond_context
 
             # Only enable gradients after num_priming_steps.
             noise_pred, x_recon, ca_layers_activations = \
-                self.guided_denoise(x_start, noise, t, cond_context,
+                self.guided_denoise(x_start, noise, t, context,
                                     uncond_emb, img_mask, 
                                     shrink_cross_attn=False,
                                     subj_indices=None, 
@@ -1784,13 +1790,13 @@ class LatentDiffusion(DDPM):
             # But since we don't capture ca activations in cls_context,
             # it won't affect the ca activations gotten captured in cond_context.
             if cls_context is not None:
-                noise_pred_cls, _, _ = \
+                noise_pred_cls, x_recon_cls, _ = \
                     self.guided_denoise(x_start, noise, t, cls_context,
                                         uncond_emb, img_mask, 
                                         shrink_cross_attn=False,
                                         subj_indices=None, 
                                         batch_part_has_grad='none',
-                                        do_pixel_recon=False, cfg_scale=cfg_scale, 
+                                        do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=False,
                                         # res_hidden_states_gradscale: 0, gradients don't flow back through 
                                         # UNet skip connections.
@@ -1802,6 +1808,7 @@ class LatentDiffusion(DDPM):
                                         ffn_lora_adapter_name=ffn_lora_adapter_name)
                 
                 noise_preds_cls.append(noise_pred_cls)
+                x_recons_cls.append(x_recon_cls)
 
             # Sample an earlier timestep for the next denoising step.
             if i < num_denoising_steps - 1:
@@ -1867,7 +1874,8 @@ class LatentDiffusion(DDPM):
 
                 noises.append(noise)
 
-        return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list, noise_preds_cls
+        return noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, \
+               noises, ts, ca_layers_activations_list
             
     def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_cross_attn=False,
@@ -2374,7 +2382,7 @@ class LatentDiffusion(DDPM):
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
-        noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list, noise_preds_cls = \
+        noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
                                          # img_mask is used to mask the blank areas around the augmented images.
                                          # If recon_on_comp_prompt, then img_mask = None, i.e., no masking.
@@ -2399,16 +2407,22 @@ class LatentDiffusion(DDPM):
 
         # Skip the first num_recon_priming_steps denoising steps from the recon loss computation.
         for i in range(num_recon_priming_steps, num_denoising_steps):
-            noise, noise_pred, noise_pred_cls, x_recon, ca_layers_activations = \
-                noises[i], noise_preds[i], noise_preds_cls[i], x_recons[i], ca_layers_activations_list[i]
+            noise, noise_pred, noise_pred_cls, x_recon, \
+            x_recon_cls, ca_layers_activations = \
+                noises[i], noise_preds[i], noise_preds_cls[i], x_recons[i], \
+                x_recons_cls[i], ca_layers_activations_list[i]
 
-            recon_images = self.decode_first_stage(x_recon)
+            recon_images_cls = self.decode_first_stage(x_recon_cls)
+            recon_images     = self.decode_first_stage(x_recon)
+            log_image_colors = torch.ones(recon_images_cls.shape[0], dtype=int, device=x_start.device) * 3 \
+                                + i + 1 - num_recon_priming_steps
+            self.cache_and_log_generations(recon_images_cls, log_image_colors, do_normalize=True)
             # log_image_colors: a list of 4 or 5, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # 4 or 5: orange for the first denoising step, blue for the second denoising step.
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 \
                                 + i + 1 - num_recon_priming_steps
             self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
-
+            
             # Calc the L2 norm of noise_pred.
             pred_l2_step = (noise_pred ** 2).mean()
             pred_l2s.append(pred_l2_step)
@@ -2742,7 +2756,7 @@ class LatentDiffusion(DDPM):
                     # We set num_denoising_steps = num_distill_priming_steps, 
                     # i.e., we only do priming steps in recon_multistep_denoise().
                     # recon_multistep_denoise() always uses CFG.
-                    noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list, noise_preds_cls = \
+                    noise_preds, _, x_starts, x_recons, _, noises, ts, ca_layers_activations_list = \
                         self.recon_multistep_denoise(None, None, 
                                                      x_start, noise0, t0, cond_context, None, 
                                                      uncond_emb, img_mask0, fg_mask0,
