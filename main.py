@@ -322,11 +322,17 @@ def make_worker_init_fn(global_seed):
             dataset = worker_info.dataset
             dataset.worker_id = worker_id
 
-            seed = global_seed * 1000 + worker_id
+            # Get DDP rank from torch or env
+            if torch.distributed.is_initialized():
+                rank = torch.distributed.get_rank()
+            else:
+                rank = int(os.environ.get("RANK", 0))
+
+            seed = rank * 10000 + global_seed * 1000 + worker_id
             np.random.seed(seed)
             random.seed(seed)
             torch.manual_seed(seed)
-            print(f"Setting seed {seed} for worker {worker_id}")
+            print(f"Rank {rank} worker {worker_id} seed set to {seed}")
 
     return worker_init_fn
         

@@ -1745,13 +1745,16 @@ class LatentDiffusion(DDPM):
             x_start = x_starts[i]
             t       = ts[i]
             noise   = noises[i]
-            has_priming_finished = (i >= num_priming_steps)
+            on_priming_steps = (i < num_priming_steps)
             # Half of the priming steps are done using cls_context, 
             # and half using subj_context.
-            if not has_priming_finished and cls_context is not None and i % 2 == 0:
+            if on_priming_steps and (cls_context is not None) and (i % 2 == 0):
                 context = cls_context
             else:
                 context = subj_context
+
+            # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
+            use_ffn_lora = enable_unet_ffn_lora and (not on_priming_steps)
 
             # Only enable gradients after num_priming_steps.
             noise_pred, x_recon, ca_layers_activations = \
@@ -1759,32 +1762,30 @@ class LatentDiffusion(DDPM):
                                     uncond_emb, img_mask, 
                                     shrink_cross_attn=False,
                                     subj_indices=None, 
-                                    batch_part_has_grad='all' if has_priming_finished else 'none',
+                                    batch_part_has_grad='all' if (not on_priming_steps) else 'none',
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
-                                    capture_ca_activations=has_priming_finished,
+                                    capture_ca_activations=(not on_priming_steps),
                                     # res_hidden_states_gradscale: 0, gradients don't flow back through 
                                     # UNet skip connections.
                                     res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     # enable_unet_attn_lora: randomly set to True 50% of the time.
                                     use_attn_lora=enable_unet_attn_lora,
-                                    # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
-                                    use_ffn_lora=enable_unet_ffn_lora, 
+                                    use_ffn_lora=use_ffn_lora, 
                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             noise_preds.append(noise_pred)
-            # The predicted x0 is used as the x_start in the next denoising step.
-            pred_x0 = x_recon
+            ca_layers_activations_list.append(ca_layers_activations)
+            x_recons.append(x_recon)
 
             # In our current implementation, num_priming_steps > 0 only if recon_on_pure_noise.
             # So no need to check (i < num_priming_steps).
-            if recon_on_pure_noise or (i < num_priming_steps):
+            if recon_on_pure_noise or on_priming_steps:
+                # The predicted x0 is used as the x_start in the next denoising step.
                 ## NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
-                x_starts.append(pred_x0.detach())
+                x_starts.append(x_recon.detach())
             else:
+                # The original x_start0 is used as the x_start in the next denoising step.
                 x_starts.append(x_start0)
-
-            x_recons.append(x_recon)
-            ca_layers_activations_list.append(ca_layers_activations)
 
             # NOTE: cls_context reuses extra_info from subj_context.
             # But since we don't capture ca activations in cls_context,
@@ -1876,7 +1877,105 @@ class LatentDiffusion(DDPM):
 
         return noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, \
                noises, ts, ca_layers_activations_list
-            
+
+
+    # Do denoising, collect the attention activations for computing the losses later.
+    # masks: (img_mask, fg_mask). 
+    # Put them in a tuple to avoid too many arguments. The updated masks are returned.
+    # On a 48GB GPU, we can only afford BLOCK_SIZE=1, otherwise OOM.
+    def prime_x_start_for_comp_prompts(self, subj_context, x_start, noise,
+                                       masks, num_primed_denoising_steps, BLOCK_SIZE=1):
+        prompt_emb, prompt_in, extra_info = subj_context
+        # Although img_mask is not explicitly referred to in the following code,
+        # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
+        img_mask, fg_mask = masks
+
+        # We use random noise for x_start, and 80% of the time, we use the training images.
+        # NOTE: DO NOT x_start.normal_() here, as it will overwrite the x_start in the caller,
+        # which is useful for loss computation.
+        x_start = torch.randn_like(x_start) 
+        # Set fg_mask to be the whole image.
+        fg_mask = torch.ones_like(fg_mask)
+
+        # Make the 4 instances in x_start, noise and t the same.
+        x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+        noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+        # In priming denoising steps, t is randomly drawn from the tail 20% segment of the timesteps 
+        # (highly noisy).
+        t_rear = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                                (BLOCK_SIZE,), device=x_start.device)
+        t      = t_rear.repeat(4)
+
+        subj_single_prompt_emb, subj_comp_prompt_emb, subj_comp_rep_prompt_emb, cls_comp_prompt_emb = prompt_emb.chunk(4)
+        cls_comp_prompt_emb2 = (1 - self.cls_subj_mix_ratio) * subj_comp_rep_prompt_emb + self.cls_subj_mix_ratio * cls_comp_prompt_emb
+
+        # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
+        # Update masks to be a 1-repeat-4 structure.
+        masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
+
+        all_t_list = []
+
+        uncond_emb = self.uncond_context[0]
+
+        # Class priming denoising: Denoise x_start_2 with the class single/comp prompts 
+        # for num_sep_denoising_steps times, using self.comp_distill_priming_unet.
+        # We only use half of the batch for faster class priming denoising.
+        # x_start, t and noise are initialized as 1-repeat-4 at above, so the half is 1-repeat-2.
+        # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
+        x_start_2   = x_start.chunk(2)[0]
+        t_2         = t.chunk(2)[1]
+        noise_2     = noise.chunk(2)[0]
+
+        subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
+        # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
+        # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
+        # x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
+        # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
+        # default cfg_scale_range=[2, 4].
+
+        if self.cls_subj_mix_scheme == 'unet':
+            teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb]
+        else:
+            # cls_comp_prompt_emb2 + the SAR checkpoint will 
+            # generate good compositional images. 
+            # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
+            # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
+            # (subj single, subj comp,    cls single,  cls comp).
+            # NOTE "cls mix comp" is used to initialize subj comp   and cls comp   instance denoising.
+            #      "subj single"  is used to initialize subj single and cls single instance denoising.
+            # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
+            # So this should be fine.
+            teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
+
+        with torch.no_grad():
+            primed_noise_preds, primed_x_starts, primed_noises, all_t = \
+                self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
+                                               # In each timestep, the unet ensemble will do denoising on the same x_start_2 
+                                               # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
+                                               # It's similar to do averaging on the prompt embeddings, but yields sharper results.
+                                               # From the outside, the unet ensemble is transparent, like a single unet.
+                                               teacher_context=teacher_context, 
+                                               negative_context=uncond_emb,
+                                               num_denoising_steps=num_primed_denoising_steps,
+                                               # Same t and noise across instances.
+                                               same_t_noise_across_instances=True)
+        
+        all_t_list += [ ti[0].item() for ti in all_t ]
+        print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
+                f"subj-cls ensemble prime denoising {num_primed_denoising_steps} steps {all_t_list}")
+        
+        # The last primed_x_start is the final denoised image (with the smallest t).
+        # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
+        # We need to let the subject and class instances use the same x_start. 
+        # Therefore, we repeat primed_x_starts[-1] twice.
+        x_start_primed  = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
+        # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
+        # We return noise to make the noise_gt up-to-date, which is the recon objective.
+        # But noise_gt is probably not referred to in the following loss computations,
+        # since the current iteration is do_comp_feat_distill. We update it just in case.
+        # masks will still be used in the loss computation. So we return updated masks as well.
+        return x_start_primed, masks
+
     def comp_distill_multistep_denoise(self, x_start, noise, t, subj_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_cross_attn=False,
                                        cfg_scale=2.5, num_denoising_steps=4, max_num_steps_with_grad=3,
@@ -2759,7 +2858,7 @@ class LatentDiffusion(DDPM):
                                                      cfg_scale=2, num_denoising_steps=num_distill_priming_steps, 
                                                      num_priming_steps=num_distill_priming_steps,
                                                      recon_on_pure_noise=True, enable_unet_attn_lora=False, 
-                                                     enable_unet_ffn_lora=True, 
+                                                     enable_unet_ffn_lora=False, 
                                                      # ffn_lora_adapter_name is 'unet_distill', 
                                                      # to get an x_start compatible with the teacher.
                                                      ffn_lora_adapter_name='recon_loss',  
@@ -2893,103 +2992,6 @@ class LatentDiffusion(DDPM):
             mon_loss_dict.update({f'{session_prefix}/unet_distill_on_image': v_loss_unet_distill})
 
         return loss_unet_distill
-
-    # Do denoising, collect the attention activations for computing the losses later.
-    # masks: (img_mask, fg_mask). 
-    # Put them in a tuple to avoid too many arguments. The updated masks are returned.
-    # On a 48GB GPU, we can only afford BLOCK_SIZE=1, otherwise OOM.
-    def prime_x_start_for_comp_prompts(self, subj_context, x_start, noise,
-                                       masks, num_primed_denoising_steps, BLOCK_SIZE=1):
-        prompt_emb, prompt_in, extra_info = subj_context
-        # Although img_mask is not explicitly referred to in the following code,
-        # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
-        img_mask, fg_mask = masks
-
-        # We use random noise for x_start, and 80% of the time, we use the training images.
-        # NOTE: DO NOT x_start.normal_() here, as it will overwrite the x_start in the caller,
-        # which is useful for loss computation.
-        x_start = torch.randn_like(x_start) 
-        # Set fg_mask to be the whole image.
-        fg_mask = torch.ones_like(fg_mask)
-
-        # Make the 4 instances in x_start, noise and t the same.
-        x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        # In priming denoising steps, t is randomly drawn from the tail 20% segment of the timesteps 
-        # (highly noisy).
-        t_rear = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
-                                (BLOCK_SIZE,), device=x_start.device)
-        t      = t_rear.repeat(4)
-
-        subj_single_prompt_emb, subj_comp_prompt_emb, subj_comp_rep_prompt_emb, cls_comp_prompt_emb = prompt_emb.chunk(4)
-        cls_comp_prompt_emb2 = (1 - self.cls_subj_mix_ratio) * subj_comp_rep_prompt_emb + self.cls_subj_mix_ratio * cls_comp_prompt_emb
-
-        # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
-        # Update masks to be a 1-repeat-4 structure.
-        masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
-
-        all_t_list = []
-
-        uncond_emb = self.uncond_context[0]
-
-        # Class priming denoising: Denoise x_start_2 with the class single/comp prompts 
-        # for num_sep_denoising_steps times, using self.comp_distill_priming_unet.
-        # We only use half of the batch for faster class priming denoising.
-        # x_start, t and noise are initialized as 1-repeat-4 at above, so the half is 1-repeat-2.
-        # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
-        x_start_2   = x_start.chunk(2)[0]
-        t_2         = t.chunk(2)[1]
-        noise_2     = noise.chunk(2)[0]
-
-        subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
-        # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
-        # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
-        # x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
-        # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
-        # default cfg_scale_range=[2, 4].
-
-        if self.cls_subj_mix_scheme == 'unet':
-            teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb]
-        else:
-            # cls_comp_prompt_emb2 + the SAR checkpoint will 
-            # generate good compositional images. 
-            # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
-            # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
-            # (subj single, subj comp,    cls single,  cls comp).
-            # NOTE "cls mix comp" is used to initialize subj comp   and cls comp   instance denoising.
-            #      "subj single"  is used to initialize subj single and cls single instance denoising.
-            # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
-            # So this should be fine.
-            teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
-
-        with torch.no_grad():
-            primed_noise_preds, primed_x_starts, primed_noises, all_t = \
-                self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
-                                               # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                               # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
-                                               # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                               # From the outside, the unet ensemble is transparent, like a single unet.
-                                               teacher_context=teacher_context, 
-                                               negative_context=uncond_emb,
-                                               num_denoising_steps=num_primed_denoising_steps,
-                                               # Same t and noise across instances.
-                                               same_t_noise_across_instances=True)
-        
-        all_t_list += [ ti[0].item() for ti in all_t ]
-        print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                f"subj-cls ensemble prime denoising {num_primed_denoising_steps} steps {all_t_list}")
-        
-        # The last primed_x_start is the final denoised image (with the smallest t).
-        # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
-        # We need to let the subject and class instances use the same x_start. 
-        # Therefore, we repeat primed_x_starts[-1] twice.
-        x_start_primed  = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-        # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
-        # We return noise to make the noise_gt up-to-date, which is the recon objective.
-        # But noise_gt is probably not referred to in the following loss computations,
-        # since the current iteration is do_comp_feat_distill. We update it just in case.
-        # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_start_primed, masks
 
     # x_start_ss: the latent of the first 1/4 batch of input images (actually only 1 image), 
     # ** without priming.
