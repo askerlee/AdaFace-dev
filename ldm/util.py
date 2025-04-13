@@ -2027,18 +2027,18 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
     return loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
            loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v
 
-def calc_subj_attn_cross_t_distill_loss(ca_layers_activations, future_ca_layers_activations, 
-                                        subj_indices_1b):
-    subj_comp_cross_t_distill_layer_weights = { 23: 1, 24: 1, 
+def calc_subj_attn_cross_t_diff_loss(ca_layers_activations, future_ca_layers_activations, 
+                                     subj_indices_1b):
+    subj_comp_cross_t_diff_layer_weights = { 23: 1, 24: 1, 
                                               }
-    subj_comp_cross_t_distill_layer_weights = normalize_dict_values(subj_comp_cross_t_distill_layer_weights)
-    loss_subj_attn_cross_t_distill = 0
+    subj_comp_cross_t_diff_layer_weights = normalize_dict_values(subj_comp_cross_t_diff_layer_weights)
+    subj_attn_cross_t_diff = 0
 
     for unet_layer_idx, ca_attn in ca_layers_activations['attn'].items():
-        if unet_layer_idx not in subj_comp_cross_t_distill_layer_weights:
+        if unet_layer_idx not in subj_comp_cross_t_diff_layer_weights:
             continue
 
-        LAYER_W = subj_comp_cross_t_distill_layer_weights[unet_layer_idx]
+        LAYER_W = subj_comp_cross_t_diff_layer_weights[unet_layer_idx]
         # ca_attn: [4, 8, 4096, 77] -> [4, 77, 8, 4096]
         ca_attn = ca_attn.permute(0, 3, 1, 2)
         future_ca_attn = future_ca_layers_activations['attn'][unet_layer_idx].permute(0, 3, 1, 2)
@@ -2046,12 +2046,12 @@ def calc_subj_attn_cross_t_distill_loss(ca_layers_activations, future_ca_layers_
         ss_attn2, sc_attn2, sc_rep_attn2, mc_attn2 = future_ca_attn.chunk(4)
         sc_subj_attn     = sc_attn[subj_indices_1b]
         sc_subj_attn2    = sc_attn2[subj_indices_1b]
-        loss_subj_attn_cross_t_distill_layer = F.mse_loss(sc_subj_attn, sc_subj_attn2.detach())
+        subj_attn_cross_t_diff_layer = F.mse_loss(sc_subj_attn, sc_subj_attn2.detach())
         # mse loss is very small, so we scale it up by 10.
-        loss_subj_attn_cross_t_distill_layer *= 10
-        loss_subj_attn_cross_t_distill += loss_subj_attn_cross_t_distill_layer * LAYER_W
+        subj_attn_cross_t_diff_layer *= 10
+        subj_attn_cross_t_diff += subj_attn_cross_t_diff_layer * LAYER_W
 
-    return loss_subj_attn_cross_t_distill
+    return subj_attn_cross_t_diff
 
 # features/attention pooling allows small perturbations of the locations of pixels.
 # pool_feat_or_attn_mat() selects a proper pooling kernel size and stride size 

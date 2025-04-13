@@ -17,7 +17,7 @@ from threading import Thread
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt_to_cpu, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
-                        calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_distill_loss, \
+                        calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
@@ -88,7 +88,6 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
-                 comp_sc_subj_attn_cross_t_distill_loss_weight=0,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -152,7 +151,6 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
-        self.comp_sc_subj_attn_cross_t_distill_loss_weight = comp_sc_subj_attn_cross_t_distill_loss_weight
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -975,7 +973,7 @@ class LatentDiffusion(DDPM):
             # However, we still keep 20% of the do_normal_recon iterations to not use the fp_trick,
             # to encourage a bias towards larger facial areas in the output images.
             elif self.iter_flags['do_normal_recon'] and self.comp_distill_iter_gap > 0:
-                p_use_fp_trick = 0.8
+                p_use_fp_trick = 1
             else:
                 # If not doing compositional distillation and only doing do_normal_recon, 
                 # and not recon_on_comp_prompt, then use_fp_trick is disabled, 
@@ -1720,7 +1718,7 @@ class LatentDiffusion(DDPM):
 
     # If not do_adv_attack, then mon_loss_dict and session_prefix are not used and could be set to None.
     def recon_multistep_denoise(self, mon_loss_dict, session_prefix,
-                                x_start0, noise, t, cond_context, cls_context,
+                                x_start0, noise, t, subj_context, cls_context,
                                 uncond_emb, img_mask, fg_mask, cfg_scale, 
                                 num_denoising_steps, num_priming_steps,
                                 recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora, 
@@ -1748,10 +1746,12 @@ class LatentDiffusion(DDPM):
             t       = ts[i]
             noise   = noises[i]
             has_priming_finished = (i >= num_priming_steps)
-            if not has_priming_finished and cls_context is not None:
+            # Half of the priming steps are done using cls_context, 
+            # and half using subj_context.
+            if not has_priming_finished and cls_context is not None and i % 2 == 0:
                 context = cls_context
             else:
-                context = cond_context
+                context = subj_context
 
             # Only enable gradients after num_priming_steps.
             noise_pred, x_recon, ca_layers_activations = \
@@ -1786,9 +1786,9 @@ class LatentDiffusion(DDPM):
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
-            # NOTE: cls_context reuses extra_info from cond_context.
+            # NOTE: cls_context reuses extra_info from subj_context.
             # But since we don't capture ca activations in cls_context,
-            # it won't affect the ca activations gotten captured in cond_context.
+            # it won't affect the ca activations gotten captured in subj_context.
             if cls_context is not None:
                 noise_pred_cls, x_recon_cls, _ = \
                     self.guided_denoise(x_start, noise, t, cls_context,
@@ -1877,7 +1877,7 @@ class LatentDiffusion(DDPM):
         return noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, \
                noises, ts, ca_layers_activations_list
             
-    def comp_distill_multistep_denoise(self, x_start, noise, t, cond_context, 
+    def comp_distill_multistep_denoise(self, x_start, noise, t, subj_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_cross_attn=False,
                                        cfg_scale=2.5, num_denoising_steps=4, max_num_steps_with_grad=3,
                                        use_comp_distill_weights=False):
@@ -1913,7 +1913,7 @@ class LatentDiffusion(DDPM):
             is_grad_enabled = (i >= num_denoising_steps - max_num_steps_with_grad)
             with torch.set_grad_enabled(is_grad_enabled):
                 noise_pred, x_recon, ca_layers_activations = \
-                    self.guided_denoise(x_start, noise, t, cond_context,
+                    self.guided_denoise(x_start, noise, t, subj_context,
                                         uncond_emb, img_mask=None, 
                                         shrink_cross_attn=shrink_cross_attn,
                                         subj_indices=all_subj_indices_1b, 
@@ -1968,7 +1968,7 @@ class LatentDiffusion(DDPM):
     # ANCHOR[id=p_losses]
     def p_losses(self, x_start, prompt_emb, prompt_in, extra_info):
         #print(prompt_in)
-        cond_context = (prompt_emb, prompt_in, extra_info)
+        subj_context = (prompt_emb, prompt_in, extra_info)
         img_mask     = self.iter_flags['img_mask']
         fg_mask      = self.iter_flags['fg_mask']
 
@@ -2036,7 +2036,7 @@ class LatentDiffusion(DDPM):
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
                                             # num_recon_denoising_steps: 2.
                                             self.num_recon_denoising_steps, x_start, noise, 
-                                            cond_context, cls_context,
+                                            subj_context, cls_context,
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights, 
                                             self.iter_flags['recon_on_comp_prompt'], self.iter_flags['recon_on_pure_noise'], 
                                             enable_unet_attn_lora, self.recon_uses_ffn_lora, 
@@ -2049,7 +2049,7 @@ class LatentDiffusion(DDPM):
             # img_mask, fg_mask are used in recon_loss().
             loss_unet_distill = \
                 self.calc_unet_distill_loss(mon_loss_dict, session_prefix,
-                                            x_start, noise, cond_context, 
+                                            x_start, noise, subj_context, 
                                             img_mask, fg_mask, all_subj_indices, 
                                             self.iter_flags['num_unet_denoising_steps'], 
                                             self.iter_flags['unet_distill_on_pure_noise'])
@@ -2064,12 +2064,12 @@ class LatentDiffusion(DDPM):
             # For simplicity, we fix BLOCK_SIZE = 1, no matter the batch size.
             # We can't afford BLOCK_SIZE=2 on a 48GB GPU as it will double the memory usage.            
             BLOCK_SIZE = 1
-            # cond_context contains 
+            # subj_context contains 
             #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
             # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
             # Therefore, we use extra_info['prompt_emb_4b_rep_nonmix'] to get the old context.
-            cond_context_orig = (extra_info['prompt_emb_4b_rep_nonmix'], cond_context[1], cond_context[2])
+            cond_context_orig = (extra_info['prompt_emb_4b_rep_nonmix'], subj_context[1], subj_context[2])
             # x_start_primed: the primed (denoised) x_start, ready for denoising.
             # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
             # We return noise to make the noise_gt up-to-date, which is the recon objective.
@@ -2126,7 +2126,7 @@ class LatentDiffusion(DDPM):
             # NOTE: max_num_comp_distill_steps_with_grad = 3 < num_comp_distill_denoising_steps = 4.
             # So the first denoising step will have no gradients and will be discarded.
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-                self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, cond_context,
+                self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, subj_context,
                                                     uncond_emb=uncond_emb, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
                                                     shrink_cross_attn=shrink_cross_attn_in_comp_iters,
@@ -2222,10 +2222,6 @@ class LatentDiffusion(DDPM):
             breakpoint()
 
         mon_loss_dict.update({f'{session_prefix}/loss': loss.mean().detach().item() })
-        # Always self.comp_iters_count + self.non_comp_iters_count > 0. So no division by 0.
-        mon_loss_dict.update({f'{session_prefix}/comp_iters_frac': 
-                              self.comp_iters_count / (self.comp_iters_count + self.non_comp_iters_count) })
-
         return loss, mon_loss_dict
 
     def are_faces_present_in_latents(self, latents):
@@ -2326,7 +2322,7 @@ class LatentDiffusion(DDPM):
     # enable_unet_attn_lora: randomly set to True 50% of the time.
     # enable_unet_ffn_lora: True.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
-                               num_denoising_steps, x_start, noise, cond_context, cls_context,
+                               num_denoising_steps, x_start, noise, subj_context, cls_context,
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
                                recon_on_comp_prompt, recon_on_pure_noise, 
                                enable_unet_attn_lora, enable_unet_ffn_lora, 
@@ -2387,7 +2383,7 @@ class LatentDiffusion(DDPM):
                                          # img_mask is used to mask the blank areas around the augmented images.
                                          # If recon_on_comp_prompt, then img_mask = None, i.e., no masking.
                                          # fg_mask is used to confine adv_grad to the foreground area.
-                                         x_start0, noise, t, cond_context, cls_context, 
+                                         x_start0, noise, t, subj_context, cls_context, 
                                          uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, num_recon_priming_steps,
                                          # enable_unet_attn_lora: randomly set to True 50% of the time.
@@ -2597,14 +2593,14 @@ class LatentDiffusion(DDPM):
 
         return loss_normal_recon
 
-    def prepare_teacher_context(self, cond_context, uncond_context, BLOCK_SIZE, 
+    def prepare_teacher_context(self, subj_context, uncond_context, BLOCK_SIZE, 
                                 id2img_prompt_embs, id2img_neg_prompt_embs, img_prompt_prefix_embs,
                                 unet_teacher_types, encoders_num_id_vecs, 
                                 p_unet_teacher_uses_cfg, unet_distill_uses_comp_prompt):
 
-        prompt_emb, prompt_in, extra_info = cond_context
+        prompt_emb, prompt_in, extra_info = subj_context
         # student_prompt_embs is the prompt embedding of the student model.
-        student_prompt_embs = cond_context[0]
+        student_prompt_embs = subj_context[0]
 
         ####### Begin of Preparing the teacher context #######
         # ** OBSOLETE ** NOTE: when unet_teacher_types == ['unet_ensemble'], unets are specified in 
@@ -2697,7 +2693,7 @@ class LatentDiffusion(DDPM):
         return teacher_contexts
     
     def calc_unet_distill_loss(self, mon_loss_dict, session_prefix, 
-                               x_start, noise, cond_context, 
+                               x_start, noise, subj_context, 
                                img_mask, fg_mask, subj_indices, 
                                num_unet_denoising_steps, unet_distill_on_pure_noise):
         if unet_distill_on_pure_noise:
@@ -2722,7 +2718,7 @@ class LatentDiffusion(DDPM):
         # If unet_distill_on_image:      all of them are 2,      indicating red.
         log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
         self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
-        teacher_contexts = self.prepare_teacher_context(cond_context, self.uncond_context, BLOCK_SIZE,
+        teacher_contexts = self.prepare_teacher_context(subj_context, self.uncond_context, BLOCK_SIZE,
                                                         self.iter_flags['id2img_prompt_embs'],
                                                         self.iter_flags['id2img_neg_prompt_embs'],
                                                         self.img_prompt_prefix_embs,
@@ -2758,7 +2754,7 @@ class LatentDiffusion(DDPM):
                     # recon_multistep_denoise() always uses CFG.
                     noise_preds, _, x_starts, x_recons, _, noises, ts, ca_layers_activations_list = \
                         self.recon_multistep_denoise(None, None, 
-                                                     x_start, noise0, t0, cond_context, None, 
+                                                     x_start, noise0, t0, subj_context, None, 
                                                      uncond_emb, img_mask0, fg_mask0,
                                                      cfg_scale=2, num_denoising_steps=num_distill_priming_steps, 
                                                      num_priming_steps=num_distill_priming_steps,
@@ -2832,7 +2828,7 @@ class LatentDiffusion(DDPM):
             # We intentionally do not use img_mask in unet distillation. 
             # Otherwise the task will be too easy for the student.
             noise_pred_s, x_recon_s, ca_layers_activations = \
-                self.guided_denoise(x_start_s, noise_t, t_s, cond_context, 
+                self.guided_denoise(x_start_s, noise_t, t_s, subj_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
                                     shrink_cross_attn=False,
                                     subj_indices=subj_indices,
@@ -2902,9 +2898,9 @@ class LatentDiffusion(DDPM):
     # masks: (img_mask, fg_mask). 
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # On a 48GB GPU, we can only afford BLOCK_SIZE=1, otherwise OOM.
-    def prime_x_start_for_comp_prompts(self, cond_context, x_start, noise,
+    def prime_x_start_for_comp_prompts(self, subj_context, x_start, noise,
                                        masks, num_primed_denoising_steps, BLOCK_SIZE=1):
-        prompt_emb, prompt_in, extra_info = cond_context
+        prompt_emb, prompt_in, extra_info = subj_context
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
         img_mask, fg_mask = masks
@@ -3009,7 +3005,7 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_nonsubj_k   = []
         losses_comp_rep_distill_subj_v      = []
         losses_comp_rep_distill_nonsubj_v   = []
-        losses_subj_attn_cross_t_distill    = []
+        subj_attn_cross_t_diffs    = []
         pred_l2s                            = []
         losses_pred_l2s                     = []
 
@@ -3155,10 +3151,10 @@ class LatentDiffusion(DDPM):
                 continue
 
             if (step_idx < len(ca_layers_activations_list) - 1) and (step_idx >= sc_face_detected_at_step - 1):
-                loss_subj_attn_cross_t_distill_step = \
-                    calc_subj_attn_cross_t_distill_loss(ca_layers_activations, ca_layers_activations_list[step_idx+1],
-                                                        all_subj_indices_1b)
-                losses_subj_attn_cross_t_distill.append(loss_subj_attn_cross_t_distill_step)
+                subj_attn_cross_t_diff_step = \
+                    calc_subj_attn_cross_t_diff_loss(ca_layers_activations, ca_layers_activations_list[step_idx+1],
+                                                     all_subj_indices_1b)
+                subj_attn_cross_t_diffs.append(subj_attn_cross_t_diff_step)
             
             # Usually sc_fg_mask_percent is around 0.05~0.25.
             # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
@@ -3214,11 +3210,11 @@ class LatentDiffusion(DDPM):
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
 
-        if len(losses_subj_attn_cross_t_distill) > 0:
-            loss_subj_attn_cross_t_distill = torch.stack(losses_subj_attn_cross_t_distill).mean()
-            mon_loss_dict.update({f'{session_prefix}/subj_attn_cross_t_distill': loss_subj_attn_cross_t_distill.mean().detach().item() })
-            # loss_subj_attn_cross_t_distill: 1e-5~2e-5 * 0 => DISABLED.
-            loss_comp_feat_distill += loss_subj_attn_cross_t_distill * self.comp_sc_subj_attn_cross_t_distill_loss_weight
+        if len(subj_attn_cross_t_diffs) > 0:
+            subj_attn_cross_t_diff = torch.stack(subj_attn_cross_t_diffs).mean()
+            mon_loss_dict.update({f'{session_prefix}/subj_attn_cross_t_diff': subj_attn_cross_t_diff.mean().detach().item() })
+            # subj_attn_cross_t_diff: 1e-5~2e-5 * 0 => DISABLED.
+            # loss_comp_feat_distill += subj_attn_cross_t_diff * self.comp_sc_subj_attn_cross_t_diff_loss_weight
 
         # loss_subj_attn_norm_distill: 0.01~0.03. Currently disabled, and just for monitoring.
         if loss_subj_attn_norm_distill > 0:
