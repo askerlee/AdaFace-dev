@@ -109,7 +109,7 @@ class DDPM(pl.LightningModule):
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
-                 p_do_adv_attack_when_recon_on_images=0.2,
+                 p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weights=[0.2, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],

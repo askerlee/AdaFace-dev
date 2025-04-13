@@ -16,6 +16,7 @@ from pytorch_lightning.utilities import rank_zero_info
 
 from ldm.data.personalized import SubjectSampler
 from ldm.util import instantiate_from_config
+import random
 
 def get_parser(**parser_kwargs):
     def str2bool(v):
@@ -313,26 +314,38 @@ class WrappedDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
 
+def make_worker_init_fn(global_seed):
+    def worker_init_fn(_):
+        worker_info = torch.utils.data.get_worker_info()
+        if worker_info is not None:
+            worker_id = worker_info.id
+            dataset = worker_info.dataset
+            dataset.worker_id = worker_id
 
-def worker_init_fn(_):
-    worker_info = torch.utils.data.get_worker_info()
-    worker_id = worker_info.id
+            seed = global_seed * 1000 + worker_id
+            np.random.seed(seed)
+            random.seed(seed)
+            torch.manual_seed(seed)
+            print(f"Setting seed {seed} for worker {worker_id}")
 
-    return np.random.seed(np.random.get_state()[1][0] + worker_id)
-
+    return worker_init_fn
+        
 # LightningDataModule: https://pytorch-lightning.readthedocs.io/en/stable/notebooks/lightning_examples/datamodules.html
 # train: ldm.data.personalized.PersonalizedBase
 class DataModuleFromConfig(pl.LightningDataModule):
     # train: the corresponding section in the config file,
     # used by instantiate_from_config(self.dataset_configs[k]).
     def __init__(self, batch_size, max_steps, train=None, test=None, predict=None,
-                 wrap=False, num_workers=None, shuffle_test_loader=False, use_worker_init_fn=False):
+                 wrap=False, num_workers=None, shuffle_test_loader=False, 
+                 use_worker_init_fn=False, seed=-1):
         super().__init__()
         self.batch_size = batch_size
         self.num_batches = max_steps
         self.dataset_configs = dict()
         self.num_workers = num_workers if num_workers is not None else batch_size * 2
-        self.use_worker_init_fn = use_worker_init_fn        # False
+        self.use_worker_init_fn = use_worker_init_fn        # True
+        self.seed = seed
+
         if train is not None:
             self.dataset_configs["train"] = train
             self.train_dataloader = self._train_dataloader
@@ -356,7 +369,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
     # _train_dataloader() is called within prepare_data().
     def _train_dataloader(self):
         if self.use_worker_init_fn:
-            init_fn = worker_init_fn
+            init_fn = make_worker_init_fn(self.seed)
         else:
             init_fn = None
         
@@ -383,7 +396,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
 
     def _test_dataloader(self, shuffle=False):
         if self.use_worker_init_fn:
-            init_fn = worker_init_fn
+            init_fn = make_worker_init_fn(self.seed)
         else:
             init_fn = None
 
@@ -394,7 +407,7 @@ class DataModuleFromConfig(pl.LightningDataModule):
 
     def _predict_dataloader(self, shuffle=False):
         if self.use_worker_init_fn:
-            init_fn = worker_init_fn
+            init_fn = make_worker_init_fn(self.seed)
         else:
             init_fn = None
 
@@ -630,7 +643,12 @@ if __name__ == "__main__":
             trainer_opt.max_steps = opt.max_steps
             # max_steps: Used to initialize DataModuleFromConfig.
             config.data.params.max_steps = opt.max_steps
-                    
+
+        # If the global seed is specified in the command line, then we set 
+        # seeds in the dataloaders as well for reproducible training data sequences.
+        config.data.params.use_worker_init_fn   = (opt.seed > 0)
+        config.data.params.seed                 = opt.seed
+
         config.data.params.train.params.subject_string = opt.subject_string
         if not hasattr(opt, 'adaface_encoder_types'):
             # Use the setting in the config file.
