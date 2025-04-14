@@ -3074,18 +3074,18 @@ class LatentDiffusion(DDPM):
 
                 mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
 
-                # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight: 0.01 => 0.005-0.008.
+                # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
                 # This loss is around 1/15 of comp distill losses (0.1).
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
                 # If comp_iters_face_detected_frac becomes smaller over time, 
                 # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
-                # If comp_iters_face_detected_frac=0.7, then arcface_align_comp_loss_scale=3.
-                # If comp_iters_face_detected_frac=0.5, then arcface_align_comp_loss_scale=6 (maximum).
-                arcface_align_comp_loss_scale = 1.5 * min(4, 1 / (comp_iters_face_detected_frac**2 + 0.01))
-                # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 200 * 0.01 => 0.04.
+                # If comp_iters_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
+                # If comp_iters_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
+                arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_iters_face_detected_frac**2 + 0.01))
+                # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 400 * 0.01 => 0.08.
                 # Although this is ~10x of loss_arcface_align_comp, it's very infraquently triggered.
-                comp_bg_faces_suppress_loss_scale = 200
+                comp_bg_faces_suppress_loss_scale = 400
                 loss_comp_feat_distill += (loss_arcface_align_comp * arcface_align_comp_loss_scale 
                                            + loss_bg_faces_suppress_comp * comp_bg_faces_suppress_loss_scale) \
                                           * self.arcface_align_loss_weight
