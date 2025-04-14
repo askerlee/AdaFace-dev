@@ -2106,9 +2106,17 @@ class LatentDiffusion(DDPM):
 
         ##### begin of do_normal_recon #####
         if self.iter_flags['do_normal_recon']:  
+            # NOTE: If recon_on_pure_noise, then disable all LoRAs to avoid biases within LoRAs 
+            # being introduced to images generated when recon_on_pure_noise.
             # Enable attn LoRAs on UNet 50% of the time during recon iterations, to prevent
             # attn LoRAs don't degerate in comp distillation iterations.
-            enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+            if not self.iter_flags['recon_on_pure_noise']:
+                enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
+                enable_unet_ffn_lora  = self.recon_uses_ffn_lora
+            else:
+                enable_unet_attn_lora = False
+                enable_unet_ffn_lora  = False    
+
             # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 
             # 3 non-comp recon iterations.
             # Previously, recon_with_adv_attack_iter_gap = 4 and do_adv_attack on both non-comp and 
@@ -2138,7 +2146,7 @@ class LatentDiffusion(DDPM):
                                             subj_context, cls_context,
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights, 
                                             self.iter_flags['recon_on_comp_prompt'], self.iter_flags['recon_on_pure_noise'], 
-                                            enable_unet_attn_lora, self.recon_uses_ffn_lora, 
+                                            enable_unet_attn_lora, enable_unet_ffn_lora, 
                                             do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
@@ -2419,7 +2427,7 @@ class LatentDiffusion(DDPM):
     # With this trick, we can be reassured to use arcface align loss without worrying it bringing a lot
     # of high-frequency noise to the background.
     # enable_unet_attn_lora: randomly set to True 50% of the time.
-    # enable_unet_ffn_lora: True.
+    # enable_unet_ffn_lora: if not recon_on_pure_noise, then True. Otherwise False.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, subj_context, cls_context,
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
@@ -2857,8 +2865,8 @@ class LatentDiffusion(DDPM):
                                                      uncond_emb, img_mask0, fg_mask0,
                                                      cfg_scale=2, num_denoising_steps=num_distill_priming_steps, 
                                                      num_priming_steps=num_distill_priming_steps,
-                                                     recon_on_pure_noise=True, enable_unet_attn_lora=False, 
-                                                     enable_unet_ffn_lora=False, 
+                                                     recon_on_pure_noise=True, 
+                                                     enable_unet_attn_lora=False, enable_unet_ffn_lora=False, 
                                                      # ffn_lora_adapter_name is 'unet_distill', 
                                                      # to get an x_start compatible with the teacher.
                                                      ffn_lora_adapter_name='recon_loss',  
