@@ -2117,7 +2117,7 @@ class LatentDiffusion(DDPM):
                 enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
                 enable_unet_ffn_lora  = self.recon_uses_ffn_lora
                 if (torch.rand(1).item() < 0.75):
-                    ffn_lora_adapter_name = 'normal_recon'
+                    ffn_lora_adapter_name = 'recon_loss'
                 else:
                     # 1/4 of the time we use comp_distill ffn lora adapter, to prevent it from degeneration.
                     ffn_lora_adapter_name = 'comp_distill'
