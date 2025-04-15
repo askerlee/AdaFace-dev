@@ -117,7 +117,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
-                 comp_uses_ffn_lora=False,
+                 comp_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -2116,6 +2116,11 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['recon_on_pure_noise']:
                 enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
                 enable_unet_ffn_lora  = self.recon_uses_ffn_lora
+                if (torch.rand(1).item() < 0.75):
+                    ffn_lora_adapter_name = 'normal_recon'
+                else:
+                    # 1/4 of the time we use comp_distill ffn lora adapter, to prevent it from degeneration.
+                    ffn_lora_adapter_name = 'comp_distill'
             else:
                 enable_unet_attn_lora = False
                 enable_unet_ffn_lora  = False    
@@ -2149,7 +2154,7 @@ class LatentDiffusion(DDPM):
                                             subj_context, cls_context,
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights, 
                                             self.iter_flags['recon_on_comp_prompt'], self.iter_flags['recon_on_pure_noise'], 
-                                            enable_unet_attn_lora, enable_unet_ffn_lora, 
+                                            enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
                                             do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
         ##### end of do_normal_recon #####
@@ -2436,7 +2441,7 @@ class LatentDiffusion(DDPM):
                                num_denoising_steps, x_start, noise, subj_context, cls_context,
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
                                recon_on_comp_prompt, recon_on_pure_noise, 
-                               enable_unet_attn_lora, enable_unet_ffn_lora, 
+                               enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
                                do_adv_attack, DO_ADV_BS):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
 
@@ -2500,7 +2505,7 @@ class LatentDiffusion(DDPM):
                                          # enable_unet_attn_lora: randomly set to True 50% of the time.
                                          # enable_unet_ffn_lora: True.
                                          recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
-                                         'recon_loss',  # ffn_lora_adapter_name
+                                         ffn_lora_adapter_name, # Switching between 'recon_loss' or 'comp_distill'.
                                          do_adv_attack, DO_ADV_BS)
 
         losses_recon = []
