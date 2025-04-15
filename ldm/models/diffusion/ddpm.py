@@ -117,6 +117,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
+                 comp_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -213,6 +214,7 @@ class DDPM(pl.LightningModule):
         self.use_ldm_unet           = use_ldm_unet
         self.unet_uses_attn_lora    = unet_uses_attn_lora
         self.recon_uses_ffn_lora    = recon_uses_ffn_lora
+        self.comp_uses_ffn_lora     = comp_uses_ffn_lora
         self.unet_lora_rank         = unet_lora_rank
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
@@ -1979,7 +1981,7 @@ class LatentDiffusion(DDPM):
     def comp_distill_multistep_denoise(self, x_start, noise, t, subj_context, 
                                        uncond_emb=None, all_subj_indices_1b=None, shrink_cross_attn=False,
                                        cfg_scale=2.5, num_denoising_steps=4, max_num_steps_with_grad=3,
-                                       use_comp_distill_weights=False):
+                                       use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
         assert num_denoising_steps <= 10
 
         # Use the same t and noise for all instances.
@@ -2023,12 +2025,13 @@ class LatentDiffusion(DDPM):
                                         # res_hidden_states_gradscale: 0, gradients don't flow back through 
                                         # UNet skip connections.
                                         res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                        # use_attn_lora == self.unet_uses_attn_lora == True.
                                         # Enable the attn lora in subject-compos batches, as long as 
                                         # attn lora is globally enabled.
-                                        use_attn_lora=self.unet_uses_attn_lora,
-                                        # If using default weights, then do not use ffn lora.
-                                        use_ffn_lora=use_comp_distill_weights, 
-                                        ffn_lora_adapter_name='comp_distill')
+                                        use_attn_lora=use_attn_lora,
+                                        # Don't use ffn lora in subject-compos batches.
+                                        use_ffn_lora=use_ffn_lora,
+                                        ffn_lora_adapter_name=ffn_lora_adapter_name)
             
             noise_preds.append(noise_pred)
             x_starts.append(x_recon.detach())
@@ -2239,7 +2242,8 @@ class LatentDiffusion(DDPM):
                                                     shrink_cross_attn=shrink_cross_attn_in_comp_iters,
                                                     cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
                                                     max_num_steps_with_grad=self.max_num_comp_distill_steps_with_grad,
-                                                    use_comp_distill_weights=self.iter_flags['use_comp_distill_weights'])
+                                                    use_attn_lora=self.unet_uses_attn_lora, use_ffn_lora=self.comp_uses_ffn_lora,
+                                                    ffn_lora_adapter_name='comp_distill')
 
             ts_1st = [ t[0].item() for t in ts ]
             print(f"comp distill denoising steps: {self.num_comp_distill_denoising_steps}, ts: {ts_1st}")
