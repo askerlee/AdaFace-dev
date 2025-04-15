@@ -2123,7 +2123,8 @@ class LatentDiffusion(DDPM):
                     ffn_lora_adapter_name = 'comp_distill'
             else:
                 enable_unet_attn_lora = False
-                enable_unet_ffn_lora  = False    
+                enable_unet_ffn_lora  = False
+                ffn_lora_adapter_name = 'recon_loss'    # placeholder. Not really used.
 
             # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 
             # 3 non-comp recon iterations.
