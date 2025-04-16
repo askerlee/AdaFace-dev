@@ -58,11 +58,10 @@ class EmbeddingManager(nn.Module):
             extend_prompt2token_proj_attention_multiplier=1,
             num_static_img_suffix_embs=0,
             p_encoder_dropout=0,
-            gen_ss_from_frozen_subj_basis_generator=False,
             multi_token_filler=',',
             unet_lora_modules=None,
             load_unet_attn_lora_from_ckpt=True,
-            load_unet_ffn_adapters_from_ckpt=['recon_loss', 'unet_distill'],
+            unet_ffn_adapters_to_load=['recon_loss', 'unet_distill'],
     ):
         super().__init__()
 
@@ -125,16 +124,6 @@ class EmbeddingManager(nn.Module):
                                          extend_prompt2token_proj_attention_multiplier=extend_prompt2token_proj_attention_multiplier,
                                          prompt2token_proj_ext_attention_perturb_ratio=prompt2token_proj_ext_attention_perturb_ratio,
                                          is_training=True, img2txt_dtype=torch.float32)
-        
-        # gen_ss_from_frozen_subj_basis_generator: generate subject-single ada embeddings from a frozen encoder,
-        # to avoid the encoder from slowly degenerating during training.
-        self.gen_ss_from_frozen_subj_basis_generator = gen_ss_from_frozen_subj_basis_generator
-        # No need to explicity set the params of subj_basis_generator_frozen to be requires_grad = False,
-        # as it's not included in the param list returned by .optimized_parameters().
-        if self.gen_ss_from_frozen_subj_basis_generator:
-            self.subj_basis_generator_frozen = copy.deepcopy(self.id2ada_prompt_encoder.subj_basis_generator)
-        else:
-            self.subj_basis_generator_frozen = None
 
         if self.cls_delta_string is not None:
             self.cls_delta_tokens = self.get_tokens_for_string(cls_delta_string)
@@ -182,7 +171,7 @@ class EmbeddingManager(nn.Module):
         # So we don't pass adafaec_ckpt_paths to create_id2ada_prompt_encoder(), 
         # but instead use self.load().
         if adaface_ckpt_paths is not None:
-            self.load(adaface_ckpt_paths, load_unet_attn_lora_from_ckpt, load_unet_ffn_adapters_from_ckpt)
+            self.load(adaface_ckpt_paths, load_unet_attn_lora_from_ckpt, unet_ffn_adapters_to_load)
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, subj_name_to_cls_delta_string, cls_delta_string)
@@ -385,38 +374,6 @@ class EmbeddingManager(nn.Module):
                     breakpoint()
                 adaface_subj_embs = adaface_subj_embs.repeat(REAL_OCCURS_IN_BATCH // adaface_subj_embs.shape[0], 1, 1)
 
-            # Replace the first adaface_subj_embs with adaface_subj_embs0 from a frozen encoder.
-            if self.iter_type == 'compos_distill_iter' and self.gen_ss_from_frozen_subj_basis_generator:
-                subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
-                self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
-                # In a compos_distill_iter, all subjects are the same. As implemented above, 
-                # we only use the first instance in the batch to generate the adaface_subj_embs,
-                # as the whole batch is of the same subject. Therefore, adaface_subj_embs0 
-                # is only the embeddings of the first instance.
-                # Since subj_basis_generator_frozen is frozen, there's no point to enable gradient flow.
-                with torch.no_grad():
-                    adaface_subj_embs0, _, lens_subj_emb_segments = \
-                        self.id2ada_prompt_encoder.generate_adaface_embeddings(
-                            image_paths=None, face_id_embs=None,
-                            img_prompt_embs=id2img_prompt_embs,
-                            p_dropout=self.p_encoder_dropout if self.training else 0,
-                            # If an encoder is dropped out, then the corresponding adaface_subj_embs
-                            # will not be included in the returned adaface_subj_embs. 
-                            # So the returned adaface_subj_embs only contain valid embeddings and 
-                            # could be shorter than self.token2num_vectors[placeholder_string].
-                            return_zero_embs_for_dropped_encoders=False,
-                            avg_at_stage=None,
-                            enable_static_img_suffix_embs=enable_static_img_suffix_embs,
-                        )
-                self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
-
-                # Replace the first adaface_subj_embs with adaface_subj_embs0.
-                # adaface_subj_embs0: [1, 16, 768]. adaface_subj_embs: [2, 16, 768], 
-                # which has been repeated twice from [1, 16, 768] above.
-                # Still allow a small gradient into the unfrozen subj-single embeddings, 
-                # maybe this will make the images more natural?
-                adaface_subj_embs[:1] = adaface_subj_embs[:1] * 0.1 + adaface_subj_embs0 * 0.9
-
             adaface_subj_embs = adaface_subj_embs.to(embedded_text.dtype)
             # adaface_subj_embs could be shorter than self.token2num_vectors[placeholder_string], but never longer.
             if adaface_subj_embs.shape[1] > self.token2num_vectors[placeholder_string]:
@@ -576,7 +533,7 @@ class EmbeddingManager(nn.Module):
         print(f"Embedding manager ckpt saved to {adaface_ckpt_path}")
 
     # Load custom tokens and their learned embeddings from "embeddings_gs-4500.pt".
-    def load(self, adaface_ckpt_paths, load_unet_attn_lora_from_ckpt=True, load_unet_ffn_adapters_from_ckpt=['recon_loss', 'unet_distill']):
+    def load(self, adaface_ckpt_paths, load_unet_attn_lora_from_ckpt=True, unet_ffn_adapters_to_load=['recon_loss', 'unet_distill']):
         # The default placeholder specified in the config file will be loaded to these dicts.
         # So before loading, remove it from these dicts first.
         self.string_to_token_dict   = {}
@@ -586,132 +543,120 @@ class EmbeddingManager(nn.Module):
         self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
         print(f"Loaded {adaface_ckpt_paths[0]} into trainable subj_basis_generator")
 
-        if self.gen_ss_from_frozen_subj_basis_generator:
-            if len(adaface_ckpt_paths) >= 2:
-                frozen_ckpt_path = adaface_ckpt_paths[1]
-            else:
-                # Use the same ckpt as the frozen subj_basis_generator.
-                frozen_ckpt_path = adaface_ckpt_paths[0]
+        ckpt_path_parts = adaface_ckpt_path.split(":")
+        adaface_ckpt_path = ckpt_path_parts[0]
+        if len(ckpt_path_parts) == 2:
+            placeholder_mapper = {}
+            for placeholder_mapping in ckpt_path_parts[1].split(","):
+                from_, to_ = placeholder_mapping.split("-")
+                placeholder_mapper[from_] = to_
+        else:
+            placeholder_mapper = None
 
-            # Back up id2ada_prompt_encoder.subj_basis_generator.
-            subj_basis_generator = self.id2ada_prompt_encoder.subj_basis_generator
-            # Temporarily replace id2ada_prompt_encoder.subj_basis_generator with subj_basis_generator_frozen.
-            self.id2ada_prompt_encoder.subj_basis_generator = self.subj_basis_generator_frozen
-            # Load frozen_ckpt_path into id2ada_prompt_encoder.subj_basis_generator.
-            self.id2ada_prompt_encoder.load_adaface_ckpt(frozen_ckpt_path)
-            print(f"Loaded {frozen_ckpt_path} into trainable subj_basis_generator")
-            # Restore id2ada_prompt_encoder.subj_basis_generator.
-            self.id2ada_prompt_encoder.subj_basis_generator = subj_basis_generator
+        ckpt = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
+        if len(adaface_ckpt_paths) == 2:
+            # Load the second ckpt into lora_modules_ckpt from which only the LoRA modules will be loaded.
+            lora_modules_ckpt = torch.load(adaface_ckpt_paths[1], map_location='cpu', weights_only=False)
+        else:
+            # Load the LoRA modules from the first and only ckpt.
+            lora_modules_ckpt = ckpt
 
-        for adaface_ckpt_path in adaface_ckpt_paths:
-            ckpt_path_parts = adaface_ckpt_path.split(":")
-            adaface_ckpt_path = ckpt_path_parts[0]
-            if len(ckpt_path_parts) == 2:
-                placeholder_mapper = {}
-                for placeholder_mapping in ckpt_path_parts[1].split(","):
-                    from_, to_ = placeholder_mapping.split("-")
-                    placeholder_mapper[from_] = to_
-            else:
-                placeholder_mapper = None
-
-            ckpt = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
-
-            if "placeholder_strings" in ckpt:
-                for token_idx, km in enumerate(ckpt["placeholder_strings"]):
-                    # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
-                    if (placeholder_mapper is not None) and (km in placeholder_mapper):
-                        km2 = placeholder_mapper[km]
-                    else:
-                        km2 = km
-
-                    try:
-                        k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
-                    except:
-                        breakpoint()
-                    if km2 in self.string_to_token_dict:
-                        print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
-                        continue
-
-                    # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
-                    # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
-                    self.subject_strings = list(set(self.subject_strings + [km2]))
-                    print("Add subject string", km2)
-
-                    # The mapping in string_to_token_dict is determined by the tokenizer. 
-                    # Shouldn't do the km->km2 mapping on string_to_token_dict.
-                    self.string_to_token_dict[km2] = k2_token
-                    print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
-                
-            if self.unet_lora_modules is not None and 'unet_lora_modules' in ckpt \
-              and (load_unet_attn_lora_from_ckpt or len(load_unet_ffn_adapters_from_ckpt) > 0):
-                unet_lora_modules_sd = ckpt['unet_lora_modules']
-                if not load_unet_attn_lora_from_ckpt:
-                    pre_filter_len = len(unet_lora_modules_sd)
-                    # Filter out the attention LoRA modules.
-                    unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'attn2_processor' not in k }
-                    if len(unet_lora_modules_sd) < pre_filter_len:
-                        print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} attn LoRA modules in {adaface_ckpt_path}")
-
-                pre_filter_len = len(unet_lora_modules_sd)
-                # Separate the attn and FFN LoRA modules.
-                unet_attn_lora_modules_sd   = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
-                unet_ffn_adapter_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' in k }
-                if 'all' not in load_unet_ffn_adapters_from_ckpt:
-                    # Filter unet_ffn_adapter_modules_sd by load_unet_ffn_adapters_from_ckpt.
-                    unet_ffn_adapter_modules_sd = { k: v for k, v in unet_ffn_adapter_modules_sd.items() if any([ adapter_name in k for adapter_name in load_unet_ffn_adapters_from_ckpt ]) }
+        if "placeholder_strings" in ckpt:
+            for token_idx, km in enumerate(ckpt["placeholder_strings"]):
+                # Mapped from km in ckpt to km2 in the current session. Partial matching is allowed.
+                if (placeholder_mapper is not None) and (km in placeholder_mapper):
+                    km2 = placeholder_mapper[km]
                 else:
-                    print(f"Loaded all {len(unet_ffn_adapter_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
+                    km2 = km
 
-                # Re-merge the attn and FFN LoRA modules.
-                unet_attn_lora_modules_sd.update(unet_ffn_adapter_modules_sd)
-                unet_lora_modules_sd = unet_attn_lora_modules_sd
+                try:
+                    k2_token = self.get_tokens_for_string(km2, force_single_token=True)[0]
+                except:
+                    breakpoint()
+                if km2 in self.string_to_token_dict:
+                    print(f"Duplicate key {km}->{km2} in {adaface_ckpt_path}. Ignored.")
+                    continue
+
+                # Add km2 to self.subject_strings, even if it's not in ckpt["subject_strings"].
+                # This is to be compatible with older ckpts which don't save ckpt["subject_strings"].
+                self.subject_strings = list(set(self.subject_strings + [km2]))
+                print("Add subject string", km2)
+
+                # The mapping in string_to_token_dict is determined by the tokenizer. 
+                # Shouldn't do the km->km2 mapping on string_to_token_dict.
+                self.string_to_token_dict[km2] = k2_token
+                print(f"Loaded {km}->{km2} from {adaface_ckpt_path}")
+            
+        if self.unet_lora_modules is not None and 'unet_lora_modules' in lora_modules_ckpt \
+            and (load_unet_attn_lora_from_ckpt or len(unet_ffn_adapters_to_load) > 0):
+            unet_lora_modules_sd = lora_modules_ckpt['unet_lora_modules']
+            if not load_unet_attn_lora_from_ckpt:
+                pre_filter_len = len(unet_lora_modules_sd)
+                # Filter out the attention LoRA modules.
+                unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'attn2_processor' not in k }
                 if len(unet_lora_modules_sd) < pre_filter_len:
-                    print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
+                    print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} attn LoRA modules in {adaface_ckpt_path}")
 
-                total_num_fix_key_prefixes = 0
-                for key in list(unet_lora_modules_sd.keys()):
-                    if key.startswith("base_model_model_"):
-                        new_key = key.replace("base_model_model_", "")
-                        unet_lora_modules_sd[new_key] = unet_lora_modules_sd.pop(key)
-                        total_num_fix_key_prefixes += 1
-                print(f"Fixed {total_num_fix_key_prefixes} key prefixes in {adaface_ckpt_path}")
+            pre_filter_len = len(unet_lora_modules_sd)
+            # Separate the attn and FFN LoRA modules.
+            unet_attn_lora_modules_sd   = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' not in k }
+            unet_ffn_adapter_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'resnets' in k }
+            if 'all' not in unet_ffn_adapters_to_load:
+                # Filter unet_ffn_adapter_modules_sd by unet_ffn_adapters_to_load.
+                unet_ffn_adapter_modules_sd = { k: v for k, v in unet_ffn_adapter_modules_sd.items() if any([ adapter_name in k for adapter_name in unet_ffn_adapters_to_load ]) }
+            else:
+                print(f"Loaded all {len(unet_ffn_adapter_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
 
-                total_num_default_renamed_keys = 0
-                total_num_adapter_renamed_keys = 0
-                
-                for key in list(unet_lora_modules_sd.keys()):
-                    # Copy the missing keys from the default weight.
-                    key_renamed = False
-                    for adapter_name in ('recon_loss', 'unet_distill', 'comp_distill'):
-                        adapter_key = key.replace('default.weight', f'{adapter_name}.weight')
-                        if adapter_key in self.unet_lora_modules.state_dict().keys() \
-                          and (adapter_key not in unet_lora_modules_sd):
-                            unet_lora_modules_sd[adapter_key] = unet_lora_modules_sd[key]
-                            # print(f"Adapter key {adapter_key} copied from {key}")                    
-                            key_renamed = True
-                            total_num_adapter_renamed_keys += 1
-                    if key_renamed:
-                        total_num_default_renamed_keys += 1
-                        del unet_lora_modules_sd[key]
+            # Re-merge the attn and FFN LoRA modules.
+            unet_attn_lora_modules_sd.update(unet_ffn_adapter_modules_sd)
+            unet_lora_modules_sd = unet_attn_lora_modules_sd
+            if len(unet_lora_modules_sd) < pre_filter_len:
+                print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
 
-                print(f"Renamed {total_num_default_renamed_keys} default keys to {total_num_adapter_renamed_keys} adapter keys in {adaface_ckpt_path}")
+            total_num_fix_key_prefixes = 0
+            for key in list(unet_lora_modules_sd.keys()):
+                if key.startswith("base_model_model_"):
+                    new_key = key.replace("base_model_model_", "")
+                    unet_lora_modules_sd[new_key] = unet_lora_modules_sd.pop(key)
+                    total_num_fix_key_prefixes += 1
+            print(f"Fixed {total_num_fix_key_prefixes} key prefixes in {adaface_ckpt_path}")
 
-                # NOTE: if ddpm.unet_lora_rank is different from the rank in the ckpt, these lora modules won't be loaded.
-                ret = self.unet_lora_modules.load_state_dict(unet_lora_modules_sd, strict=False)
-                print(f"Loaded {len(unet_lora_modules_sd)} LoRA weights")
+            total_num_default_renamed_keys = 0
+            total_num_adapter_renamed_keys = 0
+            
+            for key in list(unet_lora_modules_sd.keys()):
+                # Copy the missing keys from the default weight.
+                key_renamed = False
+                for adapter_name in ('recon_loss', 'unet_distill', 'comp_distill'):
+                    adapter_key = key.replace('default.weight', f'{adapter_name}.weight')
+                    if adapter_key in self.unet_lora_modules.state_dict().keys() \
+                        and (adapter_key not in unet_lora_modules_sd):
+                        unet_lora_modules_sd[adapter_key] = unet_lora_modules_sd[key]
+                        # print(f"Adapter key {adapter_key} copied from {key}")                    
+                        key_renamed = True
+                        total_num_adapter_renamed_keys += 1
+                if key_renamed:
+                    total_num_default_renamed_keys += 1
+                    del unet_lora_modules_sd[key]
 
-                if ret is not None and len(ret.missing_keys) > 0:
-                    print(f"Missing keys: {ret.missing_keys}")
-                if ret is not None and len(ret.unexpected_keys) > 0:
-                    print(f"Unexpected keys: {ret.unexpected_keys}")
-                
-            elif self.unet_lora_modules is None:
-                # unet unet_lora_modules are not enabled.
-                continue
-            elif 'unet_lora_modules' not in ckpt:
-                print(f"'unet_lora_modules' not found in {adaface_ckpt_path}")
-            elif not load_unet_attn_lora_from_ckpt and not load_unet_ffn_adapters_from_ckpt:
-                print(f"Instructed to skip loading unet_lora_modules from {adaface_ckpt_path}")
+            print(f"Renamed {total_num_default_renamed_keys} default keys to {total_num_adapter_renamed_keys} adapter keys in {adaface_ckpt_path}")
+
+            # NOTE: if ddpm.unet_lora_rank is different from the rank in the ckpt, these lora modules won't be loaded.
+            ret = self.unet_lora_modules.load_state_dict(unet_lora_modules_sd, strict=False)
+            print(f"Loaded {len(unet_lora_modules_sd)} LoRA weights")
+
+            if ret is not None and len(ret.missing_keys) > 0:
+                print(f"Missing keys: {ret.missing_keys}")
+            if ret is not None and len(ret.unexpected_keys) > 0:
+                print(f"Unexpected keys: {ret.unexpected_keys}")
+            
+        elif self.unet_lora_modules is None:
+            # unet unet_lora_modules are not enabled.
+            print(f"unet_lora_modules is not enabled, so they are not loaded from {adaface_ckpt_path}")
+        elif 'unet_lora_modules' not in lora_modules_ckpt:
+            print(f"'unet_lora_modules' not found in {adaface_ckpt_path}")
+        elif not load_unet_attn_lora_from_ckpt and not unet_ffn_adapters_to_load:
+            print(f"Instructed to skip loading unet_lora_modules from {adaface_ckpt_path}")
 
         # ',' is used as filler tokens.
         self.string_to_token_dict[self.multi_token_filler] = \

@@ -183,7 +183,8 @@ def get_parser(**parser_kwargs):
     
     parser.add_argument('--adaface_ckpt_paths', type=str, nargs="+", 
                         default=[],
-                        help="Initialize embedding manager from one or multiple checkpoints")
+                        help="Initialize embedding manager from 1 or 2 checkpoints. "
+                             "If 2 checkpoints, the second one provides the attn lora weights.")
     parser.add_argument("--subject_string", 
                         type=str, default="z",
                         help="Subject placeholder string used in prompts to denote the concept.")
@@ -191,7 +192,7 @@ def get_parser(**parser_kwargs):
     # default_cls_delta_string is also used as subj_init_string.
     parser.add_argument("--default_cls_delta_string",
         type=str, default='person',
-        help="One or more word tso be used in class-level prompts for delta loss")
+        help="One or more words to be used in class-level prompts for delta loss")
     parser.add_argument("--num_vectors_per_subj_token",
         type=int, default=20,
         help="Number of vectors per subject token. If > 1, use multiple embeddings to represent a subject.")
@@ -231,7 +232,7 @@ def get_parser(**parser_kwargs):
                         help="Scale down factor for the LoRA in the Diffusers UNet model")
     parser.add_argument("--load_unet_attn_lora_from_ckpt", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to load the attn LoRA modules from the checkpoint")
-    parser.add_argument("--load_unet_ffn_adapters_from_ckpt", type=str, nargs="*", 
+    parser.add_argument("--unet_ffn_adapters_to_load", type=str, nargs="*", 
                         default=['all'],
                         choices=['recon_loss', 'unet_distill', 'comp_distill', 'all', 'none'], 
                         help="Load these ffn adapters from the checkpoint")
@@ -262,9 +263,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use the 'face portrait' trick for the subject")
     parser.add_argument("--use_face_flow_for_sc_matching_loss", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use face flow for the single-composition matching loss")
-    parser.add_argument("--gen_ss_from_frozen_subj_basis_generator", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to generate the subject-single ada embeddings from the frozen subject basis generator")
-            
+       
     parser.add_argument("--clip_last_layers_skip_weights", type=float, nargs='+', default=[1, 1],
                         help="Relative weights of the skip connections of the last few layers of CLIP text embedder. " 
                              "(The last element is the weight of the last layer, ...)")
@@ -673,8 +672,6 @@ if __name__ == "__main__":
         else:
             # Override the setting in the config file.
             config.model.params.personalization_config.params.enabled_encoders = opt.enabled_encoders
-
-        config.model.params.personalization_config.params.gen_ss_from_frozen_subj_basis_generator = opt.gen_ss_from_frozen_subj_basis_generator
         
         opt.num_adaface_encoder_types = len(opt.enabled_encoders)
         config.data.params.train.params.default_cls_delta_string    = opt.default_cls_delta_string
@@ -711,10 +708,10 @@ if __name__ == "__main__":
 
         config.model.params.personalization_config.params.prompt2token_proj_ext_attention_perturb_ratio = opt.prompt2token_proj_ext_attention_perturb_ratio
         config.model.params.personalization_config.params.load_unet_attn_lora_from_ckpt = opt.load_unet_attn_lora_from_ckpt
-        if opt.load_unet_ffn_adapters_from_ckpt == ['none']:
-            config.model.params.personalization_config.params.load_unet_ffn_adapters_from_ckpt = []
+        if opt.unet_ffn_adapters_to_load == ['none']:
+            config.model.params.personalization_config.params.unet_ffn_adapters_to_load = []
         else:
-            config.model.params.personalization_config.params.load_unet_ffn_adapters_from_ckpt = opt.load_unet_ffn_adapters_from_ckpt
+            config.model.params.personalization_config.params.unet_ffn_adapters_to_load = opt.unet_ffn_adapters_to_load
         
         if hasattr(opt, 'unet_distill_iter_gap'):
             config.model.params.unet_distill_iter_gap = opt.unet_distill_iter_gap
