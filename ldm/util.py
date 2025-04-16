@@ -1935,8 +1935,8 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
 
     # loss_sc_recon_ssfg_min: 0.2 -> 0.02
     sc_recon_ssfg_loss_scale                    = 0.1
-    # loss_sc_recon_mc:       0.2 -> 0.02
-    sc_recon_mc_loss_scale                      = 0.1
+    # loss_sc_recon_mc:       0.2 -> 0.04
+    sc_recon_mc_loss_scale                      = 0.2
     # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
     sc_to_ssfg_sparse_attns_distill_loss_scale  = 0 #20
     # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.008~0.01.

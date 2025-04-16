@@ -537,7 +537,7 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
     return attn_capture_procs, attn_opt_modules
 
 # NOTE: cross-attn layers are included in the returned lora_modules.
-def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=False, lora_rank=192, lora_alpha=16):
+def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=True, lora_rank=192, lora_alpha=16):
     # target_modules_pat = 'up_blocks.3.resnets.[12].conv[a-z0-9_]+'
     # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut
     # Cannot set to conv.+ as it will match added adapter module names, including

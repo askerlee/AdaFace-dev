@@ -1651,8 +1651,7 @@ class LatentDiffusion(DDPM):
                 mc_uses_attn_lora = use_attn_lora
             else:
                 # The ms instance is indeed ms.
-                # We never need to suppress the subject attention in the mc instances, nor do we apply LoRAs.
-                # NOTE: currently the ms instance is not in use. So how these values are set doesn't really matter.
+                # We never need to suppress the subject attention in the mc instances.
                 extra_info_ms['subj_indices']       = None
                 extra_info_ms['shrink_cross_attn']  = False
                 mc_uses_attn_lora = False
