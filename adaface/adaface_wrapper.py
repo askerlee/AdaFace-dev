@@ -347,7 +347,8 @@ class AdaFaceWrapper(nn.Module):
         # but since we set use_attn_lora to False, attn loras won't be used during inference nonetheless.
         set_lora_and_capture_flags(unet, None, self.attn_capture_procs, self.outfeat_capture_blocks, 
                                    use_attn_lora, use_ffn_lora, 'recon_loss', capture_ca_activations=False, 
-                                   shrink_cross_attn=shrink_cross_attn)
+                                   shrink_cross_attn=shrink_cross_attn, mix_attn_mats=None,
+                                   res_hidden_states_gradscale=0)
 
         return unet
 

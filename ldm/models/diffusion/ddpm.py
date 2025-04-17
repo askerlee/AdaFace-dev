@@ -88,6 +88,8 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2,
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
+                 # Percent in each edge: [0.15, 0.6].
+                 comp_sc_fg_mask_percent_range=[0.0225, 0.36],
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -107,6 +109,7 @@ class DDPM(pl.LightningModule):
                  p_recon_on_comp_prompt=0,  # DISABLED
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
+                 p_comp_mix_mc_attn_with_sc=1,
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
@@ -152,6 +155,7 @@ class DDPM(pl.LightningModule):
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
+        self.comp_sc_fg_mask_percent_range          = comp_sc_fg_mask_percent_range
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -166,6 +170,7 @@ class DDPM(pl.LightningModule):
         self.unet_teacher_cfg_scale_range           = unet_teacher_cfg_scale_range
         self.max_num_unet_distill_denoising_steps   = max_num_unet_distill_denoising_steps
         self.p_unet_distill_on_pure_noise           = p_unet_distill_on_pure_noise
+        self.p_comp_mix_mc_attn_with_sc             = p_comp_mix_mc_attn_with_sc
 
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
         self.max_num_comp_distill_steps_with_grad   = max_num_comp_distill_steps_with_grad
@@ -953,9 +958,15 @@ class LatentDiffusion(DDPM):
         else:
             p_unet_distill_on_pure_noise = 0
 
+        if self.iter_flags['do_comp_feat_distill']:
+            p_comp_mix_mc_attn_with_sc = self.p_comp_mix_mc_attn_with_sc
+        else:
+            p_comp_mix_mc_attn_with_sc = 0
+
         self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < p_recon_on_comp_prompt).item()
         self.iter_flags['recon_on_pure_noise']  = (torch.rand(1) < p_recon_on_pure_noise).item()
         self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
+        self.iter_flags['comp_mix_mc_attn_with_sc']   = (torch.rand(1) < p_comp_mix_mc_attn_with_sc).item()
         
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
@@ -1582,7 +1593,8 @@ class LatentDiffusion(DDPM):
     # not on normal recon / unet distillation iterations.
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, 
-                       shrink_cross_attn=False, subj_indices=None, 
+                       shrink_cross_attn=False, comp_mix_mc_attn_with_sc=False, 
+                       subj_indices=None, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, 
@@ -1620,8 +1632,9 @@ class LatentDiffusion(DDPM):
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'subject-compos':
-            # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, it will be overridden
-            # in the unet.
+            # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, 
+            # it will be overridden in the unet.
+            ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['subj_indices']       = subj_indices
             extra_info_ss['shrink_cross_attn']  = shrink_cross_attn
@@ -1631,17 +1644,36 @@ class LatentDiffusion(DDPM):
                                                     enable_grad=False, use_attn_lora=use_attn_lora,
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
+            
+            ##### MC instance generation #####
+            extra_info_mc = copy.copy(extra_info)
+            extra_info_mc['subj_indices']        = None
+            extra_info_mc['shrink_cross_attn']   = False
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
+            # Never use attn and ffn LoRAs on mc instances.
+            # FFN LoRAs on mc instances may lead to trivial solutions of suppressing 
+            # background/compositional components and focusing on the subject only.
+            noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
+                                                    enable_grad=False, use_attn_lora=False,
+                                                    use_ffn_lora=False, 
+                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
+
+            ##### SC instance generation #####
+            if comp_mix_mc_attn_with_sc:
+                mc_attn = extra_info_mc['ca_layers_activations']['attn']
+            else:
+                mc_attn = None
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_cross_attn']  = shrink_cross_attn
+            extra_info_sc['mix_attn_mats']      = mc_attn
             #extra_info_sc['debug']  = True
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
-            ## Enable attn LoRAs on class instances, since we also do sc-mc matching using the corresponding q's.
-            # Revert to always disable attn LoRAs on class instances to avoid degeneration.
+            ##### MS (=sc_rep) instance generation #####
             extra_info_ms = copy.copy(extra_info)
             if subj_comp_distill_on_rep_prompts:
                 # The ms instance is actually sc_comp_rep.
@@ -1660,18 +1692,6 @@ class LatentDiffusion(DDPM):
             noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
                                                     enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
                                                     use_ffn_lora=use_ffn_lora, 
-                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
-            
-            extra_info_mc = copy.copy(extra_info)
-            extra_info_mc['subj_indices']       = None
-            extra_info_mc['shrink_cross_attn']   = False
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
-            # Never use attn and ffn LoRAs on mc instances.
-            # FFN LoRAs on mc instances may lead to trivial solutions of suppressing 
-            # background/compositional components and focusing on the subject only.
-            noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
-                                                    enable_grad=False, use_attn_lora=False,
-                                                    use_ffn_lora=False, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
@@ -2016,6 +2036,7 @@ class LatentDiffusion(DDPM):
                     self.guided_denoise(x_start, noise, t, subj_context,
                                         uncond_emb, img_mask=None, 
                                         shrink_cross_attn=shrink_cross_attn,
+                                        comp_mix_mc_attn_with_sc=self.iter_flags['comp_mix_mc_attn_with_sc'],
                                         subj_indices=all_subj_indices_1b, 
                                         batch_part_has_grad='subject-compos', 
                                         subj_comp_distill_on_rep_prompts=True,
@@ -3176,15 +3197,17 @@ class LatentDiffusion(DDPM):
                 subj_attn_cross_t_diffs.append(subj_attn_cross_t_diff_step)
             
             # Usually sc_fg_mask_percent is around 0.05~0.25.
+            # comp_sc_fg_mask_percent_range: 0.0225~0.36, each dim [0.15, 0.6].
             # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
             # then we don't need to preserve the background as it will be highly 
             # challenging to match the background with the mc instance.
             # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels),
             # then we don't need to preserve the fg.
-            if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= 0.36) \
-              or (sc_fg_mask_percent <= 0.0225):
+            if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
+              or (sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]):
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
+
             loss_comp_fg_bg_preserve_step = \
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
@@ -3773,6 +3796,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # layers 22, 23, 24, and only takes effect when subj_indices is not None.
         # Other layers will always have shrink_cross_attn = False.
         shrink_cross_attn = extra_info.get('shrink_cross_attn', False) if extra_info is not None else False
+        # mix_attn_mats: extra attn matrices to be mixed with the original ones.
+        mix_attn_mats = extra_info.get('mix_attn_mats', None) if extra_info is not None else None
         debug = extra_info.get('debug', False) if extra_info is not None else False
         #print(subj_indices)
 
@@ -3793,7 +3818,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_gradscale_blocks,
                                    use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                                   shrink_cross_attn, res_hidden_states_gradscale)
+                                   shrink_cross_attn, mix_attn_mats, res_hidden_states_gradscale)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \
@@ -3823,7 +3848,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # NOTE: FFN loras has been disabled above.
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_gradscale_blocks,
-                                   False, False, None, False, False, res_hidden_states_gradscale)
+                                   False, False, None, False, False, None, res_hidden_states_gradscale)
 
         out = out.to(out_dtype)
         return out
