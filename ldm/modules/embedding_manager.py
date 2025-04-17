@@ -539,9 +539,21 @@ class EmbeddingManager(nn.Module):
         self.string_to_token_dict   = {}
         self.subject_strings        = []
 
-        # Load adaface_ckpt_paths[0] into id2ada_prompt_encoder.subj_basis_generator.
-        self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_paths[0])
-        print(f"Loaded {adaface_ckpt_paths[0]} into trainable subj_basis_generator")
+        adaface_ckpt_path = adaface_ckpt_paths[0]
+        ckpt = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
+
+        if len(adaface_ckpt_paths) == 2:
+            lora_modules_ckpt_path = adaface_ckpt_paths[1]
+            # Load the second ckpt into lora_modules_ckpt from which only the LoRA modules will be loaded.
+            lora_modules_ckpt = torch.load(lora_modules_ckpt_path, map_location='cpu', weights_only=False)
+        else:
+            lora_modules_ckpt_path = adaface_ckpt_path
+            # Load the LoRA modules from the first and only ckpt.
+            lora_modules_ckpt = ckpt
+
+        # Load adaface_ckpt_path into id2ada_prompt_encoder.subj_basis_generator.
+        self.id2ada_prompt_encoder.load_adaface_ckpt(adaface_ckpt_path)
+        print(f"Loaded {adaface_ckpt_path} into trainable subj_basis_generator")
 
         ckpt_path_parts = adaface_ckpt_path.split(":")
         adaface_ckpt_path = ckpt_path_parts[0]
@@ -553,13 +565,6 @@ class EmbeddingManager(nn.Module):
         else:
             placeholder_mapper = None
 
-        ckpt = torch.load(adaface_ckpt_path, map_location='cpu', weights_only=False)
-        if len(adaface_ckpt_paths) == 2:
-            # Load the second ckpt into lora_modules_ckpt from which only the LoRA modules will be loaded.
-            lora_modules_ckpt = torch.load(adaface_ckpt_paths[1], map_location='cpu', weights_only=False)
-        else:
-            # Load the LoRA modules from the first and only ckpt.
-            lora_modules_ckpt = ckpt
 
         if "placeholder_strings" in ckpt:
             for token_idx, km in enumerate(ckpt["placeholder_strings"]):
@@ -595,7 +600,7 @@ class EmbeddingManager(nn.Module):
                 # Filter out the attention LoRA modules.
                 unet_lora_modules_sd = { k: v for k, v in unet_lora_modules_sd.items() if 'attn2_processor' not in k }
                 if len(unet_lora_modules_sd) < pre_filter_len:
-                    print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} attn LoRA modules in {adaface_ckpt_path}")
+                    print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} attn LoRA modules in {lora_modules_ckpt_path}")
 
             pre_filter_len = len(unet_lora_modules_sd)
             # Separate the attn and FFN LoRA modules.
@@ -605,13 +610,13 @@ class EmbeddingManager(nn.Module):
                 # Filter unet_ffn_adapter_modules_sd by unet_ffn_adapters_to_load.
                 unet_ffn_adapter_modules_sd = { k: v for k, v in unet_ffn_adapter_modules_sd.items() if any([ adapter_name in k for adapter_name in unet_ffn_adapters_to_load ]) }
             else:
-                print(f"Loaded all {len(unet_ffn_adapter_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
+                print(f"Loaded all {len(unet_ffn_adapter_modules_sd)} FFN LoRA modules in {lora_modules_ckpt_path}")
 
             # Re-merge the attn and FFN LoRA modules.
             unet_attn_lora_modules_sd.update(unet_ffn_adapter_modules_sd)
             unet_lora_modules_sd = unet_attn_lora_modules_sd
             if len(unet_lora_modules_sd) < pre_filter_len:
-                print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {adaface_ckpt_path}")
+                print(f"Filtered out {pre_filter_len - len(unet_lora_modules_sd)} FFN LoRA modules in {lora_modules_ckpt_path}")
 
             total_num_fix_key_prefixes = 0
             for key in list(unet_lora_modules_sd.keys()):
@@ -619,7 +624,7 @@ class EmbeddingManager(nn.Module):
                     new_key = key.replace("base_model_model_", "")
                     unet_lora_modules_sd[new_key] = unet_lora_modules_sd.pop(key)
                     total_num_fix_key_prefixes += 1
-            print(f"Fixed {total_num_fix_key_prefixes} key prefixes in {adaface_ckpt_path}")
+            print(f"Fixed {total_num_fix_key_prefixes} key prefixes in {lora_modules_ckpt_path}")
 
             total_num_default_renamed_keys = 0
             total_num_adapter_renamed_keys = 0
@@ -639,7 +644,7 @@ class EmbeddingManager(nn.Module):
                     total_num_default_renamed_keys += 1
                     del unet_lora_modules_sd[key]
 
-            print(f"Renamed {total_num_default_renamed_keys} default keys to {total_num_adapter_renamed_keys} adapter keys in {adaface_ckpt_path}")
+            print(f"Renamed {total_num_default_renamed_keys} default keys to {total_num_adapter_renamed_keys} adapter keys in {lora_modules_ckpt_path}")
 
             # NOTE: if ddpm.unet_lora_rank is different from the rank in the ckpt, these lora modules won't be loaded.
             ret = self.unet_lora_modules.load_state_dict(unet_lora_modules_sd, strict=False)
@@ -652,11 +657,11 @@ class EmbeddingManager(nn.Module):
             
         elif self.unet_lora_modules is None:
             # unet unet_lora_modules are not enabled.
-            print(f"unet_lora_modules is not enabled, so they are not loaded from {adaface_ckpt_path}")
+            print(f"unet_lora_modules is not enabled, so they are not loaded from {lora_modules_ckpt_path}")
         elif 'unet_lora_modules' not in lora_modules_ckpt:
-            print(f"'unet_lora_modules' not found in {adaface_ckpt_path}")
+            print(f"'unet_lora_modules' not found in {lora_modules_ckpt_path}")
         elif not load_unet_attn_lora_from_ckpt and not unet_ffn_adapters_to_load:
-            print(f"Instructed to skip loading unet_lora_modules from {adaface_ckpt_path}")
+            print(f"Instructed to skip loading unet_lora_modules from {lora_modules_ckpt_path}")
 
         # ',' is used as filler tokens.
         self.string_to_token_dict[self.multi_token_filler] = \
