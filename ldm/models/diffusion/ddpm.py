@@ -3175,12 +3175,12 @@ class LatentDiffusion(DDPM):
             sc_face_proportion_type = 'none'
         elif sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]:
             sc_face_proportion_type = 'too-small'
-        # If face is detected in the mc instance, then the face in the sc instance is at most 9x of its size
-        # (3x at each dimension),
+        # If a face is detected in the mc instance, then the face in the sc instance is at most 6.25x of its size
+        # (2.5x at each dimension),
         # Otherwise, the face in the sc instance is at most 1/4 of the max allowed size = 0.25 * 0.36 = 0.09,
         # i.e., each edge of the face is at most 0.3.
         elif (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
-          or (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 9 * mc_fg_mask_percent) \
+          or (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 6.25 * mc_fg_mask_percent) \
           or (mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
             # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
             sc_face_proportion_type = 'too-large'
