@@ -3150,12 +3150,14 @@ class LatentDiffusion(DDPM):
             loss_name2 = f'{session_prefix}/{loss_name}'
             mon_loss_dict[loss_name2] = 0
 
+        # If no face is detected in either the SC or the MC instance, then both sc_fg_mask and mc_fg_mask are None.
         if sc_fg_mask is not None:
             sc_fg_mask_percent = sc_fg_mask.float().mean().item()
             mon_loss_dict.update({f'{session_prefix}/sc_fg_mask_percent': sc_fg_mask_percent })
         else:
             sc_fg_mask_percent = 0
         
+        # If no face is detected in either the SC or the MC instance, then both sc_fg_mask and mc_fg_mask are None.
         if mc_fg_mask is not None:
             mc_fg_mask_percent = mc_fg_mask.float().mean().item()
             mon_loss_dict.update({f'{session_prefix}/mc_fg_mask_percent': mc_fg_mask_percent })
@@ -3186,7 +3188,7 @@ class LatentDiffusion(DDPM):
         # If sc_face_proportion_type is 'too-small' or 'good', then we compute the arcface align loss.
         # If sc_face_proportion_type is 'too-large', then the arcface align loss will encourage the face to 
         # become larger, which is not what we want.
-        if sc_face_proportion_type != 'too-large':
+        if (sc_fg_mask_percent > 0) and (sc_face_proportion_type != 'too-large'):
             # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
             # This loss is around 1/15 of comp distill losses (0.1).
             # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
