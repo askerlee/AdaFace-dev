@@ -3125,21 +3125,10 @@ class LatentDiffusion(DDPM):
                 # because it's an accumulated value that's inherently continuous.
                 mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
-                # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
-                # This loss is around 1/15 of comp distill losses (0.1).
-                # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
-                # whole image, not just the face area. So we need to keep it small.
-                # If comp_sc_face_detected_frac becomes smaller over time, 
-                # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
-                # If comp_sc_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
-                # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
-                arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 400 * 0.01 => 0.08.
                 # Although this is ~10x of loss_arcface_align_comp, it's very infraquently triggered.
                 comp_bg_faces_suppress_loss_scale = 400
-                loss_comp_feat_distill += (loss_arcface_align_comp * arcface_align_comp_loss_scale 
-                                           + loss_bg_faces_suppress_comp * comp_bg_faces_suppress_loss_scale) \
-                                          * self.arcface_align_loss_weight
+                loss_comp_feat_distill += loss_bg_faces_suppress_comp * comp_bg_faces_suppress_loss_scale * self.arcface_align_loss_weight
                 # loss_comp_sc_subj_mb_suppress: ~0.2, comp_sc_subj_mb_suppress_loss_weight: 0.2 => 0.04.
                 # loss_comp_feat_distill: 0.07, 60% of comp distillation loss.
                 loss_comp_feat_distill += loss_comp_sc_subj_mb_suppress * self.comp_sc_subj_mb_suppress_loss_weight
@@ -3179,6 +3168,35 @@ class LatentDiffusion(DDPM):
         # Even if the face is not detected in this step, we still update comp_mc_face_detected_frac,
         # because it's an accumulated value that's inherently continuous.
         mon_loss_dict.update({f'{session_prefix}/comp_mc_face_detected_frac': comp_mc_face_detected_frac})
+
+        if sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]:
+            # NOTE: If no face is detected in the sc instance, then sc_face_proportion_type is 'too-small'.
+            sc_face_proportion_type = 'too-small'
+        # If face is detected in the mc instance, then the face in the sc instance is at most 4x of its size;
+        # Otherwise, the face in the sc instance is at most 1/4 of the max allowed size = 0.25 * 0.36 = 0.09,
+        # i.e., each edge of the face is at most 0.3.
+        elif (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
+          or (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 4 * mc_fg_mask_percent) \
+          or (sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
+            # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
+            sc_face_proportion_type = 'too-large'
+        else:
+            sc_face_proportion_type = 'good'
+
+        # If sc_face_proportion_type is 'too-small' or 'good', then we compute the arcface align loss.
+        # If sc_face_proportion_type is 'too-large', then the arcface align loss will encourage the face to 
+        # become larger, which is not what we want.
+        if sc_face_proportion_type != 'too-large':
+            # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
+            # This loss is around 1/15 of comp distill losses (0.1).
+            # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
+            # whole image, not just the face area. So we need to keep it small.
+            # If comp_sc_face_detected_frac becomes smaller over time, 
+            # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
+            # If comp_sc_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
+            # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
+            arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
+            loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
 
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
             # Calc the L2 norm of noise_pred.
@@ -3237,17 +3255,7 @@ class LatentDiffusion(DDPM):
             # challenging to match the background with the mc instance.
             # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels),
             # then we don't need to preserve the fg.
-            if (step_idx < sc_face_detected_at_step):
-                continue
-            if (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
-              or (sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]):
-                continue
-            # If face is detected in the mc instance, then the face in the sc instance is at most 4x of its size;
-            # Otherwise, the face in the sc instance is at most 1/4 of the max allowed size = 0.25 * 0.36 = 0.09,
-            # i.e., each edge of the face is at most 0.3.
-            if (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 4 * mc_fg_mask_percent) \
-              or (sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
-                # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
+            if (step_idx < sc_face_detected_at_step) or (sc_face_proportion_type != 'good'):
                 continue
 
             loss_comp_fg_bg_preserve_step = \
