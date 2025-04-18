@@ -3049,7 +3049,6 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_nonsubj_v   = []
         subj_attn_cross_t_diffs    = []
         pred_l2s                            = []
-        losses_pred_l2s                     = []
 
         device = x_start_ss.device
         dtype  = x_start_ss.dtype
@@ -3238,9 +3237,16 @@ class LatentDiffusion(DDPM):
             # challenging to match the background with the mc instance.
             # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels),
             # then we don't need to preserve the fg.
-            if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
-              or (sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]) \
-              or (sc_fg_mask_percent >= 4 * mc_fg_mask_percent):
+            if (step_idx < sc_face_detected_at_step):
+                continue
+            if (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
+              or (sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]):
+                continue
+            # If face is detected in the mc instance, then the face in the sc instance is at most 4x of its size;
+            # Otherwise, the face in the sc instance is at most 1/4 of the max allowed size = 0.25 * 0.36 = 0.09,
+            # i.e., each edge of the face is at most 0.3.
+            if (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 4 * mc_fg_mask_percent) \
+              or (sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
 
@@ -3290,7 +3296,7 @@ class LatentDiffusion(DDPM):
             comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(1)
         else:
             comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(0)
-            
+
         mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve_loss_frac': comp_fg_bg_preserve_loss_frac})
 
         if len(subj_attn_cross_t_diffs) > 0:
