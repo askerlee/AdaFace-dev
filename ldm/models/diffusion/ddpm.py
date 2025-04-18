@@ -3171,24 +3171,28 @@ class LatentDiffusion(DDPM):
         # because it's an accumulated value that's inherently continuous.
         mon_loss_dict.update({f'{session_prefix}/comp_mc_face_detected_frac': comp_mc_face_detected_frac})
 
-        if sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]:
-            # NOTE: If no face is detected in the sc instance, then sc_face_proportion_type is 'too-small'.
+        if sc_fg_mask_percent == 0:
+            sc_face_proportion_type = 'none'
+        elif sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]:
             sc_face_proportion_type = 'too-small'
-        # If face is detected in the mc instance, then the face in the sc instance is at most 4x of its size;
+        # If face is detected in the mc instance, then the face in the sc instance is at most 9x of its size
+        # (3x at each dimension),
         # Otherwise, the face in the sc instance is at most 1/4 of the max allowed size = 0.25 * 0.36 = 0.09,
         # i.e., each edge of the face is at most 0.3.
         elif (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
-          or (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 4 * mc_fg_mask_percent) \
-          or (sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
+          or (mc_fg_mask_percent > 0 and sc_fg_mask_percent >= 9 * mc_fg_mask_percent) \
+          or (mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
             # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
             sc_face_proportion_type = 'too-large'
         else:
             sc_face_proportion_type = 'good'
 
+        print(f"Rank {self.trainer.global_rank}-{self.global_step} sc_face_proportion_type: {sc_face_proportion_type}")
+
         # If sc_face_proportion_type is 'too-small' or 'good', then we compute the arcface align loss.
         # If sc_face_proportion_type is 'too-large', then the arcface align loss will encourage the face to 
         # become larger, which is not what we want.
-        if (sc_fg_mask_percent > 0) and (sc_face_proportion_type != 'too-large'):
+        if (sc_fg_mask_percent > 0) and (sc_face_proportion_type == 'too-small' or sc_face_proportion_type == 'good'):
             # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
             # This loss is around 1/15 of comp distill losses (0.1).
             # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
