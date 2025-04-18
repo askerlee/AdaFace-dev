@@ -663,7 +663,8 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
             device_id = device.index
             self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
                                          providers=['CUDAExecutionProvider'],
-                                         provider_options=[{"device_id": device_id}])
+                                         provider_options=[{'device_id': device_id,
+                                                            'cudnn_conv_algo_search': 'DEFAULT'}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
         self.device = device
@@ -808,7 +809,8 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
             device_id = device.index
             self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
                                          providers=['CUDAExecutionProvider'],
-                                         provider_options=[{"device_id": device_id}])
+                                         provider_options=[{'device_id': device_id,
+                                                            'cudnn_conv_algo_search': 'DEFAULT'}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
         self.device = device

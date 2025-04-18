@@ -205,7 +205,9 @@ class DDPM(pl.LightningModule):
         self.normal_recon_iters_count                = 0
         self.normal_recon_face_images_on_image_stats = RollingStats(num_values=2, window_size=600, stat_type='sum')
         self.normal_recon_face_images_on_noise_stats = RollingStats(num_values=2, window_size=200, stat_type='sum')
-        self.comp_iters_face_detected_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_sc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_mc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_fg_bg_preserve_loss_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
@@ -3053,7 +3055,8 @@ class LatentDiffusion(DDPM):
         dtype  = x_start_ss.dtype
         latent_shape = x_start_ss.shape
 
-        ss_fg_mask, sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes = None, None, None, None
+        ss_fg_mask, sc_fg_mask, mc_fg_mask = None, None, None
+        ss_fg_face_bboxes, sc_fg_face_bboxes = None, None
         sc_face_detected_at_step = -1
         # When sc_fg_mask_percent >= 0.19, we think the face is close to be too large and 
         # do subj_comp_rep_distill to discourage it.
@@ -3071,10 +3074,20 @@ class LatentDiffusion(DDPM):
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
             # bleed=4: remove 4 pixels from each side of the detected face area.
-            fg_face_crops, bg_face_crops_flat, ss_fg_face_bboxes, face_detected_inst_mask = \
+            ss_fg_face_crops, ss_bg_face_crops_flat, ss_fg_face_bboxes, ss_face_detected_inst_mask = \
                 self.arcface.retinaface.crop_faces(ss_x_recon_pixels, out_size=(128, 128), T=20, bleed=4)
-            # Only compute losses when all instances have faces detected.
-            if (1 - face_detected_inst_mask).sum() == 0:
+            
+            mc_x_recon = x_recons[-1].chunk(4)[3]
+            mc_x_recon_pixels = self.decode_first_stage(mc_x_recon)
+            # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
+            # So we don't need to wrap it here.
+            # bleed=4: remove 4 pixels from each side of the detected face area.
+            mc_fg_face_crops, mc_bg_face_crops_flat, mc_fg_face_bboxes, mc_face_detected_inst_mask = \
+                self.arcface.retinaface.crop_faces(mc_x_recon_pixels, out_size=(128, 128), T=20, bleed=4)
+            
+            # Only compute losses when all ss and mc instances have faces detected.
+            if (1 - ss_face_detected_inst_mask).sum() == 0 and \
+                (1 - mc_face_detected_inst_mask).sum() == 0:
                 # If there are no failed indices, then we get ss_fg_mask.
                 # NOTE: ss_fg_face_bboxes are coords on ss_x_recon_pixels, 512*512.
                 # ss_fg_mask is on the latents, 64*64. So we scale ss_fg_face_bboxes down by 8.
@@ -3087,6 +3100,15 @@ class LatentDiffusion(DDPM):
                     ss_fg_mask[i, :, y1:y2, x1:x2] = 1
                     print(f"Rank {self.trainer.global_rank} SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}.", end=' ')
 
+                mc_fg_face_bboxes = pixel_bboxes_to_latent(mc_fg_face_bboxes, mc_x_recon_pixels.shape[-1], latent_shape[-1])
+                mc_fg_mask = torch.zeros(BLOCK_SIZE, 1, latent_shape[-2], latent_shape[-1], device=device)
+                # mc_fg_mask is zero-initialized.
+                # len(mc_fg_face_bboxes) == BLOCK_SIZE == len(mc_fg_mask), usually 1.
+                for i in range(len(mc_fg_face_bboxes)):
+                    x1, y1, x2, y2 = mc_fg_face_bboxes[i]
+                    mc_fg_mask[i, :, y1:y2, x1:x2] = 1
+                    print(f"Rank {self.trainer.global_rank} MC face coords {i}: {mc_fg_face_bboxes[i].detach().cpu().numpy()}.", end=' ')
+
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
                 loss_arcface_align_comp, loss_bg_faces_suppress_comp, loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
@@ -3096,23 +3118,23 @@ class LatentDiffusion(DDPM):
                 
                 if loss_arcface_align_comp > 0:
                     # This iteration is counted as face detected, as long as the face is detected in one step.
-                    comp_iters_face_detected_frac = self.comp_iters_face_detected_frac.update(1)
+                    comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(1)
                 else:
-                    # Even if the face is not detected in this step, we still update comp_iters_face_detected_frac,
-                    # because it's an accumulated value that's inherently continuous.
-                    comp_iters_face_detected_frac = self.comp_iters_face_detected_frac.update(0)
+                    comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(0)
 
-                mon_loss_dict.update({f'{session_prefix}/comp_iters_face_detected_frac': comp_iters_face_detected_frac})
+                # Even if the face is not detected in this step, we still update comp_sc_face_detected_frac,
+                # because it's an accumulated value that's inherently continuous.
+                mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
                 # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
                 # This loss is around 1/15 of comp distill losses (0.1).
                 # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
                 # whole image, not just the face area. So we need to keep it small.
-                # If comp_iters_face_detected_frac becomes smaller over time, 
+                # If comp_sc_face_detected_frac becomes smaller over time, 
                 # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
-                # If comp_iters_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
-                # If comp_iters_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
-                arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_iters_face_detected_frac**2 + 0.01))
+                # If comp_sc_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
+                # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
+                arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 400 * 0.01 => 0.08.
                 # Although this is ~10x of loss_arcface_align_comp, it's very infraquently triggered.
                 comp_bg_faces_suppress_loss_scale = 400
@@ -3146,6 +3168,19 @@ class LatentDiffusion(DDPM):
         else:
             sc_fg_mask_percent = 0
         
+        if mc_fg_mask is not None:
+            mc_fg_mask_percent = mc_fg_mask.float().mean().item()
+            mon_loss_dict.update({f'{session_prefix}/mc_fg_mask_percent': mc_fg_mask_percent })
+            # This iteration is counted as face detected, as long as the face is detected in one step.
+            comp_mc_face_detected_frac = self.comp_mc_face_detected_frac.update(1)
+        else:
+            mc_fg_mask_percent = 0
+            comp_mc_face_detected_frac = self.comp_mc_face_detected_frac.update(0)
+
+        # Even if the face is not detected in this step, we still update comp_mc_face_detected_frac,
+        # because it's an accumulated value that's inherently continuous.
+        mon_loss_dict.update({f'{session_prefix}/comp_mc_face_detected_frac': comp_mc_face_detected_frac})
+
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
             # Calc the L2 norm of noise_pred.
             pred_l2_step = (noise_preds[step_idx] ** 2).mean()   
@@ -3204,7 +3239,8 @@ class LatentDiffusion(DDPM):
             # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels),
             # then we don't need to preserve the fg.
             if (step_idx < sc_face_detected_at_step )or (sc_fg_mask_percent >= self.comp_sc_fg_mask_percent_range[1]) \
-              or (sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]):
+              or (sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]) \
+              or (sc_fg_mask_percent >= 4 * mc_fg_mask_percent):
                 # Skip calc_comp_subj_bg_preserve_loss() before sc_face is detected.
                 continue
 
@@ -3251,6 +3287,11 @@ class LatentDiffusion(DDPM):
             # loss_comp_fg_bg_preserve: 0.04~0.05.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
+            comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(1)
+        else:
+            comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(0)
+            
+        mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve_loss_frac': comp_fg_bg_preserve_loss_frac})
 
         if len(subj_attn_cross_t_diffs) > 0:
             subj_attn_cross_t_diff = torch.stack(subj_attn_cross_t_diffs).mean()
