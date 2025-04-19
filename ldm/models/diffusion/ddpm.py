@@ -3215,7 +3215,7 @@ class LatentDiffusion(DDPM):
             arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
             loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
         elif sc_face_proportion_type in ['no-overlap', 'too-large']:
-            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 100, 'too-large': 50 }
+            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 200, 'too-large': 100 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
