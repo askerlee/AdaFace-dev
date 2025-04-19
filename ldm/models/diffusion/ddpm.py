@@ -207,7 +207,7 @@ class DDPM(pl.LightningModule):
         self.comp_sc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_mc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_fg_bg_preserve_loss_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
-        self.comp_sc_mc_face_no_overlap_frac         = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_sc_face_suppressed_frac         = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
@@ -3194,12 +3194,8 @@ class LatentDiffusion(DDPM):
             sc_face_proportion_type = 'good'
 
         print(f"Rank {self.trainer.global_rank}-{self.global_step} sc_face_proportion_type: {sc_face_proportion_type}")
-        if sc_face_proportion_type == 'no-overlap':
-            comp_sc_mc_face_no_overlap_frac = self.comp_sc_mc_face_no_overlap_frac.update(1)
-        else:
-            comp_sc_mc_face_no_overlap_frac = self.comp_sc_mc_face_no_overlap_frac.update(0)
-        mon_loss_dict.update({f'{session_prefix}/comp_sc_mc_face_no_overlap_frac': comp_sc_mc_face_no_overlap_frac})
-
+        comp_sc_face_suppressed = 0
+        
         # If sc_face_proportion_type is 'too-small' or 'good', then we compute the arcface align loss.
         # If sc_face_proportion_type is 'too-large', then the arcface align loss will encourage the face to 
         # become larger, which is not what we want.
@@ -3219,6 +3215,10 @@ class LatentDiffusion(DDPM):
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
+            comp_sc_face_suppressed = 1
+
+        comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(comp_sc_face_suppressed)
+        mon_loss_dict.update({f'{session_prefix}/comp_sc_face_suppressed_frac': comp_sc_face_suppressed_frac})
 
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
             # Calc the L2 norm of noise_pred.
