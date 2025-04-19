@@ -3203,22 +3203,22 @@ class LatentDiffusion(DDPM):
         # If sc_face_proportion_type is 'too-small' or 'good', then we compute the arcface align loss.
         # If sc_face_proportion_type is 'too-large', then the arcface align loss will encourage the face to 
         # become larger, which is not what we want.
-        if sc_fg_mask_percent > 0:
-            if sc_face_proportion_type in ['too-small', 'good']:
-                # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
-                # This loss is around 1/15 of comp distill losses (0.1).
-                # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
-                # whole image, not just the face area. So we need to keep it small.
-                # If comp_sc_face_detected_frac becomes smaller over time, 
-                # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
-                # If comp_sc_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
-                # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
-                arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
-                loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
-            elif sc_face_proportion_type == 'no-overlap':
-                # Suppress the face in the sc instance, which is at the "background" of the mc instance.
-                comp_no_overlap_fg_faces_suppress_loss_scale = 100
-                loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
+        if sc_face_proportion_type in ['too-small', 'good']:
+            # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
+            # This loss is around 1/15 of comp distill losses (0.1).
+            # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
+            # whole image, not just the face area. So we need to keep it small.
+            # If comp_sc_face_detected_frac becomes smaller over time, 
+            # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
+            # If comp_sc_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
+            # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
+            arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
+            loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
+        elif sc_face_proportion_type in ['no-overlap', 'too-large']:
+            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 100, 'too-large': 50 }
+            # Suppress the face in the sc instance, which is at the "background" of the mc instance.
+            comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
+            loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
 
         for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
             # Calc the L2 norm of noise_pred.
