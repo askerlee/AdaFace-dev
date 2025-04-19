@@ -836,7 +836,7 @@ def gen_smooth_grad_layer(kernel_center_weight=2, debug=False):
     if kernel_center_weight > 4 or kernel_center_weight <= 0:
         breakpoint()
     return SmoothGradLayer(kernel_center_weight, debug=debug)
-    
+
 def get_clip_tokens_for_string(clip_tokenizer, string, force_single_token=False):
     '''
     # If string is a new token, add it to the tokenizer.
