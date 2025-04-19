@@ -2409,15 +2409,15 @@ class LatentDiffusion(DDPM):
         orig_image = self.decode_first_stage_with_grad(x_start)
         # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
         # so such faces are really small.
-        face_embs, _, fg_face_bboxes, face_detected_inst_mask = \
+        face_embs_center, _, _, fg_face_bboxes, face_detected_inst_mask = \
             self.arcface.embed_image_tensor(orig_image, T=20, enable_grad=True, fg_faces_grad_mask_ratio=0.9)
         no_face_img_num = (1 - face_detected_inst_mask).sum()
         if no_face_img_num.sum() > 0:
             print(f"Failed to detect faces in {no_face_img_num} image, unable to compute adv_grad.")
             return None
         
-        # NOTE: We want to push face_embs towards the negative direction, 
-        # which is equivalent to push face_embs towards 0 == minimize (face_embs*face_embs).mean().
+        # NOTE: We want to push face_embs_center towards the negative direction, 
+        # which is equivalent to push face_embs_center towards 0 == minimize (face_embs_center*face_embs_center).mean().
         # It's not simply reduce the magnitude of the face embedding. Since we add noise to the face image,
         # which introduces other random directions of the face embedding. When we reduce the  
         # face embedding magnitude along the original direction, we boost the noisy face embedding 
@@ -2425,8 +2425,8 @@ class LatentDiffusion(DDPM):
         # Randomly drop 30% of the face embeddings, i.e., backprop only based on a subset of 
         # the face embeddings, to make the generated adv grad more stochastic 
         # and less artificial.
-        face_embs = F.dropout(face_embs, p=0.3, training=True)
-        self_align_loss = (face_embs ** 2).mean()
+        face_embs_center = F.dropout(face_embs_center, p=0.3, training=True)
+        self_align_loss = (face_embs_center ** 2).mean()
         # self_align_loss.backward() won't cause gradient syncing between GPUs, 
         # so we don't need to add self.trainer.model.no_sync() context here.
         self_align_loss.backward()
@@ -3205,7 +3205,7 @@ class LatentDiffusion(DDPM):
             arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
             loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
         elif sc_face_proportion_type in ['no-overlap', 'too-large']:
-            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 200, 'too-large': 100 }
+            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 20, 'too-large': 10 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight

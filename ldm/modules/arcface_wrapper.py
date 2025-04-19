@@ -111,31 +111,33 @@ class ArcFaceWrapper(nn.Module):
 
         # Resize to (128, 128); arcface takes 128x128 images as input.
         fg_faces_gray = F.interpolate(fg_faces_gray, size=(128, 128), mode='bilinear', align_corners=False)
-        fg_central_mask = torch.zeros_like(fg_faces_gray, device=fg_faces_gray.device)
         if 0 < fg_faces_grad_mask_ratio < 1:
             ML = int(fg_faces_gray.shape[3] * (1 - fg_faces_grad_mask_ratio) / 2)
             MR = fg_faces_gray.shape[3] - ML
             MT = int(fg_faces_gray.shape[2] * (1 - fg_faces_grad_mask_ratio) / 2)
             MB = fg_faces_gray.shape[2] - MT
+            fg_central_mask = torch.zeros_like(fg_faces_gray, device=fg_faces_gray.device)
+            # fg_central_mask: The central 0.8 part of the face is filled with 1s.
             fg_central_mask[:, :, MT:MB, ML:MR] = 1
+            # fg_border_mask: The border 0.2 part of the face is filled with 1s.
             fg_border_mask = 1 - fg_central_mask
             fg_central_masked_grad_layer = gen_masked_grad_layer(fg_border_mask, debug=False)
             fg_border_masked_grad_layer  = gen_masked_grad_layer(fg_central_mask, debug=False)
-            fg_faces_gray_cm = fg_central_masked_grad_layer(fg_faces_gray)
-            fg_faces_gray_bm = fg_border_masked_grad_layer(fg_faces_gray)
+            fg_faces_gray_center = fg_central_masked_grad_layer(fg_faces_gray)
+            fg_faces_gray_border = fg_border_masked_grad_layer(fg_faces_gray)
         else:
-            fg_faces_gray_cm = fg_faces_gray
-            fg_faces_gray_bm = None
+            fg_faces_gray_center = fg_faces_gray
+            fg_faces_gray_border = None
 
         with torch.set_grad_enabled(enable_grad):
             # If some instances have no face detected, we still compute their face embeddings,
             # but such face embeddings shouldn't be used for loss computation, instead,
             # they should be filtered out by face_detected_inst_mask.
-            fg_faces_emb_cm = self.arcface(fg_faces_gray_cm)
-            if fg_faces_gray_bm is not None:
-                fg_faces_emb_bm = self.arcface(fg_faces_gray_bm)
+            fg_faces_emb_center = self.arcface(fg_faces_gray_center)
+            if fg_faces_gray_border is not None:
+                fg_faces_emb_border = self.arcface(fg_faces_gray_border)
             else:
-                fg_faces_emb_bm = fg_faces_emb_cm    
+                fg_faces_emb_border = fg_faces_emb_center    
 
         if embed_bg_faces and bg_face_crops_flat is not None:
             bg_faces_gray = (bg_face_crops_flat * rgb_to_gray_weights).sum(dim=1, keepdim=True)
@@ -146,7 +148,7 @@ class ArcFaceWrapper(nn.Module):
         else:
             bg_faces_emb = None
 
-        return fg_faces_emb_cm, fg_faces_emb_bm, bg_faces_emb, fg_face_bboxes, face_detected_inst_mask
+        return fg_faces_emb_center, fg_faces_emb_border, bg_faces_emb, fg_face_bboxes, face_detected_inst_mask
 
     # T: minimal face height/width to be detected.
     # ref_images:     the groundtruth images, roughly normalized to [-1, 1] (could go beyond).
@@ -159,7 +161,7 @@ class ArcFaceWrapper(nn.Module):
                                     enable_grad=False, fg_faces_grad_mask_ratio=-1)
         # bg_embs are not separated by instances, but flattened. 
         # We don't align them, just suppress them. So we don't need the batch dimension.
-        aligned_fg_faces_emb_cm, aligned_fg_faces_emb_bm, aligned_bg_faces_emb, \
+        aligned_fg_faces_emb_center, aligned_fg_faces_emb_border, aligned_bg_faces_emb, \
           aligned_fg_face_bboxes, aligned_face_detected_inst_mask = \
             self.embed_image_tensor(aligned_images, T, bleed, embed_bg_faces=True, enable_grad=True,
                                     fg_faces_grad_mask_ratio=fg_faces_grad_mask_ratio)
@@ -178,15 +180,15 @@ class ArcFaceWrapper(nn.Module):
         # If the numbers of instances in ref_fg_faces_emb and aligned_fg_faces_emb are different, then there's only one ref image, 
         # and multiple aligned images of the same person.
         # We repeat groundtruth embeddings to match the number of generated embeddings.
-        if len(ref_fg_faces_emb) < len(aligned_fg_faces_emb_cm):
-            ref_fg_faces_emb = ref_fg_faces_emb.repeat(len(aligned_fg_faces_emb_cm)//len(ref_fg_faces_emb), 1)
+        if len(ref_fg_faces_emb) < len(aligned_fg_faces_emb_center):
+            ref_fg_faces_emb = ref_fg_faces_emb.repeat(len(aligned_fg_faces_emb_center)//len(ref_fg_faces_emb), 1)
         
         # labels = 1: align the embeddings of the same person.
         # losses_arcface_align: tensor of [BS].
         # losses_arcface_align uses a center-filled grad mask to 
         # direct the optimization to focus on the central part of the face and ignore the border part,
         # so that the face will not grow too big.
-        losses_arcface_align = F.cosine_embedding_loss(ref_fg_faces_emb, aligned_fg_faces_emb_cm, 
+        losses_arcface_align = F.cosine_embedding_loss(ref_fg_faces_emb, aligned_fg_faces_emb_center, 
                                                        torch.ones(ref_fg_faces_emb.shape[0]).to(ref_fg_faces_emb.device),
                                                        reduction='none')
         # Mask out the losses of instances that have no face detected.
@@ -196,7 +198,7 @@ class ArcFaceWrapper(nn.Module):
         # losses_fg_faces_suppress uses a border-filled grad mask to
         # direct the optimization to suppress the border part of the face 
         # so that the face will shrink from the border.
-        losses_fg_faces_suppress = (aligned_fg_faces_emb_bm ** 2).mean(dim=1)
+        losses_fg_faces_suppress = (aligned_fg_faces_emb_border ** 2).mean(dim=1)
         loss_fg_faces_suppress = (losses_fg_faces_suppress * aligned_face_detected_inst_mask).sum() / aligned_face_detected_inst_mask.sum()
         print(f"loss_fg_faces_suppress: {loss_fg_faces_suppress.detach().item():.2f}")
 
