@@ -3160,10 +3160,20 @@ class LatentDiffusion(DDPM):
         mon_loss_dict.update({f'{session_prefix}/comp_mc_face_detected_frac': comp_mc_face_detected_frac})
 
         if sc_fg_mask_percent == 0:
-            sc_face_proportion_type = 'none'
-        elif (mc_fg_mask_percent > 0 and ((sc_fg_mask * mc_fg_mask) == 0).all()) \
-          or (mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]):
+            sc_face_proportion_type = 'sc-noface'
+        # If mc doesn't contain a face, and sc contains a small face, it's allowed.
+        # If mc doesn't contain a face, but sc contains a sufficiently large face,
+        # it is not desired.
+        elif mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]:
+            sc_face_proportion_type = 'mc-no-sc-large'
+        elif mc_fg_mask_percent > 0 and ((sc_fg_mask * mc_fg_mask) == 0).all():
             sc_face_proportion_type = 'no-overlap'
+        # Usually sc_fg_mask_percent is around 0.05~0.25.
+        # comp_sc_fg_mask_percent_range: 0.0225~0.36, each dim [0.15, 0.6].
+        # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
+        # then we don't need to preserve the background as it will be highly 
+        # challenging to match the background with the mc instance.
+        # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels).
         elif sc_fg_mask_percent <= self.comp_sc_fg_mask_percent_range[0]:
             sc_face_proportion_type = 'too-small'
         # If a face is detected in the mc instance, then the face in the sc instance is at most 6.25x of its size
@@ -3179,10 +3189,6 @@ class LatentDiffusion(DDPM):
 
         print(f"Rank {self.trainer.global_rank}-{self.global_step} sc_face_proportion_type: {sc_face_proportion_type}")
 
-        # If sc_face_proportion_type is 'too-small' or 'good', then we only compute the arcface align loss.
-        # If sc_face_proportion_type is 'no-overlap' or 'too-large', then 
-        # ** we compute both the arcface align loss and the face suppression loss, to drive the face
-        # into the center of the face area, and keep the face identity at the same time.
         # loss_arcface_align_comp: 0.5-0.8. arcface_align_loss_weight * scale: 0.01 * 10 => 0.05-0.08.
         # This loss is around 1/15 of comp distill losses (0.1).
         # NOTE: if arcface_align_loss_weight is too large (e.g., 0.05), then it will introduce a lot of artifacts to the 
@@ -3203,14 +3209,20 @@ class LatentDiffusion(DDPM):
         # because it's an accumulated value that's inherently continuous.
         mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
-        if sc_face_proportion_type in ['no-overlap', 'too-large']:
-            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 10, 'too-large': 5 }
+        if sc_face_proportion_type in ['mc-no-sc-large', 'no-overlap', 'too-large']:
+            # If sc_face_proportion_type is 'mc-no-sc-large', 'no-overlap' or 'too-large', then 
+            # ** we optimize both the arcface align loss and the face suppression loss, to drive the face
+            # into the center of the face area, and keep the face identity at the same time.
+            comp_no_overlap_fg_faces_suppress_loss_scale_dict = \
+                    { 'mc-no-sc-large': 3, 'no-overlap': 10, 'too-large': 6 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
             comp_sc_face_suppressed = 1
             sc_face_shrink_ratio_for_bg_matching_mask = 0.8
         else:
+            # If sc_face_proportion_type is 'too-small' or 'good', then
+            # ** we don't optimize the face suppression loss.
             comp_sc_face_suppressed = 0
             sc_face_shrink_ratio_for_bg_matching_mask = 1
 
@@ -3267,14 +3279,7 @@ class LatentDiffusion(DDPM):
                                                      all_subj_indices_1b)
                 subj_attn_cross_t_diffs.append(subj_attn_cross_t_diff_step)
             
-            # Usually sc_fg_mask_percent is around 0.05~0.25.
-            # comp_sc_fg_mask_percent_range: 0.0225~0.36, each dim [0.15, 0.6].
-            # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
-            # then we don't need to preserve the background as it will be highly 
-            # challenging to match the background with the mc instance.
-            # If sc_fg_mask_percent <= 0.0225, it means the face is too small (each edge <= 0.15 = 77 pixels),
-            # then we don't need to preserve the fg.
-            if (step_idx < sc_face_detected_at_step) or (sc_face_proportion_type != 'good'):
+            if (step_idx < sc_face_detected_at_step) or (sc_face_proportion_type in ['sc-noface']):
                 continue
 
             loss_comp_fg_bg_preserve_step = \
