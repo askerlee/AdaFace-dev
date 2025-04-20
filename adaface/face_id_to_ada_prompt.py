@@ -1275,7 +1275,7 @@ class Joint_FaceID2AdaPrompt(FaceID2AdaPrompt):
         # No faces are found in the images, so return None embeddings.
         # We don't want to return an all-zero embedding, which is useless.
         if num_available_id_vecs == 0:
-            return None, [0]
+            return None, None, [0]
         
         # If id2ada_prompt_encoders are ["arc2face", "consistentID"], then 
         # during inference, we average across the batch dim.
