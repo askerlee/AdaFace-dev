@@ -3062,6 +3062,7 @@ class LatentDiffusion(DDPM):
         rep_dist_fg_bounds      = (0.19, 0.22, 0.25)
         loss_comp_feat_distill  = torch.tensor(0., device=device, dtype=dtype)
         loss_fg_faces_suppress_comp = torch.tensor(0., device=device, dtype=dtype)
+        loss_arcface_align_comp = torch.tensor(0., device=device, dtype=dtype)
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # ** The recon image in the last step is the clearest. Therefore,
@@ -3095,16 +3096,6 @@ class LatentDiffusion(DDPM):
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
                                                                      all_subj_indices_1b, BLOCK_SIZE)
-                
-                if loss_arcface_align_comp > 0:
-                    # This iteration is counted as face detected, as long as the face is detected in one step.
-                    comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(1)
-                else:
-                    comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(0)
-
-                # Even if the face is not detected in this step, we still update comp_sc_face_detected_frac,
-                # because it's an accumulated value that's inherently continuous.
-                mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 400 * 0.01 => 0.08.
                 # Although this is ~10x of loss_arcface_align_comp, it's very infraquently triggered.
@@ -3199,13 +3190,22 @@ class LatentDiffusion(DDPM):
         # whole image, not just the face area. So we need to keep it small.
         # If comp_sc_face_detected_frac becomes smaller over time, 
         # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
-        # If comp_sc_face_detected_frac=0.7, then arcface_align_comp_loss_scale=6.
+        # If comp_sc_face_detected_frac=0.9, then arcface_align_comp_loss_scale= 1.25*3 = 3.75.
         # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
-        arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
-        loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
+        if loss_arcface_align_comp > 0:
+            # This iteration is counted as face detected, as long as the face is detected in one step.
+            comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(1)
+            arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
+            loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
+        else:
+            comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(0)
+
+        # Even if the face is not detected in this step, we still update comp_sc_face_detected_frac,
+        # because it's an accumulated value that's inherently continuous.
+        mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
         if sc_face_proportion_type in ['no-overlap', 'too-large']:
-            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 40, 'too-large': 20 }
+            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 20, 'too-large': 10 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
