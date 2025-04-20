@@ -112,7 +112,7 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weights=[0.2, 0.0],
+                 recon_bg_pixel_weights=[0.05, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=1e-2,
@@ -206,7 +206,7 @@ class DDPM(pl.LightningModule):
         self.normal_recon_face_images_on_noise_stats = RollingStats(num_values=2, window_size=200, stat_type='sum')
         self.comp_sc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_mc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
-        self.comp_fg_bg_preserve_loss_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        # self.comp_fg_bg_preserve_loss_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_sc_face_suppressed_frac         = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
@@ -3326,11 +3326,11 @@ class LatentDiffusion(DDPM):
             # loss_comp_fg_bg_preserve: 0.04~0.05.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
-            comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(1)
-        else:
-            comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(0)
+        #    comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(1)
+        #else:
+        #    comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(0)
 
-        mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve_loss_frac': comp_fg_bg_preserve_loss_frac})
+        #mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve_loss_frac': comp_fg_bg_preserve_loss_frac})
 
         if len(subj_attn_cross_t_diffs) > 0:
             subj_attn_cross_t_diff = torch.stack(subj_attn_cross_t_diffs).mean()
