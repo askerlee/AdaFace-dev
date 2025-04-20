@@ -3204,13 +3204,15 @@ class LatentDiffusion(DDPM):
         mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
         if sc_face_proportion_type in ['no-overlap', 'too-large']:
-            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 20, 'too-large': 10 }
+            comp_no_overlap_fg_faces_suppress_loss_scale_dict = { 'no-overlap': 10, 'too-large': 5 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
             comp_sc_face_suppressed = 1
+            sc_face_shrink_ratio_for_bg_matching_mask = 0.8
         else:
             comp_sc_face_suppressed = 0
+            sc_face_shrink_ratio_for_bg_matching_mask = 1
 
         comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(comp_sc_face_suppressed)
         mon_loss_dict.update({f'{session_prefix}/comp_sc_face_suppressed_frac': comp_sc_face_suppressed_frac})
@@ -3279,8 +3281,9 @@ class LatentDiffusion(DDPM):
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
+                                                sc_face_shrink_ratio_for_bg_matching_mask=sc_face_shrink_ratio_for_bg_matching_mask,
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                                recon_max_scale_of_threses=20000
+                                                recon_max_scale_of_threses=20
                                                )
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve_step)
 

@@ -1829,8 +1829,9 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
 def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     flow_model, ca_layers_activations,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                                    sc_face_shrink_ratio_for_bg_matching_mask=1,
                                     recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                    recon_max_scale_of_threses=20000):
+                                    recon_max_scale_of_threses=20):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -1890,6 +1891,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_q_h, ca_q_w, 
                                        sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                                       sc_face_shrink_ratio_for_bg_matching_mask=sc_face_shrink_ratio_for_bg_matching_mask,
                                        recon_scaled_loss_threses=recon_scaled_loss_threses,
                                        recon_max_scale_of_threses=recon_max_scale_of_threses,
                                        small_motion_ignore_thres=0.3,
@@ -2450,8 +2452,9 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 @conditional_compile(enable_compile=EnableCompile)
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                               sc_face_shrink_ratio_for_bg_matching_mask=1,
                                recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                               recon_max_scale_of_threses=20000,
+                               recon_max_scale_of_threses=20,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 
@@ -2461,11 +2464,14 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     all_flow_distill_stats    = {}
     flow_distill_stats        = {}
 
-    # sc_fg_mask_3d: Collapse the spatial dimensions of sc_fg_mask to 1 dim.
+    # sc_fg_mask: [1, 1, 64, 64].
+    # sc_fg_mask_3d: [1, 1, 4096].
+    # Collapse the spatial dimensions of sc_fg_mask to 1 dim.
     sc_fg_mask_3d = sc_fg_mask.reshape(*sc_fg_mask.shape[:-2], -1)
+    # sc_bg_mask: [1, 1, 64, 64].
     # We have made sure that sc_fg_mask_percent <= 0.8 in calc_comp_feat_distill_loss(), so 
-    # sc_bg_mask_3d will never be all 0s.
-    sc_bg_mask_3d   = 1 - sc_fg_mask_3d
+    # sc_bg_mask will never be all 0s.
+    sc_bg_mask = torch.ones_like(sc_fg_mask) 
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, sc_rep_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
@@ -2486,7 +2492,17 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
         sc_face_q = sc_q_4d[:, :, y1:y2, x1:x2]
         sc_face_q = F.interpolate(sc_face_q, (H, W), mode='bilinear', align_corners=False)
         scfg_q.append(sc_face_q)
+        x1_shrink, y1_shrink, x2_shrink, y2_shrink = \
+            [ int(v * sc_face_shrink_ratio_for_bg_matching_mask) for v in sc_face_bboxes[bi] ]
+        # Mask out the fg area in sc_bg_mask.
+        # If sc_face_shrink_ratio_for_bg_matching_mask < 1, then some border tokens of the 
+        # face area is still 1s in sc_bg_mask, indicating them to be matched 
+        # with the bg tokens in the mc instance.
+        sc_bg_mask[bi, :, y1_shrink:y2_shrink, x1_shrink:x2_shrink] = 0
     
+    # sc_bg_mask_3d: [1, 1, 4096].
+    sc_bg_mask_3d = sc_bg_mask.reshape(*sc_bg_mask.shape[:-2], -1)
+
     ssfg_q = torch.cat(ssfg_q, dim=0).reshape(*ss_q.shape)
     scfg_q = torch.cat(scfg_q, dim=0).reshape(*sc_q.shape)
     # Remove mean features from ssfg_q, scfg_q to remove low-freq features, 
