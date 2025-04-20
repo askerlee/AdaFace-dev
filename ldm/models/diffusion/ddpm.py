@@ -2379,7 +2379,7 @@ class LatentDiffusion(DDPM):
         return are_face_detected, images
     
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_bboxes is None.
-    def calc_arcface_align_loss(self, x_start, x_recon, fg_faces_grad_mask_ratio=0.8):
+    def calc_arcface_align_loss(self, x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.8)):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
         x_start_pixels = self.decode_first_stage(x_start)
@@ -2392,7 +2392,7 @@ class LatentDiffusion(DDPM):
         loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, \
         recon_fg_face_bboxes, recon_fg_face_detected_inst_mask = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, 
-                                                 fg_faces_grad_mask_ratio=fg_faces_grad_mask_ratio)
+                                                 fg_faces_grad_mask_ratios=fg_faces_grad_mask_ratios)
         loss_arcface_align      = loss_arcface_align.to(x_start.dtype)
         loss_bg_faces_suppress  = loss_bg_faces_suppress.to(x_start.dtype)
         # Map the recon_fg_face_bboxes from the pixel space to latent space (scale down by 8x).
@@ -2409,7 +2409,7 @@ class LatentDiffusion(DDPM):
         # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
         # so such faces are really small.
         face_embs_center, _, _, fg_face_bboxes, face_detected_inst_mask = \
-            self.arcface.embed_image_tensor(orig_image, T=20, enable_grad=True, fg_faces_grad_mask_ratio=0.9)
+            self.arcface.embed_image_tensor(orig_image, T=20, enable_grad=True, fg_faces_grad_mask_ratios=(0.9, 0.9))
         no_face_img_num = (1 - face_detected_inst_mask).sum()
         if no_face_img_num.sum() > 0:
             print(f"Failed to detect faces in {no_face_img_num} image, unable to compute adv_grad.")
@@ -2568,8 +2568,10 @@ class LatentDiffusion(DDPM):
                 # We still compute the recon loss on the good instances with face detected, 
                 # which are indicated by face_detected_inst_mask.
                 # face_detected_inst_mask: binary tensor of [BS].
+                # loss_fg_faces_suppress_step is not optimized. 
+                # So the second item in fg_faces_grad_mask_ratios has no effect.
                 loss_arcface_align_recon_step, loss_fg_faces_suppress_step, loss_bg_faces_suppress_step, fg_face_bboxes, face_detected_inst_mask = \
-                    self.calc_arcface_align_loss(x_start, x_recon, fg_faces_grad_mask_ratio=0.8)
+                    self.calc_arcface_align_loss(x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.8))
 
                 # Count recon_on_pure_noise stats and non-pure-noise stats separately.
                 # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
@@ -3214,7 +3216,7 @@ class LatentDiffusion(DDPM):
             # ** we optimize both the arcface align loss and the face suppression loss, to drive the face
             # into the center of the face area, and keep the face identity at the same time.
             comp_no_overlap_fg_faces_suppress_loss_scale_dict = \
-                    { 'mc-no-sc-large': 3, 'no-overlap': 10, 'too-large': 6 }
+                    { 'mc-no-sc-large': 3, 'no-overlap': 5, 'too-large': 6 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale * self.arcface_align_loss_weight
@@ -3424,9 +3426,12 @@ class LatentDiffusion(DDPM):
                     # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
                     # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
                     # sc_fg_face_detected_inst_mask: binary tensor of [BS].
+                    # fg_faces_grad_mask_ratios: (0.9, 0.8) means:
+                    # For loss_arcface_align_comp,     we focus on the central 90% of the face area, 
+                    # For loss_fg_faces_suppress_comp, we focus on the border 20% of the face area.
                     loss_arcface_align_comp_step, loss_fg_faces_suppress_comp_step, loss_bg_faces_suppress_comp_step, \
                     sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
-                        self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, fg_faces_grad_mask_ratio=0.8)
+                        self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, fg_faces_grad_mask_ratios=(0.9, 0.8))
                     # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                     if loss_arcface_align_comp_step > 0:
                         print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
