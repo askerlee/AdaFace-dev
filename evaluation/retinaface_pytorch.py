@@ -146,7 +146,7 @@ class RetinaFaceClient(nn.Module):
     # images_ts: typically [BS, 3, 512, 512] from diffusion (could be any sizes).
     # image_ts: [3, 512, 512].
     # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), face_detected_inst_mask, face_bboxes
-    def crop_faces(self, images_ts, out_size=(128, 128), T=20, bleed=0):
+    def crop_faces(self, images_ts, out_size=(128, 128), T=20):
         face_detected_inst_mask = []
         fg_face_bboxes      = []
         fg_face_crops       = []
@@ -175,10 +175,10 @@ class RetinaFaceClient(nn.Module):
                     w = face.w
                     h = face.h
 
-                    y_start = max(0, int(y + bleed))
-                    y_end   = min(image_ts.shape[1], int(y + h - bleed))
-                    x_start = max(0, int(x + bleed))
-                    x_end   = min(image_ts.shape[2], int(x + w - bleed))
+                    y_start = max(0, int(y))
+                    y_end   = min(image_ts.shape[1], int(y + h))
+                    x_start = max(0, int(x))
+                    x_end   = min(image_ts.shape[2], int(x + w))
 
                     if y_start + T >= y_end or x_start + T >= x_end:
                         continue
@@ -187,7 +187,7 @@ class RetinaFaceClient(nn.Module):
                     face_bboxes.append((facial_area, x_start, y_start, x_end, y_end))
 
                 if len(face_bboxes) == 0:
-                    # After trimming bleed pixels, no faces are >= T. So this instance is failed.
+                    # No faces are >= T. So this instance is failed.
                     face_crop = image_ts
                     face_crop = F.interpolate(face_crop.unsqueeze(0), size=out_size, mode='bilinear', align_corners=False)
                     fg_face_crops.append(face_crop)

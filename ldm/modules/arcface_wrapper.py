@@ -86,7 +86,7 @@ class ArcFaceWrapper(nn.Module):
 
     # Suppose images_ts has been normalized to [-1, 1].
     # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
-    def embed_image_tensor(self, images_ts, T=20, bleed=0, embed_bg_faces=True,
+    def embed_image_tensor(self, images_ts, T=20, embed_bg_faces=True,
                            enable_grad=True, fg_faces_grad_mask_ratio=-1):
         # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
         # the input tensor is preserved.
@@ -94,7 +94,7 @@ class ArcFaceWrapper(nn.Module):
         # fg_face_bboxes: long tensor of [BS, 4].
         # face_detected_inst_mask: binary tensor of [BS].
         fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_detected_inst_mask = \
-            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T, bleed=bleed)
+            self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T)
         
         # No face detected in any instances in the batch. 
         # fg_face_bboxes is a tensor of the full image size, 
@@ -154,16 +154,16 @@ class ArcFaceWrapper(nn.Module):
     # ref_images:     the groundtruth images, roughly normalized to [-1, 1] (could go beyond).
     # aligned_images: the generated   images, roughly normalized to [-1, 1] (could go beyond).
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, 
-                                fg_faces_grad_mask_ratio=0.8, bleed=0):
+                                fg_faces_grad_mask_ratio=0.8):
         # ref_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
         ref_fg_faces_emb, _, _, ref_fg_face_bboxes, ref_face_detected_inst_mask = \
-            self.embed_image_tensor(ref_images, T, bleed, embed_bg_faces=False,
+            self.embed_image_tensor(ref_images, T, embed_bg_faces=False,
                                     enable_grad=False, fg_faces_grad_mask_ratio=-1)
         # bg_embs are not separated by instances, but flattened. 
         # We don't align them, just suppress them. So we don't need the batch dimension.
         aligned_fg_faces_emb_center, aligned_fg_faces_emb_border, aligned_bg_faces_emb, \
           aligned_fg_face_bboxes, aligned_face_detected_inst_mask = \
-            self.embed_image_tensor(aligned_images, T, bleed, embed_bg_faces=True, enable_grad=True,
+            self.embed_image_tensor(aligned_images, T, embed_bg_faces=True, enable_grad=True,
                                     fg_faces_grad_mask_ratio=fg_faces_grad_mask_ratio)
         
         zero_losses = [ torch.tensor(0., dtype=ref_images.dtype, device=ref_images.device) for _ in range(3) ]

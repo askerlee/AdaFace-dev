@@ -2379,7 +2379,7 @@ class LatentDiffusion(DDPM):
         return are_face_detected, images
     
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_bboxes is None.
-    def calc_arcface_align_loss(self, x_start, x_recon, fg_faces_grad_mask_ratio=0.8, bleed=0):
+    def calc_arcface_align_loss(self, x_start, x_recon, fg_faces_grad_mask_ratio=0.8):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
         x_start_pixels = self.decode_first_stage(x_start)
@@ -2392,8 +2392,7 @@ class LatentDiffusion(DDPM):
         loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, \
         recon_fg_face_bboxes, recon_fg_face_detected_inst_mask = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, 
-                                                 fg_faces_grad_mask_ratio=fg_faces_grad_mask_ratio,
-                                                 bleed=bleed)
+                                                 fg_faces_grad_mask_ratio=fg_faces_grad_mask_ratio)
         loss_arcface_align      = loss_arcface_align.to(x_start.dtype)
         loss_bg_faces_suppress  = loss_bg_faces_suppress.to(x_start.dtype)
         # Map the recon_fg_face_bboxes from the pixel space to latent space (scale down by 8x).
