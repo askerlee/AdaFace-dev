@@ -3216,7 +3216,7 @@ class LatentDiffusion(DDPM):
             # ** we optimize both the arcface align loss and the face suppression loss, to drive the face
             # into the center of the face area, and keep the face identity at the same time.
             comp_no_overlap_fg_faces_suppress_loss_scale_dict = \
-                    { 'mc-no-sc-large': 3, 'no-overlap': 5, 'too-large': 6 }
+                    { 'mc-no-sc-large': 10, 'no-overlap': 5, 'too-large': 5 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
