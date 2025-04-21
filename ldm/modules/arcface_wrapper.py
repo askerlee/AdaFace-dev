@@ -87,7 +87,7 @@ class ArcFaceWrapper(nn.Module):
     # Suppose images_ts has been normalized to [-1, 1].
     # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
     def embed_image_tensor(self, images_ts, T=20, embed_bg_faces=True,
-                           enable_grad=True, fg_faces_grad_mask_ratios=(1, 0.8)):
+                           enable_grad=True, fg_faces_grad_mask_ratios=(1, 0.7)):
         # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
         # the input tensor is preserved.
         # But the cropping operation is wrapped with torch.no_grad().
@@ -164,7 +164,7 @@ class ArcFaceWrapper(nn.Module):
     # ref_images:     the groundtruth images, roughly normalized to [-1, 1] (could go beyond).
     # aligned_images: the generated   images, roughly normalized to [-1, 1] (could go beyond).
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, 
-                                fg_faces_grad_mask_ratios=(1, 0.8)):
+                                fg_faces_grad_mask_ratios=(1, 0.7)):
         # ref_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
         ref_fg_faces_emb, _, _, ref_fg_face_bboxes, ref_face_detected_inst_mask = \
             self.embed_image_tensor(ref_images, T, embed_bg_faces=False,
