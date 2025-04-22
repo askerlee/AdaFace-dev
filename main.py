@@ -224,8 +224,13 @@ def get_parser(**parser_kwargs):
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
     parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM UNet implementation as the base UNet")
+    # UNet distillation always uses ffn LoRA, so there's no such an option.
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
-                        help="Whether to use LoRA in the cross-attn layers of the Diffusers UNet model")
+                        help="Whether to use attn LoRA in the cross-attn layers of the Diffusers UNet model")
+    parser.add_argument("--recon_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
+                        help="Whether to use FFN LoRA in the reconstruction iterations")    
+    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=False,
+                        help="Whether to use FFN LoRA in the compositional distillation iterations")
     parser.add_argument("--unet_lora_rank", type=int, default=argparse.SUPPRESS,
                         help="Rank of the LoRA in the Diffusers UNet model")    
     parser.add_argument("--unet_lora_scale_down", type=float, default=8,
@@ -766,6 +771,8 @@ if __name__ == "__main__":
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
         config.model.params.use_ldm_unet            = opt.use_ldm_unet
         config.model.params.unet_uses_attn_lora     = opt.unet_uses_attn_lora
+        config.model.params.recon_uses_ffn_lora     = opt.recon_uses_ffn_lora
+        config.model.params.comp_uses_ffn_lora      = opt.comp_uses_ffn_lora
         config.model.params.unet_lora_scale_down    = opt.unet_lora_scale_down
         if hasattr(opt, 'unet_lora_rank'):
             config.model.params.unet_lora_rank = opt.unet_lora_rank

@@ -86,8 +86,8 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
-                 recon_subj_mb_suppress_loss_weight=0.2,
-                 comp_sc_subj_mb_suppress_loss_weight=0.2,
+                 recon_subj_mb_suppress_loss_weight=0,   #0.2, DISABLED
+                 comp_sc_subj_mb_suppress_loss_weight=0, #0.2, DISABLED
                  # Percent in each edge: [0.15, 0.6].
                  comp_sc_fg_mask_percent_range=[0.0225, 0.36],
                  # 'face portrait' is only valid for humans/animals. 
@@ -112,14 +112,14 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weights=[0.05, 0.0],
+                 recon_bg_pixel_weights=[0.1, 0.0],
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=1e-2,
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
-                 comp_uses_ffn_lora=True,
+                 comp_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -2139,11 +2139,13 @@ class LatentDiffusion(DDPM):
             if not self.iter_flags['recon_on_pure_noise']:
                 enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
                 enable_unet_ffn_lora  = self.recon_uses_ffn_lora
-                if (torch.rand(1).item() < 0.75):
-                    ffn_lora_adapter_name = 'recon_loss'
-                else:
-                    # 1/4 of the time we use comp_distill ffn lora adapter, to prevent it from degeneration.
+                if self.comp_uses_ffn_lora and (torch.randn(1).item() < 0.25):
+                    # 1/4 of the time we use comp_distill ffn lora adapter, 
+                    # to prevent the lora from degeneration.
+                    # But if not comp_uses_ffn_lora, then we always use the recon_loss lora.
                     ffn_lora_adapter_name = 'comp_distill'
+                else:
+                    ffn_lora_adapter_name = 'recon_loss'
             else:
                 enable_unet_attn_lora = False
                 enable_unet_ffn_lora  = False
@@ -3096,7 +3098,9 @@ class LatentDiffusion(DDPM):
                 loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
-                                                                     all_subj_indices_1b, BLOCK_SIZE)
+                                                                     all_subj_indices_1b, 
+                                                                     fg_faces_grad_mask_ratios=(0.9, 0.7), 
+                                                                     BLOCK_SIZE=BLOCK_SIZE)
 
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 400 * 0.01 => 0.08.
                 # Although this is ~10x of loss_arcface_align_comp, it's very infraquently triggered.
@@ -3168,8 +3172,11 @@ class LatentDiffusion(DDPM):
         # it is not desired.
         elif mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]:
             sc_face_proportion_type = 'mc-no-sc-large'
-        elif mc_fg_mask_percent > 0 and ((sc_fg_mask * mc_fg_mask) == 0).all():
-            sc_face_proportion_type = 'no-overlap'
+        # When sc fg and mc fg masks have no overlap or very little overlap, 
+        # we suppress the face in the sc instance. 1/6.25 = 0.16.
+        # In this branch, sc_fg_mask_percent > 0 always holds. So no need to check it.
+        elif mc_fg_mask_percent > 0 and ((sc_fg_mask * mc_fg_mask).sum() / sc_fg_mask.sum()) < 0.16:
+            sc_face_proportion_type = 'little-no-overlap'
         # Usually sc_fg_mask_percent is around 0.05~0.25.
         # comp_sc_fg_mask_percent_range: 0.0225~0.36, each dim [0.15, 0.6].
         # If sc_fg_mask_percent >= 0.36, it means the image is dominated by the face (each edge >= 0.6), 
@@ -3211,24 +3218,26 @@ class LatentDiffusion(DDPM):
         # because it's an accumulated value that's inherently continuous.
         mon_loss_dict.update({f'{session_prefix}/comp_sc_face_detected_frac': comp_sc_face_detected_frac})
 
-        if sc_face_proportion_type in ['mc-no-sc-large', 'no-overlap', 'too-large']:
-            # If sc_face_proportion_type is 'mc-no-sc-large', 'no-overlap' or 'too-large', then 
+        if sc_face_proportion_type in ['mc-no-sc-large', 'little-no-overlap', 'too-large']:
+            do_sc_fg_faces_suppress = True
+            # If sc_face_proportion_type is 'mc-no-sc-large', 'little-no-overlap' or 'too-large', then 
             # ** we optimize both the arcface align loss and the face suppression loss, to drive the face
             # into the center of the face area, and keep the face identity at the same time.
-            comp_no_overlap_fg_faces_suppress_loss_scale_dict = \
-                    { 'mc-no-sc-large': 10, 'no-overlap': 5, 'too-large': 5 }
+            comp_fg_faces_suppress_loss_scale_dict = \
+                    { 'mc-no-sc-large': 10, 'little-no-overlap': 5, 'too-large': 5 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
-            comp_no_overlap_fg_faces_suppress_loss_scale = comp_no_overlap_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
+            comp_fg_faces_suppress_loss_scale = comp_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
             # comp_sc_face_suppressed_frac: 0.4~0.6.
             # If comp_sc_face_suppressed_frac=0.6, then extra_suppress_loss_scale = 3.375.
             # If comp_sc_face_suppressed_frac=0.4, then extra_suppress_loss_scale = 1.
             extra_suppress_loss_scale = max(1, comp_sc_face_suppressed_frac**3 / 0.064)
-            loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_no_overlap_fg_faces_suppress_loss_scale \
+            loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = 0.7
         else:
-            # If sc_face_proportion_type is 'too-small' or 'good', then
+            do_sc_fg_faces_suppress = False
+            # If sc_face_proportion_type is 'sc-noface', 'too-small' or 'good', then
             # ** we don't optimize the face suppression loss.
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(0)
             sc_face_shrink_ratio_for_bg_matching_mask = 1
@@ -3294,7 +3303,8 @@ class LatentDiffusion(DDPM):
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
                                                 sc_face_shrink_ratio_for_bg_matching_mask=sc_face_shrink_ratio_for_bg_matching_mask,
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                                recon_max_scale_of_threses=20
+                                                recon_max_scale_of_threses=20,
+                                                do_sc_fg_faces_suppress=do_sc_fg_faces_suppress
                                                )
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve_step)
 
@@ -3390,7 +3400,8 @@ class LatentDiffusion(DDPM):
 
     def calc_comp_face_align_and_mb_suppress_losses(self, mon_loss_dict, session_prefix, 
                                                     x_start_ss, x_recons, ca_layers_activations_list,
-                                                    all_subj_indices_1b, BLOCK_SIZE):
+                                                    all_subj_indices_1b, fg_faces_grad_mask_ratios,
+                                                    BLOCK_SIZE):
         # We cannot afford calculating loss_arcface_align_comp for > 1 steps. Otherwise, OOM.
         max_arcface_align_loss_count        = 3
         arcface_align_loss_count            = 0
@@ -3435,7 +3446,7 @@ class LatentDiffusion(DDPM):
                     # For loss_fg_faces_suppress_comp, we focus on the border 20% of the face area.
                     loss_arcface_align_comp_step, loss_fg_faces_suppress_comp_step, loss_bg_faces_suppress_comp_step, \
                     sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
-                        self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, fg_faces_grad_mask_ratios=(0.9, 0.7))
+                        self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, fg_faces_grad_mask_ratios)
                     # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                     if loss_arcface_align_comp_step > 0:
                         print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")

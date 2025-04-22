@@ -573,7 +573,7 @@ def distribute_embedding_to_M_tokens(prompt_embeddings, uncond_prompt_embeddings
     cls_embeddings = prompt_embeddings[:, placeholder_indices_N0]
     if emb_cfg > 1:
         uncond_embeddings = uncond_prompt_embeddings[:, placeholder_indices_N0]
-        # compel style CFG for cls_embeddings
+        # compel style CFG is applied only on cls_embeddings.
         cls_embeddings = cls_embeddings * emb_cfg - uncond_embeddings * (emb_cfg - 1)
 
     # Multiply the magnitude of the class embedding by emb_extra_boost to make the class better expressed.
@@ -1831,7 +1831,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     sc_face_shrink_ratio_for_bg_matching_mask=1,
                                     recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                    recon_max_scale_of_threses=20):
+                                    recon_max_scale_of_threses=20, do_sc_fg_faces_suppress=False):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -1936,7 +1936,9 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
         [ local_loss_dict[loss_name] for loss_name in effective_loss_names ] 
 
     # loss_sc_recon_ssfg_min: 0.2 -> 0.02
-    sc_recon_ssfg_loss_scale                    = 0.1
+    # If do_sc_fg_faces_suppress, then we don't optimize the fg matching loss, 
+    # which preserves the subject identity.
+    sc_recon_ssfg_loss_scale                    = 0 if do_sc_fg_faces_suppress else 0.1
     # loss_sc_recon_mc:       0.2 -> 0.04
     sc_recon_mc_loss_scale                      = 0.2
     # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
