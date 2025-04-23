@@ -86,10 +86,14 @@ class DDPM(pl.LightningModule):
                  cls_subj_mix_ratio=0.4,        
                  cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
-                 recon_subj_mb_suppress_loss_weight=0,   #0.2, DISABLED
-                 comp_sc_subj_mb_suppress_loss_weight=0, #0.2, DISABLED
+                 recon_subj_mb_suppress_loss_weight=0.2, 
+                 comp_sc_subj_mb_suppress_loss_weight=0.2,
                  # Percent in each edge: [0.15, 0.6].
                  comp_sc_fg_mask_percent_range=[0.0225, 0.36],
+                 # The face align loss should be gradually reduced as the training progresses,
+                 # since the adaface model can better and better capture the face features.
+                 recon_face_align_loss_thres=0.7,
+                 comp_sc_face_align_loss_thres=0.7,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -119,7 +123,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
-                 comp_uses_ffn_lora=False,
+                 comp_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -154,8 +158,10 @@ class DDPM(pl.LightningModule):
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
         self.prompt_emb_delta_reg_weight            = prompt_emb_delta_reg_weight
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
+        self.recon_face_align_loss_thres            = recon_face_align_loss_thres
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
         self.comp_sc_fg_mask_percent_range          = comp_sc_fg_mask_percent_range
+        self.comp_sc_face_align_loss_thres          = comp_sc_face_align_loss_thres
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
@@ -204,10 +210,11 @@ class DDPM(pl.LightningModule):
         self.normal_recon_iters_count                = 0
         self.normal_recon_face_images_on_image_stats = RollingStats(num_values=2, window_size=600, stat_type='sum')
         self.normal_recon_face_images_on_noise_stats = RollingStats(num_values=2, window_size=200, stat_type='sum')
+        self.normal_recon_face_align_loss_kept_frac  = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_sc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_mc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
-        # self.comp_fg_bg_preserve_loss_frac           = RollingStats(num_values=1, window_size=200, stat_type='mean')
-        self.comp_sc_face_suppressed_frac         = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_sc_face_suppressed_frac            = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_sc_face_align_loss_kept_frac       = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
@@ -1676,6 +1683,7 @@ class LatentDiffusion(DDPM):
                                                     enable_grad=True,  use_attn_lora=use_attn_lora,
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
+            
             ##### MS (=sc_rep) instance generation #####
             extra_info_ms = copy.copy(extra_info)
             if subj_comp_distill_on_rep_prompts:
@@ -1683,17 +1691,18 @@ class LatentDiffusion(DDPM):
                 # So we use the same subj_indices and shrink_cross_attn as the sc instance.
                 extra_info_ms['subj_indices']       = subj_indices
                 extra_info_ms['shrink_cross_attn']  = shrink_cross_attn
-                mc_uses_attn_lora = use_attn_lora
+                extra_info_sc['mix_attn_mats']      = mc_attn
+                ms_uses_attn_lora = use_attn_lora
             else:
                 # The ms instance is indeed ms.
                 # We never need to suppress the subject attention in the mc instances.
                 extra_info_ms['subj_indices']       = None
                 extra_info_ms['shrink_cross_attn']  = False
-                mc_uses_attn_lora = False
+                ms_uses_attn_lora = False
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
             noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
-                                                    enable_grad=False, use_attn_lora=mc_uses_attn_lora, 
+                                                    enable_grad=False, use_attn_lora=ms_uses_attn_lora, 
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
 
@@ -2535,6 +2544,7 @@ class LatentDiffusion(DDPM):
         recon_loss_scales = []
         losses_recon_subj_mb_suppress = []
         losses_arcface_align_recon    = []
+        losses_arcface_align_recon_stat = []
         losses_bg_faces_suppress      = []
         pred_l2s        = []
         latent_shape, device = x_start.shape, x_start.device
@@ -2585,7 +2595,16 @@ class LatentDiffusion(DDPM):
                                                                          face_detected_inst_mask.shape[0]])
 
                 if loss_arcface_align_recon_step > 0:
-                    losses_arcface_align_recon.append(loss_arcface_align_recon_step)
+                    # recon_face_align_loss_thres: 0.7. Only optimize the face align loss if <= 0.7.
+                    if (self.recon_face_align_loss_thres <= 0) or (loss_arcface_align_recon_step < self.recon_face_align_loss_thres):
+                        losses_arcface_align_recon.append(loss_arcface_align_recon_step)
+                        self.normal_recon_face_align_loss_kept_frac.update(1)
+                    else:
+                        self.normal_recon_face_align_loss_kept_frac.update(0)
+                        
+                    # loss_arcface_align_recon_stat is the mean of all loss_arcface_align_recon_step 
+                    # without filtering.
+                    losses_arcface_align_recon_stat.append(loss_arcface_align_recon_step)
                     # In this branch, at least one face is detected in x_recon.
                     # Set the weights of the instances without faces detected to 0.1, 
                     # to downscale corresponding gradients which are more noisy than those with faces detected.
@@ -2648,28 +2667,33 @@ class LatentDiffusion(DDPM):
         # recon_face_images_on_image_frac: the window-accumulated ratio of (num of normal recon face images / num of all recon images).
         recon_face_images_on_image_frac = self.normal_recon_face_images_on_image_stats.sums[0] / (self.normal_recon_face_images_on_image_stats.sums[1] + 1e-2)
         mon_loss_dict.update({f'{session_prefix}/recon_face_images_on_image_frac': recon_face_images_on_image_frac})
-        recon_face_images_fracs = np.array([recon_face_images_on_noise_frac, recon_face_images_on_image_frac])
-        recon_face_images_fracs_str = np.array2string(recon_face_images_fracs, precision=3, floatmode='fixed')
+        mon_loss_dict.update({f'{session_prefix}/recon_face_align_loss_kept_frac': self.normal_recon_face_align_loss_kept_frac.mean})
 
+        arcface_align_recon_loss_scale = 1
         #### loss_arcface_align_recon ####
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
             if loss_arcface_align_recon > 0:
                 if recon_on_pure_noise:
-                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon.detach().item():.4f}")
+                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise_opt': loss_arcface_align_recon.mean().detach().item() })
                     # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
                     # so we scale it up to 4x.
                     arcface_align_recon_loss_scale = 4
                 else:
-                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon.mean().detach().item() })
-                    print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon.detach().item():.4f}")
-                    arcface_align_recon_loss_scale = 1
-
+                    mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image_opt': loss_arcface_align_recon.mean().detach().item() })
                 # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.01 => 0.004-0.005.
                 # This loss is around 1/20 of recon/distill losses (0.1).
                 # If recon_on_pure_noise, then loss_arcface_align_recon => 0.016-0.02.
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
+
+        if len(losses_arcface_align_recon_stat) > 0:
+            loss_arcface_align_recon_stat = torch.stack(losses_arcface_align_recon_stat).mean()
+            if recon_on_pure_noise:
+                mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon_stat.mean().detach().item() })
+                print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon_stat.detach().item():.4f}")
+            else:
+                mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image': loss_arcface_align_recon_stat.mean().detach().item() })
+                print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_image: {loss_arcface_align_recon_stat.detach().item():.4f}")
 
         #### loss_bg_faces_suppress ####
         if len(losses_bg_faces_suppress) > 0:
@@ -3094,13 +3118,16 @@ class LatentDiffusion(DDPM):
 
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
-                loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
+                # comp_sc_face_align_loss_thres: 0.7
+                loss_arcface_align_comp, loss_arcface_align_comp_stat, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
                 loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
                                                                      all_subj_indices_1b, 
                                                                      fg_faces_grad_mask_ratios=(0.9, 0.7), 
-                                                                     BLOCK_SIZE=BLOCK_SIZE)
+                                                                     BLOCK_SIZE=BLOCK_SIZE,
+                                                                     comp_sc_face_align_loss_kept_frac=self.comp_sc_face_align_loss_kept_frac,
+                                                                     comp_sc_face_align_loss_thres=self.comp_sc_face_align_loss_thres)
 
                 # loss_bg_faces_suppress_comp is a mean L2 loss, only ~0.02. * 400 * 0.01 => 0.08.
                 # Although this is ~10x of loss_arcface_align_comp, it's very infraquently triggered.
@@ -3164,6 +3191,7 @@ class LatentDiffusion(DDPM):
         # Even if the face is not detected in this step, we still update comp_mc_face_detected_frac,
         # because it's an accumulated value that's inherently continuous.
         mon_loss_dict.update({f'{session_prefix}/comp_mc_face_detected_frac': comp_mc_face_detected_frac})
+        mon_loss_dict.update({f'{session_prefix}/comp_sc_face_align_loss_kept_frac': self.comp_sc_face_align_loss_kept_frac.mean})
 
         if sc_fg_mask_percent == 0:
             sc_face_proportion_type = 'sc-noface'
@@ -3303,7 +3331,7 @@ class LatentDiffusion(DDPM):
                                                 sc_fg_mask, ss_fg_face_bboxes, sc_fg_face_bboxes,
                                                 sc_face_shrink_ratio_for_bg_matching_mask=sc_face_shrink_ratio_for_bg_matching_mask,
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                                recon_max_scale_of_threses=20,
+                                                recon_max_scale_of_threses=5,
                                                 do_sc_fg_faces_suppress=do_sc_fg_faces_suppress
                                                )
             losses_comp_fg_bg_preserve.append(loss_comp_fg_bg_preserve_step)
@@ -3342,11 +3370,6 @@ class LatentDiffusion(DDPM):
             # loss_comp_fg_bg_preserve: 0.04~0.05.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
-        #    comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(1)
-        #else:
-        #    comp_fg_bg_preserve_loss_frac = self.comp_fg_bg_preserve_loss_frac.update(0)
-
-        #mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve_loss_frac': comp_fg_bg_preserve_loss_frac})
 
         if len(subj_attn_cross_t_diffs) > 0:
             subj_attn_cross_t_diff = torch.stack(subj_attn_cross_t_diffs).mean()
@@ -3401,21 +3424,24 @@ class LatentDiffusion(DDPM):
     def calc_comp_face_align_and_mb_suppress_losses(self, mon_loss_dict, session_prefix, 
                                                     x_start_ss, x_recons, ca_layers_activations_list,
                                                     all_subj_indices_1b, fg_faces_grad_mask_ratios,
-                                                    BLOCK_SIZE):
+                                                    BLOCK_SIZE, comp_sc_face_align_loss_kept_frac,
+                                                    comp_sc_face_align_loss_thres):
         # We cannot afford calculating loss_arcface_align_comp for > 1 steps. Otherwise, OOM.
         max_arcface_align_loss_count        = 3
         arcface_align_loss_count            = 0
+        arcface_align_loss_stat_count       = 0
         comp_sc_subj_mb_suppress_loss_count = 0
         fg_faces_suppress_loss_count, bg_faces_suppress_loss_count = 0, 0
         sc_fg_mask, sc_fg_face_bboxes       = None, None
         sc_face_detected_at_step            = -1
 
         # Don't initialize zero_losses as torch.zeros(3), otherwise the losses cannot do inplace addition.
-        zero_losses = [ torch.tensor(0., device=x_start_ss.device, dtype=x_start_ss.dtype) for _ in range(4) ]
+        zero_losses = [ torch.tensor(0., device=x_start_ss.device, dtype=x_start_ss.dtype) for _ in range(5) ]
         loss_comp_sc_subj_mb_suppress = zero_losses[0]
         loss_arcface_align_comp       = zero_losses[1]
-        loss_fg_faces_suppress_comp   = zero_losses[2]
-        loss_bg_faces_suppress_comp   = zero_losses[3]
+        loss_arcface_align_comp_stat  = zero_losses[2]
+        loss_fg_faces_suppress_comp   = zero_losses[3]
+        loss_bg_faces_suppress_comp   = zero_losses[4]
 
         if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
             # Trying to calc arcface_align_loss from easy to difficult steps.
@@ -3450,8 +3476,22 @@ class LatentDiffusion(DDPM):
                     # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                     if loss_arcface_align_comp_step > 0:
                         print(f"Rank-{self.trainer.global_rank} arcface_align_comp step {sel_step+1}/{len(x_recons)}")
-                        loss_arcface_align_comp += loss_arcface_align_comp_step
-                        arcface_align_loss_count += 1
+                        # If comp_sc_face_align_loss_thres is not specified (-1), or the loss is smaller than the threshold,
+                        # then we optimize the loss_arcface_align_comp_step.
+                        # comp_sc_face_align_loss_thres: 0.7.
+                        if (comp_sc_face_align_loss_thres <= 0) or (loss_arcface_align_comp_step <= comp_sc_face_align_loss_thres):
+                            loss_arcface_align_comp += loss_arcface_align_comp_step
+                            arcface_align_loss_count += 1
+                            loss_arcface_align_comp_stat += loss_arcface_align_comp_step
+                            arcface_align_loss_stat_count += 1
+                            comp_sc_face_align_loss_kept_frac.update(1)
+                        else:
+                            # Skip the loss_arcface_align_comp_step if it's too big and the gradient is too noisy.
+                            # Only calculate the unoptimized statistics.
+                            loss_arcface_align_comp_stat += loss_arcface_align_comp_step
+                            arcface_align_loss_stat_count += 1
+                            comp_sc_face_align_loss_kept_frac.update(0)
+
                         ca_layers_activations = ca_layers_activations_list[sel_step]
                         if sc_face_detected_at_step == -1:
                             sc_face_detected_at_step = sel_step
@@ -3490,8 +3530,12 @@ class LatentDiffusion(DDPM):
 
             if arcface_align_loss_count > 0:
                 loss_arcface_align_comp = loss_arcface_align_comp / arcface_align_loss_count
-                mon_loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp.mean().detach().item() })
+                mon_loss_dict.update({f'{session_prefix}/arcface_align_comp_opt': loss_arcface_align_comp.mean().detach().item() })
 
+            if arcface_align_loss_stat_count > 0:
+                loss_arcface_align_comp_stat = loss_arcface_align_comp_stat / arcface_align_loss_stat_count
+                mon_loss_dict.update({f'{session_prefix}/arcface_align_comp': loss_arcface_align_comp_stat.mean().detach().item() })
+                
             if comp_sc_subj_mb_suppress_loss_count > 0:
                 loss_comp_sc_subj_mb_suppress = loss_comp_sc_subj_mb_suppress / comp_sc_subj_mb_suppress_loss_count
                 mon_loss_dict.update({f'{session_prefix}/comp_sc_subj_mb_suppress': loss_comp_sc_subj_mb_suppress.mean().detach().item() })
@@ -3504,7 +3548,7 @@ class LatentDiffusion(DDPM):
                 loss_bg_faces_suppress_comp = loss_bg_faces_suppress_comp / bg_faces_suppress_loss_count
                 mon_loss_dict.update({f'{session_prefix}/comp_bg_faces_suppress': loss_bg_faces_suppress_comp.mean().detach().item() })
 
-        return loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
+        return loss_arcface_align_comp, loss_arcface_align_comp_stat, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
                loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step
     
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 

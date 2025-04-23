@@ -158,8 +158,8 @@ def get_parser(**parser_kwargs):
         help="Path to model to actually resume from")
     parser.add_argument("--comp_unet_weight_path", 
         type=str,
-        default=None,
-        help="Path to model on compositional distillation iterations (default: None, same as base_model_path)")
+        default="models/ensemble/sar-unet",
+        help="Path to model on compositional distillation iterations. If None, then it's the same as base_model_path)")
 
     parser.add_argument("--data_roots", 
         type=str, 
@@ -229,7 +229,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use attn LoRA in the cross-attn layers of the Diffusers UNet model")
     parser.add_argument("--recon_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use FFN LoRA in the reconstruction iterations")    
-    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use FFN LoRA in the compositional distillation iterations")
     parser.add_argument("--unet_lora_rank", type=int, default=argparse.SUPPRESS,
                         help="Rank of the LoRA in the Diffusers UNet model")    

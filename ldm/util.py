@@ -1831,7 +1831,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                     sc_face_shrink_ratio_for_bg_matching_mask=1,
                                     recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                                    recon_max_scale_of_threses=20, do_sc_fg_faces_suppress=False):
+                                    recon_max_scale_of_threses=5, do_sc_fg_faces_suppress=False):
 
     # ca_outfeats is a dict as: layer_idx -> ca_outfeat. 
     # It contains the 3 specified cross-attention layers of UNet. i.e., layers 22, 23, 24.
@@ -2456,7 +2456,7 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
                                sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
                                sc_face_shrink_ratio_for_bg_matching_mask=1,
                                recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
-                               recon_max_scale_of_threses=20,
+                               recon_max_scale_of_threses=5,
                                small_motion_ignore_thres=0.3, 
                                num_flow_est_iters=12):
 
