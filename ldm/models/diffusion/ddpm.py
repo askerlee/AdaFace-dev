@@ -16,7 +16,7 @@ from threading import Thread
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt_to_cpu, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
-                        calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_subj_comp_rep_distill_loss, \
+                        calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_sc_ref_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
@@ -3296,7 +3296,7 @@ class LatentDiffusion(DDPM):
         
             loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
             loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v = \
-                calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
+                calc_sc_ref_attn_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                 prompt_emb_mask_4b,    prompt_pad_mask_4b,
                                                 sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0],
                                                 do_sc_fg_faces_suppress=do_sc_fg_faces_suppress)
