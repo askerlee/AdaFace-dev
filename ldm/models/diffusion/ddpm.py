@@ -3084,11 +3084,11 @@ class LatentDiffusion(DDPM):
         ss_fg_mask, sc_fg_mask, mc_fg_mask = None, None, None
         ss_fg_face_bboxes, sc_fg_face_bboxes = None, None
         sc_face_detected_at_step = -1
-        # When sc_fg_mask_percent >= 0.19, we think the face is close to be too large and 
+        # When sc_fg_mask_percent >= 0.1, we think the face has a chance to be too large and 
         # do subj_comp_rep_distill to discourage it.
-        # 0.22 is borderline large, and 0.25 is too large.
+        # 0.2 is borderline large, and 0.25 is too large.
         # 0.25 means when sc_fg_mask_percent >= 0.25, the loss scale is at the max value 1.
-        rep_dist_fg_bounds      = (0.19, 0.22, 0.25)
+        rep_dist_fg_bounds      = (0.1, 0.20, 0.25)
         loss_comp_feat_distill  = torch.tensor(0., device=device, dtype=dtype)
         loss_fg_faces_suppress_comp = torch.tensor(0., device=device, dtype=dtype)
         loss_arcface_align_comp = torch.tensor(0., device=device, dtype=dtype)
@@ -3298,7 +3298,8 @@ class LatentDiffusion(DDPM):
             loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v = \
                 calc_subj_comp_rep_distill_loss(ca_layers_activations, all_subj_indices_1b, 
                                                 prompt_emb_mask_4b,    prompt_pad_mask_4b,
-                                                sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
+                                                sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0],
+                                                do_sc_fg_faces_suppress=do_sc_fg_faces_suppress)
             
             if loss_comp_rep_distill_subj_attn == 0:
                 loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
@@ -3390,13 +3391,13 @@ class LatentDiffusion(DDPM):
             mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_k':  loss_comp_rep_distill_nonsubj_k.detach().item() })
             mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_subj_v':     loss_comp_rep_distill_subj_v.detach().item() })
             mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_nonsubj_v':  loss_comp_rep_distill_nonsubj_v.detach().item() })
-            # If sc_fg_mask_percent == 0.22, then fg_percent_rep_distill_scale = 0.1.
+            # If sc_fg_mask_percent == 0.2, then fg_percent_rep_distill_scale = 0.5.
             # If sc_fg_mask_percent >= 0.25, then fg_percent_rep_distill_scale = 2.
-            # valid_scale_range=(0.02, 1): If sc_fg_mask_percent = 0.19, then fg_percent_rep_distill_scale = 0.02.
+            # valid_scale_range=(0.05, 1): If sc_fg_mask_percent = 0.1, then fg_percent_rep_distill_scale = 0.05.
             if sc_fg_mask_percent > 0:
                 fg_percent_rep_distill_scale = \
-                    calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[1], 0.1), (rep_dist_fg_bounds[2], 2), 
-                                        valid_scale_range=(0.02, 2))
+                    calc_dyn_loss_scale(sc_fg_mask_percent, (rep_dist_fg_bounds[1], 0.5), (rep_dist_fg_bounds[2], 2), 
+                                        valid_scale_range=(0.05, 2))
             else:
                 # sc_fg_mask_percent == 0 means no face is detected in the subject-comp instance.
                 # In this case, we don't do distillation on the subject-comp-rep instance.

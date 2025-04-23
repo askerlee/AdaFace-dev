@@ -1955,9 +1955,10 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
 
 def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                    sc_fg_mask_percent, FG_THRES=0.22):
+                                    sc_fg_mask_percent, FG_THRES=0.1,
+                                    do_sc_fg_faces_suppress=False):
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
-    # and the face area is > 0.22 of the whole image, 
+    # and the face area is > 0.1 of the whole image, 
     # we will distill the whole image on the subject-comp rep prompts.
     loss_comp_rep_distill_subj_attn = 0
     loss_comp_rep_distill_subj_k    = 0
@@ -1994,11 +1995,14 @@ def calc_subj_comp_rep_distill_loss(ca_layers_activations, subj_indices_1b,
             # ca_attn: [4, 8, 4096, 77] -> [4, 77, 8, 4096]
             ca_attn = ca_attn.permute(0, 3, 1, 2)
             ss_attn, sc_attn, sc_rep_attn, mc_attn = ca_attn.chunk(4)
-            sc_subj_attn     = sc_attn[subj_indices_1b]
-            sc_subj_rep_attn = sc_rep_attn[subj_indices_1b]
+            if do_sc_fg_faces_suppress:
+                refer_attn = mc_attn
+            else:
+                refer_attn = sc_rep_attn
+
             # sc_rep_q.detach() is not really needed, since the sc_rep instance
             # was generated without gradient. We added .detach() just in case.
-            loss_subj_attn_distill_layer = F.mse_loss(sc_subj_attn, sc_subj_rep_attn.detach())
+            loss_subj_attn_distill_layer = F.mse_loss(sc_attn, refer_attn.detach())
             # The prob is distributed over 77 tokens. We scale up the loss by 77 * 10.
             loss_comp_rep_distill_subj_attn += loss_subj_attn_distill_layer * subj_attn_distill_layer_loss_layer_scale \
                                                 * LAYER_W
