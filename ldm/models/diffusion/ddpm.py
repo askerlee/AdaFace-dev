@@ -88,6 +88,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2, 
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
+                 sc_fg_face_suppress_mask_shrink_ratio=0.6,
                  # Percent in each edge: [0.15, 0.6].
                  comp_sc_fg_mask_percent_range=[0.0225, 0.36],
                  # The face align loss should be gradually reduced as the training progresses,
@@ -160,6 +161,7 @@ class DDPM(pl.LightningModule):
         self.recon_subj_mb_suppress_loss_weight     = recon_subj_mb_suppress_loss_weight
         self.recon_face_align_loss_thres            = recon_face_align_loss_thres
         self.comp_sc_subj_mb_suppress_loss_weight   = comp_sc_subj_mb_suppress_loss_weight
+        self.sc_fg_face_suppress_mask_shrink_ratio  = sc_fg_face_suppress_mask_shrink_ratio
         self.comp_sc_fg_mask_percent_range          = comp_sc_fg_mask_percent_range
         self.comp_sc_face_align_loss_thres          = comp_sc_face_align_loss_thres
         # mix some of the subject embedding denoising results into the class embedding denoising results for faster convergence.
@@ -2361,7 +2363,7 @@ class LatentDiffusion(DDPM):
                                                  all_subj_indices_1b, all_subj_indices_2b, 
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
-                                                 BLOCK_SIZE)
+                                                 BLOCK_SIZE, self.sc_fg_face_suppress_mask_shrink_ratio)
             loss += loss_comp_feat_distill
         ##### end of do_comp_feat_distill #####
 
@@ -3064,7 +3066,7 @@ class LatentDiffusion(DDPM):
                                     x_start_ss, x_recons, noise_preds, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                    BLOCK_SIZE):
+                                    BLOCK_SIZE, sc_fg_face_suppress_mask_shrink_ratio):
         losses_comp_fg_bg_preserve          = []
         losses_subj_attn_norm_distill       = []
         losses_comp_rep_distill_subj_attn   = []
@@ -3119,12 +3121,13 @@ class LatentDiffusion(DDPM):
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
                 # comp_sc_face_align_loss_thres: 0.7
-                loss_arcface_align_comp, loss_arcface_align_comp_stat, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
+                loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
                 loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
                                                                      all_subj_indices_1b, 
-                                                                     fg_faces_grad_mask_ratios=(0.9, 0.7), 
+                                                                     # fg_faces_grad_mask_ratios = (0.9, 0.6)
+                                                                     fg_faces_grad_mask_ratios=(0.9, sc_fg_face_suppress_mask_shrink_ratio), 
                                                                      BLOCK_SIZE=BLOCK_SIZE,
                                                                      comp_sc_face_align_loss_kept_frac=self.comp_sc_face_align_loss_kept_frac,
                                                                      comp_sc_face_align_loss_thres=self.comp_sc_face_align_loss_thres)
@@ -3256,13 +3259,13 @@ class LatentDiffusion(DDPM):
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_fg_faces_suppress_loss_scale = comp_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
-            # comp_sc_face_suppressed_frac: 0.4~0.6.
-            # If comp_sc_face_suppressed_frac=0.6, then extra_suppress_loss_scale = 3.375.
-            # If comp_sc_face_suppressed_frac=0.4, then extra_suppress_loss_scale = 1.
-            extra_suppress_loss_scale = max(1, comp_sc_face_suppressed_frac**3 / 0.064)
+            # comp_sc_face_suppressed_frac: 0.25~0.45.
+            # If comp_sc_face_suppressed_frac=0.45, then extra_suppress_loss_scale = 5.83.
+            # If comp_sc_face_suppressed_frac=0.25, then extra_suppress_loss_scale = 1.
+            extra_suppress_loss_scale = max(1, (comp_sc_face_suppressed_frac / 0.25)**3)
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
-            sc_face_shrink_ratio_for_bg_matching_mask = 0.7
+            sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.6
         else:
             do_sc_fg_faces_suppress = False
             # If sc_face_proportion_type is 'sc-noface', 'too-small' or 'good', then
@@ -3548,7 +3551,7 @@ class LatentDiffusion(DDPM):
                 loss_bg_faces_suppress_comp = loss_bg_faces_suppress_comp / bg_faces_suppress_loss_count
                 mon_loss_dict.update({f'{session_prefix}/comp_bg_faces_suppress': loss_bg_faces_suppress_comp.mean().detach().item() })
 
-        return loss_arcface_align_comp, loss_arcface_align_comp_stat, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
+        return loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
                loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step
     
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
