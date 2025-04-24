@@ -16,7 +16,7 @@ from threading import Thread
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt_to_cpu, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
-                        calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_sc_ref_attn_distill_loss, \
+                        calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, select_and_repeat_instances, halve_token_indices, \
@@ -131,7 +131,7 @@ class DDPM(pl.LightningModule):
                  q_lora_updates_query=False,
                  p_shrink_cross_attn_in_comp_iters=1,
                  cross_attn_shrink_factor=0.5,
-                 p_comp_mix_mc_attn_with_sc=1,
+                 p_comp_mix_mc_attn_with_sc=0,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  # 0.25: 50% of cross_attn_shrink_factor=0.5, so that the gradient will impact
                  # 50% less on the residual hidden states than the cross-attn 
@@ -3259,10 +3259,10 @@ class LatentDiffusion(DDPM):
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_fg_faces_suppress_loss_scale = comp_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
-            # comp_sc_face_suppressed_frac: 0.25~0.45.
-            # If comp_sc_face_suppressed_frac=0.45, then extra_suppress_loss_scale = 5.83.
-            # If comp_sc_face_suppressed_frac=0.25, then extra_suppress_loss_scale = 1.
-            extra_suppress_loss_scale = max(1, (comp_sc_face_suppressed_frac / 0.25)**3)
+            # comp_sc_face_suppressed_frac: 0.2~0.45.
+            # If comp_sc_face_suppressed_frac=0.4, then extra_suppress_loss_scale = 8.
+            # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
+            extra_suppress_loss_scale = min(8, max(1, (comp_sc_face_suppressed_frac / 0.2)**3))
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.6
@@ -3296,10 +3296,9 @@ class LatentDiffusion(DDPM):
         
             loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
             loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v = \
-                calc_sc_ref_attn_distill_loss(ca_layers_activations, all_subj_indices_1b, 
-                                                prompt_emb_mask_4b,    prompt_pad_mask_4b,
-                                                sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0],
-                                                do_sc_fg_faces_suppress=do_sc_fg_faces_suppress)
+                calc_sc_rep_attn_distill_loss(ca_layers_activations, all_subj_indices_1b, 
+                                              prompt_emb_mask_4b,    prompt_pad_mask_4b,
+                                              sc_fg_mask_percent,    FG_THRES=rep_dist_fg_bounds[0])
             
             if loss_comp_rep_distill_subj_attn == 0:
                 loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \

@@ -1953,10 +1953,9 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
 
     return loss_comp_fg_bg_preserve
 
-def calc_sc_ref_attn_distill_loss(ca_layers_activations, subj_indices_1b, 
+def calc_sc_rep_attn_distill_loss(ca_layers_activations, subj_indices_1b, 
                                   prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                  sc_fg_mask_percent, FG_THRES=0.1,
-                                  do_sc_fg_faces_suppress=False):
+                                  sc_fg_mask_percent, FG_THRES=0.1):
     # sc_fg_mask is not None: If we have detected the face area in the subject-comp instance, 
     # and the face area is > 0.1 of the whole image, 
     # we will distill the whole image on the subject-comp rep prompts.
@@ -1982,8 +1981,6 @@ def calc_sc_ref_attn_distill_loss(ca_layers_activations, subj_indices_1b,
     # sc_emb_mask: [1, 77] -> [1, 1, 77], to be broadcasted to sc_k and mc_k [1, 320, 77].
     sc_nonsubj_emb_mask = sc_nonsubj_emb_mask.unsqueeze(1)
 
-    # If no face is detected in the subject-comp instance, sc_fg_mask_percent = 0.
-    # In this case, we still distill the subject-comp rep attns and ks from the subject-comp rep instance.
     if sc_fg_mask_percent >= FG_THRES:
         # q is computed from image features, and k is from the prompt embeddings.
         for unet_layer_idx, ca_attn in ca_layers_activations['attn'].items():
@@ -1995,14 +1992,10 @@ def calc_sc_ref_attn_distill_loss(ca_layers_activations, subj_indices_1b,
             # ca_attn: [4, 8, 4096, 77] -> [4, 77, 8, 4096]
             ca_attn = ca_attn.permute(0, 3, 1, 2)
             ss_attn, sc_attn, sc_rep_attn, mc_attn = ca_attn.chunk(4)
-            if do_sc_fg_faces_suppress:
-                refer_attn = mc_attn
-            else:
-                refer_attn = sc_rep_attn
 
             # sc_rep_q.detach() is not really needed, since the sc_rep instance
             # was generated without gradient. We added .detach() just in case.
-            loss_subj_attn_distill_layer = F.mse_loss(sc_attn, refer_attn.detach())
+            loss_subj_attn_distill_layer = F.mse_loss(sc_attn, sc_rep_attn.detach())
             # The prob is distributed over 77 tokens. We scale up the loss by 77 * 10.
             loss_comp_rep_distill_subj_attn += loss_subj_attn_distill_layer * subj_attn_distill_layer_loss_layer_scale \
                                                 * LAYER_W
@@ -2031,6 +2024,7 @@ def calc_sc_ref_attn_distill_loss(ca_layers_activations, subj_indices_1b,
             loss_comp_rep_distill_nonsubj_k += loss_nonsubj_k_distill_layer * LAYER_W
             loss_nonsubj_v_distill_layer = masked_l2_loss(sc_v, mc_v.detach(), sc_nonsubj_emb_mask)
             loss_comp_rep_distill_nonsubj_v += loss_nonsubj_v_distill_layer * LAYER_W
+    # Otherwise, sc_fg_mask_percent < FG_THRES, the face is already small, so we don't do refer distillation.
 
     return loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
            loss_comp_rep_distill_subj_v, loss_comp_rep_distill_nonsubj_v
