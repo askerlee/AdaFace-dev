@@ -87,7 +87,7 @@ class ArcFaceWrapper(nn.Module):
     # Suppose images_ts has been normalized to [-1, 1].
     # Cannot wrap this function with @torch.compile. Otherwise a lot of warnings will be spit out.
     def embed_image_tensor(self, images_ts, T=20, embed_bg_faces=True,
-                           enable_grad=True, fg_faces_grad_mask_ratios=(1, 0.7)):
+                           enable_grad=True, fg_faces_grad_mask_ratios=(1, 0.3)):
         # retina_crop_face() crops on the input tensor, so that computation graph w.r.t. 
         # the input tensor is preserved.
         # But the cropping operation is wrapped with torch.no_grad().
@@ -121,6 +121,8 @@ class ArcFaceWrapper(nn.Module):
             MT = int(fg_faces_gray.shape[2] * (1 - fg_faces_grad_central_mask_ratio) / 2)
             MB = fg_faces_gray.shape[2] - MT
             # fg_central_mask: The central fg_faces_grad_central_mask_ratio part of the face is filled with 1s.
+            # This will stop the gradient from flowing through the border part of the face,
+            # to avoid the face being encouraged to grow too big.
             fg_central_mask[:, :, MT:MB, ML:MR] = 1
             fg_central_masked_grad_layer = gen_masked_grad_layer(fg_central_mask, debug=False)
             fg_faces_gray_center = fg_central_masked_grad_layer(fg_faces_gray)
@@ -133,6 +135,8 @@ class ArcFaceWrapper(nn.Module):
             MT = int(fg_faces_gray.shape[2] * (1 - fg_faces_grad_border_mask_ratio) / 2)
             MB = fg_faces_gray.shape[2] - MT
             # fg_border_mask: The central fg_faces_grad_border_mask_ratio part of the face is filled with 0s.
+            # This will stop the gradient from flowing through the central part of the face, 
+            # to avoid totally destroying the identity captured by adaface.
             fg_border_mask[:, :, MT:MB, ML:MR] = 0
             fg_border_masked_grad_layer = gen_masked_grad_layer(fg_border_mask, debug=False)
             fg_faces_gray_border = fg_border_masked_grad_layer(fg_faces_gray)
@@ -164,7 +168,7 @@ class ArcFaceWrapper(nn.Module):
     # ref_images:     the groundtruth images, roughly normalized to [-1, 1] (could go beyond).
     # aligned_images: the generated   images, roughly normalized to [-1, 1] (could go beyond).
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, 
-                                fg_faces_grad_mask_ratios=(1, 0.7)):
+                                fg_faces_grad_mask_ratios=(1, 0.3)):
         # ref_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
         ref_fg_faces_emb, _, _, ref_fg_face_bboxes, ref_face_detected_inst_mask = \
             self.embed_image_tensor(ref_images, T, embed_bg_faces=False,

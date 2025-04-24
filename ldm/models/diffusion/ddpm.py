@@ -88,7 +88,7 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2, 
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
-                 sc_fg_face_suppress_mask_shrink_ratio=0.6,
+                 sc_fg_face_suppress_mask_shrink_ratio=0.3,
                  # Percent in each edge: [0.15, 0.6].
                  comp_sc_fg_mask_percent_range=[0.0225, 0.36],
                  # The face align loss should be gradually reduced as the training progresses,
@@ -133,12 +133,7 @@ class DDPM(pl.LightningModule):
                  cross_attn_shrink_factor=0.5,
                  p_comp_mix_mc_attn_with_sc=0,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
-                 # 0.25: 50% of cross_attn_shrink_factor=0.5, so that the gradient will impact
-                 # 50% less on the residual hidden states than the cross-attn 
-                 # hidden states (subject embeddings).
-                 # NOTE: Even setting to 0.25, lots of artifacts will still appear. 
-                 # Therefore, we set it to 0.0.
-                 res_hidden_states_gradscale=0.0,
+                 res_hidden_states_gradscale=0.5,
                  log_attn_level=0,
                  ablate_img_embs=False
                 ):
@@ -2392,7 +2387,7 @@ class LatentDiffusion(DDPM):
         return are_face_detected, images
     
     # If no faces are detected in x_recon, loss_arcface_align is 0, and face_bboxes is None.
-    def calc_arcface_align_loss(self, x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.7)):
+    def calc_arcface_align_loss(self, x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.3)):
         # If there are faceless input images, then do_comp_feat_distill is always False.
         # Thus, here do_comp_feat_distill is always True, and x_start[0] is a valid face image.
         x_start_pixels = self.decode_first_stage(x_start)
@@ -3126,7 +3121,7 @@ class LatentDiffusion(DDPM):
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
                                                                      all_subj_indices_1b, 
-                                                                     # fg_faces_grad_mask_ratios = (0.9, 0.6)
+                                                                     # fg_faces_grad_mask_ratios = (0.9, 0.3)
                                                                      fg_faces_grad_mask_ratios=(0.9, sc_fg_face_suppress_mask_shrink_ratio), 
                                                                      BLOCK_SIZE=BLOCK_SIZE,
                                                                      comp_sc_face_align_loss_kept_frac=self.comp_sc_face_align_loss_kept_frac,
@@ -3201,7 +3196,9 @@ class LatentDiffusion(DDPM):
         # If mc doesn't contain a face, and sc contains a small face, it's allowed.
         # If mc doesn't contain a face, but sc contains a sufficiently large face,
         # it is not desired.
-        elif mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.25 * self.comp_sc_fg_mask_percent_range[1]:
+        # comp_sc_fg_mask_percent_range[1] = 0.36, so sc_fg_mask_percent >= 0.16 * 0.36 = 0.0576, meaning
+        # each edge of the face is at most 0.24.
+        elif mc_fg_mask_percent == 0 and sc_fg_mask_percent >= 0.16 * self.comp_sc_fg_mask_percent_range[1]:
             sc_face_proportion_type = 'mc-no-sc-large'
         # When sc fg and mc fg masks have no overlap or very little overlap, 
         # we suppress the face in the sc instance. 1/6.25 = 0.16.
@@ -3259,13 +3256,13 @@ class LatentDiffusion(DDPM):
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_fg_faces_suppress_loss_scale = comp_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
-            # comp_sc_face_suppressed_frac: 0.2~0.45.
-            # If comp_sc_face_suppressed_frac=0.4, then extra_suppress_loss_scale = 8.
+            # comp_sc_face_suppressed_frac: 0.2~0.5.
+            # If comp_sc_face_suppressed_frac=0.5, then extra_suppress_loss_scale = 15.625.
             # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
             extra_suppress_loss_scale = min(8, max(1, (comp_sc_face_suppressed_frac / 0.2)**3))
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
-            sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.6
+            sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.3
         else:
             do_sc_fg_faces_suppress = False
             # If sc_face_proportion_type is 'sc-noface', 'too-small' or 'good', then
@@ -3402,8 +3399,10 @@ class LatentDiffusion(DDPM):
                 # In this case, we don't do distillation on the subject-comp-rep instance.
                 fg_percent_rep_distill_scale = 0
 
+            # loss_comp_rep_distill_nonsubj_k: 0.003.
             comp_rep_distill_nonsubj_k_loss_scale = 5
             # Weaker regularization on the non-subj v alignment.
+            # loss_comp_rep_distill_nonsubj_v: 0.001.
             comp_rep_distill_nonsubj_v_loss_scale = 2
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             subj_comp_rep_distill_loss_scale = fg_percent_rep_distill_scale
@@ -3470,9 +3469,9 @@ class LatentDiffusion(DDPM):
                     # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
                     # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
                     # sc_fg_face_detected_inst_mask: binary tensor of [BS].
-                    # fg_faces_grad_mask_ratios: (0.9, 0.7) means:
-                    # For loss_arcface_align_comp,     we focus on the central 90% of the face area, 
-                    # For loss_fg_faces_suppress_comp, we focus on the border 20% of the face area.
+                    # fg_faces_grad_mask_ratios: (0.9, 0.3) means:
+                    # For loss_arcface_align_comp,     we encourage the central 90% of the face area, 
+                    # For loss_fg_faces_suppress_comp, we suppress  the border  70% of the face area.
                     loss_arcface_align_comp_step, loss_fg_faces_suppress_comp_step, loss_bg_faces_suppress_comp_step, \
                     sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start_ss, subj_comp_recon, fg_faces_grad_mask_ratios)
