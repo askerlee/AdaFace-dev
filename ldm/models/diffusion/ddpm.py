@@ -1795,9 +1795,9 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all' if (not on_priming_steps) else 'none',
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=(not on_priming_steps),
-                                    # res_hidden_states_gradscale: 0, gradients don't flow back through 
-                                    # UNet skip connections.
-                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                    # When doing normal recon, res_hidden_states_gradscale is always 0, 
+                                    # i.e., gradients don't flow back through UNet skip connections.
+                                    res_hidden_states_gradscale=0,
                                     # enable_unet_attn_lora: randomly set to True 50% of the time.
                                     use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=use_ffn_lora, 
@@ -1829,9 +1829,9 @@ class LatentDiffusion(DDPM):
                                         batch_part_has_grad='none',
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=False,
-                                        # res_hidden_states_gradscale: 0, gradients don't flow back through 
-                                        # UNet skip connections.
-                                        res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                        # When doing normal recon, res_hidden_states_gradscale is always 0, 
+                                        # i.e., gradients don't flow back through UNet skip connections.
+                                        res_hidden_states_gradscale=0,
                                         # enable_unet_attn_lora: randomly set to True 50% of the time.
                                         use_attn_lora=enable_unet_attn_lora,
                                         # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
@@ -2051,8 +2051,8 @@ class LatentDiffusion(DDPM):
                                         subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
-                                        # res_hidden_states_gradscale: 0, gradients don't flow back through 
-                                        # UNet skip connections.
+                                        # res_hidden_states_gradscale: 0.5, i.e.,
+                                        # gradients are halved when flowing back through UNet skip connections.
                                         res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                         # use_attn_lora == self.unet_uses_attn_lora == True.
                                         # Enable the attn lora in subject-compos batches, as long as 
@@ -2997,9 +2997,9 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    # res_hidden_states_gradscale: 0, gradients don't flow back through 
-                                    # UNet skip connections.
-                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                    # When doing unet distillation, res_hidden_states_gradscale is always 0, 
+                                    # i.e., gradients don't flow back through UNet skip connections.
+                                    res_hidden_states_gradscale=0,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3259,7 +3259,8 @@ class LatentDiffusion(DDPM):
             # comp_sc_face_suppressed_frac: 0.2~0.5.
             # If comp_sc_face_suppressed_frac=0.5, then extra_suppress_loss_scale = 15.625.
             # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
-            extra_suppress_loss_scale = min(8, max(1, (comp_sc_face_suppressed_frac / 0.2)**3))
+            # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 15 * 0.01 = 0.045.
+            extra_suppress_loss_scale = 15
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.3
