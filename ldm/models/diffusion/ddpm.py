@@ -102,7 +102,7 @@ class DDPM(pl.LightningModule):
                  unet_distill_weight=8, # Boost up the unet distillation loss by 8 times.
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
-                 max_num_comp_priming_denoising_steps=4,
+                 max_num_comp_priming_denoising_steps=5,
                  max_num_comp_distill_steps_with_grad=3,
                  num_recon_denoising_steps=2,
                  num_comp_distill_denoising_steps=4,
@@ -2226,15 +2226,16 @@ class LatentDiffusion(DDPM):
             # NOTE: x_start still contains valid face images, as it's unchanged after priming.
             # Later it will be used for loss computation.
             
-            # num_primed_denoising_steps iterates from 2 to 5, with equal probs.
-            num_primed_denoising_steps = self.comp_iters_count % self.max_num_comp_priming_denoising_steps + 2
+            # num_primed_denoising_steps alternates between 4 and 5.
+            num_primed_denoising_steps = self.comp_iters_count % 2 - 1 + self.max_num_comp_priming_denoising_steps
 
             x_start0 = x_start
             # Only the first 1/4 of the batch (actually 1 image), i.e., x_start0_ss, is used for priming.
             # They are repeated 4 times to form a primed batch.
             x_start_primed, masks = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
-                                                    (img_mask, fg_mask), num_primed_denoising_steps, BLOCK_SIZE=BLOCK_SIZE)
+                                                    (img_mask, fg_mask), num_primed_denoising_steps, 
+                                                    BLOCK_SIZE=BLOCK_SIZE)
             
             # Update masks.
             img_mask, fg_mask = masks
