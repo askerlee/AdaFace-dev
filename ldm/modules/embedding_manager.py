@@ -673,7 +673,7 @@ class EmbeddingManager(nn.Module):
 
     # Originally returned value is not enclosed in list(), i.e., return a generator.
     # Returned list is list() again. list() the second time won't copy or clone the tensors.
-    def optimized_parameters(self):
+    def optimized_parameters(self, lr, weight_decay, lora_weight_decay):
         subj_basis_generator_param_list0 = list(self.string_to_subj_basis_generator_dict.parameters())
         subj_basis_generator_param_list = [ p for p in subj_basis_generator_param_list0 if p.requires_grad ]
         num_no_grad_params  = len(subj_basis_generator_param_list0) - len(subj_basis_generator_param_list)
@@ -688,4 +688,16 @@ class EmbeddingManager(nn.Module):
         else:
             unet_loras_param_list = []
 
-        return subj_basis_generator_param_list + unet_loras_param_list
+        param_groups = [
+            {
+                'params': subj_basis_generator_param_list,
+                'lr': lr,
+                'weight_decay': weight_decay,
+            },
+            {
+                'params': unet_loras_param_list,
+                'lr': lr,
+                'weight_decay': lora_weight_decay,
+            }
+        ]
+        return param_groups

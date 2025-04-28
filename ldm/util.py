@@ -194,6 +194,8 @@ class RollingStats:
         self.means = [ 0 for _ in range(num_values) ]
         self.num_values = num_values
         self.stat_type = stat_type
+        if self.num_values == 1:
+            self.mean = 0
 
     def update(self, values):
         if self.num_values == 1:

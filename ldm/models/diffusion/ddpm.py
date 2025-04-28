@@ -46,6 +46,7 @@ torch.set_printoptions(precision=4, sci_mode=False)
 import cv2
 import platform
 import insightface
+import itertools
 
 # Check the architecture
 arch = platform.machine()
@@ -102,7 +103,7 @@ class DDPM(pl.LightningModule):
                  unet_distill_weight=8, # Boost up the unet distillation loss by 8 times.
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
-                 max_num_comp_priming_denoising_steps=5,
+                 max_num_comp_priming_denoising_steps=4,
                  max_num_comp_distill_steps_with_grad=3,
                  num_recon_denoising_steps=2,
                  num_comp_distill_denoising_steps=4,
@@ -135,7 +136,8 @@ class DDPM(pl.LightningModule):
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  res_hidden_states_gradscale=0.5,
                  log_attn_level=0,
-                 ablate_img_embs=False
+                 ablate_img_embs=False,
+                 lora_weight_decay=0.01,
                 ):
         
         super().__init__()
@@ -235,6 +237,7 @@ class DDPM(pl.LightningModule):
         self.p_comp_mix_mc_attn_with_sc  = p_comp_mix_mc_attn_with_sc
         self.res_hidden_states_gradscale = res_hidden_states_gradscale
 
+        self.lora_weight_decay      = lora_weight_decay
         self.ablate_img_embs        = ablate_img_embs
         self.log_attn_level         = log_attn_level
 
@@ -1043,8 +1046,8 @@ class LatentDiffusion(DDPM):
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
                 CLS_SINGLE_PROMPT   = 'cls_single_mod_prompt'
                 # Sometimes the cls comp instances don't have clear faces.
-                # So use the fp trick on cls comp prompts at 50% of the time.
-                if self.comp_iters_count % 2 == 0:
+                # So use the fp trick on cls comp prompts at 75% of the time.
+                if self.comp_iters_count % 4 != 0:
                     CLS_COMP_PROMPT = 'cls_comp_mod_prompt_fp'
                 else:
                     CLS_COMP_PROMPT = 'cls_comp_mod_prompt'
@@ -1783,7 +1786,8 @@ class LatentDiffusion(DDPM):
             else:
                 context = subj_context
 
-            # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
+            # If recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
+            # Otherwise, enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
             use_ffn_lora = enable_unet_ffn_lora and (not on_priming_steps)
 
             # Only enable gradients after num_priming_steps.
@@ -1914,7 +1918,7 @@ class LatentDiffusion(DDPM):
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # On a 48GB GPU, we can only afford BLOCK_SIZE=1, otherwise OOM.
     def prime_x_start_for_comp_prompts(self, subj_context, x_start, noise,
-                                       masks, num_primed_denoising_steps, BLOCK_SIZE=1):
+                                       masks, num_comp_priming_denoising_steps, BLOCK_SIZE=1):
         prompt_emb, prompt_in, extra_info = subj_context
         # Although img_mask is not explicitly referred to in the following code,
         # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
@@ -1986,13 +1990,13 @@ class LatentDiffusion(DDPM):
                                                # From the outside, the unet ensemble is transparent, like a single unet.
                                                teacher_context=teacher_context, 
                                                negative_context=uncond_emb,
-                                               num_denoising_steps=num_primed_denoising_steps,
+                                               num_denoising_steps=num_comp_priming_denoising_steps,
                                                # Same t and noise across instances.
                                                same_t_noise_across_instances=True)
         
         all_t_list += [ ti[0].item() for ti in all_t ]
         print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
-                f"subj-cls ensemble prime denoising {num_primed_denoising_steps} steps {all_t_list}")
+                f"subj-cls ensemble prime denoising {num_comp_priming_denoising_steps} steps {all_t_list}")
         
         # The last primed_x_start is the final denoised image (with the smallest t).
         # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
@@ -2226,15 +2230,15 @@ class LatentDiffusion(DDPM):
             # NOTE: x_start still contains valid face images, as it's unchanged after priming.
             # Later it will be used for loss computation.
             
-            # num_primed_denoising_steps alternates between 4 and 5.
-            num_primed_denoising_steps = self.comp_iters_count % 2 - 1 + self.max_num_comp_priming_denoising_steps
+            # num_comp_priming_denoising_steps alternates between 3 and 4.
+            num_comp_priming_denoising_steps = self.comp_iters_count % 2 - 1 + self.max_num_comp_priming_denoising_steps
 
             x_start0 = x_start
             # Only the first 1/4 of the batch (actually 1 image), i.e., x_start0_ss, is used for priming.
             # They are repeated 4 times to form a primed batch.
             x_start_primed, masks = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
-                                                    (img_mask, fg_mask), num_primed_denoising_steps, 
+                                                    (img_mask, fg_mask), num_comp_priming_denoising_steps, 
                                                     BLOCK_SIZE=BLOCK_SIZE)
             
             # Update masks.
@@ -2531,7 +2535,8 @@ class LatentDiffusion(DDPM):
                                          x_start0, noise, t, subj_context, cls_context, 
                                          uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, num_recon_priming_steps,
-                                         # enable_unet_attn_lora: randomly set to True 50% of the time.
+                                         # If recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
+                                         # Otherwise, enable_unet_attn_lora: randomly set to True 50% of the time.
                                          # enable_unet_ffn_lora: True.
                                          recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
                                          ffn_lora_adapter_name, # Switching between 'recon_loss' or 'comp_distill'.
@@ -2571,7 +2576,7 @@ class LatentDiffusion(DDPM):
 
             # Only compute loss_recon and loss_recon_subj_mb_suppress when faces are detected in x_recon.
             # loss_arcface_align_recon_step > 0 implies there's a face detected in each instances in x_recon.
-            if self.arcface is not None:
+            if self.arcface_align_loss_weight > 0:
                 # If no faces are detected in x_recon, loss_arcface_align is 0, and fg_face_bboxes is None.
                 # If there is no face detected in any of the instances, then loss_arcface_align_recon_step is 0,
                 # and recon loss is skipped. 
@@ -3089,7 +3094,7 @@ class LatentDiffusion(DDPM):
         loss_fg_faces_suppress_comp = torch.tensor(0., device=device, dtype=dtype)
         loss_arcface_align_comp = torch.tensor(0., device=device, dtype=dtype)
 
-        if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
+        if self.arcface_align_loss_weight > 0:
             # ** The recon image in the last step is the clearest. Therefore,
             # we use the reconstructed images of the subject-single block in the last step
             # to detect the face area in the subject-single images. 
@@ -3447,7 +3452,7 @@ class LatentDiffusion(DDPM):
         loss_fg_faces_suppress_comp   = zero_losses[3]
         loss_bg_faces_suppress_comp   = zero_losses[4]
 
-        if self.arcface_align_loss_weight > 0 and (self.arcface is not None):
+        if self.arcface_align_loss_weight > 0:
             # Trying to calc arcface_align_loss from easy to difficult steps.
             # sel_step: 2~0. 0 is the hardest for face detection (denoised once), and 2 is the easiest (denoised 3 times).
             # Reverse the steps, so we start from the clearest face image, and get the most accurate sc_fg_mask.
@@ -3652,34 +3657,28 @@ class LatentDiffusion(DDPM):
         lr          = self.learning_rate
         scheduler   = None
 
-        opt_params_with_lrs = []
-        opt_params = []
+        opt_param_groups = []
+        # In most cases (unless we finetune unet only), is_embedding_manager_trainable = True.
         if self.is_embedding_manager_trainable:
-            embedding_params = self.embedding_manager.optimized_parameters()
-            embedding_params_with_lrs = [ {'params': embedding_params, 'lr': lr} ]
-            opt_params_with_lrs += embedding_params_with_lrs
+            # embedding_param_groups contains two param groups: adaface encoders, and unet lora params.
+            embedding_param_groups = self.embedding_manager.optimized_parameters(lr, self.weight_decay, self.lora_weight_decay)
+            opt_param_groups += embedding_param_groups
             # For CAdamW, we are unable to set the learning rate of the embedding_params individually.
-            opt_params += embedding_params
 
         # Are we allowing the base model to train? If so, set two different parameter groups.
         if self.unfreeze_unet: 
             model_params = list(self.model.parameters())
             # unet_lr: default 2e-6 set in finetune-unet.yaml.
-            opt_params_with_lrs += [ {"params": model_params, "lr": self.unet_lr} ]
-            # For CAdamW, we are unable to set the learning rate of the model parameters individually.
-            opt_params += model_params
+            opt_param_groups += [ {"params": model_params, "lr": self.unet_lr, "weight_decay": self.weight_decay} ]
 
-        count_optimized_params(opt_params_with_lrs)
-        self._params_being_optimized = opt_params 
+        opt_params = list(itertools.chain.from_iterable(
+            group["params"] for group in opt_param_groups
+        ))
+        self._params_being_optimized = opt_params
+        count_optimized_params(opt_param_groups)
         
         if 'adam' in self.optimizer_type.lower():
-            if self.optimizer_type == 'CAdamW':
-                # CAdamW doesn't support individual LRs.
-                opt = OptimizerClass(opt_params, lr=lr, weight_decay=self.weight_decay,
-                                     betas=self.adam_config.betas)
-            else:
-                opt = OptimizerClass(opt_params_with_lrs, weight_decay=self.weight_decay,
-                                    betas=self.adam_config.betas)
+            opt = OptimizerClass(opt_param_groups, betas=self.adam_config.betas)
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
