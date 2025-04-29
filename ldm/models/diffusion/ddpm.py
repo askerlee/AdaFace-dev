@@ -3374,7 +3374,7 @@ class LatentDiffusion(DDPM):
         if len(losses_comp_fg_bg_preserve) > 0:
             loss_comp_fg_bg_preserve = torch.stack(losses_comp_fg_bg_preserve).mean()
             mon_loss_dict.update({f'{session_prefix}/comp_fg_bg_preserve': loss_comp_fg_bg_preserve.mean().detach().item() })
-            # loss_comp_fg_bg_preserve: 0.04~0.05.
+            # loss_comp_fg_bg_preserve: 0.06~0.08.
             # loss_sc_recon_ssfg_min and loss_sc_recon_mc_min is absorbed into loss_comp_fg_bg_preserve.
             loss_comp_feat_distill += loss_comp_fg_bg_preserve
 
