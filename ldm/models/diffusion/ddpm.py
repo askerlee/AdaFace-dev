@@ -130,6 +130,8 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
+                 # p_shrink_cross_attn_in_comp_iters: even reducing to 0.5 will lead to background erosion.
+                 # So we have to enable it for every comp iteration.
                  p_shrink_cross_attn_in_comp_iters=1,
                  cross_attn_shrink_factor=0.5,
                  p_comp_mix_mc_attn_with_sc=0,
@@ -1670,13 +1672,14 @@ class LatentDiffusion(DDPM):
 
             ##### SC instance generation #####
             if comp_mix_mc_attn_with_sc:
-                mc_attn = extra_info_mc['ca_layers_activations']['attn']
+                # mix_attn_mats = mc cross attn matrices.
+                mix_attn_mats = extra_info_mc['ca_layers_activations']['attn']
             else:
-                mc_attn = None
+                mix_attn_mats = None
             extra_info_sc = copy.copy(extra_info)
             extra_info_sc['subj_indices']       = subj_indices
             extra_info_sc['shrink_cross_attn']  = shrink_cross_attn
-            extra_info_sc['mix_attn_mats']      = mc_attn
+            extra_info_sc['mix_attn_mats']      = mix_attn_mats
             #extra_info_sc['debug']  = True
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
             noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
@@ -1691,7 +1694,7 @@ class LatentDiffusion(DDPM):
                 # So we use the same subj_indices and shrink_cross_attn as the sc instance.
                 extra_info_ms['subj_indices']       = subj_indices
                 extra_info_ms['shrink_cross_attn']  = shrink_cross_attn
-                extra_info_sc['mix_attn_mats']      = mc_attn
+                extra_info_sc['mix_attn_mats']      = mix_attn_mats
                 ms_uses_attn_lora = use_attn_lora
             else:
                 # The ms instance is indeed ms.
