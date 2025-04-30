@@ -1844,7 +1844,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
     # Feature map spatial sizes are all 64*64.
     # Remove layer 22, as the losses at this layer are often too large 
     # and are discarded at a high percentage.
-    elastic_matching_layer_weights = { 23: 1, 24: 1, 
+    elastic_matching_layer_weights = { 22: 1, 23: 1, 24: 1, 
                                      }
     
     # Normalize the weights above so that each set sum to 1.
