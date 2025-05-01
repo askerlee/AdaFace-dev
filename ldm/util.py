@@ -1077,20 +1077,60 @@ def filter_dict_by_key(d, key_container):
 # each dict in dicts has the same keys.
 # The values are either lists or tensors, or dicts of either lists or tensors.
 def collate_dicts(dicts):
-    d = {}
+    d_all = {}
 
     for k, v in dicts[0].items():
         collection = [ d[k] for d in dicts ]
         if isinstance(v, list):
-            d[k] = sum(collection, [])
+            d_all[k] = sum(collection, [])
         elif isinstance(v, torch.Tensor):
-            d[k] = torch.cat(collection, dim=0)
+            d_all[k] = torch.cat(collection, dim=0)
         elif isinstance(v, dict):
-            d[k] = collate_dicts(collection)
+            d_all[k] = collate_dicts(collection)
         else:
             breakpoint()
 
-    return d
+    return d_all
+
+# Reverse of collate_dicts.
+def split_dict(d_all, split_size):
+    """
+    Split a collated dictionary back into a list of dictionaries.
+    
+    Args:
+        d_all: A dictionary created by collate_dicts()
+        split_size: The size of each split
+    
+    Returns:
+        A list of dictionaries with the same structure as inputs to collate_dicts()
+    """
+    result = [{} for _ in range(split_size)]
+    
+    for k, v in d_all.items():
+        if isinstance(v, list):
+            # Calculate the size of each split for lists
+            item_per_split = len(v) // split_size
+            for i in range(split_size):
+                start_idx = i * item_per_split
+                end_idx = (i + 1) * item_per_split
+                result[i][k] = v[start_idx:end_idx]
+        
+        elif isinstance(v, torch.Tensor):
+            # Split tensors along the first dimension
+            splits = torch.split(v, v.size(0) // split_size, dim=0)
+            for i in range(split_size):
+                result[i][k] = splits[i]
+        
+        elif isinstance(v, dict):
+            # Recursively split nested dictionaries
+            split_nested = split_dict(v, split_size)
+            for i in range(split_size):
+                result[i][k] = split_nested[i]
+        
+        else:
+            raise TypeError(f"Unsupported type: {type(v)}")
+    
+    return result
 
 def extract_layerwise_value(v, layer_idx, v_is_layerwise_array, v_is_layerwise_dict):
     if v_is_layerwise_array:

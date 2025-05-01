@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
-                        collate_dicts, select_and_repeat_instances, halve_token_indices, \
+                        collate_dicts, split_dict, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
                         RollingStats, save_grid, set_seed_per_rank_and_batch
@@ -130,11 +130,12 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
-                 # p_shrink_cross_attn_in_comp_iters: even reducing to 0.5 will lead to background erosion.
-                 # So we have to enable it for every comp iteration.
-                 p_shrink_cross_attn_in_comp_iters=1,
+                 # ps_comp_attn_aug: [p for no aug, p for shrink cross attn, p for mix mc attn with sc].
+                 # We don't apply shrink cross attn and mix mc attn with sc at the same time.
+                 # Since ps_comp_attn_aug = [0, 0.5, 0.5], we always do 
+                 # either shrink_cross_attn or mix_sc_mc_attn.
+                 ps_comp_attn_aug=[0, 0.5, 0.5],
                  cross_attn_shrink_factor=0.5,
-                 p_comp_mix_mc_attn_with_sc=0,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  res_hidden_states_gradscale=0.5,
                  log_attn_level=0,
@@ -234,9 +235,8 @@ class DDPM(pl.LightningModule):
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query   = q_lora_updates_query
-        self.p_shrink_cross_attn_in_comp_iters  = p_shrink_cross_attn_in_comp_iters
+        self.ps_comp_attn_aug       = torch.tensor(ps_comp_attn_aug)
         self.cross_attn_shrink_factor = cross_attn_shrink_factor
-        self.p_comp_mix_mc_attn_with_sc  = p_comp_mix_mc_attn_with_sc
         self.res_hidden_states_gradscale = res_hidden_states_gradscale
 
         self.lora_weight_decay      = lora_weight_decay
@@ -971,14 +971,24 @@ class LatentDiffusion(DDPM):
             p_unet_distill_on_pure_noise = 0
 
         if self.iter_flags['do_comp_feat_distill']:
-            p_comp_mix_mc_attn_with_sc = self.p_comp_mix_mc_attn_with_sc
+            attn_aug_idx = torch.multinomial(self.ps_comp_attn_aug, 1).item()
+            # NOTE: the multinomial distribution guarantees that 
+            # we don't do shrink_cross_attn and mix_sc_mc_attn at the same time.
+            # Since ps_comp_attn_aug = [0, 0.5, 0.5], we always do 
+            # either shrink_cross_attn or mix_sc_mc_attn.
+            self.iter_flags['shrink_cross_attn']    = (attn_aug_idx == 1)
+            self.iter_flags['mix_sc_mc_attn']       = (attn_aug_idx == 2)
+            if self.iter_flags['shrink_cross_attn']:
+                print("Shrink cross attention")
+            elif self.iter_flags['mix_sc_mc_attn']:
+                print("Mix sc-mc attention")
         else:
-            p_comp_mix_mc_attn_with_sc = 0
+            self.iter_flags['shrink_cross_attn']    = False
+            self.iter_flags['mix_sc_mc_attn']       = False
 
-        self.iter_flags['recon_on_comp_prompt'] = (torch.rand(1) < p_recon_on_comp_prompt).item()
-        self.iter_flags['recon_on_pure_noise']  = (torch.rand(1) < p_recon_on_pure_noise).item()
+        self.iter_flags['recon_on_comp_prompt']       = (torch.rand(1) < p_recon_on_comp_prompt).item()
+        self.iter_flags['recon_on_pure_noise']        = (torch.rand(1) < p_recon_on_pure_noise).item()
         self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
-        self.iter_flags['comp_mix_mc_attn_with_sc']   = (torch.rand(1) < p_comp_mix_mc_attn_with_sc).item()
         
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
         # They highlight the face features compared to the normal prompts.
@@ -1580,14 +1590,14 @@ class LatentDiffusion(DDPM):
         return x_recon
 
     # sliced_apply_model() is only called within guided_denoise().
-    def sliced_apply_model(self, x_noisy, t, cond_context, slice_inst, 
+    def sliced_apply_model(self, x_noisy, t, cond_context, slice_indices, 
                            enable_grad, use_attn_lora=False, 
                            use_ffn_lora=False, ffn_lora_adapter_name=None):
-        x_noisy_ = x_noisy[slice_inst]
-        t_       = t[slice_inst]
+        x_noisy_ = x_noisy[slice_indices]
+        t_       = t[slice_indices]
         prompt_emb, prompt_in, extra_info = cond_context
-        prompt_emb_ = prompt_emb[slice_inst]
-        prompt_in_  = prompt_in[slice_inst]
+        prompt_emb_ = prompt_emb[slice_indices]
+        prompt_in_  = [ prompt_in[i] for i in slice_indices ]
         cond_context_ = (prompt_emb_, prompt_in_, extra_info)
         with torch.set_grad_enabled(enable_grad):
             # use_attn_lora, use_ffn_lora, and ffn_lora_adapter_name are set in apply_model().
@@ -1603,12 +1613,13 @@ class LatentDiffusion(DDPM):
     # batch_part_has_grad: 'all', 'none', 'subject-compos'.
     # shrink_cross_attn: only enabled on compositional distillation iterations, 
     # not on normal recon / unet distillation iterations.
+    # If use_attn_lora is set to True and self.unet_uses_attn_lora is False, 
+    # it will be overridden in the unet.
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, 
-                       shrink_cross_attn=False, comp_mix_mc_attn_with_sc=False, 
+                       shrink_cross_attn=False, mix_sc_mc_attn=False, 
                        subj_indices=None, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
-                       subj_comp_distill_on_rep_prompts=False,
                        capture_ca_activations=False, 
                        res_hidden_states_gradscale=1,
                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None):
@@ -1643,80 +1654,85 @@ class LatentDiffusion(DDPM):
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
-        elif batch_part_has_grad == 'subject-compos':
-            # Although use_attn_lora is set to True, if self.unet_uses_attn_lora is False, 
-            # it will be overridden in the unet.
+        elif batch_part_has_grad == 'subject-compos':            
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['subj_indices']       = subj_indices
             extra_info_ss['shrink_cross_attn']  = shrink_cross_attn
             #extra_info_ss['debug']  = False
             cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
-            noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(0, 1), 
+            noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[0], 
                                                     enable_grad=False, use_attn_lora=use_attn_lora,
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
-            
-            ##### MC instance generation #####
-            extra_info_mc = copy.copy(extra_info)
-            extra_info_mc['subj_indices']        = None
-            extra_info_mc['shrink_cross_attn']   = False
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
-            # Never use attn and ffn LoRAs on mc instances.
-            # FFN LoRAs on mc instances may lead to trivial solutions of suppressing 
-            # background/compositional components and focusing on the subject only.
-            noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(3, 4),
-                                                    enable_grad=False, use_attn_lora=False,
-                                                    use_ffn_lora=False, 
-                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
+            ss_ca_layers_activations = extra_info_ss['ca_layers_activations']
 
-            ##### SC instance generation #####
-            if comp_mix_mc_attn_with_sc:
-                # mix_attn_mats = mc cross attn matrices.
-                mix_attn_mats = extra_info_mc['ca_layers_activations']['attn']
-            else:
-                mix_attn_mats = None
-            extra_info_sc = copy.copy(extra_info)
-            extra_info_sc['subj_indices']       = subj_indices
-            extra_info_sc['shrink_cross_attn']  = shrink_cross_attn
-            extra_info_sc['mix_attn_mats']      = mix_attn_mats
-            #extra_info_sc['debug']  = True
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
-            noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(1, 2),
-                                                    enable_grad=True,  use_attn_lora=use_attn_lora,
-                                                    use_ffn_lora=use_ffn_lora, 
-                                                    ffn_lora_adapter_name=ffn_lora_adapter_name)
-            
-            ##### MS (=sc_rep) instance generation #####
-            extra_info_ms = copy.copy(extra_info)
-            if subj_comp_distill_on_rep_prompts:
-                # The ms instance is actually sc_comp_rep.
-                # So we use the same subj_indices and shrink_cross_attn as the sc instance.
-                extra_info_ms['subj_indices']       = subj_indices
-                extra_info_ms['shrink_cross_attn']  = shrink_cross_attn
-                extra_info_sc['mix_attn_mats']      = mix_attn_mats
-                ms_uses_attn_lora = use_attn_lora
-            else:
-                # The ms instance is indeed ms.
-                # We never need to suppress the subject attention in the mc instances.
-                extra_info_ms['subj_indices']       = None
-                extra_info_ms['shrink_cross_attn']  = False
-                ms_uses_attn_lora = False
+            ##### SR (sc_rep) instance generation #####
+            extra_info_sr = copy.copy(extra_info)
+            # The ms instance is actually sc_comp_rep.
+            # So we use the same subj_indices and shrink_cross_attn as the sc instance.
+            extra_info_sr['subj_indices']           = subj_indices
+            extra_info_sr['shrink_cross_attn']      = shrink_cross_attn
+            extra_info_sr['mix_attn_mats_in_batch'] = False
+            ms_uses_attn_lora = use_attn_lora
 
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_ms)
-            noise_pred_ms = self.sliced_apply_model(x_noisy, t, cond_context2, slice_inst=slice(2, 3),
+            cond_context2 = (cond_context[0], cond_context[1], extra_info_sr)
+            noise_pred_sr = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[2],
                                                     enable_grad=False, use_attn_lora=ms_uses_attn_lora, 
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
+            sr_ca_layers_activations = extra_info_sr['ca_layers_activations']
 
-            noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_ms, noise_pred_mc], dim=0)
+            if mix_sc_mc_attn:
+                ##### SC and MC instances generation #####
+                extra_info_sm = copy.copy(extra_info)
+                extra_info_sm['subj_indices']           = subj_indices
+                extra_info_sm['shrink_cross_attn']      = False
+                extra_info_sm['mix_attn_mats_in_batch'] = True
+                cond_context2 = (cond_context[0], cond_context[1], extra_info_sm)
+                # Do not use attn and ffn LoRAs on joint sc-mc instances.
+                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[1, 3],
+                                                        enable_grad=False, use_attn_lora=False,
+                                                        use_ffn_lora=False, ffn_lora_adapter_name=ffn_lora_adapter_name)
+                noise_pred_sc, noise_pred_mc = noise_pred_sm.chunk(2, dim=0)
+                sc_ca_layers_activations, mc_ca_layers_activations = \
+                    split_dict(extra_info_sm['ca_layers_activations'], 2)
+
+            else:
+                ##### SC instance generation #####
+                extra_info_sc = copy.copy(extra_info)
+                extra_info_sc['subj_indices']           = subj_indices
+                extra_info_sc['shrink_cross_attn']      = shrink_cross_attn
+                extra_info_sc['mix_attn_mats_in_batch'] = False
+                cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
+                noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[1],
+                                                        enable_grad=True,  use_attn_lora=use_attn_lora,
+                                                        use_ffn_lora=use_ffn_lora, 
+                                                        ffn_lora_adapter_name=ffn_lora_adapter_name)
+                sc_ca_layers_activations = extra_info_sc['ca_layers_activations']
+
+                ##### MC instance generation #####
+                extra_info_mc = copy.copy(extra_info)
+                extra_info_mc['subj_indices']        = None
+                extra_info_mc['shrink_cross_attn']   = False
+                cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
+                # Never use attn and ffn LoRAs on mc instances.
+                # FFN LoRAs on mc instances may lead to trivial solutions of suppressing 
+                # background/compositional components and focusing on the subject only.
+                noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[3],
+                                                        enable_grad=False, use_attn_lora=False,
+                                                        use_ffn_lora=False, 
+                                                        ffn_lora_adapter_name=ffn_lora_adapter_name)
+                mc_ca_layers_activations = extra_info_mc['ca_layers_activations']
+
+            noise_pred = torch.cat([noise_pred_ss, noise_pred_sc, noise_pred_sr, noise_pred_mc], dim=0)
             extra_info = cond_context[2]
             if capture_ca_activations:
                 # Collate three captured activation dicts into extra_info.
-                ca_layers_activations = collate_dicts([extra_info_ss['ca_layers_activations'],
-                                                       extra_info_sc['ca_layers_activations'],
-                                                       extra_info_ms['ca_layers_activations'],
-                                                       extra_info_mc['ca_layers_activations']])
+                ca_layers_activations = collate_dicts([ss_ca_layers_activations,
+                                                       sc_ca_layers_activations,
+                                                       sr_ca_layers_activations,
+                                                       mc_ca_layers_activations])
         else:
             breakpoint()
 
@@ -2052,10 +2068,9 @@ class LatentDiffusion(DDPM):
                     self.guided_denoise(x_start, noise, t, subj_context,
                                         uncond_emb, img_mask=None, 
                                         shrink_cross_attn=shrink_cross_attn,
-                                        comp_mix_mc_attn_with_sc=self.iter_flags['comp_mix_mc_attn_with_sc'],
+                                        mix_sc_mc_attn=self.iter_flags['mix_sc_mc_attn'],
                                         subj_indices=all_subj_indices_1b, 
                                         batch_part_has_grad='subject-compos', 
-                                        subj_comp_distill_on_rep_prompts=True,
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=True,
                                         # res_hidden_states_gradscale: 0.5, i.e.,
@@ -2249,7 +2264,7 @@ class LatentDiffusion(DDPM):
             # Regenerate the noise, since the noise above has been used in prime_x_start_for_comp_prompts().
             noise = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
 
-            x_start_ss, x_start_sc, x_start_ms, x_start_mc = x_start_primed.chunk(4)
+            x_start_ss, x_start_sc, x_start_sr, x_start_mc = x_start_primed.chunk(4)
             # Block 2 is the subject comp repeat (sc-repeat) instance.
             # Make the sc-repeat and sc blocks use the same x_start, so that their output features
             # are more aligned, and more effective for distillation.
@@ -2262,10 +2277,6 @@ class LatentDiffusion(DDPM):
                                       (BLOCK_SIZE,), device=x_start.device)
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
-
-            # Enable shrink_cross_attn 50% of the time during comp distillation iterations.
-            # Same shrink_cross_attn for all denoising steps in a comp_distill_multistep_denoise call.
-            shrink_cross_attn_in_comp_iters = (torch.rand(1) < self.p_shrink_cross_attn_in_comp_iters).item()
 
             # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
             # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
@@ -2284,7 +2295,7 @@ class LatentDiffusion(DDPM):
                 self.comp_distill_multistep_denoise(x_start_primed, noise, t_midrear, subj_context,
                                                     uncond_emb=uncond_emb, 
                                                     all_subj_indices_1b=all_subj_indices_1b,
-                                                    shrink_cross_attn=shrink_cross_attn_in_comp_iters,
+                                                    shrink_cross_attn=self.iter_flags['shrink_cross_attn'],
                                                     cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
                                                     max_num_steps_with_grad=self.max_num_comp_distill_steps_with_grad,
                                                     use_attn_lora=self.unet_uses_attn_lora, use_ffn_lora=self.comp_uses_ffn_lora,
@@ -3953,8 +3964,8 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # layers 22, 23, 24, and only takes effect when subj_indices is not None.
         # Other layers will always have shrink_cross_attn = False.
         shrink_cross_attn = extra_info.get('shrink_cross_attn', False) if extra_info is not None else False
-        # mix_attn_mats: extra attn matrices to be mixed with the original ones.
-        mix_attn_mats = extra_info.get('mix_attn_mats', None) if extra_info is not None else None
+        # mix_attn_mats_in_batch: extra attn matrices to be mixed with the original ones.
+        mix_attn_mats_in_batch = extra_info.get('mix_attn_mats_in_batch', False) if extra_info is not None else False
         debug = extra_info.get('debug', False) if extra_info is not None else False
         #print(subj_indices)
 
@@ -3975,7 +3986,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         set_lora_and_capture_flags(self.diffusion_model, self.unet_lora_modules, 
                                    self.attn_capture_procs, self.outfeat_capture_blocks, self.res_hidden_states_gradscale_blocks,
                                    use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                                   shrink_cross_attn, mix_attn_mats, res_hidden_states_gradscale)
+                                   shrink_cross_attn, mix_attn_mats_in_batch, res_hidden_states_gradscale)
 
         # x: x_noisy from LatentDiffusion.apply_model().
         x, prompt_emb, img_mask = [ ts.to(self.dtype) if ts is not None else None \

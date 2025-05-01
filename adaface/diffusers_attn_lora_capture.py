@@ -108,7 +108,7 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                                  shrink_cross_attn=False, 
                                  cross_attn_shrink_factor=0.5, 
-                                 mix_attn_mat=None, 
+                                 mix_attn_mats_in_batch=False, 
                                  is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     B, L, S = query.size(0), query.size(-2), key.size(-2)
     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
@@ -142,9 +142,11 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     attn_score = attn_weight
     attn_weight = torch.softmax(attn_weight, dim=-1)
 
-    if mix_attn_mat is not None:
-        # attn_weight: [1, 8, 64, 77]. mix_attn_mat: [1, 8, 64, 77].
-        attn_weight = torch.sqrt(attn_weight * mix_attn_mat)
+    if mix_attn_mats_in_batch:
+        # The instances in the batchare [sc, mc]. We average their attn weights, 
+        # and apply to both instances.
+        # attn_weight: [2, 8, 64, 77] -> [1, 8, 64, 77] -> [2, 8, 64, 77].
+        attn_weight = attn_weight.mean(dim=0).repeat(B, 1, 1, 1)
     else:
         # NOTE: After scaling, the "probabilities" of the subject embeddings will sum to < 1.
         # But this is intended, as we want to scale down the impact of the subject embeddings 
@@ -196,10 +198,10 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                                                         use_dora=lora_uses_dora, lora_dropout=0.1)
 
     # LoRA layers can be enabled/disabled dynamically.
-    def reset_attn_cache_and_flags(self, capture_ca_activations, shrink_cross_attn, mix_attn_mat, enable_lora):
+    def reset_attn_cache_and_flags(self, capture_ca_activations, shrink_cross_attn, mix_attn_mats_in_batch, enable_lora):
         self.capture_ca_activations = capture_ca_activations
         self.shrink_cross_attn      = shrink_cross_attn
-        self.mix_attn_mat           = mix_attn_mat
+        self.mix_attn_mats_in_batch = mix_attn_mats_in_batch
         self.cached_activations     = {}
         # Only enable LoRA for the next call(s) if global_enable_lora is set to True.
         self.enable_lora = enable_lora and self.global_enable_lora
@@ -326,7 +328,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
                                              dropout_p=0.0, shrink_cross_attn=self.shrink_cross_attn,
                                              cross_attn_shrink_factor=self.cross_attn_shrink_factor,
-                                             mix_attn_mat=self.mix_attn_mat)
+                                             mix_attn_mats_in_batch=self.mix_attn_mats_in_batch)
 
         else:
             # Use the faster implementation of scaled_dot_product_attention 
@@ -603,15 +605,10 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=True, lora_rank=19
 def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, 
                                outfeat_capture_blocks, res_hidden_states_gradscale_blocks,
                                use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                               shrink_cross_attn, mix_attn_mats, res_hidden_states_gradscale):
+                               shrink_cross_attn, mix_attn_mats_in_batch, res_hidden_states_gradscale):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for i, attn_capture_proc in enumerate(attn_capture_procs):
-        if mix_attn_mats is not None:
-            captured_layer_indices = [22, 23, 24]
-            mix_attn_mat = mix_attn_mats[captured_layer_indices[i]]
-        else:
-            mix_attn_mat = None
-        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_cross_attn, mix_attn_mat,
+        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_cross_attn, mix_attn_mats_in_batch,
                                                      enable_lora=use_attn_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
