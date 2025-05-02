@@ -345,7 +345,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, night view of tokyo street, neon light",
                                     "portrait, playing guitar on a boat, ocean waves",
                                     "portrait, with a passion for reading, curled up with a book in a cozy nook near a window, front view",
-                                    "portrait, celebrating new year, fireworks",
+                                    "portrait, celebrating new year alone, fireworks",
                                     "portrait, running pose in a park",
                                     "portrait, in space suit, space helmet, walking on mars",
                                     "portrait, in superman costume, the sky ablaze with hues of orange and purple",

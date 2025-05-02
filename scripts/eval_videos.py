@@ -71,6 +71,7 @@ if __name__ == "__main__":
     if args.single_video is not None:
         assert args.ref_image is not None, "Reference image must be provided"
         frames = extract_frames(args.single_video, interval=3, collate=False)
+        print(f"Processing {args.single_video} ({len(frames)} frames)")
         avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
                                     cache_src_embeds=False, verbose=True)
