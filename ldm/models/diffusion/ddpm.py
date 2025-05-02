@@ -971,18 +971,20 @@ class LatentDiffusion(DDPM):
             p_unet_distill_on_pure_noise = 0
 
         if self.iter_flags['do_comp_feat_distill']:
+            attn_aug_names = ['no_attn_aug', 'shrink_cross_attn', 'mix_sc_mc_attn']
             attn_aug_idx = torch.multinomial(self.ps_comp_attn_aug, 1).item()
             # NOTE: the multinomial distribution guarantees that 
             # we don't do shrink_cross_attn and mix_sc_mc_attn at the same time.
             # Since ps_comp_attn_aug = [0, 0.5, 0.5], we always do 
             # either shrink_cross_attn or mix_sc_mc_attn.
-            self.iter_flags['shrink_cross_attn']    = (attn_aug_idx == 1)
-            self.iter_flags['mix_sc_mc_attn']       = (attn_aug_idx == 2)
-            if self.iter_flags['shrink_cross_attn']:
-                print("Shrink cross attention")
-            elif self.iter_flags['mix_sc_mc_attn']:
-                print("Mix sc-mc attention")
+            for i in range(len(attn_aug_names)):
+                if i == attn_aug_idx:
+                    self.iter_flags[attn_aug_names[i]] = True
+                    print("Attn augmentation: ", attn_aug_names[i])
+                else:
+                    self.iter_flags[attn_aug_names[i]] = False
         else:
+            self.iter_flags['no_attn_aug']          = True
             self.iter_flags['shrink_cross_attn']    = False
             self.iter_flags['mix_sc_mc_attn']       = False
 
