@@ -1654,7 +1654,10 @@ class LatentDiffusion(DDPM):
             if capture_ca_activations:
                 ca_layers_activations = extra_info['ca_layers_activations']
 
-        elif batch_part_has_grad == 'subject-compos':            
+        elif batch_part_has_grad == 'subject-compos':    
+            # When mixing sc and mc attention, don't use attn and ffn LoRAs on all instances.
+            use_attn_lora = use_attn_lora and (not mix_sc_mc_attn)
+            use_ffn_lora  = use_ffn_lora  and (not mix_sc_mc_attn)
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['subj_indices']       = subj_indices
@@ -1674,11 +1677,10 @@ class LatentDiffusion(DDPM):
             extra_info_sr['subj_indices']           = subj_indices
             extra_info_sr['shrink_cross_attn']      = shrink_cross_attn
             extra_info_sr['mix_attn_mats_in_batch'] = False
-            ms_uses_attn_lora = use_attn_lora
 
             cond_context2 = (cond_context[0], cond_context[1], extra_info_sr)
             noise_pred_sr = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[2],
-                                                    enable_grad=False, use_attn_lora=ms_uses_attn_lora, 
+                                                    enable_grad=False, use_attn_lora=use_attn_lora, 
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
             sr_ca_layers_activations = extra_info_sr['ca_layers_activations']
