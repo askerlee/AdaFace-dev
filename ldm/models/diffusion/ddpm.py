@@ -2019,8 +2019,7 @@ class LatentDiffusion(DDPM):
         
         # The last primed_x_start is the final denoised image (with the smallest t).
         # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
-        # We need to let the subject and class instances use the same x_start. 
-        # Therefore, we repeat primed_x_starts[-1] twice.
+        # The subject and class instances use the same primed x_start. So we repeat primed_x_starts[-1] twice.
         x_start_primed  = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
         # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
         # We return noise to make the noise_gt up-to-date, which is the recon objective.

@@ -174,7 +174,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         self.attn_proc_idx = attn_proc_idx
         # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
         # By default, shrink_cross_attn is False. Later in layers 22, 23, 24 it will be set to True.
-        self.reset_attn_cache_and_flags(capture_ca_activations, False, None, enable_lora)
+        self.reset_attn_cache_and_flags(capture_ca_activations, False, False, enable_lora)
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
