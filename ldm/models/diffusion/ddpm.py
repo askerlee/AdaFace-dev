@@ -85,7 +85,6 @@ class DDPM(pl.LightningModule):
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
                  cls_subj_mix_ratio=0.4,        
-                 cls_subj_mix_scheme='embedding', # 'embedding' or 'unet'
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2, 
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
@@ -168,7 +167,6 @@ class DDPM(pl.LightningModule):
         # Otherwise, the class embeddings are too far from subject embeddings (person, man, woman), 
         # posing too large losses to the subject embeddings.
         self.cls_subj_mix_ratio                     = cls_subj_mix_ratio
-        self.cls_subj_mix_scheme                    = cls_subj_mix_scheme
 
         self.use_fp_trick                           = use_fp_trick
         self.unet_distill_iter_gap                  = unet_distill_iter_gap if self.training else 0
@@ -584,21 +582,17 @@ class LatentDiffusion(DDPM):
             self.unet_teacher = None
 
         if self.comp_distill_iter_gap > 0:
+            # self.comp_unet_weight_path: "models/ensemble/sar-unet".
             # Although using RealisticVision UNet has better compositionality than sar UNet,
-            # seems the semantics doesn't effectively pass to the subsequent denoising by the sar UNet.
+            # seems the domain gap with original SD is wider, and the semantics doesn't effectively 
+            # pass to the subsequent denoising by the sar UNet.
             # Therefore, we still use sar UNET to prime x_start for compositional distillation.
-            unet = UNet2DConditionModel.from_pretrained('models/ensemble/sar-unet', torch_dtype=torch.float16)
+            unet = UNet2DConditionModel.from_pretrained(self.comp_unet_weight_path, torch_dtype=torch.float16)
             # comp_distill_unet is a diffusers unet used to do a few steps of denoising 
             # on the compositional prompts, before the actual compositional distillation.
             # So float16 is sufficient.
-            if self.cls_subj_mix_scheme == 'unet':
-                unets = [unet, unet]
-                # ensemble weights: [0.6, 0.4]
-                unet_weights_in_ensemble = [1 - self.cls_subj_mix_ratio, self.cls_subj_mix_ratio]
-            else:
-                unets = [unet]
-                # cls_subj_mix_scheme == 'embedding'. Only use one unet.
-                unet_weights_in_ensemble = [1]
+            unets = [unet]
+            unet_weights_in_ensemble = [1]
 
             self.comp_distill_priming_unet = \
                 create_unet_teacher('unet_ensemble', 
@@ -1984,26 +1978,21 @@ class LatentDiffusion(DDPM):
         t_2         = t.chunk(2)[1]
         noise_2     = noise.chunk(2)[0]
 
-        subj_double_prompt_emb, cls_double_prompt_emb = prompt_emb.chunk(2)
         # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
         # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
         # x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
         # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
         # default cfg_scale_range=[2, 4].
 
-        if self.cls_subj_mix_scheme == 'unet':
-            teacher_context=[subj_double_prompt_emb, cls_double_prompt_emb]
-        else:
-            # cls_comp_prompt_emb2 + the SAR checkpoint will 
-            # generate good compositional images. 
-            # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
-            # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
-            # (subj single, subj comp,    cls single,  cls comp).
-            # NOTE "cls mix comp" is used to initialize subj comp   and cls comp   instance denoising.
-            #      "subj single"  is used to initialize subj single and cls single instance denoising.
-            # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
-            # So this should be fine.
-            teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
+        # cls_comp_prompt_emb2 + the SAR checkpoint will generate good compositional images. 
+        # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
+        # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
+        # (subj single, subj comp,    cls single,  cls comp).
+        # NOTE "cls mix comp" is used to initialize subj comp   and cls comp   instance denoising.
+        #      "subj single"  is used to initialize subj single and cls single instance denoising.
+        # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
+        # So this should be fine.
+        teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
 
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \

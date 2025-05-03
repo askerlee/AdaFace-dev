@@ -250,8 +250,6 @@ def get_parser(**parser_kwargs):
     parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether the q LoRA updates the query in the Diffusers UNet model. "
                              "If False, the q lora only updates query2.")
-    parser.add_argument("--cls_subj_mix_scheme", type=str, default=argparse.SUPPRESS,
-                        choices=['unet', 'embedding'], help="Scheme for mixing the subject and class embeddings")
     parser.add_argument("--prompt_emb_delta_reg_weight", type=float, default=argparse.SUPPRESS,
                         help="Prompt delta regularization weight")
 
@@ -743,9 +741,7 @@ if __name__ == "__main__":
             config.model.params.cross_attn_shrink_factor  = opt.cross_attn_shrink_factor
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
         config.model.params.q_lora_updates_query = opt.q_lora_updates_query
-        if hasattr(opt, 'cls_subj_mix_scheme'):
-            config.model.params.cls_subj_mix_scheme = opt.cls_subj_mix_scheme
-            
+
         # data: DataModuleFromConfig
         data = instantiate_from_config(config.data)
         # NOTE according to https://lightning.ai/docs/pytorch/stable/data/datamodule.html
