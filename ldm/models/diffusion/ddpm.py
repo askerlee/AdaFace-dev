@@ -125,7 +125,7 @@ class DDPM(pl.LightningModule):
                  use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
-                 comp_uses_ffn_lora=True,
+                 comp_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -1657,9 +1657,10 @@ class LatentDiffusion(DDPM):
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'subject-compos':    
-            # When mixing sc and mc attention, don't use attn and ffn LoRAs on all instances.
+            # When mixing sc and mc attention, disable attn and ffn LoRAs on all instances.
             use_attn_lora = use_attn_lora and (not mix_sc_mc_attn)
             use_ffn_lora  = use_ffn_lora  and (not mix_sc_mc_attn)
+
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['subj_indices']       = subj_indices
