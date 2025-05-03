@@ -222,8 +222,6 @@ def get_parser(**parser_kwargs):
                         help="Range of the scale of the classifier-free guidance")
     parser.add_argument("--num_static_img_suffix_embs", type=int, default=4,
                         help="Number of extra static learnable image embeddings appended to input ID embeddings")    
-    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use the LDM UNet implementation as the base UNet")
     # UNet distillation always uses ffn LoRA, so there's no such an option.
     parser.add_argument("--unet_uses_attn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use attn LoRA in the cross-attn layers of the Diffusers UNet model")
@@ -765,7 +763,6 @@ if __name__ == "__main__":
         config.model.params.use_fp_trick = opt.use_fp_trick
         
         config.model.params.use_face_flow_for_sc_matching_loss = opt.use_face_flow_for_sc_matching_loss
-        config.model.params.use_ldm_unet            = opt.use_ldm_unet
         config.model.params.unet_uses_attn_lora     = opt.unet_uses_attn_lora
         config.model.params.recon_uses_ffn_lora     = opt.recon_uses_ffn_lora
         config.model.params.comp_uses_ffn_lora      = opt.comp_uses_ffn_lora

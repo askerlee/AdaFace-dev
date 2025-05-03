@@ -91,7 +91,8 @@ class DDPM(pl.LightningModule):
                  sc_fg_face_suppress_mask_shrink_ratio=0.3,
                  # Percent in each edge: [0.15, 0.6].
                  comp_sc_fg_mask_percent_range=[0.0225, 0.36],
-                 # The face align loss should be gradually reduced as the training progresses,
+                 # Maybe we should set the face align loss threshold higher during the earlier stages, 
+                 # and reduce it gradually as the training progresses,
                  # since the adaface model can better and better capture the face features.
                  recon_face_align_loss_thres=0.7,
                  comp_sc_face_align_loss_thres=0.7,
@@ -121,7 +122,6 @@ class DDPM(pl.LightningModule):
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=1e-2,
-                 use_ldm_unet=False,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
                  comp_uses_ffn_lora=False,
@@ -225,7 +225,6 @@ class DDPM(pl.LightningModule):
 
         self.init_iteration_flags()
 
-        self.use_ldm_unet           = use_ldm_unet
         self.unet_uses_attn_lora    = unet_uses_attn_lora
         self.recon_uses_ffn_lora    = recon_uses_ffn_lora
         self.comp_uses_ffn_lora     = comp_uses_ffn_lora
@@ -241,34 +240,31 @@ class DDPM(pl.LightningModule):
         self.ablate_img_embs        = ablate_img_embs
         self.log_attn_level         = log_attn_level
 
-        if self.use_ldm_unet:
-            self.model = DiffusionWrapper(unet_config)
+        self.model = DiffusersUNetWrapper(base_model_path=base_model_path, 
+                                            torch_dtype=torch.float16,
+                                            use_attn_lora=self.unet_uses_attn_lora,
+                                            # attn_lora_layer_names: ['q', 'k', 'v', 'out'], 
+                                            # add lora layers to all components in the designated cross-attn layers.
+                                            attn_lora_layer_names=self.attn_lora_layer_names,
+                                            use_ffn_lora=True,
+                                            # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
+                                            lora_rank=self.unet_lora_rank, 
+                                            attn_lora_scale_down=self.unet_lora_scale_down,   # 8
+                                            ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
+                                            cross_attn_shrink_factor=self.cross_attn_shrink_factor,
+                                            # q_lora_updates_query = True: q is updated by the LoRA layer.
+                                            # False: q is not updated, and an additional q2 is updated and returned.
+                                            q_lora_updates_query=self.q_lora_updates_query
+                                            )
+        self.model.setup_hooks_and_loras()
+        self.vae = self.model.pipeline.vae
+        if comp_unet_weight_path is not None:
+            # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
+            self.base_unet_state_dict = { k: v.cpu().pin_memory() for k, v in self.model.diffusion_model.state_dict().items() }
+            self.comp_unet_state_dict = load_ckpt_to_cpu(comp_unet_weight_path, pinned=True)
         else:
-            self.model = DiffusersUNetWrapper(base_model_path=base_model_path, 
-                                              torch_dtype=torch.float16,
-                                              use_attn_lora=self.unet_uses_attn_lora,
-                                              # attn_lora_layer_names: ['q', 'k', 'v', 'out'], 
-                                              # add lora layers to all components in the designated cross-attn layers.
-                                              attn_lora_layer_names=self.attn_lora_layer_names,
-                                              use_ffn_lora=True,
-                                              # attn QKV dim: 768, lora_rank: 192, 1/4 of 768.
-                                              lora_rank=self.unet_lora_rank, 
-                                              attn_lora_scale_down=self.unet_lora_scale_down,   # 8
-                                              ffn_lora_scale_down=self.unet_lora_scale_down,    # 8
-                                              cross_attn_shrink_factor=self.cross_attn_shrink_factor,
-                                              # q_lora_updates_query = True: q is updated by the LoRA layer.
-                                              # False: q is not updated, and an additional q2 is updated and returned.
-                                              q_lora_updates_query=self.q_lora_updates_query
-                                             )
-            self.model.setup_hooks_and_loras()
-            self.vae = self.model.pipeline.vae
-            if comp_unet_weight_path is not None:
-                # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
-                self.base_unet_state_dict = { k: v.cpu().pin_memory() for k, v in self.model.diffusion_model.state_dict().items() }
-                self.comp_unet_state_dict = load_ckpt_to_cpu(comp_unet_weight_path, pinned=True)
-            else:
-                self.base_unet_state_dict = None
-                self.comp_unet_state_dict = None
+            self.base_unet_state_dict = None
+            self.comp_unet_state_dict = None
 
         # face_detector is a light weight and highly efficient face detector.
         self.face_detector = insightface.model_zoo.get_model('models/insightface/models/antelopev2/scrfd_10g_bnkps.onnx')
@@ -372,8 +368,8 @@ class DDPM(pl.LightningModule):
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
         # Restored from models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors with 1018 missing and 1 unexpected keys
-        # This is OK, because the missing keys are from the UNet model, which is replaced by DiffusersUNetWrapper
-        # when not use_ldm_unet, and the key names are different.
+        # This is OK, because the missing keys are from the UNet model, which is replaced by DiffusersUNetWrapper,
+        # and the key names are different with the original LDM UNet model.
         # NOTE: we still load first_stage_model from the checkpoint. 
         # len(self.first_stage_model.state_dict().keys()) = 248. 1018 + 248 = 1266.
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
@@ -502,7 +498,7 @@ class DDPM(pl.LightningModule):
         return loss
 
 # LatentDiffusion inherits from DDPM. So:
-# LatentDiffusion.model = DiffusionWrapper(unet_config)
+# LatentDiffusion.model = DiffusersUNetWrapper(unet_config)
 class LatentDiffusion(DDPM):
     """main class"""
     def __init__(self,
@@ -523,9 +519,6 @@ class LatentDiffusion(DDPM):
         # cond_stage_config is a dict:
         # {'target': 'ldm.modules.encoders.modules.FrozenCLIPEmbedder'}
         # Not sure why it's compared with a string
-
-        # use_ldm_unet is gotten from kwargs, so it will still be passed to the base class DDPM.
-        use_ldm_unet    = kwargs.get("use_ldm_unet", True)
 
         # base_model_path and ignore_keys are popped from kwargs, so they won't be passed to the base class DDPM.
         base_model_path = kwargs.get("base_model_path", None)
@@ -563,8 +556,7 @@ class LatentDiffusion(DDPM):
             # We've changed the openai CLIP to transformers CLIP, so in principle we don't need to load the CLIP weights again.
             # However, in the ckpt, the CLIP may be finetuned and better than the pretrained CLIP weights.
             # NOTE: we use diffusers vae to decode, but still use ldm VAE to encode.
-            if not use_ldm_unet:
-                ignore_keys.extend(['model'])
+            ignore_keys.extend(['model'])
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
@@ -634,7 +626,6 @@ class LatentDiffusion(DDPM):
             print(f"Freeze {embed_param_count} embedding parameters, train {trainable_param_count} parameters.")
 
         else:
-            # self.model = DiffusionWrapper() training = False.
             # If not unfreeze_unet, then disable the training of the UNetk, 
             # and only train the embedding_manager.
             self.model.eval()
@@ -713,10 +704,7 @@ class LatentDiffusion(DDPM):
         self.cond_stage_model.initialize_hooks()
         
     def instantiate_embedding_manager(self, config, text_embedder):
-        if not self.use_ldm_unet:
-            unet_lora_modules = self.model.unet_lora_modules
-        else:
-            unet_lora_modules = None
+        unet_lora_modules = self.model.unet_lora_modules
         model = instantiate_from_config(config, text_embedder=text_embedder,
                                         unet_lora_modules=unet_lora_modules)
         return model
@@ -893,36 +881,24 @@ class LatentDiffusion(DDPM):
     # output: roughly -1 ~ 1, but sometimes it could go beyond [-1, 1].
     @torch.no_grad()
     def decode_first_stage(self, z):
-        if self.use_ldm_unet:
-            z = 1. / self.scale_factor * z
-            # first_stage_model: ldm.models.autoencoder.AutoencoderKL
-            #LINK ldm/models/autoencoder.py#AutoencoderKL_decode
-            return self.first_stage_model.decode(z)
-        else:
-            # Revised from StableDiffusionPipeline::decode_latents().
-            z = z.to(self.model.pipeline.dtype)
-            z = 1 / self.vae.config.scaling_factor * z
-            # NOTE: vae.decode() doesn't clip the output to [-1, 1].
-            # image: roughly [-1, 1], but sometimes it could go beyond [-1, 1].
-            image = self.vae.decode(z, return_dict=False)[0]
-            return image
+        # Revised from StableDiffusionPipeline::decode_latents().
+        z = z.to(self.model.pipeline.dtype)
+        z = 1 / self.vae.config.scaling_factor * z
+        # NOTE: vae.decode() doesn't clip the output to [-1, 1].
+        # image: roughly [-1, 1], but sometimes it could go beyond [-1, 1].
+        image = self.vae.decode(z, return_dict=False)[0]
+        return image
         
     # same as decode_first_stage() but without torch.no_grad() decorator
     # output: roughly -1 ~ 1, but sometimes it could go beyond [-1, 1].
     def decode_first_stage_with_grad(self, z):
-        if self.use_ldm_unet:
-            z = 1. / self.scale_factor * z
-            # first_stage_model: ldm.models.autoencoder.AutoencoderKL
-            #LINK ldm/models/autoencoder.py#AutoencoderKL_decode
-            return self.first_stage_model.decode(z)
-        else:
-            # Revised from StableDiffusionPipeline::decode_latents().
-            # from diffusers import AutoencoderKL
-            z = z.to(self.model.pipeline.dtype)
-            z = 1 / self.vae.config.scaling_factor * z
-            # image: [-1, 1]
-            image = self.vae.decode(z, return_dict=False)[0]
-            return image
+        # Revised from StableDiffusionPipeline::decode_latents().
+        # from diffusers import AutoencoderKL
+        z = z.to(self.model.pipeline.dtype)
+        z = 1 / self.vae.config.scaling_factor * z
+        # image: [-1, 1]
+        image = self.vae.decode(z, return_dict=False)[0]
+        return image
         
     @torch.no_grad()
     def encode_first_stage(self, x, mask=None):
@@ -1576,8 +1552,8 @@ class LatentDiffusion(DDPM):
     # apply_model() is called in sliced_apply_model() and guided_denoise().
     def apply_model(self, x_noisy, t, cond_context, use_attn_lora=False, 
                     use_ffn_lora=False, ffn_lora_adapter_name=None):
-        # self.model: DiffusionWrapper -> 
-        # self.model.diffusion_model: ldm.modules.diffusionmodules.openaimodel.UNetModel
+        # self.model: DiffusersUNetWrapper -> 
+        # self.model.diffusion_model: diffusers UNet2DConditionModel.
         # cond_context[2]: extra_info.
         cond_context[2]['use_attn_lora'] = use_attn_lora
         cond_context[2]['use_ffn_lora']  = use_ffn_lora
@@ -2182,12 +2158,8 @@ class LatentDiffusion(DDPM):
             # to the whole image (not just the face area), so we only do it after the first denoise step.
             do_adv_attack = (torch.rand(1) < self.p_do_adv_attack_when_recon_on_images) \
                             and not (self.iter_flags['recon_on_comp_prompt'] or self.iter_flags['recon_on_pure_noise'])
-            # LDM VAE uses fp32, and we can only afford a DO_ADV_BS=1.
-            if self.use_ldm_unet:
-                DO_ADV_BS = 1
-            else:
-                # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
-                DO_ADV_BS = min(x_start.shape[0], 2)
+            # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
+            DO_ADV_BS = min(x_start.shape[0], 2)
 
             if not self.iter_flags['recon_on_comp_prompt']:
                 cls_context = (extra_info['cls_single_emb'], prompt_in, extra_info)
@@ -3802,7 +3774,7 @@ class LatentDiffusion(DDPM):
 
             if self.unfreeze_unet:
                 # Save the UNetModel state_dict.
-                # self.model is a DiffusionWrapper, whose parameters are the same as the UNetModel member,
+                # self.model is a DiffusersUNetWrapper, whose parameters are the same as the UNetModel member,
                 # but with an extra diffusion_model session_prefix. This would be handled during checkpoint conversion.
                 # The unet has different parameter names from diffusers.
                 # It can be converted with convert_ldm_unet_checkpoint().
@@ -3823,7 +3795,8 @@ class LatentDiffusion(DDPM):
                 safetensors_save_file(state_dict2, unet_save_path)
                 print(f"Saved {unet_save_path}")
 
-# The old LDM UNet wrapper.
+'''
+# The old LDM UNet wrapper. OBSOLETE.
 class DiffusionWrapper(pl.LightningModule): 
     def __init__(self, diff_model_config):
         super().__init__()
@@ -3836,6 +3809,7 @@ class DiffusionWrapper(pl.LightningModule):
         out = self.diffusion_model(x, t, context=prompt_emb, context_in=prompt_in, extra_info=extra_info)
 
         return out
+'''
 
 # The diffusers UNet wrapper.
 # attn_lora_layer_names=['q', 'k', 'v', 'out']: add lora layers to the q, k, v, out projections.

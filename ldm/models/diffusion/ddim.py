@@ -13,7 +13,7 @@ class DDIMSampler:
         super().__init__()
         # model: LatentDiffusion (inherits from DDPM)
         # model is used by calling model.apply_model() -> 
-        # DiffusionWrapper.forward() -> UNetModel.forward().
+        # DiffusionWrapper/DiffusersUNetWrapper.forward() -> UNetModel.forward().
         self.model = model
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
@@ -249,7 +249,7 @@ class DDIMSampler:
             else:
                 c2 = torch.cat([c, unconditional_conditioning])
 
-            # model.apply_model() -> DiffusionWrapper.forward() -> UNetModel.forward().
+            # model.apply_model() -> DiffusionWrapper/DiffusersUNetWrapper.forward() -> UNetModel.forward().
             e_t, e_t_uncond = self.model.apply_model(x_in, t_in, c2).chunk(2)
             # scale = 0: e_t = e_t_uncond. scale = 1: e_t = e_t.
             e_t = e_t_uncond + guidance_scale * (e_t - e_t_uncond)

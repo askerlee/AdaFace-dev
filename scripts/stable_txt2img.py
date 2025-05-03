@@ -249,8 +249,6 @@ def parse_args():
                         help="Repeat the prompt for each encoder during inference (default behavior)")
     parser.add_argument("--use_lcm", type=str2bool, const=True, nargs="?", default=False,
                         help="Use LCM to do quick inference")
-    parser.add_argument("--use_ldm_unet", type=str2bool, nargs="?", const=True, default=False,
-                        help="Whether to use the LDM UNet implementation as the base UNet (only effective when --use_ldm_pipeline is enabled)")
     parser.add_argument("--use_ldm_pipeline", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use the LDM pipeline to do the inference")
     parser.add_argument("--diffusers_scheduler_name", type=str, default="ddim",
@@ -339,7 +337,6 @@ def main(opt):
         config.model.params.personalization_config.params.subject_strings       = [opt.subject_string]
         # Currently embedding manager only supports one type of prompt encoder.
         config.model.params.personalization_config.params.adaface_encoder_types = opt.adaface_encoder_types
-        config.model.params.use_ldm_unet = opt.use_ldm_unet
         config.model.params.unet_uses_attn_lora = opt.unet_uses_attn_lora
         config.model.params.shrink_cross_attn = opt.shrink_cross_attn
         
