@@ -63,7 +63,6 @@ else:
 class DDPM(pl.LightningModule):
     # classic DDPM with Gaussian diffusion, in image space
     def __init__(self,
-                 unet_config,
                  base_model_path,
                  comp_unet_weight_path=None,
                  lightning_auto_optimization=True,
@@ -495,7 +494,7 @@ class DDPM(pl.LightningModule):
         return loss
 
 # LatentDiffusion inherits from DDPM. So:
-# LatentDiffusion.model = DiffusersUNetWrapper(unet_config)
+# LatentDiffusion.model = DiffusersUNetWrapper()
 class LatentDiffusion(DDPM):
     """main class"""
     def __init__(self,

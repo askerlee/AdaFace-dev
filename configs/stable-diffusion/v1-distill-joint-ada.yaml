@@ -93,24 +93,7 @@ model:
         # Probabilities for randomly dropping out each of the ada encoders.
         p_encoder_dropout:                  0
         # Load the ada components from these placeholders in the checkpoint.
-  
-    unet_config:
-      target: ldm.modules.diffusionmodules.openaimodel.UNetModel
-      params:
-        in_channels: 4
-        out_channels: 4
-        model_channels: 320
-        attention_resolutions: [ 4, 2, 1 ]
-        num_res_blocks: 2
-        channel_mult: [ 1, 2, 4, 4 ]
-        num_heads: 8
-        # The spatial transformer is just a transformer applied on 4D (BCHW) inputs.
-        use_spatial_transformer: True
-        transformer_depth: 1
-        context_dim: 768
-        use_checkpoint: True
-        legacy: False
-        
+
     first_stage_config:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
