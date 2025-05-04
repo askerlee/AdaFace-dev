@@ -112,13 +112,12 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_comp_prompt=0,  # DISABLED
                  p_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weights=[0.1, 0.0],
+                 recon_bg_pixel_weight=0.1,
                  perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=1e-2,
@@ -196,12 +195,11 @@ class DDPM(pl.LightningModule):
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
-        self.p_recon_on_comp_prompt                 = p_recon_on_comp_prompt
         self.p_recon_on_pure_noise                  = p_recon_on_pure_noise
         self.subj_rep_prompts_count                 = subj_rep_prompts_count
         self.p_do_adv_attack_when_recon_on_images   = p_do_adv_attack_when_recon_on_images
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
-        self.recon_bg_pixel_weights                 = recon_bg_pixel_weights
+        self.recon_bg_pixel_weight                  = recon_bg_pixel_weight
 
         self.comp_iters_count                        = 0
         self.non_comp_iters_count                    = 0
@@ -418,7 +416,6 @@ class DDPM(pl.LightningModule):
                             'unet_distill_uses_comp_prompt':    False,
                             'unet_distill_on_pure_noise':       False,
                             'use_fp_trick':                     False,
-                            'recon_on_comp_prompt':             False,
                             'recon_on_pure_noise':              False,
                           }
         
@@ -929,10 +926,8 @@ class LatentDiffusion(DDPM):
         x_start = self.get_input(batch, self.first_stage_key)
 
         if self.iter_flags['do_normal_recon']:
-            p_recon_on_comp_prompt = self.p_recon_on_comp_prompt
             p_recon_on_pure_noise  = self.p_recon_on_pure_noise
         else:
-            p_recon_on_comp_prompt = 0
             p_recon_on_pure_noise  = 0
 
         if self.iter_flags['do_unet_distill']:
@@ -958,7 +953,6 @@ class LatentDiffusion(DDPM):
             self.iter_flags['shrink_cross_attn']    = False
             self.iter_flags['mix_sc_mc_attn']       = False
 
-        self.iter_flags['recon_on_comp_prompt']       = (torch.rand(1) < p_recon_on_comp_prompt).item()
         self.iter_flags['recon_on_pure_noise']        = (torch.rand(1) < p_recon_on_pure_noise).item()
         self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
         
@@ -969,12 +963,6 @@ class LatentDiffusion(DDPM):
                 # Use the fp trick all the time on compositional distillation iterations,
                 # so that class comp prompts will generate clear face areas.
                 p_use_fp_trick = 0.5
-            # recon_on_comp_prompt. So we add "portrait" to the prompts.
-            # By doing so, the subject model is more clearly hinted to reconstruct the subject portraits.
-            # Otherwise it may learn to implicitly encode "portrait" in the ID embeddings 
-            # for better reconstruction, which is undesirable.
-            elif self.iter_flags['recon_on_comp_prompt']:
-                p_use_fp_trick = 1
             # If compositional distillation is enabled, then in normal recon iterations,
             # we use the fp_trick most of the time, to better reconstructing single-face input images.
             # However, we still keep 20% of the do_normal_recon iterations to not use the fp_trick,
@@ -983,8 +971,7 @@ class LatentDiffusion(DDPM):
                 p_use_fp_trick = 1
             else:
                 # If not doing compositional distillation and only doing do_normal_recon, 
-                # and not recon_on_comp_prompt, then use_fp_trick is disabled, 
-                # so that the ID embeddings alone are expected 
+                # then use_fp_trick is disabled, so that the ID embeddings alone are expected 
                 # to reconstruct the subject portraits.
                 p_use_fp_trick = 0
         else:
@@ -1011,9 +998,6 @@ class LatentDiffusion(DDPM):
                 # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
                 CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
-                # recon_on_comp_prompt uses the subj comp prompts without styles, lighting, etc.
-                # Otherwise there's a gap betwen the generated images and the input realistic face images,
-                # making distillation less effective.
                 # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet, 
                 # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
                 SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
@@ -1040,9 +1024,6 @@ class LatentDiffusion(DDPM):
                 # cls prompts are only used for delta loss, so they don't need to be fp prompts.
                 SUBJ_SINGLE_PROMPT  = 'subj_single_prompt'
                 CLS_SINGLE_PROMPT   = 'cls_single_prompt'
-                # If recon_on_comp_prompt, we still uses the subj comp prompts without styles, lighting, etc.
-                # Otherwise there's a gap betwen the generated images and the input realistic face images,
-                # making distillation less effective.
                 # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet,
                 # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
                 SUBJ_COMP_PROMPT    = 'subj_comp_prompt'
@@ -1269,8 +1250,7 @@ class LatentDiffusion(DDPM):
                 # never use the compositional instances as the distillation target of arc2face.
                 # If unet_teacher_types is ['consistentID', 'arc2face'], then p_unet_distill_uses_comp_prompt == 0.1.
                 # If unet_teacher_types == ['consistentID'], then p_unet_distill_uses_comp_prompt == 0.2.
-                # NOTE: 'recon_on_comp_prompt' is applicable to all teachers.
-                # While 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
+                # 'unet_distill_uses_comp_prompt' is only applicable to composable teachers, such as consistentID.
                 # They are exclusive to each other, and are never enabled at the same time.
                 self.iter_flags['unet_distill_uses_comp_prompt'] = True
 
@@ -1521,7 +1501,7 @@ class LatentDiffusion(DDPM):
             extra_info['placeholder2indices'] = extra_info['placeholder2indices_2b']
         else:
             # do_normal_recon or do_unet_distill.
-            if self.iter_flags['unet_distill_uses_comp_prompt'] or self.iter_flags['recon_on_comp_prompt']:
+            if self.iter_flags['unet_distill_uses_comp_prompt']:
                 prompt_in   = subj_comp_prompts
                 prompt_emb  = subj_comp_emb
             else:
@@ -2157,22 +2137,19 @@ class LatentDiffusion(DDPM):
             # Doing adversarial attack on the input images seems to introduce high-frequency noise 
             # to the whole image (not just the face area), so we only do it after the first denoise step.
             do_adv_attack = (torch.rand(1) < self.p_do_adv_attack_when_recon_on_images) \
-                            and not (self.iter_flags['recon_on_comp_prompt'] or self.iter_flags['recon_on_pure_noise'])
+                            and (not self.iter_flags['recon_on_pure_noise'])
             # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
             DO_ADV_BS = min(x_start.shape[0], 2)
 
-            if not self.iter_flags['recon_on_comp_prompt']:
-                cls_context = (extra_info['cls_single_emb'], prompt_in, extra_info)
-            else:
-                cls_context = (extra_info['cls_comp_emb'],   prompt_in, extra_info)
+            cls_context = (extra_info['cls_single_emb'], prompt_in, extra_info)
 
             loss_normal_recon = \
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
                                             # num_recon_denoising_steps: 2.
                                             self.num_recon_denoising_steps, x_start, noise, 
                                             subj_context, cls_context,
-                                            img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weights, 
-                                            self.iter_flags['recon_on_comp_prompt'], self.iter_flags['recon_on_pure_noise'], 
+                                            img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weight, 
+                                            self.iter_flags['recon_on_pure_noise'], 
                                             enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
                                             do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
@@ -2440,7 +2417,7 @@ class LatentDiffusion(DDPM):
 
         return adv_grad
 
-    # cls_context: class single embeddings or class comp embeddings (when recon_on_comp_prompt).
+    # cls_context: class single embeddings.
     # NOTE: cls_context is used to align the background denoised using ada embeddings 
     # with images denoised using the class embeddings. This is an important trick
     # *** to mitigate that the subject gradually dominates the whole image and a lot of artifacts
@@ -2449,10 +2426,11 @@ class LatentDiffusion(DDPM):
     # of high-frequency noise to the background.
     # enable_unet_attn_lora: randomly set to True 50% of the time.
     # enable_unet_ffn_lora: if not recon_on_pure_noise, then True. Otherwise False.
+    # recon_bg_pixel_weight == 0.1, a small penalty on bg errors.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, subj_context, cls_context,
-                               img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weights,
-                               recon_on_comp_prompt, recon_on_pure_noise, 
+                               img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weight,
+                               recon_on_pure_noise, 
                                enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
                                do_adv_attack, DO_ADV_BS):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
@@ -2473,7 +2451,7 @@ class LatentDiffusion(DDPM):
             num_recon_priming_steps = 0
 
         if num_denoising_steps > 1 or recon_on_pure_noise:
-            # When doing multi-step denoising, or recon_on_comp_prompt, we apply CFG on the recon images.
+            # When doing multi-step denoising, we apply CFG on the recon images.
             # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
@@ -2486,15 +2464,6 @@ class LatentDiffusion(DDPM):
             # Don't do CFG. So uncond_emb is None.
             uncond_emb = None
             cfg_scale  = -1
-            if recon_on_comp_prompt:
-                # If recon_on_comp_prompt, don't limit the image area to img_mask, 
-                # to boost the compositional patterns in the background.
-                # If recon_on_pure_noise, img_mask is meaningless, so set it to None.
-                img_mask = None
-
-        # if recon_on_comp_prompt, then recon_bg_pixel_weight == 0, no penalty on bg errors.
-        # otherwise, recon_bg_pixel_weight == 0.01, a tiny penalty on bg errors.
-        recon_bg_pixel_weight = recon_bg_pixel_weights[recon_on_comp_prompt]
 
         input_images = self.decode_first_stage(x_start)
         # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
@@ -2509,7 +2478,6 @@ class LatentDiffusion(DDPM):
         noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
                                          # img_mask is used to mask the blank areas around the augmented images.
-                                         # If recon_on_comp_prompt, then img_mask = None, i.e., no masking.
                                          # fg_mask is used to confine adv_grad to the foreground area.
                                          x_start0, noise, t, subj_context, cls_context, 
                                          uncond_emb, img_mask, fg_mask,
@@ -2621,10 +2589,8 @@ class LatentDiffusion(DDPM):
                     face_detected_inst_weights = torch.ones_like(face_detected_inst_mask)
                     fg_mask2 = fg_mask
 
-                # NOTE: if not recon_on_comp_prompt, then recon_bg_pixel_weight = 0.1,
-                # bg loss is given a tiny weight to suppress multi-face artifacts.
-                # If recon_on_comp_prompt, then recon_bg_pixel_weight = 0, i.e., 
-                # we don't penalize the bg errors to allow the bg to be compositional patterns.
+                # NOTE: recon_bg_pixel_weight = 0.1, i.e.,
+                # bg loss is given a small weight to suppress multi-face artifacts.
                 # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
                 # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
                 # If img_mask = None, then blank pixels are regularized as bg pixels.
@@ -2711,10 +2677,7 @@ class LatentDiffusion(DDPM):
             loss_recon_unscaled = losses_recon.mean()
             v_loss_recon = loss_recon_unscaled.detach().item()
 
-            if recon_on_comp_prompt:
-                mon_loss_dict.update({f'{session_prefix}/loss_recon_comp': v_loss_recon})
-            else:
-                mon_loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
+            mon_loss_dict.update({f'{session_prefix}/loss_recon': v_loss_recon})
 
             ts_str = ", ".join([ f"{t.tolist()}" for t in ts ])
             print(f"Rank {self.trainer.global_rank} {num_denoising_steps}-step recon: {ts_str}, {v_loss_recon:.4f}")
