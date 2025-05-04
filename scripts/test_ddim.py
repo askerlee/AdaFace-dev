@@ -42,6 +42,7 @@ model = pipeline.unet
 def test_enc_dec(pipeline, input, output):
     input_image = Image.open(input).convert("RGB")
     input_image = torch.from_numpy(np.array(input_image)).permute(2, 0, 1).half().to("cuda")
+    # Normalize input_image to [-1, 1]
     input_image = input_image.unsqueeze(0) / 255.0 * 2 - 1
     input_image = F.interpolate(input_image, (512, 512), mode="bilinear")
     latents = pipeline.vae.encode(input_image).latent_dist.mode()

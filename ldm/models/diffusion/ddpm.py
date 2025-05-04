@@ -138,6 +138,7 @@ class DDPM(pl.LightningModule):
                  log_attn_level=0,
                  ablate_img_embs=False,
                  lora_weight_decay=0.01,
+                 use_diffusers_vae_for_encoding=False,
                 ):
         
         super().__init__()
@@ -254,7 +255,11 @@ class DDPM(pl.LightningModule):
                                             q_lora_updates_query=self.q_lora_updates_query
                                             )
         self.model.setup_hooks_and_loras()
+        # Always use diffusers vae for decoding
         self.vae = self.model.pipeline.vae
+        # Use diffusers vae for encoding if use_diffusers_vae_for_encoding.
+        self.use_diffusers_vae_for_encoding = use_diffusers_vae_for_encoding
+
         if comp_unet_weight_path is not None:
             # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
             self.base_unet_state_dict = { k: v.cpu().pin_memory() for k, v in self.model.diffusion_model.state_dict().items() }
@@ -364,10 +369,11 @@ class DDPM(pl.LightningModule):
         num_remaining_keys = len(list(sd.keys()))
         missing, unexpected = self.load_state_dict(sd, strict=False) if not only_model else self.model.load_state_dict(
             sd, strict=False)
-        # Restored from models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors with 1018 missing and 1 unexpected keys
+        # Restored from models/stable-diffusion-v-1-5/v1-5-dste8-vae.safetensors with 1018 or 1581 
+        # missing and 1 unexpected keys (1018: including VAE keys, 1581: deleting VAE keys).
         # This is OK, because the missing keys are from the UNet model, which is replaced by DiffusersUNetWrapper,
         # and the key names are different with the original LDM UNet model.
-        # NOTE: we still load first_stage_model from the checkpoint. 
+        # NOTE: if not use_diffusers_vae_for_encoding, we still load first_stage_model from the checkpoint. 
         # len(self.first_stage_model.state_dict().keys()) = 248. 1018 + 248 = 1266.
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
@@ -526,15 +532,12 @@ class LatentDiffusion(DDPM):
         self.cond_stage_key = cond_stage_key
         self.is_embedding_manager_trainable = is_embedding_manager_trainable
 
-        try:
-            self.num_downs = len(first_stage_config.params.ddconfig.ch_mult) - 1
-        except:
-            self.num_downs = 0
         if not scale_by_std:
             self.scale_factor = scale_factor
         else:
             self.register_buffer('scale_factor', torch.tensor(scale_factor))
-        self.instantiate_first_stage(first_stage_config)
+        if not self.use_diffusers_vae_for_encoding:
+            self.instantiate_first_stage(first_stage_config)
         self.instantiate_cond_stage(cond_stage_config)
 
         self.cond_stage_forward = cond_stage_forward
@@ -547,12 +550,16 @@ class LatentDiffusion(DDPM):
             # In addition, we've loaded the CLIP model weights, including the position embedding, in the ctor of
             # FrozenCLIPEmbedder.
             ignore_keys.append('cond_stage_model.transformer.text_model.embeddings.position_embedding.weight')
-            # Ignore all keys of the UNet model, since we are using a diffusers UNet model.
-            # We still need to load the CLIP (cond_stage_model) and VAE (first_stage_model) weights.
+            # Ignore all keys of the UNet model (key starts with 'model') and the VAE (first_stage_model), 
+            # since we are using diffusers UNet model and VAE.
+            # We still need to load the CLIP (cond_stage_model).
             # We've changed the openai CLIP to transformers CLIP, so in principle we don't need to load the CLIP weights again.
             # However, in the ckpt, the CLIP may be finetuned and better than the pretrained CLIP weights.
             # NOTE: we use diffusers vae to decode, but still use ldm VAE to encode.
             ignore_keys.extend(['model'])
+            if self.use_diffusers_vae_for_encoding:
+                # Ignore the VAE keys, since we are using diffusers VAE.
+                ignore_keys.extend(['first_stage_model'])
             self.init_from_ckpt(base_model_path, ignore_keys)
         
         if self.unet_distill_iter_gap > 0 and self.unet_teacher_types is not None:
@@ -898,11 +905,15 @@ class LatentDiffusion(DDPM):
         
     @torch.no_grad()
     def encode_first_stage(self, x, mask=None):
-        # diffusers AutoencoderKL doesn't support mask.
-        # In order to support mask, we still use the old VAE.
-        # first_stage_model: ldm.models.autoencoder.AutoencoderKL
-        #LINK ldm/models/autoencoder.py#AutoencoderKL_encode
-        return self.first_stage_model.encode(x, mask)
+        # x: cuda float tensor of [BS, 3, 512, 512], normalized to [-1, 1]
+        # mask: dict of {'fg_mask':  cuda torch.uint8 [BS, 1, 512, 512], 
+        #                'aug_mask': cuda torch.uint8 [BS, 1, 512, 512]}.
+        if not self.use_diffusers_vae_for_encoding:
+            return self.first_stage_model.encode(x, mask)
+        else:
+            # Since diffusers VAE doesn't support mask, mask is ignored.
+            latents = self.vae.encode(x.to(torch.float16)).latent_dist.mode()
+            return latents        
 
     # LatentDiffusion.shared_step() overloads DDPM.shared_step().
     # shared_step() is called in training_step() and (no_grad) validation_step().
@@ -3026,7 +3037,7 @@ class LatentDiffusion(DDPM):
 
         ss_fg_mask, sc_fg_mask, mc_fg_mask = None, None, None
         ss_fg_face_bboxes, sc_fg_face_bboxes = None, None
-        sc_face_detected_at_step = -1
+        first_step_when_sc_face_is_detected = -1
         # When sc_fg_mask_percent >= 0.1, we think the face has a chance to be too large and 
         # do subj_comp_rep_distill to discourage it.
         # 0.2 is borderline large, and 0.25 is too large.
@@ -3065,7 +3076,7 @@ class LatentDiffusion(DDPM):
                 # won't be detected in the subject-compositional instance either.
                 # comp_sc_face_align_loss_thres: 0.7
                 loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
-                loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step = \
+                loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, first_step_when_sc_face_is_detected = \
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start_ss, x_recons, 
                                                                      ca_layers_activations_list,
                                                                      all_subj_indices_1b, 
@@ -3259,20 +3270,20 @@ class LatentDiffusion(DDPM):
             losses_comp_rep_distill_nonsubj_v.append(loss_comp_rep_distill_nonsubj_v)
 
             # NOTE: Skip computing loss_comp_fg_bg_preserve before sc_face is detected.
-            # If sc_face_detected_at_step == -1, then in all steps, sc_face is not detected.
+            # If first_step_when_sc_face_is_detected == -1, then in all steps, sc_face is not detected.
             # So we skip all the steps.
             # We also skip loss_comp_fg_bg_preserve on all steps if ss_fg_mask is None, 
             # i.e., no faces are detected in the subject-single instance. But this should be rare.
-            if ss_fg_mask is None or sc_face_detected_at_step == -1:
+            if ss_fg_mask is None or first_step_when_sc_face_is_detected == -1:
                 continue
 
-            if (step_idx < len(ca_layers_activations_list) - 1) and (step_idx >= sc_face_detected_at_step - 1):
+            if (step_idx < len(ca_layers_activations_list) - 1) and (step_idx >= first_step_when_sc_face_is_detected - 1):
                 subj_attn_cross_t_diff_step = \
                     calc_subj_attn_cross_t_diff_loss(ca_layers_activations, ca_layers_activations_list[step_idx+1],
                                                      all_subj_indices_1b)
                 subj_attn_cross_t_diffs.append(subj_attn_cross_t_diff_step)
             
-            if (step_idx < sc_face_detected_at_step) or (sc_face_proportion_type in ['sc-noface']):
+            if (step_idx < first_step_when_sc_face_is_detected) or (sc_face_proportion_type in ['sc-noface']):
                 continue
 
             loss_comp_fg_bg_preserve_step = \
@@ -3385,7 +3396,7 @@ class LatentDiffusion(DDPM):
         comp_sc_subj_mb_suppress_loss_count = 0
         fg_faces_suppress_loss_count, bg_faces_suppress_loss_count = 0, 0
         sc_fg_mask, sc_fg_face_bboxes       = None, None
-        sc_face_detected_at_step            = -1
+        first_step_when_sc_face_is_detected = -1
 
         # Don't initialize zero_losses as torch.zeros(3), otherwise the losses cannot do inplace addition.
         zero_losses = [ torch.tensor(0., device=x_start_ss.device, dtype=x_start_ss.dtype) for _ in range(5) ]
@@ -3445,8 +3456,8 @@ class LatentDiffusion(DDPM):
                             comp_sc_face_align_loss_kept_frac.update(0)
 
                         ca_layers_activations = ca_layers_activations_list[sel_step]
-                        if sc_face_detected_at_step == -1:
-                            sc_face_detected_at_step = sel_step
+                        if first_step_when_sc_face_is_detected == -1:
+                            first_step_when_sc_face_is_detected = sel_step
 
                         # Generate sc_fg_mask for the first time, based on the detected face area.
                         if sc_fg_mask is None:
@@ -3501,7 +3512,7 @@ class LatentDiffusion(DDPM):
                 mon_loss_dict.update({f'{session_prefix}/comp_bg_faces_suppress': loss_bg_faces_suppress_comp.mean().detach().item() })
 
         return loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
-               loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, sc_face_detected_at_step
+               loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, first_step_when_sc_face_is_detected
     
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
