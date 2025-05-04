@@ -350,7 +350,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                                     "portrait, in space suit, space helmet, walking on mars",
                                     "portrait, in superman costume, the sky ablaze with hues of orange and purple",
                                     "in a wheelchair",
-                                    "on a horse"
+                                    "on a horse",
+                                    "on a bike",
                             ])
             
             highlight_face = gr.Checkbox(label="Highlight face", value=False, 
