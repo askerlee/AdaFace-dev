@@ -153,8 +153,13 @@ def load_model_from_config(config, ckpt_path, verbose=False):
 def inplace_model_copy(model, source_state_dict):
     model_state = model.state_dict()
     for name, tensor in source_state_dict.items():
+        # Some modules are patched with LoRA layers. 
+        # Their original weights/biases are prepended with "base_layer.".
         if name not in model_state:
-            name2 = re.sub(r"\.(weight|bias)$", ".base_layer.\\1", name)
+            if name.endswith(".weight"):
+                name2 = name[:-7] + ".base_layer.weight"
+            elif name.endswith(".bias"):
+                name2 = name[:-5] + ".base_layer.bias"
             if name2 in model_state:
                 # print(f"Renaming {name} to {name2}")
                 name = name2
@@ -1982,7 +1987,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
     # which preserves the subject identity.
     sc_recon_ssfg_loss_scale                    = 0 if do_sc_fg_faces_suppress else 0.1
     # loss_sc_recon_mc:       0.2 -> 0.08
-    sc_recon_mc_loss_scale                      = 0.4
+    sc_recon_mc_loss_scale                      = 0.2
     # loss_sc_to_ssfg_sparse_attns_distill: ~2e-4 -> 0.004.
     sc_to_ssfg_sparse_attns_distill_loss_scale  = 0 #20
     # loss_sc_to_mc_sparse_attns_distill: 4e-4~5e-4 -> 0.008~0.01.

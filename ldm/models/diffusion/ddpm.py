@@ -538,6 +538,8 @@ class LatentDiffusion(DDPM):
             self.register_buffer('scale_factor', torch.tensor(scale_factor))
         if not self.use_diffusers_vae_for_encoding:
             self.instantiate_first_stage(first_stage_config)
+        else:
+            self.first_stage_model = None
         self.instantiate_cond_stage(cond_stage_config)
 
         self.cond_stage_forward = cond_stage_forward
