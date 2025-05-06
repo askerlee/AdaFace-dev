@@ -2332,7 +2332,8 @@ class LatentDiffusion(DDPM):
                                                  extra_info['prompt_emb_mask_4b'],
                                                  extra_info['prompt_pad_mask_4b'],
                                                  BLOCK_SIZE, self.sc_fg_face_suppress_mask_shrink_ratio,
-                                                 use_attn_lora=self.unet_uses_attn_lora)
+                                                 use_attn_lora=self.unet_uses_attn_lora,
+                                                 use_ffn_lora=self.comp_uses_ffn_lora)
             loss += loss_comp_feat_distill
         ##### end of do_comp_feat_distill #####
 
@@ -3022,7 +3023,8 @@ class LatentDiffusion(DDPM):
                                     x_start_ss, x_recons, noise_preds, ca_layers_activations_list, 
                                     all_subj_indices_1b, all_subj_indices_2b, 
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
-                                    BLOCK_SIZE, sc_fg_face_suppress_mask_shrink_ratio, use_attn_lora):
+                                    BLOCK_SIZE, sc_fg_face_suppress_mask_shrink_ratio, 
+                                    use_attn_lora, use_ffn_lora):
         losses_comp_fg_bg_preserve          = []
         losses_subj_attn_norm_distill       = []
         losses_comp_rep_distill_subj_attn   = []
@@ -3222,7 +3224,11 @@ class LatentDiffusion(DDPM):
             # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
             # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 15 * 0.01 = 0.045 if use_attn_lora.
             # or                                   0.03 * 10 *  5 * 0.01 = 0.015 if not use_attn_lora.
-            extra_suppress_loss_scale = 15 if use_attn_lora else 5
+            # If use_attn_lora, then the background is more likely to be reinterpreted as a face,
+            # therefore we need to increase the loss scale.
+            # If **not** use_ffn_lora, then the background is more likely to be reinterpreted as a face,
+            # therefore we need to increase the loss scale.
+            extra_suppress_loss_scale = 15 if (use_attn_lora or not use_ffn_lora) else 5
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.3

@@ -2512,9 +2512,6 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     flow_distill_stats        = {}
 
     # sc_fg_mask: [1, 1, 64, 64].
-    # sc_fg_mask_3d: [1, 1, 4096].
-    # Collapse the spatial dimensions of sc_fg_mask to 1 dim.
-    sc_fg_mask_3d = sc_fg_mask.reshape(*sc_fg_mask.shape[:-2], -1)
     # sc_bg_mask: [1, 1, 64, 64].
     # We have made sure that sc_fg_mask_percent <= 0.8 in calc_comp_feat_distill_loss(), so 
     # sc_bg_mask will never be all 0s.
@@ -2602,6 +2599,8 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
 
         ssfg_feat = []
         scfg_feat = []
+        # Resize ss_face_feat, sc_face_feat to the original size of the image. 
+        # So they can be directly matched with each other.
         for bi in range(len(sc_feat)):
             x1, y1, x2, y2 = ss_face_bboxes[bi]
             ss_face_feat = ss_feat_4d[:, :, y1:y2, x1:x2]
