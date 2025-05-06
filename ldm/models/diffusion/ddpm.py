@@ -111,13 +111,13 @@ class DDPM(pl.LightningModule):
                  p_unet_distill_uses_comp_prompt=0,
                  p_gen_rand_id_for_id2img=0,
                  p_perturb_face_id_embs=0.2,
-                 p_recon_on_pure_noise=0.4,
+                 perturb_face_id_embs_std_range=[0.3, 0.6],
+                 p_normal_recon_on_pure_noise=0.4,
                  p_unet_distill_on_pure_noise=0.5,
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weight=0.1,
-                 perturb_face_id_embs_std_range=[0.3, 0.6],
                  use_face_flow_for_sc_matching_loss=True,
                  arcface_align_loss_weight=1e-2,
                  unet_uses_attn_lora=True,
@@ -195,7 +195,7 @@ class DDPM(pl.LightningModule):
         self.p_gen_rand_id_for_id2img               = p_gen_rand_id_for_id2img
         self.p_perturb_face_id_embs                 = p_perturb_face_id_embs
         self.perturb_face_id_embs_std_range         = perturb_face_id_embs_std_range
-        self.p_recon_on_pure_noise                  = p_recon_on_pure_noise
+        self.p_normal_recon_on_pure_noise           = p_normal_recon_on_pure_noise
         self.subj_rep_prompts_count                 = subj_rep_prompts_count
         self.p_do_adv_attack_when_recon_on_images   = p_do_adv_attack_when_recon_on_images
         self.recon_adv_mod_mag_range                = recon_adv_mod_mag_range
@@ -421,7 +421,7 @@ class DDPM(pl.LightningModule):
                             'unet_distill_uses_comp_prompt':    False,
                             'unet_distill_on_pure_noise':       False,
                             'use_fp_trick':                     False,
-                            'recon_on_pure_noise':              False,
+                            'normal_recon_on_pure_noise':              False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -938,9 +938,9 @@ class LatentDiffusion(DDPM):
         x_start = self.get_input(batch, self.first_stage_key)
 
         if self.iter_flags['do_normal_recon']:
-            p_recon_on_pure_noise  = self.p_recon_on_pure_noise
+            p_normal_recon_on_pure_noise = self.p_normal_recon_on_pure_noise
         else:
-            p_recon_on_pure_noise  = 0
+            p_normal_recon_on_pure_noise = 0
 
         if self.iter_flags['do_unet_distill']:
             p_unet_distill_on_pure_noise = self.p_unet_distill_on_pure_noise
@@ -965,7 +965,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['shrink_cross_attn']    = False
             self.iter_flags['mix_sc_mc_attn']       = False
 
-        self.iter_flags['recon_on_pure_noise']        = (torch.rand(1) < p_recon_on_pure_noise).item()
+        self.iter_flags['normal_recon_on_pure_noise']        = (torch.rand(1) < p_normal_recon_on_pure_noise).item()
         self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
         
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
@@ -991,14 +991,14 @@ class LatentDiffusion(DDPM):
 
         self.iter_flags['use_fp_trick'] = (torch.rand(1) < p_use_fp_trick).item()
 
-        # NOTE: If recon_on_pure_noise, there are no ground truth images, and we use 
+        # NOTE: If normal_recon_on_pure_noise, there are no ground truth images, and we use 
         # subj_single_prompt to reconstruct the foreground face, and use cls_single_prompt
         # to reconstruct the background. Therefore, modifiers could be added to the prompts.
         # So in such cases, we use the mod prompts. 
         # Otherwise, there are ground truth images, and we can only use prompts without modifiers.
         if self.iter_flags['use_fp_trick']:
             if self.iter_flags['do_comp_feat_distill'] or \
-              (self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_pure_noise']):
+              (self.iter_flags['do_normal_recon'] and self.iter_flags['normal_recon_on_pure_noise']):
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
@@ -1018,7 +1018,7 @@ class LatentDiffusion(DDPM):
 
         else:
             if self.iter_flags['do_comp_feat_distill'] or \
-              (self.iter_flags['do_normal_recon'] and self.iter_flags['recon_on_pure_noise']):
+              (self.iter_flags['do_normal_recon'] and self.iter_flags['normal_recon_on_pure_noise']):
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
                 SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt'
                 SUBJ_COMP_PROMPT    = 'subj_comp_mod_prompt'
@@ -1740,7 +1740,7 @@ class LatentDiffusion(DDPM):
                                 x_start0, noise, t, subj_context, cls_context,
                                 uncond_emb, img_mask, fg_mask, cfg_scale, 
                                 num_denoising_steps, num_priming_steps,
-                                recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora, 
+                                normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora, 
                                 ffn_lora_adapter_name, do_adv_attack, DO_ADV_BS):
 
         assert num_denoising_steps <= 10
@@ -1772,7 +1772,7 @@ class LatentDiffusion(DDPM):
             else:
                 context = subj_context
 
-            # If recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
+            # If normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
             # Otherwise, enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
             use_ffn_lora = enable_unet_ffn_lora and (not on_priming_steps)
 
@@ -1797,9 +1797,9 @@ class LatentDiffusion(DDPM):
             ca_layers_activations_list.append(ca_layers_activations)
             x_recons.append(x_recon)
 
-            # In our current implementation, num_priming_steps > 0 only if recon_on_pure_noise.
+            # In our current implementation, num_priming_steps > 0 only if normal_recon_on_pure_noise.
             # So no need to check (i < num_priming_steps).
-            if recon_on_pure_noise or on_priming_steps:
+            if normal_recon_on_pure_noise or on_priming_steps:
                 # The predicted x0 is used as the x_start in the next denoising step.
                 ## NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
                 x_starts.append(x_recon.detach())
@@ -2121,11 +2121,11 @@ class LatentDiffusion(DDPM):
 
         ##### begin of do_normal_recon #####
         if self.iter_flags['do_normal_recon']:  
-            # NOTE: If recon_on_pure_noise, then disable all LoRAs to avoid biases within LoRAs 
-            # being introduced to images generated when recon_on_pure_noise.
+            # NOTE: If normal_recon_on_pure_noise, then disable all LoRAs to avoid biases within LoRAs 
+            # being introduced to images generated when normal_recon_on_pure_noise.
             # Enable attn LoRAs on UNet 50% of the time during recon iterations, to prevent
             # attn LoRAs don't degerate in comp distillation iterations.
-            if not self.iter_flags['recon_on_pure_noise']:
+            if not self.iter_flags['normal_recon_on_pure_noise']:
                 enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
                 enable_unet_ffn_lora  = self.recon_uses_ffn_lora
                 if self.comp_uses_ffn_lora and (torch.randn(1).item() < 0.25):
@@ -2149,7 +2149,7 @@ class LatentDiffusion(DDPM):
             # Doing adversarial attack on the input images seems to introduce high-frequency noise 
             # to the whole image (not just the face area), so we only do it after the first denoise step.
             do_adv_attack = (torch.rand(1) < self.p_do_adv_attack_when_recon_on_images) \
-                            and (not self.iter_flags['recon_on_pure_noise'])
+                            and (not self.iter_flags['normal_recon_on_pure_noise'])
             # diffusers VAE is fp16, more memory efficient. So we can afford DO_ADV_BS=2.
             DO_ADV_BS = min(x_start.shape[0], 2)
 
@@ -2161,7 +2161,7 @@ class LatentDiffusion(DDPM):
                                             self.num_recon_denoising_steps, x_start, noise, 
                                             subj_context, cls_context,
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weight, 
-                                            self.iter_flags['recon_on_pure_noise'], 
+                                            self.iter_flags['normal_recon_on_pure_noise'], 
                                             enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
                                             do_adv_attack, DO_ADV_BS)
             loss += loss_normal_recon
@@ -2438,12 +2438,12 @@ class LatentDiffusion(DDPM):
     # With this trick, we can be reassured to use arcface align loss without worrying it bringing a lot
     # of high-frequency noise to the background.
     # enable_unet_attn_lora: randomly set to True 50% of the time.
-    # enable_unet_ffn_lora: if not recon_on_pure_noise, then True. Otherwise False.
+    # enable_unet_ffn_lora: if not normal_recon_on_pure_noise, then True. Otherwise False.
     # recon_bg_pixel_weight == 0.1, a small penalty on bg errors.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
                                num_denoising_steps, x_start, noise, subj_context, cls_context,
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weight,
-                               recon_on_pure_noise, 
+                               normal_recon_on_pure_noise, 
                                enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
                                do_adv_attack, DO_ADV_BS):
         loss_normal_recon = torch.tensor(0.0, device=x_start.device)
@@ -2451,7 +2451,7 @@ class LatentDiffusion(DDPM):
         BLOCK_SIZE = x_start.shape[0]
         # The t at the first denoising step are sampled from the middle rear 0.5 ~ 0.8 of the timesteps.
         # In the subsequent denoising steps, the timesteps become gradually earlier.
-        if recon_on_pure_noise:
+        if normal_recon_on_pure_noise:
             t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
                               (BLOCK_SIZE,), device=x_start.device).long()
             x_start0 = torch.randn_like(x_start)
@@ -2463,13 +2463,13 @@ class LatentDiffusion(DDPM):
             x_start0 = x_start
             num_recon_priming_steps = 0
 
-        if num_denoising_steps > 1 or recon_on_pure_noise:
+        if num_denoising_steps > 1 or normal_recon_on_pure_noise:
             # When doing multi-step denoising, we apply CFG on the recon images.
             # Use the null prompt as the negative prompt.
             uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE, 1, 1)
             # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
             cfg_scale = 2
-            if recon_on_pure_noise:
+            if normal_recon_on_pure_noise:
                 img_mask = None
                 fg_mask  = torch.ones_like(fg_mask)
         else:
@@ -2495,10 +2495,10 @@ class LatentDiffusion(DDPM):
                                          x_start0, noise, t, subj_context, cls_context, 
                                          uncond_emb, img_mask, fg_mask,
                                          cfg_scale, num_denoising_steps, num_recon_priming_steps,
-                                         # If recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
+                                         # If normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
                                          # Otherwise, enable_unet_attn_lora: randomly set to True 50% of the time.
                                          # enable_unet_ffn_lora: True.
-                                         recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
+                                         normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
                                          ffn_lora_adapter_name, # Switching between 'recon_loss' or 'comp_distill'.
                                          do_adv_attack, DO_ADV_BS)
 
@@ -2548,9 +2548,9 @@ class LatentDiffusion(DDPM):
                 loss_arcface_align_recon_step, loss_fg_faces_suppress_step, loss_bg_faces_suppress_step, fg_face_bboxes, face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.7))
 
-                # Count recon_on_pure_noise stats and non-pure-noise stats separately.
+                # Count normal_recon_on_pure_noise stats and non-pure-noise stats separately.
                 # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
-                if recon_on_pure_noise:
+                if normal_recon_on_pure_noise:
                     self.normal_recon_face_images_on_noise_stats.update([face_detected_inst_mask.sum().item(),
                                                                          face_detected_inst_mask.shape[0]])
                 else:
@@ -2613,7 +2613,7 @@ class LatentDiffusion(DDPM):
                                                    ca_layers_activations,
                                                    all_subj_indices, None, fg_mask2,
                                                    recon_bg_pixel_weight, x_start.shape[0],
-                                                   recon_on_pure_noise)
+                                                   normal_recon_on_pure_noise)
                 
                 losses_recon.append(loss_recon_step)
                 losses_recon_cls.append(loss_recon_cls_step)
@@ -2635,21 +2635,21 @@ class LatentDiffusion(DDPM):
         if len(losses_arcface_align_recon) > 0:
             loss_arcface_align_recon = torch.stack(losses_arcface_align_recon).mean()
             if loss_arcface_align_recon > 0:
-                if recon_on_pure_noise:
+                if normal_recon_on_pure_noise:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise_opt': loss_arcface_align_recon.mean().detach().item() })
-                    # When recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
+                    # When normal_recon_on_pure_noise, loss_arcface_align_recon is the only loss, 
                     # so we scale it up to 4x.
                     arcface_align_recon_loss_scale = 4
                 else:
                     mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_image_opt': loss_arcface_align_recon.mean().detach().item() })
                 # loss_arcface_align_recon: 0.4-0.5. arcface_align_loss_weight: 0.01 => 0.004-0.005.
                 # This loss is around 1/20 of recon/distill losses (0.1).
-                # If recon_on_pure_noise, then loss_arcface_align_recon => 0.016-0.02.
+                # If normal_recon_on_pure_noise, then loss_arcface_align_recon => 0.016-0.02.
                 loss_normal_recon += loss_arcface_align_recon * self.arcface_align_loss_weight * arcface_align_recon_loss_scale
 
         if len(losses_arcface_align_recon_stat) > 0:
             loss_arcface_align_recon_stat = torch.stack(losses_arcface_align_recon_stat).mean()
-            if recon_on_pure_noise:
+            if normal_recon_on_pure_noise:
                 mon_loss_dict.update({f'{session_prefix}/arcface_align_recon_on_noise': loss_arcface_align_recon_stat.mean().detach().item() })
                 print(f"Rank {self.trainer.global_rank} arcface_align_recon_on_noise: {loss_arcface_align_recon_stat.detach().item():.4f}")
             else:
@@ -2675,13 +2675,13 @@ class LatentDiffusion(DDPM):
         #### loss_recon_subj_mb_suppress ####
         loss_recon_subj_mb_suppress = torch.stack(losses_recon_subj_mb_suppress).mean()
         # If fg_mask is None, then loss_recon_subj_mb_suppress = loss_bg_mf_suppress = 0.
-        # If recon_on_pure_noise, then loss_recon_subj_mb_suppress is not optimized, and is only for monitoring.
+        # If normal_recon_on_pure_noise, then loss_recon_subj_mb_suppress is not optimized, and is only for monitoring.
         if loss_recon_subj_mb_suppress > 0:
             mon_loss_dict.update({f'{session_prefix}/recon_subj_mb_suppress': loss_recon_subj_mb_suppress.mean().detach().item()})
         recon_loss_scales = torch.tensor(recon_loss_scales, device=device)
 
         #### loss_recon ####
-        if not recon_on_pure_noise:
+        if not normal_recon_on_pure_noise:
             losses_recon = torch.stack(losses_recon)
             loss_recon   = (losses_recon * recon_loss_scales).mean()
             # The scaled loss_recon may be smaller when none of the images have faces detected
@@ -2700,7 +2700,7 @@ class LatentDiffusion(DDPM):
             # recon loss: 0.1, loss_recon_subj_mb_suppress is 1/20 of recon loss.
             loss_normal_recon += loss_recon_subj_mb_suppress * self.recon_subj_mb_suppress_loss_weight
         else:
-            print(f"Rank {self.trainer.global_rank} recon_on_pure_noise.")
+            print(f"Rank {self.trainer.global_rank} normal_recon_on_pure_noise.")
 
         #### loss_recon_cls ####
         losses_recon_cls = torch.stack(losses_recon_cls)
@@ -2880,7 +2880,7 @@ class LatentDiffusion(DDPM):
                                                      uncond_emb, img_mask0, fg_mask0,
                                                      cfg_scale=2, num_denoising_steps=num_distill_priming_steps, 
                                                      num_priming_steps=num_distill_priming_steps,
-                                                     recon_on_pure_noise=True, 
+                                                     normal_recon_on_pure_noise=True, 
                                                      enable_unet_attn_lora=False, enable_unet_ffn_lora=False, 
                                                      # ffn_lora_adapter_name is 'unet_distill', 
                                                      # to get an x_start compatible with the teacher.

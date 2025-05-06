@@ -227,7 +227,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use attn LoRA in the cross-attn layers of the Diffusers UNet model")
     parser.add_argument("--recon_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use FFN LoRA in the reconstruction iterations")    
-    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
+    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=False,
                         help="Whether to use FFN LoRA in the compositional distillation iterations")
     parser.add_argument("--unet_lora_rank", type=int, default=argparse.SUPPRESS,
                         help="Rank of the LoRA in the Diffusers UNet model")    
