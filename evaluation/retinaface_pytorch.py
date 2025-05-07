@@ -145,6 +145,7 @@ class RetinaFaceClient(nn.Module):
     # Find facial areas of given image tensors and crop them.
     # images_ts: typically [BS, 3, 512, 512] from diffusion (could be any sizes).
     # image_ts: [3, 512, 512].
+    # T: minimum size of the face (the height or the width) to be detected.
     # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), face_detected_inst_mask, face_bboxes
     def crop_faces(self, images_ts, out_size=(128, 128), T=20):
         face_detected_inst_mask = []

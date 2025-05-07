@@ -227,7 +227,7 @@ def get_parser(**parser_kwargs):
                         help="Whether to use attn LoRA in the cross-attn layers of the Diffusers UNet model")
     parser.add_argument("--recon_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use FFN LoRA in the reconstruction iterations")    
-    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=False,
+    parser.add_argument("--comp_uses_ffn_lora", type=str2bool, nargs="?", const=True, default=True,
                         help="Whether to use FFN LoRA in the compositional distillation iterations")
     parser.add_argument("--unet_lora_rank", type=int, default=argparse.SUPPRESS,
                         help="Rank of the LoRA in the Diffusers UNet model")    
@@ -299,9 +299,7 @@ def set_placeholders_info(personalization_config_params, opt, dataset):
     # Only keep the first subject placeholder.
     personalization_config_params.subject_strings               = dataset.subject_strings[:1]
     personalization_config_params.subj_name_to_cls_delta_string = dict(zip(dataset.subject_names, dataset.cls_delta_strings))
-    # subjects_are_faces are always available in dataset.
-    personalization_config_params.subj_name_to_being_faces = dict(zip(dataset.subject_names, dataset.subjects_are_faces))
-    
+
 class WrappedDataset(Dataset):
     """Wraps an arbitrary object with __len__ and __getitem__ into a pytorch dataset"""
 

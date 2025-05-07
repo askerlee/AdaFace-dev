@@ -214,7 +214,6 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
         img_mask: Optional[torch.Tensor] = None,
-        subj_indices: Optional[Tuple[torch.IntTensor, torch.IntTensor]] = None,
         debug: bool = False,
         *args,
         **kwargs,

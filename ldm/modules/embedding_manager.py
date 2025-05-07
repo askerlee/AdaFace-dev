@@ -45,7 +45,6 @@ class EmbeddingManager(nn.Module):
                                        17: 8, 18: 9, 19: 10, 20: 11, 21: 12, 22: 13, 23: 14, 24: 15 },    
             training_perturb_std_range=None,
             training_perturb_prob=None,
-            subj_name_to_being_faces=None,   # subj_name_to_being_faces: a dict that maps subject names to is_face.
             cls_delta_string='person',
             cls_delta_token_weights=None,
             # During training,  prompt2token_proj_ext_attention_perturb_ratio is 0.1.
@@ -175,7 +174,6 @@ class EmbeddingManager(nn.Module):
 
         # Initialize self.subj_name_to_cls_delta_tokens.
         self.init_cls_delta_tokens(self.get_tokens_for_string, subj_name_to_cls_delta_string, cls_delta_string)
-        self.init_subj_name_to_being_faces(subj_name_to_being_faces)
 
         self.layer_idx = -1
         self.clear_prompt_adhoc_info()
@@ -233,14 +231,6 @@ class EmbeddingManager(nn.Module):
             # should be multiplied by the number of subject strings. Currently not implemented.
             if num_cls_delta_tokens - 1 > self.CLS_DELTA_STRING_MAX_SEARCH_SPAN:
                 self.CLS_DELTA_STRING_MAX_SEARCH_SPAN = num_cls_delta_tokens - 1
-
-    def init_subj_name_to_being_faces(self, subj_name_to_being_faces):
-        # subj_name_to_being_faces: a dict that maps subject names to is_face.
-        # subj_name_to_being_faces is used in ddpm.py and not here.
-        self.subj_name_to_being_faces = subj_name_to_being_faces if subj_name_to_being_faces is not None \
-                                            else {subj_name: True for subj_name in self.subject_strings}
-        self.subj_name_to_being_faces['rand_id_to_img_prompt'] = True
-        self.subj_name_to_being_faces['default']            = True
 
     # "Patch" the returned embeddings of CLIPTextEmbeddings.
     def forward(
@@ -460,7 +450,7 @@ class EmbeddingManager(nn.Module):
         # BUG: if there are multiple subjects in the same batch, then is_face is only 
         # about the first subject. But now we only support one subject in a batch.
         if len(self.curr_batch_subj_names) > 0:
-            self.curr_subj_is_face = self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
+            self.curr_subj_is_face = True # self.subj_name_to_being_faces[self.curr_batch_subj_names[0]]
 
         if len(self.current_subj_name_to_cls_delta_tokens) > 0:
             self.cls_delta_strings       = [ self.subj_name_to_cls_delta_string[subj_name] \

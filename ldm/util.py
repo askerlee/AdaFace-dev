@@ -1098,38 +1098,38 @@ def collate_dicts(dicts):
     return d_all
 
 # Reverse of collate_dicts.
-def split_dict(d_all, split_size):
+def split_dict(d_all, num_splits):
     """
     Split a collated dictionary back into a list of dictionaries.
     
     Args:
         d_all: A dictionary created by collate_dicts()
-        split_size: The size of each split
+        num_splits: Number of splits to create.
     
     Returns:
         A list of dictionaries with the same structure as inputs to collate_dicts()
     """
-    result = [{} for _ in range(split_size)]
+    result = [{} for _ in range(num_splits)]
     
     for k, v in d_all.items():
         if isinstance(v, list):
             # Calculate the size of each split for lists
-            item_per_split = len(v) // split_size
-            for i in range(split_size):
+            item_per_split = len(v) // num_splits
+            for i in range(num_splits):
                 start_idx = i * item_per_split
                 end_idx = (i + 1) * item_per_split
                 result[i][k] = v[start_idx:end_idx]
         
         elif isinstance(v, torch.Tensor):
             # Split tensors along the first dimension
-            splits = torch.split(v, v.size(0) // split_size, dim=0)
-            for i in range(split_size):
+            splits = torch.split(v, v.size(0) // num_splits, dim=0)
+            for i in range(num_splits):
                 result[i][k] = splits[i]
         
         elif isinstance(v, dict):
             # Recursively split nested dictionaries
-            split_nested = split_dict(v, split_size)
-            for i in range(split_size):
+            split_nested = split_dict(v, num_splits)
+            for i in range(num_splits):
                 result[i][k] = split_nested[i]
         
         else:
@@ -1875,7 +1875,7 @@ def calc_subj_masked_bg_suppress_loss(ca_attn, subj_indices, BLOCK_SIZE, fg_mask
 
 def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                     flow_model, ca_layers_activations,
-                                    sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                                    ss_face_bboxes, sc_face_bboxes,
                                     sc_face_shrink_ratio_for_bg_matching_mask=1,
                                     recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                     recon_max_scale_of_threses=5, do_sc_fg_faces_suppress=False):
@@ -1926,7 +1926,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
         # ca_attn_out is used to compute the reconstruction loss between subject-single and subject-comp instances 
         # (using the correlation matrix), as well as class-single and class-comp instances.
         # Flatten the spatial dimensions of ca_attn_out.
-        # ca_layer_q, ca_attn_out, ca_outfeat: [4, 1280, 8, 8] -> [4, 1280, 64].
+        # ca_layer_q, ca_attn_out, ca_outfeat: [4, 320, 64, 64] -> [4, 320, 4096].
         ca_outfeat  = ca_outfeat.reshape(*ca_outfeat.shape[:2], -1)
 
         # sc_to_ss_fg_prob, mc_to_ms_fg_prob: [1, 1, 64]
@@ -1937,7 +1937,7 @@ def calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
         losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats, discarded_loss_ratio = \
             calc_elastic_matching_loss(unet_layer_idx, flow_model, 
                                        ca_layer_q, ca_attn_out, ca_outfeat, ca_q_h, ca_q_w, 
-                                       sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                                       ss_face_bboxes, sc_face_bboxes,
                                        sc_face_shrink_ratio_for_bg_matching_mask=sc_face_shrink_ratio_for_bg_matching_mask,
                                        recon_scaled_loss_threses=recon_scaled_loss_threses,
                                        recon_max_scale_of_threses=recon_max_scale_of_threses,
@@ -2498,7 +2498,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
 # and isn't caused by inherently different scales of attn_out and outfeat.
 @conditional_compile(enable_compile=EnableCompile)
 def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outfeat, H, W, 
-                               sc_fg_mask, ss_face_bboxes, sc_face_bboxes,
+                               ss_face_bboxes, sc_face_bboxes,
                                sc_face_shrink_ratio_for_bg_matching_mask=1,
                                recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                recon_max_scale_of_threses=5,
@@ -2511,11 +2511,11 @@ def calc_elastic_matching_loss(layer_idx, flow_model, ca_q, ca_attn_out, ca_outf
     all_flow_distill_stats    = {}
     flow_distill_stats        = {}
 
-    # sc_fg_mask: [1, 1, 64, 64].
+    BLOCK_SIZE = ca_q.shape[0] // 4
     # sc_bg_mask: [1, 1, 64, 64].
     # We have made sure that sc_fg_mask_percent <= 0.8 in calc_comp_feat_distill_loss(), so 
     # sc_bg_mask will never be all 0s.
-    sc_bg_mask = torch.ones_like(sc_fg_mask) 
+    sc_bg_mask = torch.ones((BLOCK_SIZE, 1, H, W), device=ca_q.device, dtype=ca_q.dtype)
 
     # ss_*: subj single, sc_*: subj comp, ms_*: class single, mc_*: class comp.
     # ss_q, sc_q, sc_rep_q, mc_q: [4, 1280, 961] => [1, 1280, 961].
