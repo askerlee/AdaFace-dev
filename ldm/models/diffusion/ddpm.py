@@ -3250,8 +3250,14 @@ class LatentDiffusion(DDPM):
                                            crop_mix_weight=self.redenoise_subj_single_crop_mix_weight)
             if ss_fg_face_bboxes2 is not None:
                 ss_fg_face_bboxes = ss_fg_face_bboxes2
-        # Otherwise, no face is detected in the sc instance. 
-        # So we keep the original SS activations and ss_fg_face_bboxes.
+                ss_redenoised = True
+            else:
+                # Otherwise, the redenoising failed, i.e., no face is detected in the new ss instance.
+                ss_redenoised = False
+        else:
+            # Otherwise, no face is detected in the sc instance. 
+            # So we keep the original SS activations and ss_fg_face_bboxes.
+            ss_redenoised = False
 
         if sc_face_proportion_type in ['mc-no-sc-large', 'little-no-overlap', 'too-large']:
             do_sc_fg_faces_suppress = True
@@ -3266,13 +3272,8 @@ class LatentDiffusion(DDPM):
             # comp_sc_face_suppressed_frac: 0.2~0.5.
             # If comp_sc_face_suppressed_frac=0.5, then extra_suppress_loss_scale = 15.625.
             # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
-            # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 15 * 0.01 = 0.045 if use_attn_lora.
-            # or                                   0.03 * 10 *  5 * 0.01 = 0.015 if not use_attn_lora.
-            # If use_attn_lora, then the background is more likely to be reinterpreted as a face,
-            # therefore we need to increase the loss scale.
-            # If **not** use_ffn_lora, then the background is more likely to be reinterpreted as a face,
-            # therefore we need to increase the loss scale.
-            extra_suppress_loss_scale = 15 if (use_attn_lora or not use_ffn_lora) else 5
+            # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 15 * 0.01 = 0.045.
+            extra_suppress_loss_scale = 15
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.3
