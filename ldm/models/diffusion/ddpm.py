@@ -213,6 +213,7 @@ class DDPM(pl.LightningModule):
         self.comp_mc_face_detected_frac              = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_sc_face_suppressed_frac            = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_sc_face_align_loss_kept_frac       = RollingStats(num_values=1, window_size=200, stat_type='mean')
+        self.comp_ss_redenoise_success_frac          = RollingStats(num_values=1, window_size=200, stat_type='mean')
         self.comp_iters_bg_has_face_count            = 0
         self.comp_iters_bg_match_loss_count          = 0
         self.adaface_adv_iters_count                 = 0
@@ -3255,14 +3256,19 @@ class LatentDiffusion(DDPM):
             if ss_fg_face_bboxes2 is not None:
                 ss_fg_face_bboxes = ss_fg_face_bboxes2
                 ss_redenoised = True
+                self.comp_ss_redenoise_success_frac.update(1)
             else:
                 # Otherwise, the redenoising failed, i.e., no face is detected in the new ss instance.
                 ss_redenoised = False
+                self.comp_ss_redenoise_success_frac.update(0)
         else:
             # Otherwise, no face is detected in the sc instance. 
             # So we keep the original SS activations and ss_fg_face_bboxes.
             ss_redenoised = False
+            # Don't update comp_ss_redenoise_success_frac, as redenoise_subj_single() is not tried in this branch.
 
+        mon_loss_dict.update({f'{session_prefix}/comp_ss_redenoise_success_frac': self.comp_ss_redenoise_success_frac.mean})
+        
         if sc_face_proportion_type in ['mc-no-sc-large', 'little-no-overlap', 'too-large']:
             do_sc_fg_faces_suppress = True
             # If sc_face_proportion_type is 'mc-no-sc-large', 'little-no-overlap' or 'too-large', then 
