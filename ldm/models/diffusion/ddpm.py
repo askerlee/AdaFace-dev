@@ -1020,11 +1020,11 @@ class LatentDiffusion(DDPM):
             if self.iter_flags['do_comp_feat_distill'] or \
               (self.iter_flags['do_normal_recon'] and self.iter_flags['normal_recon_on_pure_noise']):
                 # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
-                SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt'
+                SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt_fp'
                 SUBJ_COMP_PROMPT    = 'subj_comp_mod_prompt'
                 # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
                 # SUBJ_SINGLE_PROMPT for prompt delta loss.
-                CLS_SINGLE_PROMPT   = 'cls_single_mod_prompt'
+                CLS_SINGLE_PROMPT   = 'cls_single_mod_prompt_fp'
                 # Sometimes the cls comp instances don't have clear faces.
                 # So use the fp trick on cls comp prompts at 75% of the time.
                 if self.comp_iters_count % 4 != 0:
@@ -2975,22 +2975,26 @@ class LatentDiffusion(DDPM):
             x1, y1, x2, y2 = sc_fg_face_bboxes[i]
             # x_start0_ss: [1, 4, 64, 64].
             ss_crop_i = x_start0_ss[i:i+1, :, y1:y2, x1:x2]
+            # Crop the sc face area in the x_start0_ss and noises of the ss instance.
+            # Resize them to the original size of (64, 64), then add to the original x_start0_ss / noises_ss.
+            # IF BLOCK_SIZE > 1, then different sc_fg_face_bboxes may have different sizes. 
+            # Therefore we have to crop and resize them separately.
             ss_crop_i = F.interpolate(ss_crop_i, latent_shape[-2:], mode='bilinear', align_corners=False)
             x_start0_ss_crop.append(ss_crop_i)
-            for t, noise in enumerate(noises):
+            for step, noise in enumerate(noises):
                 noise_ss = noise[i:i+1, :, y1:y2, x1:x2]
                 noise_ss = F.interpolate(noise_ss, latent_shape[-2:], mode='bilinear', align_corners=False)
-                noises_ss_crop[t].append(noise_ss)
+                noises_ss_crop[step].append(noise_ss)
 
         x_start0_ss_crop = torch.cat(x_start0_ss_crop, dim=0)
         # Simply scaling up x_start0_ss_crop, noises_ss_crop to the original size will introduce
         # too many low frequency artifacts. Therefore we take a weighted average of the original and cropped-and-scaled ones.
         x_start0_ss_crop = x_start0_ss_crop * crop_mix_weight + x_start0_ss * (1 - crop_mix_weight)
-        for t in range(len(noises_ss_crop)):
-            noises_ss_crop[t] = torch.cat(noises_ss_crop[t], dim=0)
-            noises_ss_crop[t] = noises_ss_crop[t] * crop_mix_weight + noises_ss[t] * (1 - crop_mix_weight)
+        for step in range(len(noises_ss_crop)):
+            noises_ss_crop[step] = torch.cat(noises_ss_crop[step], dim=0)
+            noises_ss_crop[step] = noises_ss_crop[step] * crop_mix_weight + noises_ss[step] * (1 - crop_mix_weight)
 
-        # ts_ss: only keep the first 1/4 of each t in the t sequence.
+        # ts_ss: only keep the first 1/4 (the SS block) of each t in the t sequence.
         ts_ss = [ t.chunk(4)[0] for t in ts ]
 
         # The input noises and ts are the randomly sampled noise and t sequences 
