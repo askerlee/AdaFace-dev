@@ -149,9 +149,10 @@ class RetinaFaceClient(nn.Module):
     # Output: [BS, 3, 128, 128] (cropped faces resized to 128x128), face_detected_inst_mask, face_bboxes
     def crop_faces(self, images_ts, out_size=(128, 128), T=20):
         face_detected_inst_mask = []
-        fg_face_bboxes      = []
-        fg_face_crops       = []
-        bg_face_crops_flat  = []
+        face_confidences        = []
+        fg_face_bboxes          = []
+        fg_face_crops           = []
+        bg_face_crops_flat      = []
     
         for i, image_ts in enumerate(images_ts):
             # [3, H, W] -> [H, W, 3], [-1, 1] -> [0, 255]
@@ -166,6 +167,7 @@ class RetinaFaceClient(nn.Module):
                 fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
                 # No face detected
                 face_detected_inst_mask.append(0)
+                face_confidences.append(0.0)
                 continue
             else:
                 face_bboxes = []
@@ -175,7 +177,8 @@ class RetinaFaceClient(nn.Module):
                     y = face.y
                     w = face.w
                     h = face.h
-
+                    confidence = face.confidence
+                    
                     y_start = max(0, int(y))
                     y_end   = min(image_ts.shape[1], int(y + h))
                     x_start = max(0, int(x))
@@ -185,7 +188,7 @@ class RetinaFaceClient(nn.Module):
                         continue
                     
                     facial_area = (y_end - y_start) * (x_end - x_start)
-                    face_bboxes.append((facial_area, x_start, y_start, x_end, y_end))
+                    face_bboxes.append((facial_area, confidence, x_start, y_start, x_end, y_end))
 
                 if len(face_bboxes) == 0:
                     # No faces are >= T. So this instance is failed.
@@ -196,12 +199,14 @@ class RetinaFaceClient(nn.Module):
                     fg_face_bboxes.append((0, 0, image_ts.shape[2], image_ts.shape[1]))
                     # Mark no face detected
                     face_detected_inst_mask.append(0)
+                    face_confidences.append(0.0)
                     continue
 
                 # Sort face_bboxes by the facial area in descending order
                 face_bboxes = sorted(face_bboxes, key=lambda x: x[0], reverse=True)
-                # Remove the facial area from the tuple
-                face_bboxes = [x[1:] for x in face_bboxes]
+                confidence_of_largest_face = face_bboxes[0][1]
+                # Remove the facial_area, confidence from the tuple
+                face_bboxes = [x[2:] for x in face_bboxes]
 
                 face_crops = []
                 for x_start, y_start, x_end, y_end in face_bboxes:
@@ -219,11 +224,13 @@ class RetinaFaceClient(nn.Module):
                 fg_face_crops.append(face_crops[0])
                 face_detected_inst_mask.append(1)
                 bg_face_crops_flat.extend(face_crops[1:])
+                face_confidences.append(confidence_of_largest_face)
 
         # fg_face_bboxes: long tensor of [BS, 4].
-        fg_face_bboxes      = torch.tensor(fg_face_bboxes, device=images_ts.device)
+        fg_face_bboxes          = torch.tensor(fg_face_bboxes, device=images_ts.device)
         # face_detected_inst_mask: binary tensor of [BS]
         face_detected_inst_mask = torch.tensor(face_detected_inst_mask, device=images_ts.device)
+        face_confidences        = torch.tensor(face_confidences, device=images_ts.device)
 
         # fg_face_crops: [BS, 3, 128, 128], BS1 <= BS
         fg_face_crops = torch.cat(fg_face_crops, dim=0)
@@ -234,5 +241,5 @@ class RetinaFaceClient(nn.Module):
             # bg_face_crops_flat: [N, 3, 128, 128], N is the total number of bg face crops.
             bg_face_crops_flat  = torch.cat(bg_face_crops_flat, dim=0)
         
-        return fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_detected_inst_mask
+        return fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_confidences, face_detected_inst_mask
 

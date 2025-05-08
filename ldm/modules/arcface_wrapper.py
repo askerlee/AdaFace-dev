@@ -93,14 +93,14 @@ class ArcFaceWrapper(nn.Module):
         # But the cropping operation is wrapped with torch.no_grad().
         # fg_face_bboxes: long tensor of [BS, 4].
         # face_detected_inst_mask: binary tensor of [BS].
-        fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_detected_inst_mask = \
+        fg_face_crops, bg_face_crops_flat, fg_face_bboxes, face_confidences, face_detected_inst_mask = \
             self.retinaface.crop_faces(images_ts, out_size=(128, 128), T=T)
         
         # No face detected in any instances in the batch. 
         # fg_face_bboxes is a tensor of the full image size, 
         # and doesn't indicate the face locations.
         if face_detected_inst_mask.sum() == 0:
-            return None, None, None, None, face_detected_inst_mask
+            return None, None, None, None, None, face_detected_inst_mask
         
         # Arcface takes grayscale images as input
         rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
@@ -162,7 +162,8 @@ class ArcFaceWrapper(nn.Module):
         else:
             bg_faces_emb = None
 
-        return fg_faces_emb_center, fg_faces_emb_border, bg_faces_emb, fg_face_bboxes, face_detected_inst_mask
+        return fg_faces_emb_center, fg_faces_emb_border, bg_faces_emb, fg_face_bboxes, \
+               face_confidences, face_detected_inst_mask
 
     # T: minimal face height/width to be detected.
     # ref_images:     the groundtruth images, roughly normalized to [-1, 1] (could go beyond).
@@ -170,13 +171,13 @@ class ArcFaceWrapper(nn.Module):
     def calc_arcface_align_loss(self, ref_images, aligned_images, T=20, 
                                 fg_faces_grad_mask_ratios=(1, 0.3)):
         # ref_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
-        ref_fg_faces_emb, _, _, ref_fg_face_bboxes, ref_face_detected_inst_mask = \
+        ref_fg_faces_emb, _, _, ref_fg_face_bboxes, ref_fg_face_confidences, ref_face_detected_inst_mask = \
             self.embed_image_tensor(ref_images, T, embed_bg_faces=False,
                                     enable_grad=False, fg_faces_grad_mask_ratios=(-1, -1))
         # bg_embs are not separated by instances, but flattened. 
         # We don't align them, just suppress them. So we don't need the batch dimension.
         aligned_fg_faces_emb_center, aligned_fg_faces_emb_border, aligned_bg_faces_emb, \
-          aligned_fg_face_bboxes, aligned_face_detected_inst_mask = \
+          aligned_fg_face_bboxes, aligned_fg_face_confidences, aligned_face_detected_inst_mask = \
             self.embed_image_tensor(aligned_images, T, embed_bg_faces=True, enable_grad=True,
                                     fg_faces_grad_mask_ratios=fg_faces_grad_mask_ratios)
         
@@ -186,10 +187,12 @@ class ArcFaceWrapper(nn.Module):
         # But only if all instances in the aligned batch have no face detected, we return zero losses.
         if (1 - ref_face_detected_inst_mask).sum() > 0:
             print(f"Failed to detect faces in some ref_images. Cannot compute arcface align loss")
-            return zero_losses[0], zero_losses[1], zero_losses[2], None, aligned_face_detected_inst_mask
+            return zero_losses[0], zero_losses[1], zero_losses[2], None, \
+                   None,                        aligned_face_detected_inst_mask
         if aligned_face_detected_inst_mask.sum() == 0:
             print(f"Failed to detect faces in any aligned_images. Cannot compute arcface align loss")
-            return zero_losses[0], zero_losses[1], zero_losses[2], None, aligned_face_detected_inst_mask
+            return zero_losses[0], zero_losses[1], zero_losses[2], None, \
+                   aligned_fg_face_confidences, aligned_face_detected_inst_mask
 
         # If the numbers of instances in ref_fg_faces_emb and aligned_fg_faces_emb are different, then there's only one ref image, 
         # and multiple aligned images of the same person.
@@ -223,4 +226,5 @@ class ArcFaceWrapper(nn.Module):
         else:
             loss_bg_faces_suppress = zero_losses[0]
 
-        return loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, aligned_fg_face_bboxes, aligned_face_detected_inst_mask
+        return loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, aligned_fg_face_bboxes, \
+               aligned_fg_face_confidences, aligned_face_detected_inst_mask

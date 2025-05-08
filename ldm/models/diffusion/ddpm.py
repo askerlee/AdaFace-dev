@@ -2320,7 +2320,7 @@ class LatentDiffusion(DDPM):
         # If no face is detected in instance i, recon_fg_face_bboxes[i] is the full image size.
         # recon_fg_face_detected_inst_mask: binary tensor of [BS]
         loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, \
-        recon_fg_face_bboxes, recon_fg_face_detected_inst_mask = \
+        recon_fg_face_bboxes, recon_fg_face_confidences, recon_fg_face_detected_inst_mask = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, 
                                                  fg_faces_grad_mask_ratios=fg_faces_grad_mask_ratios)
         loss_arcface_align      = loss_arcface_align.to(x_start.dtype)
@@ -2329,7 +2329,7 @@ class LatentDiffusion(DDPM):
         # recon_fg_face_bboxes is None if there are no faces detected in x_recon.
         recon_fg_face_bboxes = pixel_bboxes_to_latent(recon_fg_face_bboxes, x_start_pixels.shape[-1], x_start.shape[-1])
         return loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, \
-               recon_fg_face_bboxes, recon_fg_face_detected_inst_mask
+               recon_fg_face_bboxes, recon_fg_face_confidences, recon_fg_face_detected_inst_mask
 
     def calc_arcface_adv_grad(self, x_start):
         x_start.requires_grad = True
@@ -2338,7 +2338,7 @@ class LatentDiffusion(DDPM):
         orig_image = self.decode_first_stage_with_grad(x_start)
         # T=20: the smallest face size to be detected is 20x20. Note this is in the pixel space, 
         # so such faces are really small.
-        face_embs_center, _, _, fg_face_bboxes, face_detected_inst_mask = \
+        face_embs_center, _, _, fg_face_bboxes, fg_face_confidences, face_detected_inst_mask = \
             self.arcface.embed_image_tensor(orig_image, T=20, enable_grad=True, fg_faces_grad_mask_ratios=(0.9, 0.9))
         no_face_img_num = (1 - face_detected_inst_mask).sum()
         if no_face_img_num.sum() > 0:
@@ -2493,7 +2493,8 @@ class LatentDiffusion(DDPM):
                 # face_detected_inst_mask: binary tensor of [BS].
                 # loss_fg_faces_suppress_step is not optimized. 
                 # So the second item in fg_faces_grad_mask_ratios has no effect.
-                loss_arcface_align_recon_step, loss_fg_faces_suppress_step, loss_bg_faces_suppress_step, fg_face_bboxes, face_detected_inst_mask = \
+                loss_arcface_align_recon_step, loss_fg_faces_suppress_step, loss_bg_faces_suppress_step, fg_face_bboxes, \
+                fg_face_confidences, face_detected_inst_mask = \
                     self.calc_arcface_align_loss(x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.7))
 
                 # Count normal_recon_on_pure_noise stats and non-pure-noise stats separately.
@@ -2964,7 +2965,7 @@ class LatentDiffusion(DDPM):
     # the re-denoised subject-single instance activations.
     # x_start_primed_ss: Note to provide the primed x_start_ss, not the input x_start0_ss.
     def redenoise_subj_single(self, x_start_primed_ss, noises, ts, ca_layers_activations_list, 
-                              ss_context, uncond_emb, sc_fg_face_bboxes, 
+                              ss_context, uncond_emb, sc_fg_face_bboxes, orig_face_confidence,
                               use_attn_lora, use_ffn_lora, crop_mix_weight=0.3):
         device = x_start_primed_ss.device
         latent_shape = x_start_primed_ss.shape
@@ -3021,10 +3022,13 @@ class LatentDiffusion(DDPM):
         x_recon_ss_pixels2 = self.decode_first_stage(x_recon_ss2)
         # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
         # So we don't need to wrap it here.
-        ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, ss_face_detected_inst_mask2 = \
+        ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, face_confidences, ss_face_detected_inst_mask2 = \
             self.arcface.retinaface.crop_faces(x_recon_ss_pixels2, out_size=(128, 128), T=20)
 
-        # Only replace the ss instance results when all ss instances have faces detected.
+        face_confidence = face_confidences.mean().item()
+
+        # Only replace the ss instance results when all ss instances have faces detected,
+        # and the confidence (likelihood) of the new ss face is at least 90% of the original ss face.
         if (1 - ss_face_detected_inst_mask2).sum() == 0:
             # If there are no failed indices, then we get ss_fg_face_bboxes2.
             # NOTE: ss_fg_face_bboxes2 are coords on x_recon_ss_pixels2, 512*512.
@@ -3033,30 +3037,48 @@ class LatentDiffusion(DDPM):
             ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recon_ss_pixels2.shape[-1], latent_shape[-1])
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
-                print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}.", end=' ')
+                print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. Confidence: {face_confidences[i]:.2f}.", end=' ')
+
+            is_good_confidence = (face_confidence >= orig_face_confidence)
 
             for i, x_recon_ss2 in enumerate(x_recons_ss):
-                recon_images_ss = self.decode_first_stage(x_recon_ss2)
+                if i == len(x_recons_ss) - 1:
+                    # If currently pointing at the last step, then x_recon_ss_pixels2 has been decoded already. 
+                    # Avoid decoding it again.
+                    recon_images_ss = x_recon_ss_pixels2
+                else:
+                    recon_images_ss = self.decode_first_stage(x_recon_ss2)
+
                 # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
                 log_image_colors = torch.ones(recon_images_ss.shape[0], dtype=int, device=device) * (i % 4)
+                if not is_good_confidence:
+                    # Change the border colors to 4, 5, 6, 7, i.e., orange, blue, pink, magenta, 
+                    # to indicate they are of low confidence.
+                    log_image_colors += 4
                 # Since the 1st round of recon images have been logged already,
                 # we can only put the second round of SS recon images altogether at the end of 
                 # this batch of logged images.
                 self.cache_and_log_generations(recon_images_ss, log_image_colors, do_normalize=True)
 
-            for i, ca_layers_activations_ss in enumerate(ca_layers_activations_list_ss):
-                ca_layers_activations = ca_layers_activations_list[i]
-                ca_ss, ca_sc, ca_ss_rep, ca_mc = \
-                    split_dict(ca_layers_activations, 4)
-                # Replace the first round SS instance CA activations with 
-                # the second round of SS instance CA activations.
-                ca_layers_activations = collate_dicts([ca_layers_activations_ss, ca_sc, ca_ss_rep, ca_mc])
-                ca_layers_activations_list[i] = ca_layers_activations
+            if is_good_confidence:
+                for i, ca_layers_activations_ss in enumerate(ca_layers_activations_list_ss):
+                    ca_layers_activations = ca_layers_activations_list[i]
+                    ca_ss, ca_sc, ca_ss_rep, ca_mc = \
+                        split_dict(ca_layers_activations, 4)
+                    # Replace the first round SS instance CA activations with 
+                    # the second round of SS instance CA activations.
+                    ca_layers_activations = collate_dicts([ca_layers_activations_ss, ca_sc, ca_ss_rep, ca_mc])
+                    ca_layers_activations_list[i] = ca_layers_activations
 
-            return ss_fg_face_bboxes2
+                return ss_fg_face_bboxes2
+            else:
+                # If the face confidence is too low, we still log the images, but we don't replace the activations.
+                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.2f} is lower than original confidence {orig_face_confidence:.2f} * 0.9. Discarded.")
+                return None
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
         else:
+            print(f"Rank {self.trainer.global_rank} 2nd SS denoising failed. Discarded.")
             return None
         
     # x_start0_ss: the latent of the first 1/4 batch of input images (actually only 1 image), 
@@ -3104,7 +3126,7 @@ class LatentDiffusion(DDPM):
             x_recon_ss_pixels = self.decode_first_stage(x_recon_ss)
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
-            ss_fg_face_crops, ss_bg_face_crops_flat, ss_fg_face_bboxes, ss_face_detected_inst_mask = \
+            ss_fg_face_crops, ss_bg_face_crops_flat, ss_fg_face_bboxes, ss_face_confidences, ss_face_detected_inst_mask = \
                 self.arcface.retinaface.crop_faces(x_recon_ss_pixels, out_size=(128, 128), T=20)
 
             # Only compute losses when all ss instances have faces detected.
@@ -3115,7 +3137,7 @@ class LatentDiffusion(DDPM):
                 # ss cropping is done on the latents, 64*64. So we scale ss_fg_face_bboxes down by 8.
                 ss_fg_face_bboxes = pixel_bboxes_to_latent(ss_fg_face_bboxes, x_recon_ss_pixels.shape[-1], latent_shape[-1])
                 for i in range(len(ss_fg_face_bboxes)):
-                    print(f"Rank {self.trainer.global_rank} 1st SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}.", end=' ')
+                    print(f"Rank {self.trainer.global_rank} 1st SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}. Confidence: {ss_face_confidences[i]:.2f}.", end=' ')
 
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
@@ -3148,7 +3170,7 @@ class LatentDiffusion(DDPM):
             mc_x_recon_pixels = self.decode_first_stage(mc_x_recon)
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
-            mc_fg_face_crops, mc_bg_face_crops_flat, mc_fg_face_bboxes, mc_face_detected_inst_mask = \
+            mc_fg_face_crops, mc_bg_face_crops_flat, mc_fg_face_bboxes, mc_face_confidences, mc_face_detected_inst_mask = \
                 self.arcface.retinaface.crop_faces(mc_x_recon_pixels, out_size=(128, 128), T=20)
             
             if (1 - mc_face_detected_inst_mask).sum() == 0:
@@ -3255,9 +3277,10 @@ class LatentDiffusion(DDPM):
             # the new ss_fg_face_bboxes is returned, and we replace ss_fg_face_bboxes with it.
             ss_fg_face_bboxes2 = \
                 self.redenoise_subj_single(x_start_primed_ss, noises, ts, ca_layers_activations_list,
-                                           ss_context, uncond_emb, sc_fg_face_bboxes, 
+                                           ss_context, uncond_emb, sc_fg_face_bboxes, ss_face_confidences.mean().item(),
                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
                                            crop_mix_weight=self.redenoise_subj_single_crop_mix_weight)
+            
             if ss_fg_face_bboxes2 is not None:
                 ss_fg_face_bboxes = ss_fg_face_bboxes2
                 ss_redenoised = True
@@ -3483,7 +3506,7 @@ class LatentDiffusion(DDPM):
                     # For loss_arcface_align_comp,     we encourage the central 90% of the face area, 
                     # For loss_fg_faces_suppress_comp, we suppress  the border  70% of the face area.
                     loss_arcface_align_comp_step, loss_fg_faces_suppress_comp_step, loss_bg_faces_suppress_comp_step, \
-                    sc_fg_face_bboxes_, sc_fg_face_detected_inst_mask = \
+                    sc_fg_face_bboxes_, sc_fg_face_confidences, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start0_ss, subj_comp_recon, fg_faces_grad_mask_ratios)
                     # Found valid face images. Stop trying, since we cannot afford calculating loss_arcface_align_comp for > 1 steps.
                     if loss_arcface_align_comp_step > 0:
