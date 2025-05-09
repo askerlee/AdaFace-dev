@@ -3074,7 +3074,7 @@ class LatentDiffusion(DDPM):
                 return ss_fg_face_bboxes2
             else:
                 # If the face confidence is too low, we still log the images, but we don't replace the activations.
-                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.2f} is lower than original confidence {orig_face_confidence:.2f} * 0.9. Discarded.")
+                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.2f} is lower than original confidence {orig_face_confidence:.2f}. Discarded.")
                 return None
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
         else:

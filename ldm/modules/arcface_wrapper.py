@@ -100,7 +100,7 @@ class ArcFaceWrapper(nn.Module):
         # fg_face_bboxes is a tensor of the full image size, 
         # and doesn't indicate the face locations.
         if face_detected_inst_mask.sum() == 0:
-            return None, None, None, None, None, face_detected_inst_mask
+            return None, None, None, None, face_confidences, face_detected_inst_mask
         
         # Arcface takes grayscale images as input
         rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
@@ -188,7 +188,7 @@ class ArcFaceWrapper(nn.Module):
         if (1 - ref_face_detected_inst_mask).sum() > 0:
             print(f"Failed to detect faces in some ref_images. Cannot compute arcface align loss")
             return zero_losses[0], zero_losses[1], zero_losses[2], None, \
-                   None,                        aligned_face_detected_inst_mask
+                   aligned_fg_face_confidences, aligned_face_detected_inst_mask
         if aligned_face_detected_inst_mask.sum() == 0:
             print(f"Failed to detect faces in any aligned_images. Cannot compute arcface align loss")
             return zero_losses[0], zero_losses[1], zero_losses[2], None, \
