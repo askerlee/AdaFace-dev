@@ -106,6 +106,7 @@ class DDPM(pl.LightningModule):
                  num_recon_denoising_steps=2,
                  num_comp_distill_denoising_steps=4,
                  redenoise_subj_single_crop_mix_weight=0.3,
+                 comp_ss_face_confidence_thres=0.99,
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.5, 2.5],
                  p_unet_distill_uses_comp_prompt=0,
@@ -180,6 +181,7 @@ class DDPM(pl.LightningModule):
         self.num_recon_denoising_steps              = num_recon_denoising_steps
         self.num_comp_distill_denoising_steps       = num_comp_distill_denoising_steps
         self.redenoise_subj_single_crop_mix_weight  = redenoise_subj_single_crop_mix_weight
+        self.comp_ss_face_confidence_thres          = comp_ss_face_confidence_thres
 
         # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
         # If unet_teacher_types == ['arc2face'], then p_unet_distill_uses_comp_prompt == 0, i.e., we
@@ -2965,8 +2967,9 @@ class LatentDiffusion(DDPM):
     # the re-denoised subject-single instance activations.
     # x_start_primed_ss: Note to provide the primed x_start_ss, not the input x_start0_ss.
     def redenoise_subj_single(self, x_start_primed_ss, noises, ts, ca_layers_activations_list, 
-                              ss_context, uncond_emb, sc_fg_face_bboxes, orig_face_confidence,
-                              use_attn_lora, use_ffn_lora, crop_mix_weight=0.3):
+                              ss_context, uncond_emb, sc_fg_face_bboxes,
+                              use_attn_lora, use_ffn_lora, crop_mix_weight=0.3, 
+                              comp_ss_face_confidence_thres=0.99):
         device = x_start_primed_ss.device
         latent_shape = x_start_primed_ss.shape
 
@@ -3037,9 +3040,9 @@ class LatentDiffusion(DDPM):
             ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recon_ss_pixels2.shape[-1], latent_shape[-1])
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
-                print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. Confidence: {face_confidences[i]:.2f}.", end=' ')
+                print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences[i]:.3f}.", end=' ')
 
-            is_good_confidence = (face_confidence >= orig_face_confidence)
+            is_good_confidence = (face_confidence >= comp_ss_face_confidence_thres)
 
             for i, x_recon_ss2 in enumerate(x_recons_ss):
                 if i == len(x_recons_ss) - 1:
@@ -3074,7 +3077,7 @@ class LatentDiffusion(DDPM):
                 return ss_fg_face_bboxes2
             else:
                 # If the face confidence is too low, we still log the images, but we don't replace the activations.
-                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.2f} is lower than original confidence {orig_face_confidence:.2f}. Discarded.")
+                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.3f} is lower than original confidence {orig_face_confidence:.3f}. Discarded.")
                 return None
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
         else:
@@ -3129,15 +3132,15 @@ class LatentDiffusion(DDPM):
             ss_fg_face_crops, ss_bg_face_crops_flat, ss_fg_face_bboxes, ss_face_confidences, ss_face_detected_inst_mask = \
                 self.arcface.retinaface.crop_faces(x_recon_ss_pixels, out_size=(128, 128), T=20)
 
-            # Only compute losses when all ss instances have faces detected.
-            if (1 - ss_face_detected_inst_mask).sum() == 0:
+            # Only compute losses when all ss instances have faces detected, and the confidence is above 0.99.
+            if (1 - ss_face_detected_inst_mask).sum() == 0 and ss_face_confidences.min() > self.comp_ss_face_confidence_thres:
                 all_ss_contain_faces = True
                 # If there are no failed indices, then we get ss_fg_face_bboxes.
                 # NOTE: ss_fg_face_bboxes are coords on x_recon_ss_pixels, 512*512.
                 # ss cropping is done on the latents, 64*64. So we scale ss_fg_face_bboxes down by 8.
                 ss_fg_face_bboxes = pixel_bboxes_to_latent(ss_fg_face_bboxes, x_recon_ss_pixels.shape[-1], latent_shape[-1])
                 for i in range(len(ss_fg_face_bboxes)):
-                    print(f"Rank {self.trainer.global_rank} 1st SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}. Confidence: {ss_face_confidences[i]:.2f}.", end=' ')
+                    print(f"Rank {self.trainer.global_rank} 1st SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}. confidence {ss_face_confidences[i]:.3f}.", end=' ')
 
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
@@ -3277,9 +3280,10 @@ class LatentDiffusion(DDPM):
             # the new ss_fg_face_bboxes is returned, and we replace ss_fg_face_bboxes with it.
             ss_fg_face_bboxes2 = \
                 self.redenoise_subj_single(x_start_primed_ss, noises, ts, ca_layers_activations_list,
-                                           ss_context, uncond_emb, sc_fg_face_bboxes, ss_face_confidences.mean().item(),
+                                           ss_context, uncond_emb, sc_fg_face_bboxes, 
                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
-                                           crop_mix_weight=self.redenoise_subj_single_crop_mix_weight)
+                                           crop_mix_weight=self.redenoise_subj_single_crop_mix_weight,
+                                           comp_ss_face_confidence_thres=self.comp_ss_face_confidence_thres)
             
             if ss_fg_face_bboxes2 is not None:
                 ss_fg_face_bboxes = ss_fg_face_bboxes2
