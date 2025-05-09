@@ -105,7 +105,7 @@ class DDPM(pl.LightningModule):
                  max_num_comp_priming_denoising_steps=4,
                  num_recon_denoising_steps=2,
                  num_comp_distill_denoising_steps=4,
-                 redenoise_subj_single_crop_mix_weight=0.3,
+                 redenoise_subj_single_crop_mix_weight=0.5,
                  comp_ss_face_confidence_thres=0.99,
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.5, 2.5],
@@ -1979,12 +1979,19 @@ class LatentDiffusion(DDPM):
         # masks will still be used in the loss computation. So we return updated masks as well.
         return x_start_primed, masks
 
-    # In ordinary comp denoising,  noises = [noise],                 ts = [t], where noise and t are of 1-repeat-4 structures.
-    # In subject-single denoising, noises = [noise_0, noise_1, ...], ts = [t_0, t_1, ...], i.e., 
+    # In ordinary comp denoising,  x_starts = [x_start0], noises = [noise], ts = [t], 
+    # where x_start0, noise and t are of 1-repeat-4 structures.
+    # In subject-single denoising, x_starts = [x_start0_0, x_start0_1, ..., ], 
+    # noises = [noise_0, noise_1, ...], ts = [t_0, t_1, ...], i.e., 
     # for all num_denoising_steps, they are provided and shouldn't be randomly sampled.
-    def comp_distill_multistep_denoise(self, x_start, noises, ts, subj_context, 
+    # x_starts_pre_mix_ratio: 0.3, i.e., if a sequence of x_starts is provided,
+    # then we mix x_starts[i+1] with x_recons[i] for the next denoising step.
+    # x_starts_pre_mix_ratio=0.3: 0.3 * x_starts_ss_sc_mix + 0.7 * denoised x_recons -> new x_starts_ss.
+    # x_starts_ss_sc_mix = 0.3 * x_starts_sc + 0.7 * x_starts_ss.
+    # So the new x_starts_ss = 0.09 * x_starts_sc + 0.21 * x_starts_ss + 0.7 * denoised x_recons.
+    def comp_distill_multistep_denoise(self, x_starts, noises, ts, subj_context, 
                                        uncond_emb, shrink_cross_attn=False, mix_sc_mc_attn=False,
-                                       cfg_scale=2.5, num_denoising_steps=4, 
+                                       cfg_scale=2.5, num_denoising_steps=4, x_starts_pre_mix_ratio=0.3,
                                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None,
                                        BLKS=4, batch_part_has_grad='subject-compos'):
         assert num_denoising_steps <= 10
@@ -1993,8 +2000,6 @@ class LatentDiffusion(DDPM):
         use_attn_lora = use_attn_lora and (not mix_sc_mc_attn)
         use_ffn_lora  = use_ffn_lora  and (not mix_sc_mc_attn)
 
-        # Initially, x_starts only contains the original x_start.
-        x_starts    = [ x_start ]
         noise_preds = []
         x_recons    = []
         ca_layers_activations_list = []
@@ -2033,34 +2038,41 @@ class LatentDiffusion(DDPM):
                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
         
             noise_preds.append(noise_pred)
-            x_starts.append(x_recon.detach())
             x_recons.append(x_recon)
             ca_layers_activations_list.append(ca_layers_activations)
 
             # If noises[i+1] and t[i+1] are not provided as arguments, we need to sample an earlier timestep t
             # and noise for the next denoising step i+1.
-            if i < num_denoising_steps - 1 and len(noises) <= i + 1:
-                noise = torch.randn_like(x_start.chunk(BLKS)[0]).repeat(BLKS, 1, 1, 1)
+            if i < num_denoising_steps - 1:
+                if len(noises) <= i + 1:
+                    noise = torch.randn_like(x_start.chunk(BLKS)[0]).repeat(BLKS, 1, 1, 1)
 
-                t0 = t.chunk(BLKS)[0]
-                # NOTE: rand_like() samples from U(0, 1), not like randn_like().
-                rand_ts = torch.rand_like(t0.float())
-                # Make sure at the middle step (i < num_denoising_steps - 1), the timestep 
-                # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
-                # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
-                # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
-                # of the current timestep.
-                # In general, the larger num_denoising_steps, the ratio between et and t0 is closer to 1.
-                t_lb = t0 * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
-                t_ub = t0 * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
-                # et: earlier timestep, ts[i+1] < ts[i].
-                # et is randomly sampled between [t_lb, t_ub].
-                et = (t_ub - t_lb) * rand_ts + t_lb
-                et = et.long()
-                # Use the same t and noise for all instances.
-                earlier_timesteps = et.repeat(BLKS)
-                ts.append(earlier_timesteps)
-                noises.append(noise)
+                    t0 = t.chunk(BLKS)[0]
+                    # NOTE: rand_like() samples from U(0, 1), not like randn_like().
+                    rand_ts = torch.rand_like(t0.float())
+                    # Make sure at the middle step (i < num_denoising_steps - 1), the timestep 
+                    # is between 50% and 70% of the current timestep. So if num_denoising_steps = 5,
+                    # we take timesteps within [0.5^0.66, 0.7^0.66] = [0.63, 0.79] of the current timestep.
+                    # If num_denoising_steps = 4, we take timesteps within [0.5^0.72, 0.7^0.72] = [0.61, 0.77] 
+                    # of the current timestep.
+                    # In general, the larger num_denoising_steps, the ratio between et and t0 is closer to 1.
+                    t_lb = t0 * np.power(0.5, np.power(num_denoising_steps - 1, -0.3))
+                    t_ub = t0 * np.power(0.7, np.power(num_denoising_steps - 1, -0.3))
+                    # et: earlier timestep, ts[i+1] < ts[i].
+                    # et is randomly sampled between [t_lb, t_ub].
+                    et = (t_ub - t_lb) * rand_ts + t_lb
+                    et = et.long()
+                    # Use the same t and noise for all instances.
+                    earlier_timesteps = et.repeat(BLKS)
+                    ts.append(earlier_timesteps)
+                    noises.append(noise)
+
+                if len(x_starts) <= i + 1:
+                    # The predicted x0 is used as the x_start in the next denoising step.
+                    x_starts.append(x_recon.detach())
+                else:
+                    # NOTE: x_starts are rewritten in-place. The caller should make sure this is fine.
+                    x_starts[i+1] = x_starts_pre_mix_ratio * x_starts[i+1] + (1 - x_starts_pre_mix_ratio) * x_recon.detach()
 
         return noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list
             
@@ -2231,11 +2243,12 @@ class LatentDiffusion(DDPM):
             # x_recons[-1] will be used to detect faces.
             # All x_recons with faces detected will be used for arcface align loss computation.
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
-                self.comp_distill_multistep_denoise(x_start_primed, [noise], [t_midrear], subj_context,
-                                                    uncond_emb=uncond_emb, 
+                self.comp_distill_multistep_denoise([x_start_primed], [noise], [t_midrear], subj_context,
+                                                    uncond_emb=uncond_emb,
                                                     shrink_cross_attn=self.iter_flags['shrink_cross_attn'],
                                                     mix_sc_mc_attn=self.iter_flags['mix_sc_mc_attn'],
                                                     cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
+                                                    x_starts_pre_mix_ratio=0,
                                                     use_attn_lora=self.unet_uses_attn_lora, use_ffn_lora=self.comp_uses_ffn_lora,
                                                     ffn_lora_adapter_name='comp_distill', batch_part_has_grad='subject-compos')
 
@@ -2275,7 +2288,8 @@ class LatentDiffusion(DDPM):
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
-                                                 x_start0_ss, x_start_primed_ss, x_recons, noise_preds, noises, ts,
+                                                 x_start0_ss, x_start_primed_ss, x_starts, x_recons, 
+                                                 noise_preds, noises, ts,
                                                  ca_layers_activations_list, all_subj_indices_1b, 
                                                  ss_context, self.uncond_context[0], # Only pass one block of uncond embedding.
                                                  extra_info['prompt_emb_mask_4b'],
@@ -2966,42 +2980,51 @@ class LatentDiffusion(DDPM):
 
     # Replace the first block of each activation data in ca_layers_activations_list to 
     # the re-denoised subject-single instance activations.
-    # x_start_primed_ss: Note to provide the primed x_start_ss, not the input x_start0_ss.
-    def redenoise_subj_single(self, x_start_primed_ss, noises, ts, ca_layers_activations_list, 
-                              ss_context, uncond_emb, sc_fg_face_bboxes,
-                              use_attn_lora, use_ffn_lora, crop_mix_weight=0.3, 
+    # x_starts_primed_ss: Note to provide the primed x_start_ss, not the input x_start0_ss.
+    def redenoise_subj_single(self, x_starts, noises, ts, ca_layers_activations_list, 
+                              ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes,
+                              use_attn_lora, use_ffn_lora, crop_mix_weight=0.5, 
                               comp_ss_face_confidence_thres=0.99):
-        device = x_start_primed_ss.device
-        latent_shape = x_start_primed_ss.shape
+        device = x_starts[0].device
+        latent_shape = x_starts[0].shape
 
-        # Crop the face area in the x_start_primed_ss and noises of the ss instance, 
-        # and re-denoise it and replace the ss instance results.
-        noises_ss = [ noise.chunk(4)[0] for noise in noises ]
-        x_start_primed_ss_crop = []
-        noises_ss_crop = [ [] for _ in range(len(noises)) ]
+        x_starts_ss = [ x_start.chunk(4)[0] for x_start in x_starts ]
+        x_starts_sc = [ x_start.chunk(4)[1] for x_start in x_starts ]
+        # In fact, noises_sc == noises_ss. Use different name to facilitate the understanding
+        noises_ss   = [ noise.chunk(4)[0]   for noise   in noises ]
+        noises_sc   = [ noise.chunk(4)[1]   for noise   in noises ]
+
+        # Crop the face area in the x_starts_sc (of the sc instance) and noises_sc,
+        # and mix with the x_starts_ss and noises_ss (in fact, noises_sc == noises_ss. Use different name
+        # to facilitate the understanding).
+        # and use them to re-denoise the ss instance.
+        x_starts_ss_sc_mix = copy.copy(x_starts_ss)
+        noises_ss_sc_mix   = copy.copy(noises_ss)
         # If BLOCK_SIZE == 1, then i only takes 0.
         for i in range(len(sc_fg_face_bboxes)):
             x1, y1, x2, y2 = sc_fg_face_bboxes[i]
-            # x_start_primed_ss: [1, 4, 64, 64].
-            ss_crop_i = x_start_primed_ss[i:i+1, :, y1:y2, x1:x2]
-            # Crop the sc face area in the x_start_primed_ss and noises of the ss instance.
-            # Resize them to the original size of (64, 64), then add to the original x_start_primed_ss / noises_ss.
-            # IF BLOCK_SIZE > 1, then different sc_fg_face_bboxes may have different sizes. 
-            # Therefore we have to crop and resize them separately.
-            ss_crop_i = F.interpolate(ss_crop_i, latent_shape[-2:], mode='bilinear', align_corners=False)
-            x_start_primed_ss_crop.append(ss_crop_i)
-            for step, noise in enumerate(noises):
-                noise_ss = noise[i:i+1, :, y1:y2, x1:x2]
-                noise_ss = F.interpolate(noise_ss, latent_shape[-2:], mode='bilinear', align_corners=False)
-                noises_ss_crop[step].append(noise_ss)
+            X1, Y1, X2, Y2 = ss_fg_face_bboxes[i]
 
-        x_start_primed_ss_crop = torch.cat(x_start_primed_ss_crop, dim=0)
-        # Simply scaling up x_start_primed_ss_crop, noises_ss_crop to the original size will introduce
-        # too many low frequency artifacts. Therefore we take a weighted average of the original and cropped-and-scaled ones.
-        x_start_primed_ss_crop = x_start_primed_ss_crop * crop_mix_weight + x_start_primed_ss * (1 - crop_mix_weight)
-        for step in range(len(noises_ss_crop)):
-            noises_ss_crop[step] = torch.cat(noises_ss_crop[step], dim=0)
-            noises_ss_crop[step] = noises_ss_crop[step] * crop_mix_weight + noises_ss[step] * (1 - crop_mix_weight)
+            for step in range(len(noises)):
+                noise_i_sc_crop = noises_sc[step][i:i+1, :, y1:y2, x1:x2]
+                noise_i_sc_crop = F.interpolate(noise_i_sc_crop, (Y2 - Y1, X2 - X1), mode='bilinear', align_corners=False)
+                # Simply scaling up x_starts_ss_sc_mix, noises_ss_sc_mix to the size in the sc instance 
+                # and replace the original area will introduce too many low frequency artifacts. 
+                # Therefore we take a weighted average of the original and cropped-and-scaled ones.
+                noises_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] = noises_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] * (1 - crop_mix_weight) \
+                                                             + noise_i_sc_crop * crop_mix_weight
+                # x_starts_primed_ss: [1, 4, 64, 64].
+                x_start_i_sc_crop = x_starts_sc[step][i:i+1, :, y1:y2, x1:x2]
+                # Crop the sc face area in the x_starts_primed_ss and noises of the ss instance.
+                # Resize them to the original size of (64, 64), then add to the original x_starts_primed_ss / noises_ss.
+                # IF BLOCK_SIZE > 1, then different sc_fg_face_bboxes may have different sizes. 
+                # Therefore we have to crop and resize them separately.
+                # Simply scaling up x_starts_ss_sc_mix, noises_ss_sc_mix to the size in the sc instance 
+                # and replace the original area will introduce too many low frequency artifacts. 
+                # Therefore we take a weighted average of the original and cropped-and-scaled ones.
+                x_start_i_sc_crop = F.interpolate(x_start_i_sc_crop, (Y2 - Y1, X2 - X1), mode='bilinear', align_corners=False)
+                x_starts_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] = x_starts_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] * (1 - crop_mix_weight) \
+                                                               + x_start_i_sc_crop * crop_mix_weight
 
         # ts_ss: only keep the first 1/4 (the SS block) of each t in the t sequence.
         ts_ss = [ t.chunk(4)[0] for t in ts ]
@@ -3012,12 +3035,16 @@ class LatentDiffusion(DDPM):
         # ss_context: (prompt_emb_ss, prompt_in_ss, extra_info).
         # BLKS=1: only one block of the subject-single instance.
         # batch_part_has_grad='none': no grad will be computed below to avoid unnecessary compute.
-        noise_preds_ss, x_starts_ss, x_recons_ss, noises_ss_crop, ts_ss, ca_layers_activations_list_ss = \
-            self.comp_distill_multistep_denoise(x_start_primed_ss_crop, noises_ss_crop, ts_ss, ss_context,
-                                                uncond_emb=uncond_emb, 
+        # x_starts_pre_mix_ratio=0.3: 0.3 * x_starts_ss_sc_mix + 0.7 * denoised x_recons -> new x_starts_ss.
+        # Since x_starts_ss_sc_mix = 0.3 * x_starts_sc + 0.7 * x_starts_ss.
+        # So the new x_starts_ss = 0.09 * x_starts_sc + 0.21 * x_starts_ss + 0.7 * denoised x_recons.
+        noise_preds_ss, x_starts_ss, x_recons_ss, noises_ss, ts_ss, ca_layers_activations_list_ss = \
+            self.comp_distill_multistep_denoise(x_starts_ss_sc_mix, noises_ss_sc_mix, ts_ss, ss_context,
+                                                uncond_emb=uncond_emb,
                                                 shrink_cross_attn=self.iter_flags['shrink_cross_attn'],
                                                 mix_sc_mc_attn=self.iter_flags['mix_sc_mc_attn'],
                                                 cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
+                                                x_starts_pre_mix_ratio=0.3,
                                                 use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora,
                                                 ffn_lora_adapter_name='comp_distill', 
                                                 BLKS=1, batch_part_has_grad='none')
@@ -3094,9 +3121,9 @@ class LatentDiffusion(DDPM):
     # x_start_primed_ss: primed x_start_ss, used for re-denoising the SS instance.
     # sc_fg_face_suppress_mask_shrink_ratio: 0.3.
     def calc_comp_feat_distill_loss(self, mon_loss_dict, session_prefix,
-                                    x_start0_ss, x_start_primed_ss, x_recons, noise_preds, noises, 
-                                    ts, ca_layers_activations_list, 
-                                    all_subj_indices_1b, ss_context, uncond_emb, 
+                                    x_start0_ss, x_start_primed_ss, x_starts, x_recons, noise_preds, noises,
+                                    ts, ca_layers_activations_list,
+                                    all_subj_indices_1b, ss_context, uncond_emb,
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
                                     BLOCK_SIZE, sc_fg_face_suppress_mask_shrink_ratio, 
                                     use_attn_lora, use_ffn_lora):
@@ -3271,11 +3298,13 @@ class LatentDiffusion(DDPM):
         # If comp_sc_face_detected_frac=0.9, then arcface_align_comp_loss_scale= 1.25*3 = 3.75.
         # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
         if loss_arcface_align_comp > 0 and sc_face_proportion_type in ['too-small', 'good']:
+            # NOTE: loss_arcface_align_comp > 0 implies that faces are detected in both SS and SC instances.
             # This iteration is counted as face detected, as long as the face is detected in one step.
             comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(1)
             arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
             loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
         else:
+            # NOTE: loss_arcface_align_comp == 0 implies that faces are not detected in either SS or SC instances.
             comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(0)
 
         # Even if the face is not detected in this step, we still update comp_sc_face_detected_frac,
@@ -3286,8 +3315,8 @@ class LatentDiffusion(DDPM):
             # If a face is detected in the ss instance of the last denoising step, then 
             # the new ss_fg_face_bboxes is returned, and we replace ss_fg_face_bboxes with it.
             ss_fg_face_bboxes2 = \
-                self.redenoise_subj_single(x_start_primed_ss, noises, ts, ca_layers_activations_list,
-                                           ss_context, uncond_emb, sc_fg_face_bboxes, 
+                self.redenoise_subj_single(x_starts, noises, ts, ca_layers_activations_list,
+                                           ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes, 
                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
                                            crop_mix_weight=self.redenoise_subj_single_crop_mix_weight,
                                            comp_ss_face_confidence_thres=self.comp_ss_face_confidence_thres)
