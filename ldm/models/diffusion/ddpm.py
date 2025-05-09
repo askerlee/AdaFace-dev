@@ -2535,6 +2535,7 @@ class LatentDiffusion(DDPM):
                         x1, y1, x2, y2 = fg_face_bboxes[j]
                         face_bb_mask[j, :, y1:y2, x1:x2] = 1
                         print(f"Rank {self.trainer.global_rank} recon face coords {j}: {fg_face_bboxes[j].detach().cpu().numpy()}.", end=' ')
+                    print()
 
                     fg_mask2 = fg_mask * face_bb_mask
                     mask_overlap_ratio = fg_mask2.sum() / fg_mask.sum()
@@ -3021,7 +3022,10 @@ class LatentDiffusion(DDPM):
                                                 ffn_lora_adapter_name='comp_distill', 
                                                 BLKS=1, batch_part_has_grad='none')
         
-        x_recon_ss2 = x_recons_ss[-1]
+        # Sometimes the last step of the denoised SS instance is good, but all the previous steps are bad.
+        # So we choose the **second to last step** of the re-denoised SS instance to evaluate the face confidence.
+        # The face location should be roughly the same as in the last step.
+        x_recon_ss2 = x_recons_ss[-2]
         x_recon_ss_pixels2 = self.decode_first_stage(x_recon_ss2)
         # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
         # So we don't need to wrap it here.
@@ -3041,6 +3045,7 @@ class LatentDiffusion(DDPM):
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
                 print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences[i]:.3f}.", end=' ')
+            print()
 
             is_good_confidence = (face_confidence >= comp_ss_face_confidence_thres)
 
@@ -3077,7 +3082,7 @@ class LatentDiffusion(DDPM):
                 return ss_fg_face_bboxes2
             else:
                 # If the face confidence is too low, we still log the images, but we don't replace the activations.
-                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.3f} is lower than original confidence {orig_face_confidence:.3f}. Discarded.")
+                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
                 return None
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
         else:
@@ -3141,6 +3146,7 @@ class LatentDiffusion(DDPM):
                 ss_fg_face_bboxes = pixel_bboxes_to_latent(ss_fg_face_bboxes, x_recon_ss_pixels.shape[-1], latent_shape[-1])
                 for i in range(len(ss_fg_face_bboxes)):
                     print(f"Rank {self.trainer.global_rank} 1st SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}. confidence {ss_face_confidences[i]:.3f}.", end=' ')
+                print()
 
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
@@ -3185,6 +3191,7 @@ class LatentDiffusion(DDPM):
                     x1, y1, x2, y2 = mc_fg_face_bboxes[i]
                     mc_fg_mask[i, :, y1:y2, x1:x2] = 1
                     print(f"Rank {self.trainer.global_rank} MC face coords {i}: {mc_fg_face_bboxes[i].detach().cpu().numpy()}.", end=' ')
+                print()
 
         monitor_loss_names = \
             [ 'loss_sc_recon_ssfg_attn_agg', 'loss_sc_recon_ssfg_flow', 'loss_sc_recon_ssfg_sameloc', 'loss_sc_recon_ssfg_min', 
