@@ -779,7 +779,22 @@ def gen_gradient_scaler(alpha, debug=False):
         # Don't use lambda function here, otherwise the object can't be pickled.
         return torch.detach
 
-smooth_kernel_3x3s = { 
+def var_of_laplacian(images_ts):
+    rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
+    # Laplacian kernel (2D, single channel)
+    laplacian_kernel = \
+        torch.tensor([[0, 1, 0],
+                      [1, -4, 1],
+                      [0, 1, 0]], dtype=torch.float32, 
+                      device=images_ts.device, requires_grad=False).unsqueeze(0).unsqueeze(0)
+
+    # Convert RGB to grayscale
+    fg_faces_gray = (images_ts * rgb_to_gray_weights).sum(dim=1, keepdim=True)
+    # Apply Laplacian kernel
+    var = F.conv2d(fg_faces_gray, laplacian_kernel, padding=1).var(dim=[1, 2, 3])
+    return var
+
+smooth_kernel_3x3s = {
                         4: torch.tensor([[1, 1, 1], [1, 4, 1], [1, 1, 1]], dtype=torch.float32) / 12,
                         3: torch.tensor([[1, 1, 1], [1, 3, 1], [1, 1, 1]], dtype=torch.float32) / 11,
                         2: torch.tensor([[1, 1, 1], [1, 2, 1], [1, 1, 1]], dtype=torch.float32) / 10,
@@ -1542,15 +1557,15 @@ def anneal_perturb_embedding(embeddings, training_percent, begin_noise_std_range
                                        keep_norm, std_dim, norm_dim, verbose=verbose)
     return noised_embeddings
 
-# pixel_bboxes: long tensor of [BS, 4].
-def pixel_bboxes_to_latent(pixel_bboxes, W, latent_W):
-    if pixel_bboxes is None:
+# bboxes: long tensor of [BS, 4].
+def map_bboxes_coords(bboxes, W1, W2):
+    if bboxes is None:
         return None
-    # pixel_bboxes are coords on ss_x_recon_pixels, 512*512.
+    # bboxes are coords on ss_x_recon_pixels, 512*512.
     # However, fg_mask is on the latents, 64*64. 
     # Therefore, we need to scale them down by 8.
-    pixel_bboxes = pixel_bboxes * latent_W // W
-    return pixel_bboxes
+    bboxes = bboxes * W2 // W1
+    return bboxes
 
 # At scaled background, fill new x_start with random values (100% noise). 
 # At scaled foreground, fill new x_start with noised scaled x_start. 

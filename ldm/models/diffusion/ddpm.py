@@ -21,8 +21,8 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, split_dict, chunk_list, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
-                        count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
-                        RollingStats, save_grid, set_seed_per_rank_and_batch
+                        count_optimized_params, count_params, torch_uniform, map_bboxes_coords, \
+                        RollingStats, save_grid, set_seed_per_rank_and_batch, var_of_laplacian
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -90,8 +90,8 @@ class DDPM(pl.LightningModule):
                  # Maybe we should set the face align loss threshold higher during the earlier stages, 
                  # and reduce it gradually as the training progresses,
                  # since the adaface model can better and better capture the face features.
-                 recon_face_align_loss_thres=0.7,
-                 comp_sc_face_align_loss_thres=0.7,
+                 recon_face_align_loss_thres=0.75,
+                 comp_sc_face_align_loss_thres=0.75,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -2071,8 +2071,9 @@ class LatentDiffusion(DDPM):
     # the re-denoised subject-single instance activations.
     # x_starts_primed_ss: Note to provide the primed x_start_ss, not the input x_start0_ss.
     # sc_crop_mix_weights: weights of the SC crop, random noise and the SS crop.
+    # ss_fg_face_crops: a tensor of shape [BS, 4, 128, 128], i.e., the scaled face crops of the ss instance.
     def redenoise_subj_single(self, x_starts, noises, ts, ca_layers_activations_list, 
-                              ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes,
+                              ss_context, uncond_emb, ss_fg_face_crops, ss_fg_face_bboxes, sc_fg_face_bboxes,
                               use_attn_lora, use_ffn_lora, sc_crop_mix_weights=(0.5, 0.25, 0.25),
                               comp_ss_face_confidence_thres=0.99):
         device = x_starts[0].device
@@ -2149,6 +2150,7 @@ class LatentDiffusion(DDPM):
         
         x_recons_ss_collate = torch.cat(x_recons_ss, dim=0)
         x_recons_ss_pixel_collate = self.decode_first_stage(x_recons_ss_collate)
+        pixel_shape = x_recons_ss_pixel_collate.shape[-2:]
 
         # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
         # So we don't need to wrap it here.
@@ -2158,8 +2160,6 @@ class LatentDiffusion(DDPM):
         # Split x_recons_ss_pixel_collate into S steps which will be referred to later. 
         # x_recons_ss_pixel[s] is the SS instances at step s.
         x_recons_ss_pixel = x_recons_ss_pixel_collate.chunk(S, dim=0)
-        avg_face_confidence = face_confidences2.mean().item()
-
         # ss_fg_face_bboxes_list contains the face bboxes of all the steps. Initialized as 
         # a list of the same ss_fg_face_bboxes for all denoising steps.
         ss_fg_face_bboxes_list = [ ss_fg_face_bboxes ] * S
@@ -2168,11 +2168,16 @@ class LatentDiffusion(DDPM):
         # Only replace the ss instance results when all ss instances have faces detected,
         # and the confidence (likelihood) of the new ss face is at least 90% of the original ss face.
         if (1 - ss_face_detected_inst_mask2).sum() == 0:
+            # var of laplacian measures how blurry the image is.
+            # The higher the variance, the sharper the image, i.e., the less blurry.
+            lap_vars  = var_of_laplacian(ss_fg_face_crops)
+            lap_vars2 = var_of_laplacian(ss_fg_face_crops2)
+
             # If there are no failed indices, then we get ss_fg_face_bboxes2.
             # NOTE: ss_fg_face_bboxes2 are coords on x_recon_ss_pixels2, 512*512.
             # In calc_elastic_matching_loss(), it is used to crop the latents, 64*64. 
             # So we scale ss_fg_face_bboxes2 down by 8.
-            ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recons_ss_pixel_collate.shape[-1], latent_shape[-1])
+            ss_fg_face_bboxes2 = map_bboxes_coords(ss_fg_face_bboxes2, pixel_shape[-1], latent_shape[-1])
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
                 print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences2[i]:.3f}.", end=' ')
@@ -2183,8 +2188,11 @@ class LatentDiffusion(DDPM):
             ss_fg_face_bboxes2 = chunk_list(ss_fg_face_bboxes2, S)
 
             for step in range(S):
-                # For each step, we still require the face confidence to be at least 0.99.
-                is_good_confidence = (face_confidences2[step] >= comp_ss_face_confidence_thres)
+                # For each step, we require the face confidence to be at least 0.99.
+                # At the same time, the laplacian variance of the new face should be at least 80% of 
+                # the original face, to filter out much worse faces than the original ones.
+                is_good_confidence = (face_confidences2[step] >= comp_ss_face_confidence_thres) \
+                                     and (lap_vars2[step] >= lap_vars[step] * 0.8)
                 recon_images_ss = x_recons_ss_pixel[step]
                 # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
@@ -2209,7 +2217,6 @@ class LatentDiffusion(DDPM):
                     # the second round of SS instance CA activations.
                     ca_layers_activations = collate_dicts([ca_layers_activations_ss, ca_sc, ca_ss_rep, ca_mc])
                     ca_layers_activations_list[step] = ca_layers_activations
-
                     # Replace the first round ss_fg_face_bboxes with the second round of ss_fg_face_bboxes.
                     ss_fg_face_bboxes_list[step] = ss_fg_face_bboxes2[step]
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} > {comp_ss_face_confidence_thres:.3f}. Replaced.")
@@ -2433,7 +2440,7 @@ class LatentDiffusion(DDPM):
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
-                                                 x_start0_ss, x_start_primed_ss, x_starts, x_recons, 
+                                                 x_start0_ss, x_starts, x_recons,
                                                  noise_preds, noises, ts,
                                                  ca_layers_activations_list, all_subj_indices_1b, 
                                                  ss_context, self.uncond_context[0], # Only pass one block of uncond embedding.
@@ -2488,7 +2495,7 @@ class LatentDiffusion(DDPM):
         loss_bg_faces_suppress  = loss_bg_faces_suppress.to(x_start.dtype)
         # Map the recon_fg_face_bboxes from the pixel space to latent space (scale down by 8x).
         # recon_fg_face_bboxes is None if there are no faces detected in x_recon.
-        recon_fg_face_bboxes = pixel_bboxes_to_latent(recon_fg_face_bboxes, x_start_pixels.shape[-1], x_start.shape[-1])
+        recon_fg_face_bboxes = map_bboxes_coords(recon_fg_face_bboxes, x_start_pixels.shape[-1], x_start.shape[-1])
         return loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, \
                recon_fg_face_bboxes, recon_fg_face_confidences, recon_fg_face_detected_inst_mask
 
@@ -2527,7 +2534,7 @@ class LatentDiffusion(DDPM):
 
         # Map the fg_face_bboxes from the pixel space to latent space (scale down by 8x).
         # fg_face_bboxes is None if there are no faces detected in x_recon.
-        fg_face_bboxes = pixel_bboxes_to_latent(fg_face_bboxes, orig_image.shape[-1], x_start.shape[-1])
+        fg_face_bboxes = map_bboxes_coords(fg_face_bboxes, orig_image.shape[-1], x_start.shape[-1])
         # Set areas outside the fg_face_bboxes of adv_grad to negative.
         # NOTE: seems this trick still couldn't prevent the bg from being corrupted. Therefore,
         # we should avoid do_adv_attack.
@@ -3128,7 +3135,7 @@ class LatentDiffusion(DDPM):
     # x_start_primed_ss: primed x_start_ss, used for re-denoising the SS instance.
     # sc_fg_face_suppress_mask_shrink_ratio: 0.3.
     def calc_comp_feat_distill_loss(self, mon_loss_dict, session_prefix,
-                                    x_start0_ss, x_start_primed_ss, x_starts, x_recons, noise_preds, noises,
+                                    x_start0_ss, x_starts, x_recons, noise_preds, noises,
                                     ts, ca_layers_activations_list,
                                     all_subj_indices_1b, ss_context, uncond_emb,
                                     prompt_emb_mask_4b, prompt_pad_mask_4b,
@@ -3166,25 +3173,26 @@ class LatentDiffusion(DDPM):
             # to detect the face area in the subject-single images. 
             x_recon_ss = x_recons[-1].chunk(4)[0]
             x_recon_ss_pixels = self.decode_first_stage(x_recon_ss)
+            pixel_shape = x_recon_ss_pixels.shape[-2:]
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
             ss_fg_face_crops, ss_bg_face_crops_flat, ss_fg_face_bboxes, ss_face_confidences, ss_face_detected_inst_mask = \
                 self.arcface.retinaface.crop_faces(x_recon_ss_pixels, out_size=(128, 128), T=20)
 
             # Only compute losses when all ss instances have faces detected, and the confidence is above 0.99.
-            if (1 - ss_face_detected_inst_mask).sum() == 0 and ss_face_confidences.min() > self.comp_ss_face_confidence_thres:
+            if (1 - ss_face_detected_inst_mask).sum() == 0 and ss_face_confidences.min() >= self.comp_ss_face_confidence_thres:
                 all_ss_contain_faces = True
                 # If there are no failed indices, then we get ss_fg_face_bboxes.
                 # NOTE: ss_fg_face_bboxes are coords on x_recon_ss_pixels, 512*512.
                 # ss cropping is done on the latents, 64*64. So we scale ss_fg_face_bboxes down by 8.
-                ss_fg_face_bboxes = pixel_bboxes_to_latent(ss_fg_face_bboxes, x_recon_ss_pixels.shape[-1], latent_shape[-1])
+                ss_fg_face_bboxes = map_bboxes_coords(ss_fg_face_bboxes, pixel_shape[-1], latent_shape[-1])
                 for i in range(len(ss_fg_face_bboxes)):
                     print(f"Rank {self.trainer.global_rank} 1st SS face coords {i}: {ss_fg_face_bboxes[i].detach().cpu().numpy()}. confidence {ss_face_confidences[i]:.3f}.", end=' ')
                 print()
 
                 # If a face cannot be detected in the subject-single instance, then it probably
                 # won't be detected in the subject-compositional instance either.
-                # comp_sc_face_align_loss_thres: 0.7
+                # comp_sc_face_align_loss_thres: 0.75
                 loss_arcface_align_comp, loss_fg_faces_suppress_comp, loss_bg_faces_suppress_comp, \
                 loss_comp_sc_subj_mb_suppress, sc_fg_mask, sc_fg_face_bboxes, first_step_when_sc_face_is_detected = \
                     self.calc_comp_face_align_and_mb_suppress_losses(mon_loss_dict, session_prefix, x_start0_ss, x_recons, 
@@ -3211,13 +3219,14 @@ class LatentDiffusion(DDPM):
 
             mc_x_recon = x_recons[-1].chunk(4)[3]
             mc_x_recon_pixels = self.decode_first_stage(mc_x_recon)
+            pixel_shape = mc_x_recon_pixels.shape[-2:]
             # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
             # So we don't need to wrap it here.
             mc_fg_face_crops, mc_bg_face_crops_flat, mc_fg_face_bboxes, mc_face_confidences, mc_face_detected_inst_mask = \
                 self.arcface.retinaface.crop_faces(mc_x_recon_pixels, out_size=(128, 128), T=20)
             
             if (1 - mc_face_detected_inst_mask).sum() == 0:
-                mc_fg_face_bboxes = pixel_bboxes_to_latent(mc_fg_face_bboxes, mc_x_recon_pixels.shape[-1], latent_shape[-1])
+                mc_fg_face_bboxes = map_bboxes_coords(mc_fg_face_bboxes, pixel_shape[-1], latent_shape[-1])
                 mc_fg_mask = torch.zeros(BLOCK_SIZE, 1, latent_shape[-2], latent_shape[-1], device=device)
                 # mc_fg_mask is zero-initialized.
                 # len(mc_fg_face_bboxes) == BLOCK_SIZE == len(mc_fg_mask), usually 1.
@@ -3323,7 +3332,7 @@ class LatentDiffusion(DDPM):
             # the new ss_fg_face_bboxes is returned, and we replace ss_fg_face_bboxes with it.
             ss_fg_face_bboxes_list, repl_steps_frac = \
                 self.redenoise_subj_single(x_starts, noises, ts, ca_layers_activations_list,
-                                           ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes, 
+                                           ss_context, uncond_emb, ss_fg_face_crops, ss_fg_face_bboxes, sc_fg_face_bboxes, 
                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
                                            sc_crop_mix_weights=self.redenoise_subj_comp_crop_mix_weights,
                                            comp_ss_face_confidence_thres=self.comp_ss_face_confidence_thres)
