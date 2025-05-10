@@ -5,12 +5,7 @@ model:
     linear_start: 0.00085
     linear_end: 0.0120
     timesteps: 1000
-    # first_stage_key: used as batch[key] in DDPM.get_input()
-    first_stage_key: "images"
-    cond_stage_key: "txt"
-    channels: 4
     is_embedding_manager_trainable: false
-    #monitor: train/loss
     scale_factor: 0.18215
     unet_distill_iter_gap: 0
 
@@ -23,7 +18,6 @@ model:
       target: ldm.models.autoencoder.AutoencoderKL
       params:
         embed_dim: 4
-        #monitor: train/loss_recon
         ddconfig:
           double_z: true
           z_channels: 4

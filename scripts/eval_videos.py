@@ -77,6 +77,8 @@ if __name__ == "__main__":
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
                                     cache_src_embeds=False, verbose=True)
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
+        # By default, in the single_video mode, all similarities will be printed for diagnostic purposes.
+        args.verbose = True
         if args.verbose:
             for i, simi in enumerate(all_similarities):
                 if i == len(all_similarities) - 1 or (i > 0 and i % 10 == 0):

@@ -65,12 +65,9 @@ class DDPM(pl.LightningModule):
     def __init__(self,
                  base_model_path,
                  comp_unet_weight_path=None,
-                 lightning_auto_optimization=True,
+                 lightning_auto_optimization=True,  # if True, use lightning's optimization, else use manual optimization.
                  timesteps=1000,
                  beta_schedule="linear",
-                 monitor=None,
-                 first_stage_key="image",
-                 channels=3,
                  clip_denoised=True,    # clip the range of denoised variables, not the CLIP model.
                  linear_start=1e-4,
                  linear_end=2e-2,
@@ -119,7 +116,7 @@ class DDPM(pl.LightningModule):
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
                  recon_bg_pixel_weight=0.1,
-                 use_face_flow_for_sc_matching_loss=True,
+                 use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=1e-2,
                  unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=True,
@@ -151,8 +148,6 @@ class DDPM(pl.LightningModule):
         self.cond_stage_model = None
         # clip_denoised: clip the range of denoised variables, not the CLIP model.
         self.clip_denoised = clip_denoised
-        self.first_stage_key = first_stage_key
-        self.channels = channels
 
         self.comp_unet_weight_path                  = comp_unet_weight_path
         self.comp_distill_iter_gap                  = comp_distill_iter_gap
@@ -287,9 +282,6 @@ class DDPM(pl.LightningModule):
 
         self.unfreeze_unet = unfreeze_unet
         self.unet_lr = unet_lr
-
-        if monitor is not None:
-            self.monitor = monitor
 
         self.register_schedule(given_betas=given_betas, beta_schedule=beta_schedule, timesteps=timesteps,
                                linear_start=linear_start, linear_end=linear_end, cosine_s=cosine_s)
@@ -510,7 +502,6 @@ class LatentDiffusion(DDPM):
                  first_stage_config,
                  cond_stage_config,
                  personalization_config,
-                 cond_stage_key="image",
                  is_embedding_manager_trainable=True,
                  concat_mode=True,
                  cond_stage_forward=None,
@@ -532,7 +523,6 @@ class LatentDiffusion(DDPM):
         super().__init__(*args, **kwargs)
 
         self.concat_mode = concat_mode
-        self.cond_stage_key = cond_stage_key
         self.is_embedding_manager_trainable = is_embedding_manager_trainable
 
         if not scale_by_std:
@@ -937,8 +927,7 @@ class LatentDiffusion(DDPM):
     # ANCHOR[id=shared_step]
     def shared_step(self, batch):
         # Encode the input image/noise as 4-channel latent features.
-        # first_stage_key="image"
-        x_start = self.get_input(batch, self.first_stage_key)
+        x_start = self.get_input(batch, "image")
 
         if self.iter_flags['do_normal_recon']:
             p_normal_recon_on_pure_noise = self.p_normal_recon_on_pure_noise
