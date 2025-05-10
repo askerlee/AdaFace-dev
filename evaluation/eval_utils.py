@@ -304,7 +304,7 @@ def np_cosine_similarity(src_embeds, dst_embeds):
     c = np.sum(np.multiply(dst_embeds, dst_embeds), axis=1, keepdims=True)
     return (a / (np.sqrt(b) * np.sqrt(c).T))
     
-def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
+def calc_faces_similarities(src_list_embeds, dst_list_embeds):
     """
     This function calculates similarity between two lists of face embeddings.
 
@@ -342,11 +342,11 @@ def calc_faces_mean_similarity(src_list_embeds, dst_list_embeds):
             all_similarities.append(max_sim)
 
     if len(all_similarities) == 0:
-        mean_similarity = 0
+        avg_similarity = 0
     else:
-        mean_similarity = np.mean(all_similarities)
+        avg_similarity = np.mean(all_similarities)
 
-    return mean_similarity, src_no_face_img_count, dst_no_face_img_count
+    return all_similarities, avg_similarity, src_no_face_img_count, dst_no_face_img_count
 
 # src_path, dst_path: a folder or a single image path, or an np array.
 def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
@@ -375,25 +375,25 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
 
     '''
     if face_engine == "deepface":
-        (Pdb) calc_faces_mean_similarity(src_list_embeds, dst_list_embeds)
+        (Pdb) calc_faces_similarities(src_list_embeds, dst_list_embeds)
         (0.471041, 0, 0)
-        (Pdb) calc_faces_mean_similarity(src_list_embeds, src_list_embeds)
+        (Pdb) calc_faces_similarities(src_list_embeds, src_list_embeds)
         (0.622069, 0, 0)
-        (Pdb) calc_faces_mean_similarity(dst_list_embeds, dst_list_embeds)
+        (Pdb) calc_faces_similarities(dst_list_embeds, dst_list_embeds)
         (0.660250, 0, 0)
     if face_engine == "insightface":
-        (Pdb) calc_faces_mean_similarity(src_list_embeds, dst_list_embeds)
+        (Pdb) calc_faces_similarities(src_list_embeds, dst_list_embeds)
         (0.339248, 0, 0)
-        (Pdb) calc_faces_mean_similarity(src_list_embeds, src_list_embeds)
+        (Pdb) calc_faces_similarities(src_list_embeds, src_list_embeds)
         (0.689450, 0, 0)
-        (Pdb) calc_faces_mean_similarity(dst_list_embeds, dst_list_embeds)
+        (Pdb) calc_faces_similarities(dst_list_embeds, dst_list_embeds)
         (0.480570, 0, 0)
     Seems that insightface embeddings are very sensitive to details like lightning, pose and tone.
     Therefore, by default we use deepface embeddings, as they only focus on face characteristics.
     '''
 
-    avg_similarity, src_no_face_img_count, dst_no_face_img_count =\
-        calc_faces_mean_similarity(src_list_embeds, dst_list_embeds)
+    all_similarities, avg_similarity, src_no_face_img_count, dst_no_face_img_count =\
+        calc_faces_similarities(src_list_embeds, dst_list_embeds)
     
     dst_normal_img_count = len(dst_paths) - dst_no_face_img_count
 
@@ -415,7 +415,7 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
             dst_path_base = 'dst'
         print(f"avg face sim: {avg_similarity:.3f}    '{src_path_base}' vs '{dst_path_base}' ({dst_no_face_img_count} no face)")
 
-    return avg_similarity, dst_normal_img_count, dst_no_face_img_count
+    return all_similarities, avg_similarity, dst_normal_img_count, dst_no_face_img_count
 
 # extra_sig could be a regular expression
 def find_first_match(lst, search_term, extra_sig=""):

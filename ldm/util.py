@@ -2301,6 +2301,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     
     sc_feats_sameloc['ssfg'] = scfg_feat
     sc_feats_sameloc['mc']   = scbg_feat
+    # sc_sameloc_attn: [1, 961, 961], a diagonal matrix, i.e., attending to the same location.
+    sc_sameloc_attn = torch.eye(H*W, device=device, dtype=scbg_feat.dtype).repeat(scbg_feat.shape[0], 1, 1)
 
     if flow_model is not None:
         # ss2sc_flow: [1, 2, H, W]
@@ -2334,21 +2336,21 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                 breakpoint()
         '''        
     else:
+        # Use sameloc reconstructed features and attn as mock-ups for flow.
+        # Since we give flow losses a margin of penalty, it is effectively disabled.
         ss2sc_flow                       = None
-        sc_recon_feats_flow['ssfg']      = None
-        sc_recon_feats_flow_attn['ssfg'] = None
+        sc_recon_feats_flow['ssfg']      = sc_feats_sameloc['ssfg'].permute(0, 2, 1)
+        sc_recon_feats_flow_attn['ssfg'] = sc_sameloc_attn
 
         mc2sc_flow                       = None
-        sc_recon_feats_flow['mc']        = None
-        sc_recon_feats_flow_attn['mc']   = None
+        sc_recon_feats_flow['mc']        = sc_feats_sameloc['mc'].permute(0, 2, 1)
+        sc_recon_feats_flow_attn['mc']   = sc_sameloc_attn
 
     losses_sc_recons          = {}
     all_token_losses_sc_recon = {}
     loss_sparse_attns_distill = {}
     flow_distill_stats        = {}
     matching_type_names       = ['attn', 'flow', 'sameloc']
-    # sc_sameloc_attn: [1, 961, 961], a diagonal matrix, i.e., attending to the same location.
-    sc_sameloc_attn = torch.eye(H*W, device=device, dtype=scbg_feat.dtype).repeat(scbg_feat.shape[0], 1, 1)
 
     # feat_name: 'ssfg', 'mc'.
     for feat_name in ('ssfg', 'mc'):

@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument("--face_engine", dest='face_engine', type=str, default='deepface', 
                         choices=['deepface', 'insightface'],
                         help="face engine to use for comparison")
+    parser.add_argument("--verbose", dest='verbose', action='store_true', help="Verbose mode")
     parser.add_argument("--debug", dest='debug', action='store_true', help="Debug mode")
     args = parser.parse_args()
     return args
@@ -72,7 +73,7 @@ if __name__ == "__main__":
         assert args.ref_image is not None, "Reference image must be provided"
         frames = extract_frames(args.single_video, interval=3, collate=False)
         print(f"Processing {args.single_video} ({len(frames)} frames)")
-        avg_similarity, normal_frame_count, no_face_frame_count = \
+        all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
                                     cache_src_embeds=False, verbose=True)
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
@@ -108,7 +109,7 @@ if __name__ == "__main__":
         for video_filename in video_filenames:
             print("Processing %s" %video_filename)
             frames = extract_frames(video_filename, interval=3, collate=False)
-            avg_similarity, normal_frame_count, no_face_frame_count = \
+            all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
                 compare_face_folders(image_filenames, frames, face_engine=args.face_engine, 
                                      cache_src_embeds=False, verbose=False, debug=args.debug)
             
@@ -121,6 +122,13 @@ if __name__ == "__main__":
                     break
 
             print(f"{method:<7} sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
+            if args.verbose:
+                for i, simi in enumerate(all_similarities):
+                    print(f"{simi:.3f}", end=", ")
+                    if (i + 1) % 10 == 0:
+                        print()
+                print()
+                
             video_count += 1
 
         subject_count += 1

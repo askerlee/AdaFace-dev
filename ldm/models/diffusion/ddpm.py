@@ -16,7 +16,7 @@ from threading import Thread
 
 from ldm.util import    exists, default, instantiate_from_config, disabled_train, load_ckpt_to_cpu, inplace_model_copy, \
                         calc_prompt_emb_delta_loss, calc_comp_subj_bg_preserve_loss, calc_recon_loss, \
-                        calc_recon_and_suppress_losses, calc_attn_norm_loss, calc_sc_rep_attn_distill_loss, \
+                        calc_recon_and_suppress_losses, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
                         collate_dicts, split_dict, select_and_repeat_instances, halve_token_indices, \
