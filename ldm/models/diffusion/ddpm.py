@@ -2141,21 +2141,21 @@ class LatentDiffusion(DDPM):
         
         x_recons_ss_collate = torch.cat(x_recons_ss, dim=0)
         x_recons_ss_pixel_collate = self.decode_first_stage(x_recons_ss_collate)
-        # Split x_recons_ss_pixel_collate into S steps. x_recons_ss_pixel[s] is the SS instances at step s.
-        x_recons_ss_pixel = x_recons_ss_pixel_collate.chunk(S, dim=0)
 
         # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
         # So we don't need to wrap it here.
         ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, face_confidences2, ss_face_detected_inst_mask2 = \
-            self.arcface.retinaface.crop_faces(x_recons_ss_pixel, out_size=(128, 128), T=20)
+            self.arcface.retinaface.crop_faces(x_recons_ss_pixel_collate, out_size=(128, 128), T=20)
 
-        # Split ss_fg_face_bboxes2 into S steps. ss_fg_face_bboxes2[s] is the face bboxes at step s.
-        ss_fg_face_bboxes2 = chunk_list(ss_fg_face_bboxes2, S)
+        # Split x_recons_ss_pixel_collate into S steps which will be referred to later. 
+        # x_recons_ss_pixel[s] is the SS instances at step s.
+        x_recons_ss_pixel = x_recons_ss_pixel_collate.chunk(S, dim=0)
         avg_face_confidence = face_confidences2.mean().item()
 
         # ss_fg_face_bboxes_list contains the face bboxes of all the steps. Initialized as 
         # a list of the same ss_fg_face_bboxes for all denoising steps.
         ss_fg_face_bboxes_list = [ ss_fg_face_bboxes ] * S
+        repl_step_count = 0
 
         # Only replace the ss instance results when all ss instances have faces detected,
         # and the confidence (likelihood) of the new ss face is at least 90% of the original ss face.
@@ -2164,12 +2164,15 @@ class LatentDiffusion(DDPM):
             # NOTE: ss_fg_face_bboxes2 are coords on x_recon_ss_pixels2, 512*512.
             # In calc_elastic_matching_loss(), it is used to crop the latents, 64*64. 
             # So we scale ss_fg_face_bboxes2 down by 8.
-            ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recons_ss_pixel.shape[-1], latent_shape[-1])
+            ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recons_ss_pixel_collate.shape[-1], latent_shape[-1])
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
                 print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences2[i]:.3f}.", end=' ')
             print()
 
+            # Split ss_fg_face_bboxes2 into S steps which will be referred to later. 
+            # ss_fg_face_bboxes2[s] is the face bboxes at step s.
+            ss_fg_face_bboxes2 = chunk_list(ss_fg_face_bboxes2, S)
             # If the average face confidence < 0.99, then discard the SS instances of all steps.
             avg_is_good_confidence = (avg_face_confidence >= comp_ss_face_confidence_thres)
 
@@ -2191,6 +2194,7 @@ class LatentDiffusion(DDPM):
 
                 # Only replace the activations of the steps that have good confidence.
                 if is_good_confidence:
+                    repl_step_count += 1
                     ca_layers_activations_ss = ca_layers_activations_list_ss[step]
                     ca_layers_activations = ca_layers_activations_list[step]
                     ca_ss, ca_sc, ca_ss_rep, ca_mc = \
@@ -2212,7 +2216,7 @@ class LatentDiffusion(DDPM):
         else:
             print(f"Rank {self.trainer.global_rank} 2nd SS denoising failed. Discarded.")
 
-        return ss_fg_face_bboxes_list
+        return ss_fg_face_bboxes_list, repl_step_count / S
                         
     # t: timesteps.
     # prompt_in is the textual prompts. 

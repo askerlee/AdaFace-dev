@@ -984,9 +984,7 @@ def save_grid(samples, img_flags, grid_filepath, nrow):
 
 def chunk_list(lst, num_chunks):
     chunk_size = int(np.ceil(len(lst) / num_chunks))
-    # looping till length lst
-    for i in range(0, len(lst), chunk_size): 
-        yield lst[i:i + chunk_size]
+    return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
 
 def join_list_of_indices(*indices_list):
     list_of_indices_B, list_of_indices_N = [], []
