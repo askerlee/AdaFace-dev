@@ -2144,10 +2144,10 @@ class LatentDiffusion(DDPM):
         x_recon_ss_pixels2 = self.decode_first_stage(x_recon_ss2)
         # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
         # So we don't need to wrap it here.
-        ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, face_confidences, ss_face_detected_inst_mask2 = \
+        ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, face_confidences2, ss_face_detected_inst_mask2 = \
             self.arcface.retinaface.crop_faces(x_recon_ss_pixels2, out_size=(128, 128), T=20)
 
-        face_confidence = face_confidences.mean().item()
+        avg_face_confidence = face_confidences2.mean().item()
 
         # Only replace the ss instance results when all ss instances have faces detected,
         # and the confidence (likelihood) of the new ss face is at least 90% of the original ss face.
@@ -2159,10 +2159,10 @@ class LatentDiffusion(DDPM):
             ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recon_ss_pixels2.shape[-1], latent_shape[-1])
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
-                print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences[i]:.3f}.", end=' ')
+                print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences2[i]:.3f}.", end=' ')
             print()
 
-            is_good_confidence = (face_confidence >= comp_ss_face_confidence_thres)
+            is_good_confidence = (avg_face_confidence >= comp_ss_face_confidence_thres)
 
             for i, x_recon_ss2 in enumerate(x_recons_ss):
                 if i == len(x_recons_ss) - 1:
@@ -2197,7 +2197,7 @@ class LatentDiffusion(DDPM):
                 return ss_fg_face_bboxes2
             else:
                 # If the face confidence is too low, we still log the images, but we don't replace the activations.
-                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
+                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {avg_face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
                 return None
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
         else:

@@ -16,12 +16,15 @@ def parse_args():
     parser.add_argument("--face_engine", dest='face_engine', type=str, default='deepface', 
                         choices=['deepface', 'insightface'],
                         help="face engine to use for comparison")
+    parser.add_argument("--sample_interval", dest='sample_interval', type=int, default=3,
+                        help="Sample interval for video frames")
     parser.add_argument("--verbose", dest='verbose', action='store_true', help="Verbose mode")
     parser.add_argument("--debug", dest='debug', action='store_true', help="Debug mode")
     args = parser.parse_args()
     return args
 
-def extract_frames(video_path, interval=1, collate=False):
+# collate: whether to collate the frames into a single numpy array.
+def extract_frames(video_path, sample_interval=1, collate=False):
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
     frames = []
@@ -30,7 +33,7 @@ def extract_frames(video_path, interval=1, collate=False):
         if ret == False:
             break
         frame_count += 1
-        if frame_count % interval == 0:
+        if frame_count % sample_interval == 0:
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(frame_rgb)
 
@@ -71,7 +74,7 @@ if __name__ == "__main__":
 
     if args.single_video is not None:
         assert args.ref_image is not None, "Reference image must be provided"
-        frames = extract_frames(args.single_video, interval=3, collate=False)
+        frames = extract_frames(args.single_video, sample_interval=args.sample_interval, collate=False)
         print(f"Processing {args.single_video} ({len(frames)} frames)")
         all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
@@ -118,7 +121,7 @@ if __name__ == "__main__":
 
         for video_filename in video_filenames:
             print("Processing %s" %video_filename)
-            frames = extract_frames(video_filename, interval=3, collate=False)
+            frames = extract_frames(video_filename, sample_interval=args.sample_interval, collate=False)
             all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
                 compare_face_folders(image_filenames, frames, face_engine=args.face_engine, 
                                      cache_src_embeds=False, verbose=False, debug=args.debug)
