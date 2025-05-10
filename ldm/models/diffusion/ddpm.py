@@ -102,7 +102,8 @@ class DDPM(pl.LightningModule):
                  max_num_comp_priming_denoising_steps=4,
                  num_recon_denoising_steps=2,
                  num_comp_distill_denoising_steps=4,
-                 redenoise_subj_single_crop_mix_weight=0.75,
+                 # redenoise_subj_comp_crop_mix_weights: weights of the SC crop, random noise and the original crop.
+                 redenoise_subj_comp_crop_mix_weights=(0.5, 0.25, 0.25),
                  comp_ss_face_confidence_thres=0.99,
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.5, 2.5],
@@ -175,7 +176,7 @@ class DDPM(pl.LightningModule):
         self.max_num_comp_priming_denoising_steps   = max_num_comp_priming_denoising_steps
         self.num_recon_denoising_steps              = num_recon_denoising_steps
         self.num_comp_distill_denoising_steps       = num_comp_distill_denoising_steps
-        self.redenoise_subj_single_crop_mix_weight  = redenoise_subj_single_crop_mix_weight
+        self.redenoise_subj_comp_crop_mix_weights   = redenoise_subj_comp_crop_mix_weights
         self.comp_ss_face_confidence_thres          = comp_ss_face_confidence_thres
 
         # Sometimes we use the subject compositional instances as the distillation target on a UNet ensemble teacher.
@@ -2069,9 +2070,10 @@ class LatentDiffusion(DDPM):
     # Replace the first block of each activation data in ca_layers_activations_list to 
     # the re-denoised subject-single instance activations.
     # x_starts_primed_ss: Note to provide the primed x_start_ss, not the input x_start0_ss.
+    # sc_crop_mix_weights: weights of the SC crop, random noise and the SS crop.
     def redenoise_subj_single(self, x_starts, noises, ts, ca_layers_activations_list, 
                               ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes,
-                              use_attn_lora, use_ffn_lora, sc_crop_mix_weight=0.75, 
+                              use_attn_lora, use_ffn_lora, sc_crop_mix_weights=(0.5, 0.25, 0.25),
                               comp_ss_face_confidence_thres=0.99):
         device = x_starts[0].device
         latent_shape = x_starts[0].shape
@@ -2079,6 +2081,8 @@ class LatentDiffusion(DDPM):
         S = len(noises)
 
         x_starts_ss = [ x_start.chunk(4)[0] for x_start in x_starts ]
+        # x_starts contain x_recon.detach() of all denoising steps. Therefore, 
+        # x_starts are not attached with gradients.
         x_starts_sc = [ x_start.chunk(4)[1] for x_start in x_starts ]
         # In fact, noises_sc == noises_ss. Use different name to facilitate the understanding
         noises_ss   = [ noise.chunk(4)[0]   for noise   in noises ]
@@ -2100,21 +2104,25 @@ class LatentDiffusion(DDPM):
                 noise_i_sc_crop = F.interpolate(noise_i_sc_crop, (Y2 - Y1, X2 - X1), mode='bilinear', align_corners=False)
                 # Simply scaling up x_starts_ss_sc_mix, noises_ss_sc_mix to the size in the sc instance 
                 # and replace the original area in x_starts_ss/noises_ss will introduce too many low frequency artifacts. 
-                # Therefore we take a weighted average of the original and cropped-and-scaled ones.
-                noises_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] = noises_ss[step][i, :, Y1:Y2, X1:X2] * (1 - sc_crop_mix_weight) \
-                                                             + noise_i_sc_crop * sc_crop_mix_weight
-                # x_starts_primed_ss: [1, 4, 64, 64].
+                # Therefore we take a weighted average of the original SS crop, the scaled SC crop, and some random noise.
+                noises_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] = noise_i_sc_crop                        * sc_crop_mix_weights[0] \
+                                                             + torch.randn_like(noise_i_sc_crop)    * sc_crop_mix_weights[1] \
+                                                             + noises_ss[step][i, :, Y1:Y2, X1:X2]  * sc_crop_mix_weights[2]
+
+                # NOTE: x_starts_sc are detached from the computation graph.
+                # x_starts_sc[step]: [1, 4, 64, 64].
                 x_start_i_sc_crop = x_starts_sc[step][i:i+1, :, y1:y2, x1:x2]
-                # Crop the sc face area in the x_starts_primed_ss and noises of the ss instance.
-                # Resize them to the original size of (64, 64), then add to the original x_starts_primed_ss / noises_ss.
+                # Crop the sc face area in the x_starts_sc[step] and noises of the ss instance.
+                # Resize them to the original size of (64, 64), then add to the original x_starts_ss[step] / noises_ss[step].
                 # IF BLOCK_SIZE > 1, then different sc_fg_face_bboxes may have different sizes. 
                 # Therefore we have to crop and resize them separately.
                 # Simply scaling up x_starts_ss_sc_mix, noises_ss_sc_mix to the size in the sc instance 
                 # and replace the original area will introduce too many low frequency artifacts. 
-                # Therefore we take a weighted average of the original and cropped-and-scaled ones.
+                # Therefore we take a weighted average of the original SS crop, the scaled SC crop, and some random noise.
                 x_start_i_sc_crop = F.interpolate(x_start_i_sc_crop, (Y2 - Y1, X2 - X1), mode='bilinear', align_corners=False)
-                x_starts_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] = x_starts_ss[step][i, :, Y1:Y2, X1:X2] * (1 - sc_crop_mix_weight) \
-                                                               + x_start_i_sc_crop * sc_crop_mix_weight
+                x_starts_ss_sc_mix[step][i, :, Y1:Y2, X1:X2] = x_start_i_sc_crop                        * sc_crop_mix_weights[0] \
+                                                               + torch.randn_like(x_start_i_sc_crop)    * sc_crop_mix_weights[1] \
+                                                               + x_starts_ss[step][i, :, Y1:Y2, X1:X2]  * sc_crop_mix_weights[2]
 
         # ts_ss: only keep the first 1/4 (the SS block) of each t in the t sequence.
         ts_ss = [ t.chunk(4)[0] for t in ts ]
@@ -3317,7 +3325,7 @@ class LatentDiffusion(DDPM):
                 self.redenoise_subj_single(x_starts, noises, ts, ca_layers_activations_list,
                                            ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes, 
                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
-                                           sc_crop_mix_weight=self.redenoise_subj_single_crop_mix_weight,
+                                           sc_crop_mix_weights=self.redenoise_subj_comp_crop_mix_weights,
                                            comp_ss_face_confidence_thres=self.comp_ss_face_confidence_thres)
             
             # If the redenoising failed, i.e., no face is detected in the new ss instance, 
