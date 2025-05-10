@@ -2173,12 +2173,10 @@ class LatentDiffusion(DDPM):
             # Split ss_fg_face_bboxes2 into S steps which will be referred to later. 
             # ss_fg_face_bboxes2[s] is the face bboxes at step s.
             ss_fg_face_bboxes2 = chunk_list(ss_fg_face_bboxes2, S)
-            # If the average face confidence < 0.99, then discard the SS instances of all steps.
-            avg_is_good_confidence = (avg_face_confidence >= comp_ss_face_confidence_thres)
 
             for step in range(S):
                 # For each step, we still require the face confidence to be at least 0.99.
-                is_good_confidence = (face_confidences2[step] >= comp_ss_face_confidence_thres) and avg_is_good_confidence
+                is_good_confidence = (face_confidences2[step] >= comp_ss_face_confidence_thres)
                 recon_images_ss = x_recons_ss_pixel[step]
                 # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
@@ -2209,10 +2207,7 @@ class LatentDiffusion(DDPM):
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} > {comp_ss_face_confidence_thres:.3f}. Replaced.")
                 else:
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
-            if not avg_is_good_confidence:
-                # If the face confidence is too low, we still log the images, but we don't replace the activations.
-                print(f"Rank {self.trainer.global_rank} 2nd SS avg face confidence {avg_face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
-        # Otherwise, we keep the original activations and ss_fg_face_bboxes.
+        # Otherwise, generation fails, and we keep the original activations and ss_fg_face_bboxes.
         else:
             print(f"Rank {self.trainer.global_rank} 2nd SS denoising failed. Discarded.")
 
