@@ -13,6 +13,9 @@ def parse_args():
     parser.add_argument("--face_engine", dest='face_engine', type=str, default='deepface', 
                         choices=['deepface', 'insightface'],
                         help="face engine to use for comparison")
+    parser.add_argument("--face_model", dest='face_model', type=str, default='ArcFace',
+                        choices=['VGG-Face', 'ArcFace'],
+                        help="face model to use for comparison")
     args = parser.parse_args()
     return args
 
@@ -36,13 +39,13 @@ if __name__ == "__main__":
                     continue
 
                 print("Self comparing %s:" %(subdir_path))
-                compare_face_folders(subdir_path, subdir_path, face_engine=args.face_engine)
+                compare_face_folders(subdir_path, subdir_path, face_engine=args.face_engine, face_model=args.face_model)
                 subdir_count += 1
             if subdir_count == 0:
                 print("Self comparing %s:" %(args.path1))
-                compare_face_folders(args.path1, args.path1, face_engine=args.face_engine)
-        else:            
-            compare_face_folders(args.path1, args.path2, face_engine=args.face_engine)
+                compare_face_folders(args.path1, args.path1, face_engine=args.face_engine, face_model=args.face_model)
+        else:
+            compare_face_folders(args.path1, args.path2, face_engine=args.face_engine, face_model=args.face_model)
     else:
         subdirs = sorted(os.listdir(args.path1))
         for subdir in subdirs:
@@ -53,7 +56,7 @@ if __name__ == "__main__":
             if os.path.isdir(subdir_path1) == False or os.path.isdir(subdir_path2) == False:
                 continue
             print("Pair comparing %s vs %s:" %(subdir_path1, subdir_path2))
-            compare_face_folders(subdir_path1, subdir_path2, face_engine=args.face_engine)     
-        
+            compare_face_folders(subdir_path1, subdir_path2, face_engine=args.face_engine, face_model=args.face_model)
+
     end = time.time()
     print("Time elapsed: %.2f seconds" %(end - begin))

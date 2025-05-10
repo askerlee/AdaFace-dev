@@ -128,8 +128,7 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
             image_paths: exact image paths as a list of strings. 
             A list of numpy array (RGB) are also welcome. 
 
-            model_name (str): VGG-Face, Facenet, Facenet512, OpenFace, DeepFace, DeepID, Dlib
-            , ArcFace and SFace
+            model_name (str): VGG-Face, Facenet, Facenet512, OpenFace, DeepFace, DeepID, Dlib, ArcFace and SFace
 
             enforce_detection (boolean): If no face could not be detected in an image, then this
             function will return exception by default. Set this to False not to have this exception.
@@ -350,7 +349,7 @@ def calc_faces_similarities(src_list_embeds, dst_list_embeds):
 
 # src_path, dst_path: a folder or a single image path, or an np array.
 def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples=-1, 
-                         face_engine="deepface", insightface_app=None, 
+                         face_engine="deepface", face_model="ArcFace", insightface_app=None, 
                          cache_src_embeds=True, verbose=True, debug=False):
 
     # expand_paths(): if src_path is a directory, find all images in the directory.
@@ -360,9 +359,9 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
     dst_paths = expand_paths(dst_path, num_samples=dst_num_samples)
 
     if face_engine == "deepface":
-        src_list_embeds = deepface_embed_images(src_paths, model_name="ArcFace", detector_backend = "retinaface",
+        src_list_embeds = deepface_embed_images(src_paths, model_name=face_model, detector_backend="retinaface",
                                                 cache_embeds=cache_src_embeds, verbose=verbose)
-        dst_list_embeds = deepface_embed_images(dst_paths, model_name="ArcFace", detector_backend = "retinaface",
+        dst_list_embeds = deepface_embed_images(dst_paths, model_name=face_model, detector_backend="retinaface",
                                                 cache_embeds=False, verbose=verbose)
         if debug:
             breakpoint()

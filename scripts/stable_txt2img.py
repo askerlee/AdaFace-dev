@@ -176,6 +176,8 @@ def parse_args():
                              "and compute face similarities with the groundtruth")
     parser.add_argument("--face_engine", type=str, default="deepface", choices=["deepface", "insightface"],
                         help="Face engine to use for face similarity calculation")
+    parser.add_argument("--face_model", type=str, default="ArcFace", choices=["VGG-Face", "ArcFace"],
+                        help="Face model to use for face similarity calculation")
     
     parser.add_argument('--gpu', type=int,  default=0, help='ID of GPU to use.')
     #parser.add_argument("--tfgpu", type=int, default=argparse.SUPPRESS, help="ID of GPU to use for TensorFlow. Set to -1 to use CPU (slow).")
@@ -708,7 +710,9 @@ def main(opt):
                                 if opt.calc_face_sim:
                                     all_similarities, sim_face, normal_img_count, except_img_count = \
                                         compare_face_folders(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
-                                                             face_engine=opt.face_engine, insightface_app=insightface_app)
+                                                             face_engine=opt.face_engine, 
+                                                             face_model=opt.face_model,
+                                                             insightface_app=insightface_app)
                                     # sim_face is a float, so no need to detach().cpu().numpy().
                                     all_sims_face.append(sim_face)
                                     all_normal_img_counts.append(normal_img_count)

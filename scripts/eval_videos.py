@@ -16,7 +16,10 @@ def parse_args():
     parser.add_argument("--gpu", dest='gpu_id', type=int, default=0, help="specify a gpu to use")
     parser.add_argument("--face_engine", dest='face_engine', type=str, default='deepface', 
                         choices=['deepface', 'insightface'],
-                        help="face engine to use for comparison")
+                        help="Face engine to use for comparison")
+    parser.add_argument("--face_model", dest='face_model', type=str, default='ArcFace',
+                        choices=['VGG-Face', 'ArcFace'],
+                        help="Face model to use for comparison")
     parser.add_argument("--sample_interval", type=int, default=3,
                         help="Sample interval for video frames")
     parser.add_argument("--save_frames_to", type=str, default=None,
@@ -88,7 +91,7 @@ if __name__ == "__main__":
         print(f"Processing {args.single_video} ({len(frames)} frames)")
         all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
-                                    cache_src_embeds=False, verbose=True)
+                                 face_model=args.face_model, cache_src_embeds=False, verbose=True)
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
         # By default, in the single_video mode, all similarities will be printed for diagnostic purposes.
         args.verbose = True
@@ -134,7 +137,7 @@ if __name__ == "__main__":
             frames = extract_frames(video_filename, sample_interval=args.sample_interval, collate=False)
             all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
                 compare_face_folders(image_filenames, frames, face_engine=args.face_engine, 
-                                     cache_src_embeds=False, verbose=False, debug=args.debug)
+                                     face_model=args.face_model, cache_src_embeds=False, verbose=False, debug=args.debug)
             
             method = "unknown"
             for key in simi_stats:
