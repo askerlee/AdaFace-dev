@@ -2075,6 +2075,8 @@ class LatentDiffusion(DDPM):
                               comp_ss_face_confidence_thres=0.99):
         device = x_starts[0].device
         latent_shape = x_starts[0].shape
+        # Number of denoising steps.
+        S = len(noises)
 
         x_starts_ss = [ x_start.chunk(4)[0] for x_start in x_starts ]
         x_starts_sc = [ x_start.chunk(4)[1] for x_start in x_starts ]
@@ -2093,7 +2095,7 @@ class LatentDiffusion(DDPM):
             x1, y1, x2, y2 = sc_fg_face_bboxes[i]
             X1, Y1, X2, Y2 = ss_fg_face_bboxes[i]
 
-            for step in range(len(noises)):
+            for step in range(S):
                 noise_i_sc_crop = noises_sc[step][i:i+1, :, y1:y2, x1:x2]
                 noise_i_sc_crop = F.interpolate(noise_i_sc_crop, (Y2 - Y1, X2 - X1), mode='bilinear', align_corners=False)
                 # Simply scaling up x_starts_ss_sc_mix, noises_ss_sc_mix to the size in the sc instance 
@@ -2137,15 +2139,15 @@ class LatentDiffusion(DDPM):
                                                 ffn_lora_adapter_name='comp_distill', 
                                                 BLKS=1, batch_part_has_grad='none')
         
-        # Sometimes the last step of the denoised SS instance is good, but all the previous steps are bad.
-        # So we choose the **second to last step** of the re-denoised SS instance to evaluate the face confidence.
-        # The face location should be roughly the same as in the last step.
-        x_recon_ss2 = x_recons_ss[-2]
-        x_recon_ss_pixels2 = self.decode_first_stage(x_recon_ss2)
+        x_recons_ss_collate = torch.cat(x_recons_ss, dim=0)
+        x_recons_ss_pixel_collate = self.decode_first_stage(x_recons_ss_collate)
+        # Split x_recons_ss_pixel_collate into S steps. x_recons_ss_pixel[s] is the SS instances at step s.
+        x_recons_ss_pixel = x_recons_ss_pixel_collate.chunk(S, dim=0)
+
         # The cropping operation is wrapped with torch.no_grad() in retinaface implementation.
         # So we don't need to wrap it here.
         ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, face_confidences2, ss_face_detected_inst_mask2 = \
-            self.arcface.retinaface.crop_faces(x_recon_ss_pixels2, out_size=(128, 128), T=20)
+            self.arcface.retinaface.crop_faces(x_recons_ss_pixel, out_size=(128, 128), T=20)
 
         avg_face_confidence = face_confidences2.mean().item()
 
@@ -2156,7 +2158,7 @@ class LatentDiffusion(DDPM):
             # NOTE: ss_fg_face_bboxes2 are coords on x_recon_ss_pixels2, 512*512.
             # In calc_elastic_matching_loss(), it is used to crop the latents, 64*64. 
             # So we scale ss_fg_face_bboxes2 down by 8.
-            ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recon_ss_pixels2.shape[-1], latent_shape[-1])
+            ss_fg_face_bboxes2 = pixel_bboxes_to_latent(ss_fg_face_bboxes2, x_recons_ss_pixel.shape[-1], latent_shape[-1])
             # len(ss_fg_face_bboxes2) == BLOCK_SIZE, usually 1.
             for i in range(len(ss_fg_face_bboxes2)):
                 print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences2[i]:.3f}.", end=' ')
@@ -2164,17 +2166,11 @@ class LatentDiffusion(DDPM):
 
             is_good_confidence = (avg_face_confidence >= comp_ss_face_confidence_thres)
 
-            for i, x_recon_ss2 in enumerate(x_recons_ss):
-                if i == len(x_recons_ss) - 1:
-                    # If currently pointing at the last step, then x_recon_ss_pixels2 has been decoded already. 
-                    # Avoid decoding it again.
-                    recon_images_ss = x_recon_ss_pixels2
-                else:
-                    recon_images_ss = self.decode_first_stage(x_recon_ss2)
-
+            for step in range(S):
+                recon_images_ss = x_recons_ss_pixel[step]
                 # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
-                log_image_colors = torch.ones(recon_images_ss.shape[0], dtype=int, device=device) * (i % 4)
+                log_image_colors = torch.ones(recon_images_ss.shape[0], dtype=int, device=device) * (step % 4)
                 if not is_good_confidence:
                     # Change the border colors to 4, 5, 6, 7, i.e., orange, blue, pink, magenta, 
                     # to indicate they are of low confidence.
@@ -2185,14 +2181,14 @@ class LatentDiffusion(DDPM):
                 self.cache_and_log_generations(recon_images_ss, log_image_colors, do_normalize=True)
 
             if is_good_confidence:
-                for i, ca_layers_activations_ss in enumerate(ca_layers_activations_list_ss):
-                    ca_layers_activations = ca_layers_activations_list[i]
+                for step, ca_layers_activations_ss in enumerate(ca_layers_activations_list_ss):
+                    ca_layers_activations = ca_layers_activations_list[step]
                     ca_ss, ca_sc, ca_ss_rep, ca_mc = \
                         split_dict(ca_layers_activations, 4)
                     # Replace the first round SS instance CA activations with 
                     # the second round of SS instance CA activations.
                     ca_layers_activations = collate_dicts([ca_layers_activations_ss, ca_sc, ca_ss_rep, ca_mc])
-                    ca_layers_activations_list[i] = ca_layers_activations
+                    ca_layers_activations_list[step] = ca_layers_activations
 
                 return ss_fg_face_bboxes2
             else:
