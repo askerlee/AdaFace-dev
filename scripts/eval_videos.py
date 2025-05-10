@@ -2,7 +2,8 @@ import os
 import argparse
 import time
 from evaluation.eval_utils import compare_face_folders, set_tf_gpu
-import cv2, numpy as np, glob
+import cv2, numpy as np
+from PIL import Image
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -16,15 +17,17 @@ def parse_args():
     parser.add_argument("--face_engine", dest='face_engine', type=str, default='deepface', 
                         choices=['deepface', 'insightface'],
                         help="face engine to use for comparison")
-    parser.add_argument("--sample_interval", dest='sample_interval', type=int, default=3,
+    parser.add_argument("--sample_interval", type=int, default=3,
                         help="Sample interval for video frames")
+    parser.add_argument("--save_frames_to", type=str, default=None,
+                        help="Save frames to this directory")
     parser.add_argument("--verbose", dest='verbose', action='store_true', help="Verbose mode")
     parser.add_argument("--debug", dest='debug', action='store_true', help="Debug mode")
     args = parser.parse_args()
     return args
 
 # collate: whether to collate the frames into a single numpy array.
-def extract_frames(video_path, sample_interval=1, collate=False):
+def extract_frames(video_path, sample_interval=1, collate=False, save_frames_to=None):
     cap = cv2.VideoCapture(video_path)
     frame_count = 0
     frames = []
@@ -75,6 +78,13 @@ if __name__ == "__main__":
     if args.single_video is not None:
         assert args.ref_image is not None, "Reference image must be provided"
         frames = extract_frames(args.single_video, sample_interval=args.sample_interval, collate=False)
+        print(f"Extracted {len(frames)} frames from {args.single_video}")
+        if args.save_frames_to is not None:
+            os.makedirs(args.save_frames_to, exist_ok=True)
+            for i, frame in enumerate(frames):
+                Image.fromarray(frame).save(os.path.join(args.save_frames_to, f"frame-{i:04d}.jpg"))
+            print(f"Saved {len(frames)} frames to {args.save_frames_to}")
+
         print(f"Processing {args.single_video} ({len(frames)} frames)")
         all_similarities, avg_similarity, normal_frame_count, no_face_frame_count = \
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
