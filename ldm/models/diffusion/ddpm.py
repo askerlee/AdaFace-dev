@@ -2209,7 +2209,7 @@ class LatentDiffusion(DDPM):
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} > {comp_ss_face_confidence_thres:.3f}. Replaced.")
                 else:
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
-            else:
+            if not avg_is_good_confidence:
                 # If the face confidence is too low, we still log the images, but we don't replace the activations.
                 print(f"Rank {self.trainer.global_rank} 2nd SS avg face confidence {avg_face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
