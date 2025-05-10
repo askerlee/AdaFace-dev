@@ -79,7 +79,7 @@ if __name__ == "__main__":
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
         if args.verbose:
             for i, simi in enumerate(all_similarities):
-                if i == len(all_similarities) - 1 or i % 10 == 0:
+                if i == len(all_similarities) - 1 or (i > 0 and i % 10 == 0):
                     end_char = "\n"
                 else:
                     end_char = ", "
@@ -132,7 +132,7 @@ if __name__ == "__main__":
             print(f"{method:<7} sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
             if args.verbose:
                 for i, simi in enumerate(all_similarities):
-                    if i == len(all_similarities) - 1 or i % 10 == 0:
+                    if i == len(all_similarities) - 1 or (i > 0 and i % 10 == 0):
                         end_char = "\n"
                     else:
                         end_char = ", "
