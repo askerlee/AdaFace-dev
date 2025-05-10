@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         calc_recon_and_suppress_losses, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
-                        collate_dicts, split_dict, select_and_repeat_instances, halve_token_indices, \
+                        collate_dicts, split_dict, chunk_list, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, pixel_bboxes_to_latent, \
                         RollingStats, save_grid, set_seed_per_rank_and_batch
@@ -2149,7 +2149,13 @@ class LatentDiffusion(DDPM):
         ss_fg_face_crops2, ss_bg_face_crops_flat2, ss_fg_face_bboxes2, face_confidences2, ss_face_detected_inst_mask2 = \
             self.arcface.retinaface.crop_faces(x_recons_ss_pixel, out_size=(128, 128), T=20)
 
+        # Split ss_fg_face_bboxes2 into S steps. ss_fg_face_bboxes2[s] is the face bboxes at step s.
+        ss_fg_face_bboxes2 = chunk_list(ss_fg_face_bboxes2, S)
         avg_face_confidence = face_confidences2.mean().item()
+
+        # ss_fg_face_bboxes_list contains the face bboxes of all the steps. Initialized as 
+        # a list of the same ss_fg_face_bboxes for all denoising steps.
+        ss_fg_face_bboxes_list = [ ss_fg_face_bboxes ] * S
 
         # Only replace the ss instance results when all ss instances have faces detected,
         # and the confidence (likelihood) of the new ss face is at least 90% of the original ss face.
@@ -2164,9 +2170,12 @@ class LatentDiffusion(DDPM):
                 print(f"Rank {self.trainer.global_rank} 2nd SS face coords {i}: {ss_fg_face_bboxes2[i].detach().cpu().numpy()}. confidence {face_confidences2[i]:.3f}.", end=' ')
             print()
 
-            is_good_confidence = (avg_face_confidence >= comp_ss_face_confidence_thres)
+            # If the average face confidence < 0.99, then discard the SS instances of all steps.
+            avg_is_good_confidence = (avg_face_confidence >= comp_ss_face_confidence_thres)
 
             for step in range(S):
+                # For each step, we still require the face confidence to be at least 0.99.
+                is_good_confidence = (face_confidences2[step] >= comp_ss_face_confidence_thres) and avg_is_good_confidence
                 recon_images_ss = x_recons_ss_pixel[step]
                 # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
@@ -2180,8 +2189,9 @@ class LatentDiffusion(DDPM):
                 # this batch of logged images.
                 self.cache_and_log_generations(recon_images_ss, log_image_colors, do_normalize=True)
 
-            if is_good_confidence:
-                for step, ca_layers_activations_ss in enumerate(ca_layers_activations_list_ss):
+                # Only replace the activations of the steps that have good confidence.
+                if is_good_confidence:
+                    ca_layers_activations_ss = ca_layers_activations_list_ss[step]
                     ca_layers_activations = ca_layers_activations_list[step]
                     ca_ss, ca_sc, ca_ss_rep, ca_mc = \
                         split_dict(ca_layers_activations, 4)
@@ -2190,16 +2200,20 @@ class LatentDiffusion(DDPM):
                     ca_layers_activations = collate_dicts([ca_layers_activations_ss, ca_sc, ca_ss_rep, ca_mc])
                     ca_layers_activations_list[step] = ca_layers_activations
 
-                return ss_fg_face_bboxes2
+                    # Replace the first round ss_fg_face_bboxes with the second round of ss_fg_face_bboxes.
+                    ss_fg_face_bboxes_list[step] = ss_fg_face_bboxes2[step]
+                    print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} > {comp_ss_face_confidence_thres:.3f}. Replaced.")
+                else:
+                    print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2[step]:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
             else:
                 # If the face confidence is too low, we still log the images, but we don't replace the activations.
-                print(f"Rank {self.trainer.global_rank} 2nd SS face confidence {avg_face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
-                return None
+                print(f"Rank {self.trainer.global_rank} 2nd SS avg face confidence {avg_face_confidence:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
         # Otherwise, we keep the original activations and ss_fg_face_bboxes.
         else:
             print(f"Rank {self.trainer.global_rank} 2nd SS denoising failed. Discarded.")
-            return None
-                    
+
+        return ss_fg_face_bboxes_list
+                        
     # t: timesteps.
     # prompt_in is the textual prompts. 
     # extra_info: a dict that contains various fields. 
@@ -3300,26 +3314,22 @@ class LatentDiffusion(DDPM):
             # Update ca_layers_activations_list in-place.
             # If a face is detected in the ss instance of the last denoising step, then 
             # the new ss_fg_face_bboxes is returned, and we replace ss_fg_face_bboxes with it.
-            ss_fg_face_bboxes2 = \
+            ss_fg_face_bboxes_list, repl_steps_frac = \
                 self.redenoise_subj_single(x_starts, noises, ts, ca_layers_activations_list,
                                            ss_context, uncond_emb, ss_fg_face_bboxes, sc_fg_face_bboxes, 
                                            use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
                                            sc_crop_mix_weight=self.redenoise_subj_single_crop_mix_weight,
                                            comp_ss_face_confidence_thres=self.comp_ss_face_confidence_thres)
             
-            if ss_fg_face_bboxes2 is not None:
-                ss_fg_face_bboxes = ss_fg_face_bboxes2
-                ss_redenoised = True
-                self.comp_ss_redenoise_success_frac.update(1)
-            else:
-                # Otherwise, the redenoising failed, i.e., no face is detected in the new ss instance.
-                ss_redenoised = False
-                self.comp_ss_redenoise_success_frac.update(0)
+            # If the redenoising failed, i.e., no face is detected in the new ss instance, 
+            # then repl_steps_frac is 0.
+            self.comp_ss_redenoise_success_frac.update(repl_steps_frac)
         else:
             # Otherwise, no face is detected in the sc instance. 
-            # So we keep the original SS activations and ss_fg_face_bboxes.
-            ss_redenoised = False
-            # Don't update comp_ss_redenoise_success_frac, as redenoise_subj_single() is not tried in this branch.
+            # So we keep the original SS activations and ss_fg_face_bboxes. 
+            # ss_fg_face_bboxes_list is a list of the same ss_fg_face_bboxes for all denoising steps.
+            ss_fg_face_bboxes_list = [ ss_fg_face_bboxes ] * len(ca_layers_activations_list)
+            # We don't update comp_ss_redenoise_success_frac, as redenoise_subj_single() is not tried in this branch.
 
         mon_loss_dict.update({f'{session_prefix}/comp_ss_redenoise_success_frac': self.comp_ss_redenoise_success_frac.mean})
         
@@ -3350,9 +3360,9 @@ class LatentDiffusion(DDPM):
 
         mon_loss_dict.update({f'{session_prefix}/comp_sc_face_suppressed_frac': comp_sc_face_suppressed_frac})
 
-        for step_idx, ca_layers_activations in enumerate(ca_layers_activations_list):
+        for step, ca_layers_activations in enumerate(ca_layers_activations_list):
             # Calc the L2 norm of noise_pred.
-            pred_l2_step = (noise_preds[step_idx] ** 2).mean()   
+            pred_l2_step = (noise_preds[step] ** 2).mean()   
             pred_l2s.append(pred_l2_step)
         
             loss_comp_rep_distill_subj_attn, loss_comp_rep_distill_subj_k, loss_comp_rep_distill_nonsubj_k, \
@@ -3380,19 +3390,19 @@ class LatentDiffusion(DDPM):
             if (not all_ss_contain_faces) or (first_step_when_sc_face_is_detected == -1):
                 continue
 
-            if (step_idx < len(ca_layers_activations_list) - 1) and (step_idx >= first_step_when_sc_face_is_detected - 1):
+            if (step < len(ca_layers_activations_list) - 1) and (step >= first_step_when_sc_face_is_detected - 1):
                 subj_attn_cross_t_diff_step = \
-                    calc_subj_attn_cross_t_diff_loss(ca_layers_activations, ca_layers_activations_list[step_idx+1],
+                    calc_subj_attn_cross_t_diff_loss(ca_layers_activations, ca_layers_activations_list[step+1],
                                                      all_subj_indices_1b)
                 subj_attn_cross_t_diffs.append(subj_attn_cross_t_diff_step)
             
-            if (step_idx < first_step_when_sc_face_is_detected) or (sc_face_proportion_type in ['sc-noface']):
+            if (step < first_step_when_sc_face_is_detected) or (sc_face_proportion_type in ['sc-noface']):
                 continue
 
             loss_comp_fg_bg_preserve_step = \
                 calc_comp_subj_bg_preserve_loss(mon_loss_dict, session_prefix, device,
                                                 self.flow_model, ca_layers_activations, 
-                                                ss_fg_face_bboxes, sc_fg_face_bboxes,
+                                                ss_fg_face_bboxes_list[step], sc_fg_face_bboxes,
                                                 sc_face_shrink_ratio_for_bg_matching_mask=sc_face_shrink_ratio_for_bg_matching_mask,
                                                 recon_scaled_loss_threses={'mc': 0.4, 'ssfg': 0.4},
                                                 recon_max_scale_of_threses=5,
