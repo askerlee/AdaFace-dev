@@ -779,7 +779,7 @@ def gen_gradient_scaler(alpha, debug=False):
         # Don't use lambda function here, otherwise the object can't be pickled.
         return torch.detach
 
-def var_of_laplacian(images_ts):
+def var_of_laplacian(images_ts, scale=10):
     rgb_to_gray_weights = torch.tensor([0.299, 0.587, 0.114], device=images_ts.device).view(1, 3, 1, 1)
     # Laplacian kernel (2D, single channel)
     laplacian_kernel = \
@@ -790,8 +790,9 @@ def var_of_laplacian(images_ts):
 
     # Convert RGB to grayscale
     fg_faces_gray = (images_ts * rgb_to_gray_weights).sum(dim=1, keepdim=True)
-    # Apply Laplacian kernel
-    var = F.conv2d(fg_faces_gray, laplacian_kernel, padding=1).var(dim=[1, 2, 3])
+    # Apply Laplacian kernel.
+    # Scale up fg_faces_gray to make it not so small. var is proportional to scale**2.
+    var = F.conv2d(fg_faces_gray * scale, laplacian_kernel, padding=1).var(dim=[1, 2, 3])
     return var
 
 smooth_kernel_3x3s = {
