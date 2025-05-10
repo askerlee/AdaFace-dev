@@ -79,10 +79,11 @@ if __name__ == "__main__":
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
         if args.verbose:
             for i, simi in enumerate(all_similarities):
-                print(f"{simi:.3f}", end=", ")
-                if (i + 1) % 10 == 0:
-                    print()
-            print()
+                if i == len(all_similarities) - 1 or i % 10 == 0:
+                    end_char = "\n"
+                else:
+                    end_char = ", "
+                print(f"{simi:.3f}", end=end_char)
                         
         exit()
 
@@ -131,10 +132,11 @@ if __name__ == "__main__":
             print(f"{method:<7} sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
             if args.verbose:
                 for i, simi in enumerate(all_similarities):
-                    print(f"{simi:.3f}", end=", ")
-                    if (i + 1) % 10 == 0:
-                        print()
-                print()
+                    if i == len(all_similarities) - 1 or i % 10 == 0:
+                        end_char = "\n"
+                    else:
+                        end_char = ", "
+                    print(f"{simi:.3f}", end=end_char)
 
             video_count += 1
 
