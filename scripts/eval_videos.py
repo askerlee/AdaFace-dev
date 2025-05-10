@@ -77,6 +77,13 @@ if __name__ == "__main__":
             compare_face_folders([args.ref_image], frames, face_engine=args.face_engine,
                                     cache_src_embeds=False, verbose=True)
         print(f"Avg sim on {normal_frame_count} frames ({no_face_frame_count} no face): {avg_similarity:.3f}")
+        if args.verbose:
+            for i, simi in enumerate(all_similarities):
+                print(f"{simi:.3f}", end=", ")
+                if (i + 1) % 10 == 0:
+                    print()
+            print()
+                        
         exit()
 
     for subject_path in subject_paths:
@@ -128,7 +135,7 @@ if __name__ == "__main__":
                     if (i + 1) % 10 == 0:
                         print()
                 print()
-                
+
             video_count += 1
 
         subject_count += 1
