@@ -80,7 +80,7 @@ class DDPM(pl.LightningModule):
                  adam_config=None,
                  prodigy_config=None,
                  comp_distill_iter_gap=5,
-                 cls_subj_mix_ratio=0.4,        
+                 cls_subj_mix_ratio=0.6,        
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2, 
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
@@ -1468,17 +1468,17 @@ class LatentDiffusion(DDPM):
             subj_single_emb[:, subj_indices_1b] = self.iter_flags['id2img_prompt_embs'][:1]
             subj_comp_emb[:, subj_indices_1b]   = self.iter_flags['id2img_prompt_embs'][:1]
 
-        # prompt_emb_4b_rep_nonmix: in which cls_comp_emb is not mixed with subj_comp_emb.
-        prompt_emb_4b_rep_nonmix = torch.cat([subj_single_emb,   subj_comp_emb, 
-                                              subj_comp_rep_emb, cls_comp_emb], dim=0)
+        # prompt_emb_4b_rep_nomix: in which cls_comp_emb is not mixed with subj_comp_emb.
+        prompt_emb_4b_rep_nomix = torch.cat([subj_single_emb,   subj_comp_emb, 
+                                             subj_comp_rep_emb, cls_comp_emb], dim=0)
         # cls_single_emb and cls_comp_emb have been patched above. 
         # Then combine them back into prompt_emb_4b_orig_dist.
         # orig means it doesn't contain subj_comp_rep_emb.
         # prompt_emb_4b_orig_dist: [4, 77, 768].
         prompt_emb_4b_orig_dist  = torch.cat([subj_single_emb,     subj_comp_emb,
                                               cls_single_emb_dist, cls_comp_emb_dist], dim=0)
-        extra_info['prompt_emb_4b_rep_nonmix']  = prompt_emb_4b_rep_nonmix
-        extra_info['prompt_emb_4b_orig_dist']   = prompt_emb_4b_orig_dist
+        extra_info['prompt_emb_4b_rep_nomix']  = prompt_emb_4b_rep_nomix
+        extra_info['prompt_emb_4b_orig_dist']  = prompt_emb_4b_orig_dist
 
         if self.iter_flags['do_comp_feat_distill']:
             # prompt_in: subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
@@ -1490,14 +1490,14 @@ class LatentDiffusion(DDPM):
             # *** and subj_comp_rep_prompts repeats the compositional part twice.
             prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
 
-            # Mix 0.2 of the subject comp embeddings with 0.8 of the cls comp embeddings as cls_comp_emb2.
+            # Mix 0.4 of the subject comp embeddings with 0.6 of the cls comp embeddings as cls_comp_emb2.
             cls_comp_emb2 = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
 
             prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb2], dim=0)
 
             # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
             # The mask before update is prompt_emb_mask_4b_orig, which matches prompt_emb_4b_orig_dist.
-            # The mask after  update is prompt_emb_mask_4b,      which matches prompt_emb_4b_rep_nonmix and prompt_emb.
+            # The mask after  update is prompt_emb_mask_4b,      which matches prompt_emb_4b_rep_nomix and prompt_emb.
             prompt_emb_mask_4b  = extra_info['prompt_emb_mask_4b_orig'].clone()
             prompt_pad_mask_4b  = extra_info['prompt_pad_mask_4b_orig'].clone()
             prompt_emb_mask_4b[BLOCK_SIZE*2:BLOCK_SIZE*3] = extra_info_sc_rep['prompt_emb_mask']
@@ -1909,8 +1909,8 @@ class LatentDiffusion(DDPM):
                                 (BLOCK_SIZE,), device=x_start.device)
         t      = t_rear.repeat(4)
 
-        subj_single_prompt_emb, subj_comp_prompt_emb, subj_comp_rep_prompt_emb, cls_comp_prompt_emb = prompt_emb.chunk(4)
-        cls_comp_prompt_emb2 = (1 - self.cls_subj_mix_ratio) * subj_comp_rep_prompt_emb + self.cls_subj_mix_ratio * cls_comp_prompt_emb
+        subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb = prompt_emb.chunk(4)
+        cls_comp_emb2 = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
 
         # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
         # Update masks to be a 1-repeat-4 structure.
@@ -1935,7 +1935,7 @@ class LatentDiffusion(DDPM):
         # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
         # default cfg_scale_range=[2, 4].
 
-        # cls_comp_prompt_emb2 + the SAR checkpoint will generate good compositional images. 
+        # cls_comp_emb2 + the SAR checkpoint will generate good compositional images. 
         # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
         # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
         # (subj single, subj comp,    cls single,  cls comp).
@@ -1943,15 +1943,11 @@ class LatentDiffusion(DDPM):
         #      "subj single"  is used to initialize subj single and cls single instance denoising.
         # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
         # So this should be fine.
-        teacher_context=[ torch.cat([subj_single_prompt_emb, cls_comp_prompt_emb2], dim=0) ]
+        teacher_context=[ torch.cat([subj_single_emb, cls_comp_emb2], dim=0) ]
 
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
-                                               # In each timestep, the unet ensemble will do denoising on the same x_start_2 
-                                               # with subj_double_prompt_emb and cls_double_prompt_emb, then average the results.
-                                               # It's similar to do averaging on the prompt embeddings, but yields sharper results.
-                                               # From the outside, the unet ensemble is transparent, like a single unet.
                                                teacher_context=teacher_context, 
                                                negative_context=uncond_emb,
                                                num_denoising_steps=num_comp_priming_denoising_steps,
@@ -2358,8 +2354,8 @@ class LatentDiffusion(DDPM):
             #    (subj_single_emb, subj_comp_emb,      subj_comp_rep_emb, cls_comp_emb) 
             # But in order to do priming, we need cond_context_orig which contains
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
-            # Therefore, we use extra_info['prompt_emb_4b_rep_nonmix'] to get the old context.
-            cond_context_orig = (extra_info['prompt_emb_4b_rep_nonmix'], subj_context[1], subj_context[2])
+            # Therefore, we use extra_info['prompt_emb_4b_rep_nomix'] to get the old context.
+            cond_context_orig = (extra_info['prompt_emb_4b_rep_nomix'], subj_context[1], subj_context[2])
             # ss_context: the context used for denoising the subject single instance alone.
             ss_context = (prompt_emb.chunk(4)[0], prompt_in[:BLOCK_SIZE], copy.copy(extra_info))
 
