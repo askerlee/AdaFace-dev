@@ -90,8 +90,8 @@ class DDPM(pl.LightningModule):
                  # Maybe we should set the face align loss threshold higher during the earlier stages, 
                  # and reduce it gradually as the training progresses,
                  # since the adaface model can better and better capture the face features.
-                 recon_face_align_loss_thres=0.75,
-                 comp_sc_face_align_loss_thres=0.75,
+                 recon_face_align_loss_thres=0.7,
+                 comp_sc_face_align_loss_thres=0.7,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
                  use_fp_trick=True,
@@ -107,7 +107,7 @@ class DDPM(pl.LightningModule):
                  # Face confidence threshold for the face detected in the SS instances.
                  comp_ss_face_confidence_thres=0.99,
                  # Laplacian variance tolerance threshold (relative to the first denoising attempt) of the SS faces.
-                 comp_ss_face_lap_vars_tolerance=0.5,
+                 comp_ss_face_lap_vars_tolerance=0.3,
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.5, 2.5],
                  p_unet_distill_uses_comp_prompt=0,
@@ -2239,7 +2239,7 @@ class LatentDiffusion(DDPM):
                 elif not is_good_confidence:
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2_allsteps[step]:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
                 elif not is_clear:
-                    print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} lap var {lap_vars2_allsteps[step]} < {lap_vars_allsteps[step]} * {lap_vars_tolerance}. Discarded.")
+                    print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} lap var {lap_vars2_allsteps[step]:.3f} < {lap_vars_allsteps[step]:.3f} * {lap_vars_tolerance}. Discarded.")
 
         # Otherwise, generation fails, and we keep the original activations and ss_fg_face_bboxes.
         else:
