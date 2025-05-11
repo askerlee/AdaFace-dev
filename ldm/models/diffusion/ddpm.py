@@ -3392,7 +3392,7 @@ class LatentDiffusion(DDPM):
             # ** we optimize both the arcface align loss and the face suppression loss, to drive the face
             # into the center of the face area, and keep the face identity at the same time.
             comp_fg_faces_suppress_loss_scale_dict = \
-                    { 'mc-no-sc-large': 10, 'little-no-overlap': 5, 'too-large': 5 }
+                    { 'mc-no-sc-large': 2.5, 'little-no-overlap': 5, 'too-large': 5 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_fg_faces_suppress_loss_scale = comp_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
@@ -3400,7 +3400,7 @@ class LatentDiffusion(DDPM):
             # If comp_sc_face_suppressed_frac=0.5, then extra_suppress_loss_scale = 15.625.
             # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
             # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 15 * 0.01 = 0.045.
-            extra_suppress_loss_scale = 15
+            extra_suppress_loss_scale = 10
             loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
                                       * extra_suppress_loss_scale * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.3
