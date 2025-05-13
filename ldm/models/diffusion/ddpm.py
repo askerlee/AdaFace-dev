@@ -106,7 +106,7 @@ class DDPM(pl.LightningModule):
                  redenoise_subj_comp_crop_mix_weights=(0.5, 0.25, 0.25),
                  # Face confidence threshold for the face detected in the SS instances.
                  comp_ss_face_confidence_thres=0.99,
-                 # Laplacian variance tolerance threshold (relative to the first denoising attempt) of the SS faces.
+                 # Laplacian variance tolerance threshold (second denoising attempt vs. the first denoising attempt) of the SS faces.
                  comp_ss_face_lap_vars_tolerance=0.3,
                  p_unet_teacher_uses_cfg=0.6,
                  unet_teacher_cfg_scale_range=[1.5, 2.5],
@@ -122,8 +122,8 @@ class DDPM(pl.LightningModule):
                  recon_bg_pixel_weight=0.1,
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=1e-2,
-                 unet_uses_attn_lora=True,
-                 recon_uses_ffn_lora=True,
+                 unet_uses_attn_lora=False,
+                 recon_uses_ffn_lora=False,
                  comp_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
@@ -139,7 +139,7 @@ class DDPM(pl.LightningModule):
                  res_hidden_states_gradscale=0.5,
                  log_attn_level=0,
                  ablate_img_embs=False,
-                 lora_weight_decay=0.01,
+                 lora_weight_decay=0.02,
                  use_diffusers_vae_for_encoding=False,
                 ):
         
@@ -1473,6 +1473,7 @@ class LatentDiffusion(DDPM):
                                              subj_comp_rep_emb, cls_comp_emb], dim=0)
         # cls_single_emb and cls_comp_emb have been patched above. 
         # Then combine them back into prompt_emb_4b_orig_dist.
+        # dist means the 1~2 cls tokens are combined and distributed across the N subject tokens.
         # orig means it doesn't contain subj_comp_rep_emb.
         # prompt_emb_4b_orig_dist: [4, 77, 768].
         prompt_emb_4b_orig_dist  = torch.cat([subj_single_emb,     subj_comp_emb,
@@ -1490,10 +1491,10 @@ class LatentDiffusion(DDPM):
             # *** and subj_comp_rep_prompts repeats the compositional part twice.
             prompt_in = subj_single_prompts + subj_comp_prompts + subj_comp_rep_prompts + cls_comp_prompts
 
-            # Mix 0.4 of the subject comp embeddings with 0.6 of the cls comp embeddings as cls_comp_emb2.
-            cls_comp_emb2 = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
+            # Mix 0.4 of the subject comp embeddings with 0.6 of the cls comp embeddings as cls_comp_emb_mix.
+            cls_comp_emb_mix = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
 
-            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb2], dim=0)
+            prompt_emb = torch.cat([subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb_mix], dim=0)
 
             # Update the cls_single (mc) embedding mask and padding mask to be those of sc_rep.
             # The mask before update is prompt_emb_mask_4b_orig, which matches prompt_emb_4b_orig_dist.
@@ -1640,6 +1641,7 @@ class LatentDiffusion(DDPM):
 
             if mix_sc_mc_attn:
                 ##### SC and MC instances generation #####
+                # SC and MC instances are put in the same batch, so their attn matrices are conveniently mixed.
                 extra_info_sm = copy.copy(extra_info)
                 extra_info_sm['shrink_cross_attn']      = False
                 extra_info_sm['mix_attn_mats_in_batch'] = True
@@ -1881,40 +1883,29 @@ class LatentDiffusion(DDPM):
         return noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, \
                noises, ts, ca_layers_activations_list
 
-
     # Do denoising, collect the attention activations for computing the losses later.
     # masks: (img_mask, fg_mask). 
     # Put them in a tuple to avoid too many arguments. The updated masks are returned.
     # On a 48GB GPU, we can only afford BLOCK_SIZE=1, otherwise OOM.
     def prime_x_start_for_comp_prompts(self, subj_context, x_start, noise,
-                                       masks, num_comp_priming_denoising_steps, BLOCK_SIZE=1):
+                                       num_comp_priming_denoising_steps, 
+                                       cls_subj_mix_ratio, BLOCK_SIZE=1):
         prompt_emb, prompt_in, extra_info = subj_context
-        # Although img_mask is not explicitly referred to in the following code,
-        # it's updated within select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, *masks).
-        img_mask, fg_mask = masks
 
-        # We use random noise for x_start, and 80% of the time, we use the training images.
+        # We use random noise for x_start.
         # NOTE: DO NOT x_start.normal_() here, as it will overwrite the x_start in the caller,
         # which is useful for loss computation.
-        x_start = torch.randn_like(x_start) 
-        # Set fg_mask to be the whole image.
-        fg_mask = torch.ones_like(fg_mask)
-
-        # Make the 4 instances in x_start, noise and t the same.
-        x_start = x_start[:BLOCK_SIZE].repeat(4, 1, 1, 1)
-        noise   = noise[:BLOCK_SIZE].repeat(4, 1, 1, 1)
+        # Make the 2 instances in x_start, noise and t the same.
+        x_start_2 = torch.randn_like(x_start)[:BLOCK_SIZE].repeat(2, 1, 1, 1)
+        noise_2   = noise[:BLOCK_SIZE].repeat(2, 1, 1, 1)
         # In priming denoising steps, t is randomly drawn from the tail 20% segment of the timesteps 
         # (highly noisy).
-        t_rear = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
-                                (BLOCK_SIZE,), device=x_start.device)
-        t      = t_rear.repeat(4)
+        t_rear    = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
+                                  (BLOCK_SIZE,), device=x_start.device)
+        t_2       = t_rear.repeat(2)
 
         subj_single_emb, subj_comp_emb, subj_comp_rep_emb, cls_comp_emb = prompt_emb.chunk(4)
-        cls_comp_emb2 = subj_comp_emb * (1 - self.cls_subj_mix_ratio) + cls_comp_emb * self.cls_subj_mix_ratio
-
-        # masks may have been changed in init_x_with_fg_from_training_image(). So we update it.
-        # Update masks to be a 1-repeat-4 structure.
-        masks = select_and_repeat_instances(slice(0, BLOCK_SIZE), 4, img_mask, fg_mask)
+        cls_comp_emb_mix = subj_comp_emb * (1 - cls_subj_mix_ratio) + cls_comp_emb * cls_subj_mix_ratio
 
         all_t_list = []
 
@@ -1925,30 +1916,26 @@ class LatentDiffusion(DDPM):
         # We only use half of the batch for faster class priming denoising.
         # x_start, t and noise are initialized as 1-repeat-4 at above, so the half is 1-repeat-2.
         # i.e., the denoising only differs in the prompt embeddings, but not in the x_start, t, and noise.
-        x_start_2   = x_start.chunk(2)[0]
-        t_2         = t.chunk(2)[1]
-        noise_2     = noise.chunk(2)[0]
 
-        # ** Do num_sep_denoising_steps of separate denoising steps with the single-comp prompts.
-        # x_start_2[0] is denoised with the single prompt (both subj single and cls single before averaging), 
-        # x_start_2[1] is denoised with the comp   prompt (both subj comp   and cls comp   before averaging).
+        # x_start_2[0] is denoised with the subj single  prompt, 
+        # x_start_2[1] is denoised with the cls mix comp prompt.
         # Since we always use CFG for class priming denoising, we need to pass the negative prompt as well.
         # default cfg_scale_range=[2, 4].
 
-        # cls_comp_emb2 + the SAR checkpoint will generate good compositional images. 
-        # Later the two instances of (subj single, cls mix comp) will be repeated twice to get:
-        # (subj single, cls mix comp, subj single, cls mix comp) as the primed x_start of
-        # (subj single, subj comp,    cls single,  cls comp).
-        # NOTE "cls mix comp" is used to initialize subj comp   and cls comp   instance denoising.
-        #      "subj single"  is used to initialize subj single and cls single instance denoising.
-        # Although there is misalignment on 3 out of 4 pairs, the 3 pairs are still semantically very close. 
+        # cls_comp_emb_mix + the SAR checkpoint will generate good compositional images. 
+        # Later the two instances of (subj single, cls mix comp) will be repeated to get:
+        # (subj single, cls mix comp, cls mix comp,  cls mix comp) as the primed x_start of
+        # (subj single, subj comp,    subj comp rep, cls comp).
+        # NOTE "cls mix comp" is used to initialize subj comp, subj comp rep, cls comp instance denoising.
+        #      "subj single"  is used to initialize subj single                        instance denoising.
+        # Although there is misalignment on subj comp and subj comp rep, the 2 pairs are still semantically very close. 
         # So this should be fine.
-        teacher_context=[ torch.cat([subj_single_emb, cls_comp_emb2], dim=0) ]
+        priming_context=[ torch.cat([subj_single_emb, cls_comp_emb_mix], dim=0) ]
 
         with torch.no_grad():
             primed_noise_preds, primed_x_starts, primed_noises, all_t = \
                 self.comp_distill_priming_unet(self, x_start_2, noise_2, t_2, 
-                                               teacher_context=teacher_context, 
+                                               teacher_context=priming_context, 
                                                negative_context=uncond_emb,
                                                num_denoising_steps=num_comp_priming_denoising_steps,
                                                # Same t and noise across instances.
@@ -1958,16 +1945,11 @@ class LatentDiffusion(DDPM):
         print(f"Rank {self.trainer.global_rank} step {self.global_step}: "
                 f"subj-cls ensemble prime denoising {num_comp_priming_denoising_steps} steps {all_t_list}")
         
-        # The last primed_x_start is the final denoised image (with the smallest t).
+        # The last x_start_primed_2 is the final denoised image (with the smallest t).
         # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
-        # The subject and class instances use the same primed x_start. So we repeat primed_x_starts[-1] twice.
-        x_start_primed  = primed_x_starts[-1].repeat(2, 1, 1, 1).to(dtype=x_start.dtype)
-        # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
-        # We return noise to make the noise_gt up-to-date, which is the recon objective.
-        # But noise_gt is probably not referred to in the following loss computations,
-        # since the current iteration is do_comp_feat_distill. We update it just in case.
-        # masks will still be used in the loss computation. So we return updated masks as well.
-        return x_start_primed, masks
+        # NOTE: The subject and class instances use the same primed x_start.
+        x_start_primed_2  = primed_x_starts[-1].to(dtype=x_start.dtype)
+        return x_start_primed_2
 
     # In ordinary comp denoising,  x_starts = [x_start0], noises = [noise], ts = [t], 
     # where x_start0, noise and t are of 1-repeat-4 structures.
@@ -2356,54 +2338,37 @@ class LatentDiffusion(DDPM):
             # (subj_single_emb, subj_comp_emb, cls_single_emb, cls_comp_emb).
             # Therefore, we use extra_info['prompt_emb_4b_rep_nomix'] to get the old context.
             cond_context_orig = (extra_info['prompt_emb_4b_rep_nomix'], subj_context[1], subj_context[2])
-            # ss_context: the context used for denoising the subject single instance alone.
-            ss_context = (prompt_emb.chunk(4)[0], prompt_in[:BLOCK_SIZE], copy.copy(extra_info))
 
-            # x_start_primed: the primed (denoised) x_start, ready for denoising.
-            # noise and masks are updated to be a 1-repeat-4 structure in prime_x_start_for_comp_prompts().
-            # We return noise to make the noise_gt up-to-date, which is the recon objective.
-            # But noise_gt is probably not referred to in the following loss computations,
-            # since the current iteration is do_comp_feat_distill. We update it just in case.
-            # masks will still be used in the loss computation. So we update them as well.
-            # NOTE: x_start still contains valid face images, as it's unchanged after priming.
-            # Later it will be used for loss computation.            
-
+            # x_start_primed_2: the primed (denoised) x_start, ready for denoising.
             # num_comp_priming_denoising_steps alternates between 3 and 4.
             num_comp_priming_denoising_steps = self.comp_iters_count % 2 - 1 + self.max_num_comp_priming_denoising_steps
 
+            # NOTE: x_start contains input face images. Later it will be used for loss computation.            
             x_start0 = x_start
             # Only the first 1/4 of the batch (actually 1 image), i.e., x_start0_ss, is used for priming.
             # They are repeated 4 times to form a primed batch.
-            x_start_primed, masks = \
+            x_start_primed_2 = \
                 self.prime_x_start_for_comp_prompts(cond_context_orig, x_start, noise,
-                                                    (img_mask, fg_mask), num_comp_priming_denoising_steps, 
+                                                    num_comp_priming_denoising_steps, 
+                                                    # 0.6 -> 0.8. Give more weight to the cls comp prompt during priming.
+                                                    0.5 + self.cls_subj_mix_ratio / 2, 
                                                     BLOCK_SIZE=BLOCK_SIZE)
             
-            # Update masks.
-            img_mask, fg_mask = masks
             # Regenerate the noise, since the noise above has been used in prime_x_start_for_comp_prompts().
             noise = torch.randn_like(x_start[:BLOCK_SIZE]).repeat(4, 1, 1, 1)
 
-            x_start_ss, x_start_sc, x_start_sr, x_start_mc = x_start_primed.chunk(4)
-            # Block 2 is the subject comp repeat (sc-repeat) instance.
-            # Make the sc-repeat and sc blocks use the same x_start, so that their output features
+            x_start_single, x_start_comp = x_start_primed_2.chunk(2)
+            # The sc, sc-repeat and mc blocks use the same x_start, so that their output features
             # are more aligned, and more effective for distillation.
-            x_start_primed = torch.cat([x_start_ss, x_start_sc, x_start_sc, x_start_mc], dim=0)
+            x_start_primed = torch.cat([x_start_single, x_start_comp, x_start_comp, x_start_comp], dim=0)
 
-            uncond_emb  = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
+            uncond_emb = self.uncond_context[0].repeat(BLOCK_SIZE * 4, 1, 1)
 
-            # t is randomly drawn from the middle rear 25% segment of the timesteps (noisy but not too noisy).
-            t_midrear = torch.randint(int(self.num_timesteps * 0.45), int(self.num_timesteps * 0.7), 
+            # t is randomly drawn from the middle rear 20% segment of the timesteps (noisy but not too noisy).
+            t_midrear = torch.randint(int(self.num_timesteps * 0.45), int(self.num_timesteps * 0.65), 
                                       (BLOCK_SIZE,), device=x_start.device)
             # Same t_mid for all instances.
             t_midrear = t_midrear.repeat(BLOCK_SIZE * 4)
-
-            # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
-            # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
-            # (img_mask is not used in the prompt-guided cross-attention layers).
-            # NOTE: We don't use img_mask in compositional iterations. Because in compositional iterations,
-            # the original images don't play a role, and the unet is supposed to generate the face from scratch.
-            # so img_mask doesn't match the generated face and is set to None).
 
             # ca_layers_activations_list will be used in calc_comp_prompt_distill_loss().
             # noise_preds is not used for loss computation.
@@ -2434,13 +2399,12 @@ class LatentDiffusion(DDPM):
             log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
             self.cache_and_log_generations(input_image, log_image_colors, do_normalize=True)
 
-            # NOTE: x_start_primed is primed with 0.3 subj embeddings and 0.7 cls embeddings. Therefore,
+            # NOTE: x_start_primed_2 is primed with 0.4 subj embeddings + 0.6 cls embeddings. Therefore,
             # the faces still don't look like the subject. What matters is that the background is compositional.
-            x_start_primed = x_start_primed.chunk(2)[0]
-            log_image_colors = torch.ones(x_start_primed.shape[0], dtype=int, device=x_start.device)
-            x_start_primed_decoded = self.decode_first_stage(x_start_primed)
-            self.cache_and_log_generations(x_start_primed_decoded, log_image_colors, do_normalize=True)
-            
+            log_image_colors = torch.ones(x_start_primed_2.shape[0], dtype=int, device=x_start.device)
+            x_start_primed_2_decoded = self.decode_first_stage(x_start_primed_2)
+            self.cache_and_log_generations(x_start_primed_2_decoded, log_image_colors, do_normalize=True)
+
             x_recons_collate = torch.cat(x_recons, dim=0)
             x_recons_pixel_collate = self.decode_first_stage(x_recons_collate)
             # Split x_recons_pixel_collate into different denoising steps.
@@ -2455,6 +2419,8 @@ class LatentDiffusion(DDPM):
                 if self.log_attn_level > 0:
                     self.log_attention(ca_layers_activations_list[i], all_subj_indices_1b)
 
+            # ss_context: the context used for re-denoising the subject single instance alone.
+            ss_context = (prompt_emb.chunk(4)[0], prompt_in[:BLOCK_SIZE], copy.copy(extra_info))
             # x_start0: x_start before priming, i.e., the input latent images. 
             loss_comp_feat_distill = \
                 self.calc_comp_feat_distill_loss(mon_loss_dict, session_prefix,
@@ -2622,6 +2588,7 @@ class LatentDiffusion(DDPM):
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
+        # x_recons_cls are denoised using cls_context, which is cls_single_emb, not mixed with subj_single_emb.
         noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
                                          # img_mask is used to mask the blank areas around the augmented images.
@@ -2849,10 +2816,10 @@ class LatentDiffusion(DDPM):
 
         return loss_normal_recon
 
-    def prepare_teacher_context(self, subj_context, uncond_context, BLOCK_SIZE, 
-                                id2img_prompt_embs, id2img_neg_prompt_embs, img_prompt_prefix_embs,
-                                unet_teacher_types, encoders_num_id_vecs, 
-                                p_unet_teacher_uses_cfg, unet_distill_uses_comp_prompt):
+    def prepare_unet_teacher_context(self, subj_context, uncond_context, BLOCK_SIZE, 
+                                     id2img_prompt_embs, id2img_neg_prompt_embs, img_prompt_prefix_embs,
+                                     unet_teacher_types, encoders_num_id_vecs, 
+                                     p_unet_teacher_uses_cfg, unet_distill_uses_comp_prompt):
 
         prompt_emb, prompt_in, extra_info = subj_context
         # student_prompt_embs is the prompt embedding of the student model.
@@ -2973,14 +2940,14 @@ class LatentDiffusion(DDPM):
         # If unet_distill_on_image:      all of them are 2,      indicating red.
         log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
         self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
-        teacher_contexts = self.prepare_teacher_context(subj_context, self.uncond_context, BLOCK_SIZE,
-                                                        self.iter_flags['id2img_prompt_embs'],
-                                                        self.iter_flags['id2img_neg_prompt_embs'],
-                                                        self.img_prompt_prefix_embs,
-                                                        self.unet_teacher_types,
-                                                        self.iter_flags['encoders_num_id_vecs'],
-                                                        self.p_unet_teacher_uses_cfg,
-                                                        self.iter_flags['unet_distill_uses_comp_prompt'])
+        teacher_contexts = self.prepare_unet_teacher_context(subj_context, self.uncond_context, BLOCK_SIZE,
+                                                             self.iter_flags['id2img_prompt_embs'],
+                                                             self.iter_flags['id2img_neg_prompt_embs'],
+                                                             self.img_prompt_prefix_embs,
+                                                             self.unet_teacher_types,
+                                                             self.iter_flags['encoders_num_id_vecs'],
+                                                             self.p_unet_teacher_uses_cfg,
+                                                             self.iter_flags['unet_distill_uses_comp_prompt'])
         
         # unet_distill_on_pure_noise: Use totally random x_start as the input latent images.
         if unet_distill_on_pure_noise:

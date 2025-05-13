@@ -140,14 +140,15 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     # attn_bias: [1, 1, 4096, 77], the same size as a single-head attn_weight.
     attn_weight += attn_bias
     attn_score = attn_weight
+    if mix_attn_mats_in_batch:
+        # The instances in the batchare [sc, mc]. We average their attn scores, 
+        # and apply to both instances.
+        # attn_score: [2, 8, 64, 77] -> [1, 8, 64, 77] -> [2, 8, 64, 77].
+        attn_score = attn_score.mean(dim=0).repeat(B, 1, 1, 1)
+
     attn_weight = torch.softmax(attn_weight, dim=-1)
 
-    if mix_attn_mats_in_batch:
-        # The instances in the batchare [sc, mc]. We average their attn weights, 
-        # and apply to both instances.
-        # attn_weight: [2, 8, 64, 77] -> [1, 8, 64, 77] -> [2, 8, 64, 77].
-        attn_weight = attn_weight.mean(dim=0).repeat(B, 1, 1, 1)
-    else:
+    if not mix_attn_mats_in_batch:
         # NOTE: After scaling, the "probabilities" of the subject embeddings will sum to < 1.
         # But this is intended, as we want to scale down the impact of the subject embeddings 
         # in the computed attention output tensors.
