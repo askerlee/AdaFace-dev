@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         calc_recon_and_suppress_losses, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
-                        collate_dicts, split_dict, chunk_list, select_and_repeat_instances, halve_token_indices, \
+                        collate_dicts, split_dict, detach_dict, chunk_list, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, map_bboxes_coords, \
                         RollingStats, save_grid, set_seed_per_rank_and_batch, var_of_laplacian
@@ -1648,11 +1648,13 @@ class LatentDiffusion(DDPM):
                 cond_context2 = (cond_context[0], cond_context[1], extra_info_sm)
                 # Do not use attn and ffn LoRAs on joint sc-mc instances.
                 noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[1, 3],
-                                                        enable_grad=False, use_attn_lora=False,
+                                                        enable_grad=True, use_attn_lora=False,
                                                         use_ffn_lora=False, ffn_lora_adapter_name=ffn_lora_adapter_name)
                 noise_pred_sc, noise_pred_mc = noise_pred_sm.chunk(2, dim=0)
+                noise_pred_mc = noise_pred_mc.detach()
                 sc_ca_layers_activations, mc_ca_layers_activations = \
                     split_dict(extra_info_sm['ca_layers_activations'], 2)
+                mc_ca_layers_activations = detach_dict(mc_ca_layers_activations)
 
             else:
                 ##### SC instance generation #####
@@ -2213,7 +2215,7 @@ class LatentDiffusion(DDPM):
                     # Replace the first round ss_fg_face_bboxes with the second round of ss_fg_face_bboxes.
                     ss_fg_face_bboxes_list[step] = ss_fg_face_bboxes2_allsteps[step]
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2_allsteps[step]:.3f} > {comp_ss_face_confidence_thres:.3f}, "
-                          f"lap var {lap_vars2_allsteps[step]} > {lap_vars_allsteps[step]} * {lap_vars_tolerance}. Replaced.")
+                          f"lap var {lap_vars2_allsteps[step]:.3f} > {lap_vars_allsteps[step]:.3f} * {lap_vars_tolerance}. Replaced.")
                 elif not is_good_confidence:
                     print(f"Rank {self.trainer.global_rank} 2nd SS step-{step} face confidence {face_confidences2_allsteps[step]:.3f} < {comp_ss_face_confidence_thres:.3f}. Discarded.")
                 elif not is_clear:

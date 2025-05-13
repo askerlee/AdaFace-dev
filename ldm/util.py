@@ -1151,6 +1151,19 @@ def split_dict(d_all, num_splits):
     
     return result
 
+def detach_dict(d):
+    d2 = {}
+    for k, v in d.items():
+        if isinstance(v, list):
+            d2[k] = [ detach_dict(vv) for vv in v ]
+        elif isinstance(v, torch.Tensor):
+            d2[k] = v.detach()
+        elif isinstance(v, dict):
+            d2[k] = detach_dict(v)
+        else:
+            d2[k] = v
+    return d2
+
 def extract_layerwise_value(v, layer_idx, v_is_layerwise_array, v_is_layerwise_dict):
     if v_is_layerwise_array:
         # Extract the layer-specific value from the layerwise array.
