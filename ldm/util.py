@@ -1151,18 +1151,17 @@ def split_dict(d_all, num_splits):
     
     return result
 
-def detach_dict(d):
-    d2 = {}
-    for k, v in d.items():
-        if isinstance(v, list):
-            d2[k] = [ detach_dict(vv) for vv in v ]
-        elif isinstance(v, torch.Tensor):
-            d2[k] = v.detach()
-        elif isinstance(v, dict):
-            d2[k] = detach_dict(v)
-        else:
-            d2[k] = v
-    return d2
+def nested_detach(d):
+    if isinstance(d, torch.Tensor):
+        return d.detach()
+    elif isinstance(d, list):
+        return [nested_detach(item) for item in d]
+    elif isinstance(d, tuple):
+        return tuple(nested_detach(item) for item in d)
+    elif isinstance(d, dict):
+        return {k: nested_detach(v) for k, v in d.items()}
+    else:
+        return d  # Base case: return as-is (e.g., int, str, float)
 
 def extract_layerwise_value(v, layer_idx, v_is_layerwise_array, v_is_layerwise_dict):
     if v_is_layerwise_array:

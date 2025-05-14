@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         calc_recon_and_suppress_losses, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
-                        collate_dicts, split_dict, detach_dict, chunk_list, select_and_repeat_instances, halve_token_indices, \
+                        collate_dicts, split_dict, nested_detach, chunk_list, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, map_bboxes_coords, \
                         RollingStats, save_grid, set_seed_per_rank_and_batch, var_of_laplacian
@@ -124,9 +124,9 @@ class DDPM(pl.LightningModule):
                  recon_bg_pixel_weight=0.1,
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=1e-2,
-                 unet_uses_attn_lora=False,
+                 unet_uses_attn_lora=True,
                  recon_uses_ffn_lora=False,
-                 comp_uses_ffn_lora=False,
+                 comp_uses_ffn_lora=True,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
@@ -1657,7 +1657,7 @@ class LatentDiffusion(DDPM):
                 noise_pred_mc = noise_pred_mc.detach()
                 sc_ca_layers_activations, mc_ca_layers_activations = \
                     split_dict(extra_info_sm['ca_layers_activations'], 2)
-                mc_ca_layers_activations = detach_dict(mc_ca_layers_activations)
+                mc_ca_layers_activations = nested_detach(mc_ca_layers_activations)
 
             else:
                 ##### SC instance generation only #####
