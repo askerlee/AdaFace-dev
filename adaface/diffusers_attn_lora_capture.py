@@ -149,7 +149,7 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         attn_score_sc, attn_score_mc = attn_score.chunk(2, dim=0)
         # Cut off the grad flow from the SC instance to the MC instance.
         attn_score = (attn_score_sc + attn_score_mc.detach()) / 2
-        attn_score = attn_score.repeat(B, 1, 1, 1)
+        attn_score = attn_score.repeat(2, 1, 1, 1)
 
     attn_weight = torch.softmax(attn_score, dim=-1)
 

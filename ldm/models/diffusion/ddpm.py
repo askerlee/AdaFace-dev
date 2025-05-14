@@ -84,6 +84,8 @@ class DDPM(pl.LightningModule):
                  prompt_emb_delta_reg_weight=1e-4,
                  recon_subj_mb_suppress_loss_weight=0.2, 
                  comp_sc_subj_mb_suppress_loss_weight=0.2,
+                 # sc_fg_face_suppress_mask_shrink_ratio=0.3: For loss_fg_faces_suppress_comp, 
+                 # we suppress only the border 30% of the face area to make such faces smaller.
                  sc_fg_face_suppress_mask_shrink_ratio=0.3,
                  # Percent in each edge: [0.15, 0.6].
                  comp_sc_fg_mask_percent_range=[0.0225, 0.36],
@@ -3559,7 +3561,7 @@ class LatentDiffusion(DDPM):
                     # sc_fg_face_detected_inst_mask: binary tensor of [BS].
                     # fg_faces_grad_mask_ratios: (0.9, 0.3) means:
                     # For loss_arcface_align_comp,     we encourage the central 90% of the face area, 
-                    # For loss_fg_faces_suppress_comp, we suppress  the border  70% of the face area.
+                    # For loss_fg_faces_suppress_comp, we suppress  the border  30% of the face area.
                     loss_arcface_align_comp_step, loss_fg_faces_suppress_comp_step, loss_bg_faces_suppress_comp_step, \
                     sc_fg_face_bboxes_, sc_fg_face_confidences, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start0_ss, subj_comp_recon, fg_faces_grad_mask_ratios)
