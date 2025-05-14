@@ -134,7 +134,7 @@ class DDPM(pl.LightningModule):
                  # ps_comp_attn_aug: [p for no aug, p for shrink cross attn, p for mix mc attn with sc].
                  # We don't apply shrink cross attn and mix mc attn with sc at the same time.
                  # Since ps_comp_attn_aug = [0, 0, 1.], we always do mix_sc_mc_attn.
-                 ps_comp_attn_aug=[0, 0, 1.],
+                 ps_comp_attn_aug=[0, 0.5, 0.5],
                  cross_attn_shrink_factor=0.5,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  res_hidden_states_gradscale=0.5,
