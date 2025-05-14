@@ -124,22 +124,22 @@ class DDPM(pl.LightningModule):
                  arcface_align_loss_weight=1e-2,
                  unet_uses_attn_lora=False,
                  recon_uses_ffn_lora=False,
-                 comp_uses_ffn_lora=True,
+                 comp_uses_ffn_lora=False,
                  unet_lora_rank=192,
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
                  # ps_comp_attn_aug: [p for no aug, p for shrink cross attn, p for mix mc attn with sc].
                  # We don't apply shrink cross attn and mix mc attn with sc at the same time.
-                 # Since ps_comp_attn_aug = [0, 0.5, 0.5], we always do 
-                 # either shrink_cross_attn or mix_sc_mc_attn.
-                 ps_comp_attn_aug=[0, 0.5, 0.5],
+                 # Since ps_comp_attn_aug = [0, 0, 1.], we always do mix_sc_mc_attn.
+                 ps_comp_attn_aug=[0, 0, 1.],
                  cross_attn_shrink_factor=0.5,
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  res_hidden_states_gradscale=0.5,
                  log_attn_level=0,
                  ablate_img_embs=False,
                  lora_weight_decay=0.02,
+                 # Diffusers vae cannot use mask. Without mask, the performance is a bit worse.
                  use_diffusers_vae_for_encoding=False,
                 ):
         
@@ -421,7 +421,7 @@ class DDPM(pl.LightningModule):
                             'unet_distill_uses_comp_prompt':    False,
                             'unet_distill_on_pure_noise':       False,
                             'use_fp_trick':                     False,
-                            'normal_recon_on_pure_noise':              False,
+                            'normal_recon_on_pure_noise':       False,
                           }
         
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
@@ -470,12 +470,12 @@ class DDPM(pl.LightningModule):
         # ** Only switch half of the time ** to avoid feature space degeneration.
         if not prev_iter_use_comp_distill_weights and self.iter_flags['do_comp_feat_distill'] \
           and self.comp_unet_state_dict: # and torch.rand(1) < 0.5:
-            print("Switching to comp distill unet weights")
+            print(f"Rank-{self.trainer.global_rank} Switching to comp distill unet weights")
             self.iter_flags['use_comp_distill_weights'] = True
             self.model.load_unet_state_dict(self.comp_unet_state_dict)
         elif prev_iter_use_comp_distill_weights and (not self.iter_flags['do_comp_feat_distill']) \
           and self.base_unet_state_dict:
-            print("Switching to base unet weights")
+            print(f"Rank-{self.trainer.global_rank} Switching to base unet weights")
             self.iter_flags['use_comp_distill_weights'] = False
             self.model.load_unet_state_dict(self.base_unet_state_dict)
 
@@ -1617,37 +1617,38 @@ class LatentDiffusion(DDPM):
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['shrink_cross_attn']  = shrink_cross_attn
+            extra_info_ss['mix_attn_mats_in_batch'] = False
             #extra_info_ss['debug']  = False
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_ss)
-            noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[0], 
+            cond_context_ss = (cond_context[0], cond_context[1], extra_info_ss)
+            noise_pred_ss = self.sliced_apply_model(x_noisy, t, cond_context_ss, slice_indices=[0],
                                                     enable_grad=False, use_attn_lora=use_attn_lora,
                                                     use_ffn_lora=use_ffn_lora, 
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
             ss_ca_layers_activations = extra_info_ss['ca_layers_activations']
 
-            ##### SR (sc_rep) instance generation #####
+            ##### SC_REP instance generation #####
             extra_info_sr = copy.copy(extra_info)
             # The ms instance is actually sc_comp_rep.
             # So we use the same shrink_cross_attn as the sc instance.
             extra_info_sr['shrink_cross_attn']      = shrink_cross_attn
             extra_info_sr['mix_attn_mats_in_batch'] = False
 
-            cond_context2 = (cond_context[0], cond_context[1], extra_info_sr)
-            noise_pred_sr = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[2],
-                                                    enable_grad=False, use_attn_lora=use_attn_lora, 
-                                                    use_ffn_lora=use_ffn_lora, 
+            cond_context_sr = (cond_context[0], cond_context[1], extra_info_sr)
+            noise_pred_sr = self.sliced_apply_model(x_noisy, t, cond_context_sr, slice_indices=[2],
+                                                    enable_grad=False, use_attn_lora=use_attn_lora,
+                                                    use_ffn_lora=use_ffn_lora,
                                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
             sr_ca_layers_activations = extra_info_sr['ca_layers_activations']
 
             if mix_sc_mc_attn:
-                ##### SC and MC instances generation #####
+                ##### SC and MC instances generation at the same time #####
                 # SC and MC instances are put in the same batch, so their attn matrices are conveniently mixed.
                 extra_info_sm = copy.copy(extra_info)
                 extra_info_sm['shrink_cross_attn']      = False
                 extra_info_sm['mix_attn_mats_in_batch'] = True
-                cond_context2 = (cond_context[0], cond_context[1], extra_info_sm)
+                cond_context_sm = (cond_context[0], cond_context[1], extra_info_sm)
                 # Do not use attn and ffn LoRAs on joint sc-mc instances.
-                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[1, 3],
+                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context_sm, slice_indices=[1, 3],
                                                         enable_grad=True, use_attn_lora=False,
                                                         use_ffn_lora=False, ffn_lora_adapter_name=ffn_lora_adapter_name)
                 noise_pred_sc, noise_pred_mc = noise_pred_sm.chunk(2, dim=0)
@@ -1657,25 +1658,25 @@ class LatentDiffusion(DDPM):
                 mc_ca_layers_activations = detach_dict(mc_ca_layers_activations)
 
             else:
-                ##### SC instance generation #####
+                ##### SC instance generation only #####
                 extra_info_sc = copy.copy(extra_info)
                 extra_info_sc['shrink_cross_attn']      = shrink_cross_attn
                 extra_info_sc['mix_attn_mats_in_batch'] = False
-                cond_context2 = (cond_context[0], cond_context[1], extra_info_sc)
-                noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[1],
+                cond_context_sc = (cond_context[0], cond_context[1], extra_info_sc)
+                noise_pred_sc = self.sliced_apply_model(x_noisy, t, cond_context_sc, slice_indices=[1],
                                                         enable_grad=True,  use_attn_lora=use_attn_lora,
                                                         use_ffn_lora=use_ffn_lora, 
                                                         ffn_lora_adapter_name=ffn_lora_adapter_name)
                 sc_ca_layers_activations = extra_info_sc['ca_layers_activations']
 
-                ##### MC instance generation #####
+                ##### MC instance generation only #####
                 extra_info_mc = copy.copy(extra_info)
                 extra_info_mc['shrink_cross_attn']   = False
-                cond_context2 = (cond_context[0], cond_context[1], extra_info_mc)
+                cond_context_mc = (cond_context[0], cond_context[1], extra_info_mc)
                 # Never use attn and ffn LoRAs on mc instances.
                 # FFN LoRAs on mc instances may lead to trivial solutions of suppressing 
                 # background/compositional components and focusing on the subject only.
-                noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context2, slice_indices=[3],
+                noise_pred_mc = self.sliced_apply_model(x_noisy, t, cond_context_mc, slice_indices=[3],
                                                         enable_grad=False, use_attn_lora=False,
                                                         use_ffn_lora=False, 
                                                         ffn_lora_adapter_name=ffn_lora_adapter_name)

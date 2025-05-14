@@ -130,26 +130,31 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
         key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
         value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
 
-    attn_weight = query @ key.transpose(-2, -1) * scale_factor
+    attn_score = query @ key.transpose(-2, -1) * scale_factor
 
     if shrink_cross_attn:
         cross_attn_scale = cross_attn_shrink_factor
     else:
         cross_attn_scale = 1
 
-    # attn_bias: [1, 1, 4096, 77], the same size as a single-head attn_weight.
-    attn_weight += attn_bias
-    attn_score = attn_weight
+    # attn_bias: [1, 1, 4096, 77], the same size as a single-head attn_score.
+    attn_score += attn_bias
     if mix_attn_mats_in_batch:
-        # The instances in the batchare [sc, mc]. We average their attn scores, 
+        # The instances in the batch are [sc, mc]. We average their attn scores, 
         # and apply to both instances.
         # attn_score: [2, 8, 64, 77] -> [1, 8, 64, 77] -> [2, 8, 64, 77].
-        attn_score = attn_score.mean(dim=0).repeat(B, 1, 1, 1)
+        # If BLOCK_SIZE > 1, attn_score.shape[0] = 2 * BLOCK_SIZE.
+        if attn_score.shape[0] %2 != 0:
+            breakpoint()
+        attn_score_sc, attn_score_mc = attn_score.chunk(2, dim=0)
+        # Cut off the grad flow from the SC instance to the MC instance.
+        attn_score = (attn_score_sc + attn_score_mc.detach()) / 2
+        attn_score = attn_score.repeat(B, 1, 1, 1)
 
-    attn_weight = torch.softmax(attn_weight, dim=-1)
+    attn_weight = torch.softmax(attn_score, dim=-1)
 
     if not mix_attn_mats_in_batch:
-        # NOTE: After scaling, the "probabilities" of the subject embeddings will sum to < 1.
+        # NOTE: After scaling, the sum of "probabilities" of the token embeddings = cross_attn_scale < 1.
         # But this is intended, as we want to scale down the impact of the subject embeddings 
         # in the computed attention output tensors.
         attn_weight = attn_weight * cross_attn_scale
