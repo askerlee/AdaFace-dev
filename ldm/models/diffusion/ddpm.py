@@ -1655,7 +1655,7 @@ class LatentDiffusion(DDPM):
                 # Therefore, we pass the full batch of prompt embeddings cond_context[0].
                 cond_context_sm = (cond_context[0], cond_context[1], extra_info_sm)
                 # Do not use attn LoRAs on joint sc-mc instances.
-                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context_sm, slice_indices=[1, 2, 3],
+                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context_sm, slice_indices=[1, 3],
                                                         enable_grad=True, use_attn_lora=False,
                                                         use_ffn_lora=use_ffn_lora, ffn_lora_adapter_name=ffn_lora_adapter_name)
                 noise_pred_sc, noise_pred_mc = noise_pred_sm.chunk(2, dim=0)
