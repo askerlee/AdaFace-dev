@@ -1151,15 +1151,15 @@ def split_dict(d_all, num_splits):
     
     return result
 
-def nested_detach(d):
+def recursive_detach(d):
     if isinstance(d, torch.Tensor):
         return d.detach()
     elif isinstance(d, list):
-        return [nested_detach(item) for item in d]
+        return [recursive_detach(item) for item in d]
     elif isinstance(d, tuple):
-        return tuple(nested_detach(item) for item in d)
+        return tuple(recursive_detach(item) for item in d)
     elif isinstance(d, dict):
-        return {k: nested_detach(v) for k, v in d.items()}
+        return {k: recursive_detach(v) for k, v in d.items()}
     else:
         return d  # Base case: return as-is (e.g., int, str, float)
 

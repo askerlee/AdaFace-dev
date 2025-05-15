@@ -19,7 +19,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         calc_recon_and_suppress_losses, calc_sc_rep_attn_distill_loss, \
                         calc_subj_masked_bg_suppress_loss, calc_subj_attn_cross_t_diff_loss, \
                         distribute_embedding_to_M_tokens_by_dict, join_dict_of_indices_with_key_filter, \
-                        collate_dicts, split_dict, nested_detach, chunk_list, select_and_repeat_instances, halve_token_indices, \
+                        collate_dicts, split_dict, recursive_detach, chunk_list, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, map_bboxes_coords, \
                         RollingStats, save_grid, set_seed_per_rank_and_batch, var_of_laplacian
@@ -676,7 +676,7 @@ class LatentDiffusion(DDPM):
 
     def on_train_start(self):
         if self.trainer.global_rank == 0 and self.sample_save_thread is None:
-            self.sample_save_thread = Thread(target=self.save_samples_worker, args=(60,), daemon=True)
+            self.sample_save_thread = Thread(target=self.start_worker_to_save_samples, args=(60,), daemon=True)
             self.sample_save_thread.start()
             print("Started individual sample saving thread...")
 
@@ -1616,6 +1616,9 @@ class LatentDiffusion(DDPM):
                 ca_layers_activations = extra_info['ca_layers_activations']
 
         elif batch_part_has_grad == 'subject-compos':    
+            # Use ffn LoRAs on 50% of the iterations to mitigate domain gap,
+            # as well as to avoid degeneration caused by the ffn LoRA.
+            use_ffn_lora = use_ffn_lora and (torch.rand(1) < 0.5)
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
             extra_info_ss['shrink_cross_attn']  = shrink_cross_attn
@@ -1648,16 +1651,18 @@ class LatentDiffusion(DDPM):
                 extra_info_sm = copy.copy(extra_info)
                 extra_info_sm['shrink_cross_attn']      = False
                 extra_info_sm['mix_attn_mats_in_batch'] = True
+                # sliced_apply_model will select the prompt embeddings according to the slice_indices.
+                # Therefore, we pass the full batch of prompt embeddings cond_context[0].
                 cond_context_sm = (cond_context[0], cond_context[1], extra_info_sm)
-                # Do not use attn and ffn LoRAs on joint sc-mc instances.
-                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context_sm, slice_indices=[1, 3],
+                # Do not use attn LoRAs on joint sc-mc instances.
+                noise_pred_sm = self.sliced_apply_model(x_noisy, t, cond_context_sm, slice_indices=[1, 2, 3],
                                                         enable_grad=True, use_attn_lora=False,
-                                                        use_ffn_lora=False, ffn_lora_adapter_name=ffn_lora_adapter_name)
+                                                        use_ffn_lora=use_ffn_lora, ffn_lora_adapter_name=ffn_lora_adapter_name)
                 noise_pred_sc, noise_pred_mc = noise_pred_sm.chunk(2, dim=0)
                 noise_pred_mc = noise_pred_mc.detach()
                 sc_ca_layers_activations, mc_ca_layers_activations = \
                     split_dict(extra_info_sm['ca_layers_activations'], 2)
-                mc_ca_layers_activations = nested_detach(mc_ca_layers_activations)
+                mc_ca_layers_activations = recursive_detach(mc_ca_layers_activations)
 
             else:
                 ##### SC instance generation only #####
@@ -3496,13 +3501,17 @@ class LatentDiffusion(DDPM):
             comp_rep_distill_nonsubj_v_loss_scale = 2
             # If do_comp_feat_distill is less frequent, then increase the weight of loss_subj_comp_rep_distill_*.
             subj_comp_rep_distill_loss_scale = fg_percent_rep_distill_scale
+            comp_rep_subj_distill_scale = 2
 
-            # The right side term should be < 0.01.
-            loss_comp_feat_distill += (loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + loss_comp_rep_distill_subj_v + \
+            # The right side term should be < 0.02.
+            loss_comp_rep_distill = ((loss_comp_rep_distill_subj_attn + loss_comp_rep_distill_subj_k + 
+                                      loss_comp_rep_distill_subj_v) * comp_rep_subj_distill_scale + \
                                        loss_comp_rep_distill_nonsubj_k * comp_rep_distill_nonsubj_k_loss_scale + \
                                        loss_comp_rep_distill_nonsubj_v * comp_rep_distill_nonsubj_v_loss_scale) \
                                       * subj_comp_rep_distill_loss_scale
-            
+            mon_loss_dict.update({f'{session_prefix}/comp_rep_distill_total': loss_comp_rep_distill.mean().detach().item() })
+            loss_comp_feat_distill += loss_comp_rep_distill
+
         v_loss_comp_feat_distill = loss_comp_feat_distill.mean().detach().item()
         if v_loss_comp_feat_distill > 0:
             mon_loss_dict.update({f'{session_prefix}/comp_feat_distill_total': v_loss_comp_feat_distill})
@@ -3703,7 +3712,7 @@ class LatentDiffusion(DDPM):
 
         self.sample_image_queue.put((samples.cpu(), img_colors.cpu()))
 
-    def save_samples_worker(self, max_cache_size=60):
+    def start_worker_to_save_samples(self, max_cache_size=60):
         # max_cache_size = 60, nrow=12, so we save a 4*12 grid of samples.
         # Each sample is 512*512*3, so the grid is 512*512*3*4*12*4 bytes = 37.7M * 4 = 150M.
         """Worker that saves images only when pending_samples has at least max_cache_size items"""
