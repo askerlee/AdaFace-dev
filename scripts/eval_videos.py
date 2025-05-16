@@ -161,6 +161,8 @@ if __name__ == "__main__":
         subject_count += 1
         print(f"{subject_path} stats:")
         for key in subj_simi_stats:
+            if args.methods is not None and key not in args.methods:
+                continue
             avg_similarity = np.mean(subj_simi_stats[key])
             print(f"{key}: {avg_similarity:.3f}")
 
