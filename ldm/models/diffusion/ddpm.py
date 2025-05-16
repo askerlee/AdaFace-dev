@@ -121,7 +121,7 @@ class DDPM(pl.LightningModule):
                  subj_rep_prompts_count=2,
                  p_do_adv_attack_when_recon_on_images=0,
                  recon_adv_mod_mag_range=[0.001, 0.003],
-                 recon_bg_pixel_weight=0.1,
+                 recon_bg_pixel_weight=0.025,
                  use_face_flow_for_sc_matching_loss=False,
                  arcface_align_loss_weight=1e-2,
                  unet_uses_attn_lora=True,
