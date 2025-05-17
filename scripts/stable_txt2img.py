@@ -708,7 +708,7 @@ def main(opt):
                                 all_sims_dino.append(sim_dino.item())
 
                                 if opt.calc_face_sim:
-                                    all_similarities, sim_face, normal_img_count, except_img_count = \
+                                    all_similarities, sim_face, normal_img_count, except_img_count, list_face_bboxes = \
                                         compare_face_folders(opt.compare_with, sample_dir, dst_num_samples=len(prompts),
                                                              face_engine=opt.face_engine, 
                                                              face_model=opt.face_model,

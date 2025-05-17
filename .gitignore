@@ -42,3 +42,8 @@ latent_diffusion.egg-info/*
 gma/examples/xxr*
 *.jpg
 animatediff/*
+subjects-ood/*/*consistentid*.png
+subjects-ood/*/*consistentID*.png
+subjects-ood/*/*adaface*.png
+subjects-ood/*/*instantID*.png
+subjects-ood/*/*pulid*.png

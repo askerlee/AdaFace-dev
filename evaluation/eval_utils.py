@@ -161,6 +161,7 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
 
     # --------------------------------
     all_embeddings = []
+    all_face_bboxes = []
     det_time = 0
     rep_time = 0
     global cached_embeddings
@@ -170,11 +171,13 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
             if not "cached_embeddings" in globals():
                 cached_embeddings = {}
             if img_path in cached_embeddings:
-                embeddings = cached_embeddings[img_path]
+                embeddings, face_bboxes = cached_embeddings[img_path]
                 all_embeddings.append(embeddings)
+                all_face_bboxes.append(face_bboxes)
                 continue
 
         embeddings = []
+        face_bboxes = []
 
         if isinstance(img_path, str):
             image_obj = Image.open(img_path)
@@ -209,6 +212,7 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
                 traceback.print_exc()
                 # Append an empty list to indicate that there is no face in this image.
             all_embeddings.append(embeddings)
+            all_face_bboxes.append(face_bboxes)
             continue
         
         start = time.time()
@@ -223,17 +227,25 @@ def deepface_embed_images(image_paths, model_name='ArcFace', detector_backend='r
                 align=align,
                 normalization=normalization,
             )
-
+            face_x = img_obj["facial_area"]["x"]
+            face_y = img_obj["facial_area"]["y"]
+            face_w = img_obj["facial_area"]["w"]
+            face_h = img_obj["facial_area"]["h"]
+            face_bbox = [face_x, face_y, face_x + face_w, face_y + face_h]
             embedding = img_embedding_obj[0]["embedding"]
             embeddings.append(embedding)
+            face_bboxes.append(face_bbox)
+
         rep_time += time.time() - start
         #print(f"det_time: {det_time:.3f}, rep_time: {rep_time:.3f}")
         embeddings = np.array(embeddings)
         all_embeddings.append(embeddings)
+        face_bboxes = np.array(face_bboxes)
+        all_face_bboxes.append(face_bboxes)
         if cache_embeds:
-            cached_embeddings[img_path] = embeddings
+            cached_embeddings[img_path] = (embeddings, face_bboxes)
 
-    return all_embeddings
+    return all_embeddings, all_face_bboxes
 
 def insightface_embed_images(insightface_app, image_paths, gpu_id=0, size=(512, 512)):
     """
@@ -316,6 +328,7 @@ def calc_faces_similarities(src_list_embeds, dst_list_embeds):
     """
     # --------------------------------
     # now we will find the face pair with minimum distance
+    # all_similarities only contains similarity scores when faces are detected.
     all_similarities = []
     src_no_face_img_count = 0
     dst_no_face_img_count = 0
@@ -329,9 +342,11 @@ def calc_faces_similarities(src_list_embeds, dst_list_embeds):
 
     for src_embeds in src_list_embeds:
         if len(src_embeds) == 0:
+            all_similarities.append(0)
             continue
         for dst_embeds in dst_list_embeds:
             if len(dst_embeds) == 0:
+                all_similarities.append(0)
                 continue
             # src_embeds: (num_faces1, embed_dim)
             # dst_embeds: (num_faces2, embed_dim)
@@ -340,10 +355,11 @@ def calc_faces_similarities(src_list_embeds, dst_list_embeds):
             max_sim = np.max(sim_matrix)
             all_similarities.append(max_sim)
 
-    if len(all_similarities) == 0:
+    all_nonzero_similarities = [simi for simi in all_similarities if simi > 0]
+    if len(all_nonzero_similarities) == 0:
         avg_similarity = 0
     else:
-        avg_similarity = np.mean(all_similarities)
+        avg_similarity = np.mean(all_nonzero_similarities)
 
     return all_similarities, avg_similarity, src_no_face_img_count, dst_no_face_img_count
 
@@ -359,16 +375,22 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
     dst_paths = expand_paths(dst_path, num_samples=dst_num_samples)
 
     if face_engine == "deepface":
-        src_list_embeds = deepface_embed_images(src_paths, model_name=face_model, detector_backend="retinaface",
-                                                cache_embeds=cache_src_embeds, verbose=verbose)
-        dst_list_embeds = deepface_embed_images(dst_paths, model_name=face_model, detector_backend="retinaface",
-                                                cache_embeds=False, verbose=verbose)
+        # If no face is detected in image i, then src_list_embeds[i] = [], src_list_face_bboxes[i] = [].
+        src_list_embeds, src_list_face_bboxes \
+            = deepface_embed_images(src_paths, model_name=face_model, detector_backend="retinaface",
+                                    cache_embeds=cache_src_embeds, verbose=verbose)
+        dst_list_embeds, dst_list_face_bboxes \
+            = deepface_embed_images(dst_paths, model_name=face_model, detector_backend="retinaface",
+                                    cache_embeds=False, verbose=verbose)
         if debug:
             breakpoint()
             
     elif face_engine == "insightface":
         src_list_embeds = insightface_embed_images(insightface_app, src_paths)
         dst_list_embeds = insightface_embed_images(insightface_app, dst_paths)
+        # TODO: add face_bboxes for insightface
+        src_list_face_bboxes = None
+        dst_list_face_bboxes = None
     else:
         breakpoint()
 
@@ -391,6 +413,8 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
     Therefore, by default we use deepface embeddings, as they only focus on face characteristics.
     '''
 
+    # If src_list_embeds[i] or dst_list_embeds[i] is an empty list, it means no faces are detected, and
+    # the corresponding all_similarities[i] will be 0.
     all_similarities, avg_similarity, src_no_face_img_count, dst_no_face_img_count =\
         calc_faces_similarities(src_list_embeds, dst_list_embeds)
     
@@ -414,7 +438,7 @@ def compare_face_folders(src_path, dst_path, src_num_samples=-1, dst_num_samples
             dst_path_base = 'dst'
         print(f"avg face sim: {avg_similarity:.3f}    '{src_path_base}' vs '{dst_path_base}' ({dst_no_face_img_count} no face)")
 
-    return all_similarities, avg_similarity, dst_normal_img_count, dst_no_face_img_count
+    return all_similarities, avg_similarity, dst_normal_img_count, dst_no_face_img_count, dst_list_face_bboxes
 
 # extra_sig could be a regular expression
 def find_first_match(lst, search_term, extra_sig=""):
