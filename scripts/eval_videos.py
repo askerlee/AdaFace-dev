@@ -10,7 +10,8 @@ def parse_args():
     parser.add_argument("--root", type=str, default=None, help="Root path")
     parser.add_argument("--subject", type=str, default=None, help="Subject path")
     parser.add_argument("--methods", type=str, nargs='*', default=None,
-                        choices=['adaface', 'idani', 'luma', 'pika'], help="Select methods to evaluate")
+                        choices=['adaface', 'idani', 'luma', 'pika', 'consist', 'arc2face'], 
+                        help="Select methods to evaluate")
     parser.add_argument("--single_video", type=str, default=None, help="Single video for evaluation")
     parser.add_argument("--ref_image", type=str, default=None, help="Reference image for evaluation")
     parser.add_argument("--gpu", dest='gpu_id', type=int, default=0, help="specify a gpu to use")
@@ -90,7 +91,7 @@ if __name__ == "__main__":
     set_tf_gpu(args.gpu_id)
     img_extensions   = [ "jpg", "jpeg", "png", "bmp" ]
     video_extensions = [ "mp4" ]
-    simi_stats = { 'adaface': [], 'idani': [], 'luma': [], 'pika': [] }
+    simi_stats = { 'adaface': [], 'idani': [], 'luma': [], 'pika': [], 'consist': [], 'arc2face': [] }
     if args.methods is None:
         args.methods = simi_stats.keys()
     begin = time.time()
@@ -164,7 +165,7 @@ if __name__ == "__main__":
 
         image_filenames = []
         video_filenames = []
-        subj_simi_stats = { 'adaface': [], 'idani': [], 'luma': [], 'pika': [] }
+        subj_simi_stats = { 'adaface': [], 'idani': [], 'luma': [], 'pika': [], 'consist': [], 'arc2face': [] }
 
         for filename in sorted(os.listdir(subject_path)):
             for ext in img_extensions:
