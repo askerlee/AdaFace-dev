@@ -106,7 +106,7 @@ def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=T
 
 # Slow implementation equivalent to F.scaled_dot_product_attention.
 def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                                 shrink_cross_attn=False, 
+                                 subj_indices=None, shrink_cross_attn=False, 
                                  cross_attn_shrink_factor=0.5, 
                                  mix_attn_mats_in_batch=False, 
                                  is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
@@ -154,11 +154,19 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
 
     attn_weight = torch.softmax(attn_score, dim=-1)
 
-    if not mix_attn_mats_in_batch:
+    if shrink_cross_attn:
         # NOTE: After scaling, the sum of "probabilities" of the token embeddings = cross_attn_scale < 1.
         # But this is intended, as we want to scale down the impact of the subject embeddings 
         # in the computed attention output tensors.
-        attn_weight = attn_weight * cross_attn_scale
+        if subj_indices is None:
+            # *** SIMPLE SCALING all embeddings if subj_indices is not provided. ***
+            attn_weight = attn_weight * cross_attn_scale
+        else:
+            # *** ONLY SCALE subject embeddings. ***
+            prompt_token_attn_scaler = torch.ones_like(attn_weight)
+            subj_indices_B, subj_indices_N = subj_indices
+            prompt_token_attn_scaler[subj_indices_B, :, :, subj_indices_N] = cross_attn_scale
+            attn_weight = attn_weight * prompt_token_attn_scaler
 
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     output = attn_weight @ value
@@ -221,6 +229,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         temb: Optional[torch.Tensor] = None,
         img_mask: Optional[torch.Tensor] = None,
+        subj_indices: Optional[Tuple[torch.IntTensor, torch.IntTensor]] = None,
         debug: bool = False,
         *args,
         **kwargs,
@@ -332,7 +341,8 @@ class AttnProcessor_LoRA_Capture(nn.Module):
         if is_cross_attn and (self.capture_ca_activations or self.shrink_cross_attn):
             hidden_states, attn_score, attn_prob = \
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
-                                             dropout_p=0.0, shrink_cross_attn=self.shrink_cross_attn,
+                                             dropout_p=0.0, subj_indices=subj_indices,
+                                             shrink_cross_attn=self.shrink_cross_attn,
                                              cross_attn_shrink_factor=self.cross_attn_shrink_factor,
                                              mix_attn_mats_in_batch=self.mix_attn_mats_in_batch)
 

@@ -1581,6 +1581,7 @@ class LatentDiffusion(DDPM):
     # it will be overridden in the unet.
     def guided_denoise(self, x_start, noise, t, cond_context,
                        uncond_emb=None, img_mask=None, 
+                       subj_indices=None, 
                        shrink_cross_attn=False, mix_sc_mc_attn=False, 
                        batch_part_has_grad='all', do_pixel_recon=False, cfg_scale=-1, 
                        capture_ca_activations=False, 
@@ -1595,6 +1596,7 @@ class LatentDiffusion(DDPM):
         extra_info['res_hidden_states_gradscale']         = res_hidden_states_gradscale
         extra_info['img_mask']                            = img_mask
         extra_info['shrink_cross_attn']                   = shrink_cross_attn
+        extra_info['subj_indices']                        = subj_indices
 
         # noise_pred is the predicted noise.
         # if not batch_part_has_grad, we save RAM by not storing the computation graph.
@@ -1621,7 +1623,7 @@ class LatentDiffusion(DDPM):
             use_ffn_lora = use_ffn_lora and (torch.rand(1) < 0.5)
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
-            extra_info_ss['shrink_cross_attn']  = shrink_cross_attn
+            extra_info_ss['shrink_cross_attn']  = False
             extra_info_ss['mix_attn_mats_in_batch'] = False
             #extra_info_ss['debug']  = False
             cond_context_ss = (cond_context[0], cond_context[1], extra_info_ss)
@@ -1777,7 +1779,8 @@ class LatentDiffusion(DDPM):
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, context,
                                     uncond_emb, img_mask, 
-                                    shrink_cross_attn=False,
+                                    subj_indices=None, 
+                                    shrink_cross_attn=False, mix_sc_mc_attn=False,
                                     batch_part_has_grad='all' if (not on_priming_steps) else 'none',
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=(not on_priming_steps),
@@ -1810,7 +1813,8 @@ class LatentDiffusion(DDPM):
                 noise_pred_cls, x_recon_cls, _ = \
                     self.guided_denoise(x_start, noise, t, cls_context,
                                         uncond_emb, img_mask, 
-                                        shrink_cross_attn=False,
+                                        subj_indices=None, 
+                                        shrink_cross_attn=False, mix_sc_mc_attn=False,
                                         batch_part_has_grad='none',
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=False,
@@ -1956,8 +1960,8 @@ class LatentDiffusion(DDPM):
                 f"subj-cls ensemble prime denoising {num_comp_priming_denoising_steps} steps {all_t_list}")
         
         # The last x_start_primed_2 is the final denoised image (with the smallest t).
-        # So we use it as the x_start_primed to be denoised by the 4-type prompt set.
-        # NOTE: The subject and class instances use the same primed x_start.
+        # We return it to be used as the x_start_primed to be denoised by the 4-type prompt set.
+        # NOTE: To make distillation easier, the subject and class instances share the same primed x_start.
         x_start_primed_2  = primed_x_starts[-1].to(dtype=x_start.dtype)
         return x_start_primed_2
 
@@ -1972,7 +1976,7 @@ class LatentDiffusion(DDPM):
     # Since x_starts_ss_sc_mix = 0.75 * x_starts_sc_crop + 0.25 * x_starts_ss.
     # So the new x_starts_ss = 0.225 * x_starts_sc_crop + 0.075 * x_starts_ss + 0.7 * denoised x_recons.
     def comp_distill_multistep_denoise(self, x_starts, noises, ts, subj_context, 
-                                       uncond_emb, shrink_cross_attn=False, mix_sc_mc_attn=False,
+                                       uncond_emb, all_subj_indices_1b=None, shrink_cross_attn=False, mix_sc_mc_attn=False,
                                        cfg_scale=2.5, num_denoising_steps=4, old_x_starts_mix_ratio=0.3,
                                        use_attn_lora=False, use_ffn_lora=False, ffn_lora_adapter_name=None,
                                        BLKS=4, batch_part_has_grad='subject-compos'):
@@ -1992,6 +1996,8 @@ class LatentDiffusion(DDPM):
             noise   = noises[i]
 
             # batch_part_has_grad == 'subject-compos', i.e., only the subject compositional instance has gradients.
+            # subj_indices are only applicable to subj single and subj comp instances, 
+            # i.e., the first 2 instances, as they contain subject prompts.
             '''
             (tensor([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), 
@@ -2003,6 +2009,7 @@ class LatentDiffusion(DDPM):
             noise_pred, x_recon, ca_layers_activations = \
                 self.guided_denoise(x_start, noise, t, subj_context,
                                     uncond_emb, img_mask=None, 
+                                    subj_indices=all_subj_indices_1b, 
                                     shrink_cross_attn=shrink_cross_attn,
                                     mix_sc_mc_attn=mix_sc_mc_attn,
                                     batch_part_has_grad=batch_part_has_grad,
@@ -2065,7 +2072,7 @@ class LatentDiffusion(DDPM):
     # sc_crop_mix_weights: weights of the SC crop, random noise and the SS crop.
     # ss_fg_face_crops_collate: a tensor of shape [S*BLOCK_SIZE, 4, 128, 128], i.e., the scaled face crops of the ss instance.
     def redenoise_subj_single(self, x_starts, noises, ts, ca_layers_activations_list, 
-                              ss_context, uncond_emb, ss_fg_face_crops_collate, 
+                              ss_context, uncond_emb, all_subj_indices_1b, ss_fg_face_crops_collate, 
                               ss_fg_face_bboxes, sc_fg_face_bboxes,
                               use_attn_lora, use_ffn_lora, sc_crop_mix_weights=(0.5, 0.25, 0.25),
                               comp_ss_face_confidence_thres=0.99, lap_vars_tolerance=0.5):
@@ -2133,6 +2140,7 @@ class LatentDiffusion(DDPM):
         noise_preds_ss, x_starts_ss, x_recons_ss, noises_ss, ts_ss, ca_layers_activations_list_ss = \
             self.comp_distill_multistep_denoise(x_starts_ss_sc_mix, noises_ss_sc_mix, ts_ss, ss_context,
                                                 uncond_emb=uncond_emb,
+                                                all_subj_indices_1b=all_subj_indices_1b,
                                                 shrink_cross_attn=self.iter_flags['shrink_cross_attn'],
                                                 mix_sc_mc_attn=self.iter_flags['mix_sc_mc_attn'],
                                                 cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
@@ -2387,6 +2395,7 @@ class LatentDiffusion(DDPM):
             noise_preds, x_starts, x_recons, noises, ts, ca_layers_activations_list = \
                 self.comp_distill_multistep_denoise([x_start_primed], [noise], [t_midrear], subj_context,
                                                     uncond_emb=uncond_emb,
+                                                    all_subj_indices_1b=all_subj_indices_1b,
                                                     shrink_cross_attn=self.iter_flags['shrink_cross_attn'],
                                                     mix_sc_mc_attn=self.iter_flags['mix_sc_mc_attn'],
                                                     cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
@@ -3062,7 +3071,8 @@ class LatentDiffusion(DDPM):
             noise_pred_s, x_recon_s, ca_layers_activations = \
                 self.guided_denoise(x_start_s, noise_t, t_s, subj_context, 
                                     uncond_emb=uncond_emb, img_mask=None,
-                                    shrink_cross_attn=False,
+                                    subj_indices=None,
+                                    shrink_cross_attn=False, mix_sc_mc_attn=False,
                                     # do_pixel_recon implies using CFG to get x_recon_s.
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
@@ -3340,9 +3350,9 @@ class LatentDiffusion(DDPM):
             # instead of collating all the bboxes in all steps.
             ss_fg_face_bboxes_list, repl_steps_frac = \
                 self.redenoise_subj_single(x_starts, noises, ts, ca_layers_activations_list,
-                                           ss_context, uncond_emb, ss_fg_face_crops_collate, 
-                                           ss_fg_face_bboxes, sc_fg_face_bboxes, 
-                                           use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora, 
+                                           ss_context, uncond_emb, all_subj_indices_1b, ss_fg_face_crops_collate,
+                                           ss_fg_face_bboxes, sc_fg_face_bboxes,
+                                           use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora,
                                            sc_crop_mix_weights=self.redenoise_subj_comp_crop_mix_weights,
                                            comp_ss_face_confidence_thres=self.comp_ss_face_confidence_thres,
                                            lap_vars_tolerance=self.comp_ss_face_lap_vars_tolerance)
@@ -3659,6 +3669,7 @@ class LatentDiffusion(DDPM):
         heatmaps = []
         for layer_idx in attn.keys():
             # subj_attn: [8, 4096, 20] -> [8, 4096] -> [4096]
+            # instance 1: subj comp instance.
             subj_attn_1d = attn[layer_idx][1, :, :, all_subj_indices_1b[1]].sum(dim=-1).mean(dim=0)
             subj_attn_2d = subj_attn_1d.view(64, 64)
             # Normalize the attention weights to [0, 1].
@@ -4071,6 +4082,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # img_mask is not used in the prompt-image cross-attention layers.
         img_mask     = extra_info.get('img_mask',     None) if extra_info is not None else None
+        subj_indices = extra_info.get('subj_indices', None) if extra_info is not None else None
         # shrink_cross_attn is only set to the LoRA'ed attn layers, i.e., layers 22, 23, 24.
         # Other layers will always have shrink_cross_attn = False.
         shrink_cross_attn = extra_info.get('shrink_cross_attn', False) if extra_info is not None else False
@@ -4104,6 +4116,7 @@ class DiffusersUNetWrapper(pl.LightningModule):
         with torch.amp.autocast("cuda", enabled=(self.dtype == torch.float16)):
             out = self.diffusion_model(sample=x, timestep=t, encoder_hidden_states=prompt_emb, 
                                        cross_attention_kwargs={'img_mask': img_mask, 
+                                                               'subj_indices': subj_indices,
                                                                'debug':    debug},
                                        return_dict=False)[0]
 
