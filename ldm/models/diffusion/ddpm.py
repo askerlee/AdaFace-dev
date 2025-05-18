@@ -421,8 +421,11 @@ class DDPM(pl.LightningModule):
                             'unet_distill_on_pure_noise':       False,
                             'use_fp_trick':                     False,
                             'normal_recon_on_pure_noise':       False,
+                            'no_attn_aug':                      True,
+                            'normalize_cross_attn':             False,
+                            'mix_sc_mc_attn':                   False,
                           }
-        
+
     # This shared_step() is overridden by LatentDiffusion::shared_step() and never called. 
     def shared_step(self, batch):
         raise NotImplementedError("shared_step() is not implemented in DDPM.")
@@ -958,7 +961,7 @@ class LatentDiffusion(DDPM):
                     self.iter_flags[attn_aug_names[i]] = False
         else:
             self.iter_flags['no_attn_aug']          = True
-            self.iter_flags['normalize_cross_attn']    = False
+            self.iter_flags['normalize_cross_attn'] = False
             self.iter_flags['mix_sc_mc_attn']       = False
 
         self.iter_flags['normal_recon_on_pure_noise']        = (torch.rand(1) < p_normal_recon_on_pure_noise).item()
@@ -1592,7 +1595,7 @@ class LatentDiffusion(DDPM):
         extra_info['capture_ca_activations']              = capture_ca_activations
         extra_info['res_hidden_states_gradscale']         = res_hidden_states_gradscale
         extra_info['img_mask']                            = img_mask
-        extra_info['normalize_cross_attn']                   = normalize_cross_attn
+        extra_info['normalize_cross_attn']                = normalize_cross_attn
         extra_info['subj_indices']                        = subj_indices
 
         # noise_pred is the predicted noise.
@@ -1620,7 +1623,7 @@ class LatentDiffusion(DDPM):
             use_ffn_lora = use_ffn_lora and (torch.rand(1) < 0.5)
             ##### SS instance generation #####
             extra_info_ss = copy.copy(extra_info)
-            extra_info_ss['normalize_cross_attn']  = False
+            extra_info_ss['normalize_cross_attn']   = False
             extra_info_ss['mix_attn_mats_in_batch'] = False
             #extra_info_ss['debug']  = False
             cond_context_ss = (cond_context[0], cond_context[1], extra_info_ss)
@@ -1634,7 +1637,7 @@ class LatentDiffusion(DDPM):
             extra_info_sr = copy.copy(extra_info)
             # The ms instance is actually sc_comp_rep.
             # So we use the same normalize_cross_attn as the sc instance.
-            extra_info_sr['normalize_cross_attn']      = normalize_cross_attn
+            extra_info_sr['normalize_cross_attn']   = normalize_cross_attn
             extra_info_sr['mix_attn_mats_in_batch'] = False
 
             cond_context_sr = (cond_context[0], cond_context[1], extra_info_sr)
