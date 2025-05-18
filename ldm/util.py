@@ -2297,7 +2297,7 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                                  scfg_feat, scbg_feat, ssfg_q, scfg_q, scbg_q, mc_q, 
                                  ss2sc_flow, mc2sc_flow, 
                                  H, W, small_motion_ignore_thres, 
-                                 num_flow_est_iters, objective_name):
+                                 num_flow_est_iters, objective_name, verbose=False):
     
     sc_attns                    = {}
     sc_recon_feats_attn_agg     = {}
@@ -2381,7 +2381,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
     # feat_name: 'ssfg', 'mc'.
     for feat_name in ('ssfg', 'mc'):
         # `int(layer_idx)` is necessary, otherwise it'll output "s4" due to torch.compile.
-        print(f"Layer {int(layer_idx)} {objective_name} sc->{feat_name}:", end=' ')
+        if verbose:
+            print(f"Layer {int(layer_idx)} {objective_name} sc->{feat_name}:", end=' ')
         target_feat = target_feats[feat_name].permute(0, 2, 1)
         losses_sc_recons[feat_name] = [] 
         all_token_losses_sc_recon[feat_name] = []
@@ -2411,7 +2412,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
                 all_token_losses_sc_recon[feat_name].append(token_losses_sc_recon)
 
             losses_sc_recons[feat_name].append(loss_sc_recon)
-            print(f"{matching_type_names[i]} {loss_sc_recon}", end=' ')
+            if verbose:
+                print(f"{matching_type_names[i]} {loss_sc_recon}", end=' ')
 
         # We have both attn and flow token losses, and if mc, also sameloc token losses.
         if len(all_token_losses_sc_recon[feat_name]) > 1:
@@ -2516,7 +2518,8 @@ def calc_sc_recon_ssfg_mc_losses(layer_idx, flow_model, target_feats,
             # ssfg_sameloc_win_rate, ssfg_flow_win_rate, mc_flow_win_rate, mc_sameloc_win_rate.
             flow_distill_stats[f'{feat_name}_{matching_type_names[i+1]}_win_rate'] = sparse_win_rate
         flow_distill_stats[f'{feat_name}_avg_sparse_distill_weight']    = avg_sparse_distill_weight
-        print(f"min {loss_sc_recon_min}, flow dist {loss_sparse_attn_distill}")
+        if verbose:
+            print(f"min {loss_sc_recon_min}, flow dist {loss_sparse_attn_distill}")
 
     return losses_sc_recons, loss_sparse_attns_distill, flow_distill_stats, ss2sc_flow, mc2sc_flow
 

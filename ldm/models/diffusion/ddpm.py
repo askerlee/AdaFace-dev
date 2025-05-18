@@ -92,7 +92,7 @@ class DDPM(pl.LightningModule):
                  # Maybe we should set the face align loss threshold higher during the earlier stages, 
                  # and reduce it gradually as the training progresses,
                  # since the adaface model can better and better capture the face features.
-                 recon_face_align_loss_thres=0.7,
+                 recon_face_align_loss_thres=0.8,
                  comp_sc_face_align_loss_thres=0.7,
                  # 'face portrait' is only valid for humans/animals. 
                  # On objects, use_fp_trick will be ignored, even if it's set to True.
@@ -131,10 +131,10 @@ class DDPM(pl.LightningModule):
                  unet_lora_scale_down=8,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'],
                  q_lora_updates_query=False,
-                 # ps_comp_attn_aug: [p for no aug, p for shrink cross attn, p for mix mc attn with sc].
+                 # ps_comp_attn_aug: [p for no aug, p for normalize cross attn, p for mix mc attn with sc].
                  # We don't apply shrink cross attn and mix mc attn with sc at the same time.
-                 # Since ps_comp_attn_aug = [0, 0, 1.], we always do mix_sc_mc_attn.
-                 ps_comp_attn_aug=[0, 0.5, 0.5],
+                 # Since ps_comp_attn_aug = [0, 1., 0], we always do normalize_cross_attn.
+                 ps_comp_attn_aug=[0, 1., 0],
                  # res_hidden_states_gradscale: gradient scale for residual hidden states.
                  res_hidden_states_gradscale=0.5,
                  log_attn_level=0,
@@ -234,7 +234,7 @@ class DDPM(pl.LightningModule):
         self.unet_lora_scale_down   = unet_lora_scale_down
         self.attn_lora_layer_names  = attn_lora_layer_names
         self.q_lora_updates_query   = q_lora_updates_query
-        self.ps_comp_attn_aug       = torch.tensor(ps_comp_attn_aug)
+        self.ps_comp_attn_aug       = torch.tensor(ps_comp_attn_aug, dtype=torch.float32)
         self.res_hidden_states_gradscale = res_hidden_states_gradscale
 
         self.lora_weight_decay      = lora_weight_decay
@@ -1784,9 +1784,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all' if (not on_priming_steps) else 'none',
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=(not on_priming_steps),
-                                    # When doing normal recon, res_hidden_states_gradscale is always 0, 
-                                    # i.e., gradients don't flow back through UNet skip connections.
-                                    res_hidden_states_gradscale=0,
+                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     # enable_unet_attn_lora: randomly set to True 50% of the time.
                                     use_attn_lora=enable_unet_attn_lora,
                                     use_ffn_lora=use_ffn_lora, 
@@ -1818,9 +1816,7 @@ class LatentDiffusion(DDPM):
                                         batch_part_has_grad='none',
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=False,
-                                        # When doing normal recon, res_hidden_states_gradscale is always 0, 
-                                        # i.e., gradients don't flow back through UNet skip connections.
-                                        res_hidden_states_gradscale=0,
+                                        res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                         # enable_unet_attn_lora: randomly set to True 50% of the time.
                                         use_attn_lora=enable_unet_attn_lora,
                                         # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
@@ -2492,6 +2488,9 @@ class LatentDiffusion(DDPM):
         # recon_fg_face_bboxes: long tensor of [BS, 4], where BS is the batch size.
         # If no face is detected in instance i, recon_fg_face_bboxes[i] is the full image size.
         # recon_fg_face_detected_inst_mask: binary tensor of [BS]
+        # If fg_faces_grad_mask_ratios = (0.9, 0.3):
+        # loss_arcface_align: the BP'ed grad doesn't go to the border 10% of the face area.
+        # loss_fg_faces_suppress: the BP'ed grad doesn't go to the center 70% of the face area.
         loss_arcface_align, loss_fg_faces_suppress, loss_bg_faces_suppress, \
         recon_fg_face_bboxes, recon_fg_face_confidences, recon_fg_face_detected_inst_mask = \
             self.arcface.calc_arcface_align_loss(x_start_pixels, subj_recon_pixels, 
@@ -2665,11 +2664,11 @@ class LatentDiffusion(DDPM):
                 # We still compute the recon loss on the good instances with face detected, 
                 # which are indicated by face_detected_inst_mask.
                 # face_detected_inst_mask: binary tensor of [BS].
-                # loss_fg_faces_suppress_step is not optimized. 
-                # So the second item in fg_faces_grad_mask_ratios has no effect.
+                # loss_fg_faces_suppress_step is not optimized, so the 
+                # second item in fg_faces_grad_mask_ratios doesn't matter.
                 loss_arcface_align_recon_step, loss_fg_faces_suppress_step, loss_bg_faces_suppress_step, fg_face_bboxes, \
                 fg_face_confidences, face_detected_inst_mask = \
-                    self.calc_arcface_align_loss(x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.7))
+                    self.calc_arcface_align_loss(x_start, x_recon, fg_faces_grad_mask_ratios=(1, 0.3))
 
                 # Count normal_recon_on_pure_noise stats and non-pure-noise stats separately.
                 # normal_recon_face_images_on_*_stats contain face_images_count and all_images_count.
@@ -3079,9 +3078,7 @@ class LatentDiffusion(DDPM):
                                     batch_part_has_grad='all', do_pixel_recon=True, 
                                     cfg_scale=self.unet_teacher.cfg_scale,
                                     capture_ca_activations=False,
-                                    # When doing unet distillation, res_hidden_states_gradscale is always 0, 
-                                    # i.e., gradients don't flow back through UNet skip connections.
-                                    res_hidden_states_gradscale=0,
+                                    res_hidden_states_gradscale=self.res_hidden_states_gradscale,
                                     # ** Always disable attn LoRAs on unet distillation.
                                     use_attn_lora=False,                    
                                     # ** Always enable ffn LoRAs on unet distillation to reduce domain gap.
@@ -3580,9 +3577,11 @@ class LatentDiffusion(DDPM):
                     # Since the sc block only contains 1 instance, if loss_arcface_align_comp_step > 0, that means a face is detected.
                     # So we don't need to check sc_fg_face_detected_inst_mask since it's always [1].
                     # sc_fg_face_detected_inst_mask: binary tensor of [BS].
-                    # fg_faces_grad_mask_ratios: (0.9, 0.3) means:
-                    # For loss_arcface_align_comp,     we encourage the central 90% of the face area, 
-                    # For loss_fg_faces_suppress_comp, we suppress  the border  30% of the face area.
+                    # If fg_faces_grad_mask_ratios = (0.9, 0.3):
+                    # loss_arcface_align_comp_step: the BP'ed grad doesn't go to the border 10% of the face area, 
+                    # and only the central 90% is BP-able, i.e., we encourage the central 90% of the face area.
+                    # loss_fg_faces_suppress_comp_step: the BP'ed grad doesn't go to the center 70% of the face area,
+                    # and only the border  30% is BP-able, i.e., we suppress  the border  30% of the face area.
                     loss_arcface_align_comp_step, loss_fg_faces_suppress_comp_step, loss_bg_faces_suppress_comp_step, \
                     sc_fg_face_bboxes_, sc_fg_face_confidences, sc_fg_face_detected_inst_mask = \
                         self.calc_arcface_align_loss(x_start0_ss, subj_comp_recon, fg_faces_grad_mask_ratios)
@@ -3798,7 +3797,9 @@ class LatentDiffusion(DDPM):
         # In most cases (unless we finetune unet only), is_embedding_manager_trainable = True.
         if self.is_embedding_manager_trainable:
             # embedding_param_groups contains two param groups: adaface encoders, and unet lora params.
-            embedding_param_groups = self.embedding_manager.optimized_parameters(lr, self.weight_decay, self.lora_weight_decay)
+            embedding_param_groups = \
+                self.embedding_manager.optimized_parameters(lr, self.weight_decay, 
+                                                            lr, self.lora_weight_decay)
             opt_param_groups += embedding_param_groups
             # For CAdamW, we are unable to set the learning rate of the embedding_params individually.
 

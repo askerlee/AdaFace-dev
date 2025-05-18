@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from typing import Optional, Tuple, Dict, Any
 from diffusers.models.attention_processor import Attention, AttnProcessor2_0
 from diffusers.utils import logging, is_torch_version, deprecate
-from diffusers.utils.torch_utils import fourier_filter
 # UNet is a diffusers PeftAdapterMixin instance.
 from diffusers.loaders.peft import PeftAdapterMixin
 from peft import LoraConfig, get_peft_model
@@ -12,7 +11,6 @@ import peft.tuners.lora as peft_lora
 from peft.tuners.lora.dora import DoraLinearLayer
 from einops import rearrange
 import math, re
-import numpy as np
 from peft.tuners.tuners_utils import BaseTunerLayer
 
 
@@ -105,11 +103,6 @@ def scaled_dot_product_attention(query, key, value, cross_attn_scale_factor,
 
     attn_score = query @ key.transpose(-2, -1) * scale_factor
 
-    if normalize_cross_attn:
-        cross_attn_scale = cross_attn_scale_factor
-    else:
-        cross_attn_scale = 1
-
     # attn_bias: [1, 1, 4096, 77], the same size as a single-head attn_score.
     attn_score += attn_bias
     if mix_attn_mats_in_batch:
@@ -130,9 +123,11 @@ def scaled_dot_product_attention(query, key, value, cross_attn_scale_factor,
         subj_attn_score = attn_score[subj_indices_B, :, :, subj_indices_N]
         # Normalize the attention score of the subject tokens to have mean 0 across tokens,
         # so that positive and negative scores are balanced.
-        subj_attn_score = subj_attn_score - subj_attn_score.mean(dim=2, keepdim=True)
+        subj_attn_score = subj_attn_score - subj_attn_score.mean(dim=2, keepdim=True).detach()
         # cross_attn_scale is a learnable parameter, so the score will be scaled appropriately.
-        subj_attn_score = subj_attn_score * cross_attn_scale
+        # Scale up the BP'ed gradient to cross_attn_scale_factor by 10x.
+        ca_scale_grad_scaler = gen_gradient_scaler(10)
+        subj_attn_score = subj_attn_score * ca_scale_grad_scaler(cross_attn_scale_factor)
         attn_score2 = attn_score.clone()
         attn_score2[subj_indices_B, :, :, subj_indices_N] = subj_attn_score
         attn_score = attn_score2
@@ -170,7 +165,7 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             # enable_lora = True iff this is a cross-attn layer in the last 3 up blocks.
             # Since we only use cross_attn_scale_factor on cross-attn layers, 
             # we only use cross_attn_scale_factor when enable_lora is True.
-            self.cross_attn_scale_factor = nn.Parameter(torch.tensor(1.0), requires_grad=True)
+            self.cross_attn_scale_factor = nn.Parameter(torch.tensor(0.8), requires_grad=True)
             for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
                 if lora_layer_name == 'q':
                     self.to_q_lora   = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, 
