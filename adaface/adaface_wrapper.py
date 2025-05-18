@@ -30,7 +30,7 @@ class AdaFaceWrapper(nn.Module):
                  use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None,
                  enable_static_img_suffix_embs=None, unet_uses_attn_lora=False,
-                 attn_lora_layer_names=['q', 'k', 'v', 'out'], shrink_cross_attn=False, q_lora_updates_query=False,
+                 attn_lora_layer_names=['q', 'k', 'v', 'out'], normalize_cross_attn=False, q_lora_updates_query=False,
                  device='cuda', is_training=False):
         '''
         pipeline_name: "text2img", "text2imgxl", "img2img", "text2img3", "flux", or None. 
@@ -52,7 +52,7 @@ class AdaFaceWrapper(nn.Module):
         self.q_lora_updates_query  = q_lora_updates_query
         self.use_lcm = use_lcm
         self.subject_string = subject_string
-        self.shrink_cross_attn = shrink_cross_attn
+        self.normalize_cross_attn = normalize_cross_attn
 
         self.default_scheduler_name = default_scheduler_name
         self.num_inference_steps = num_inference_steps if not use_lcm else 4
@@ -189,10 +189,10 @@ class AdaFaceWrapper(nn.Module):
             pipeline.unet = unet_ensemble
 
         print(f"Loaded pipeline from {self.base_model_path}.")
-        if not remove_unet and (self.unet_uses_attn_lora or self.shrink_cross_attn):
+        if not remove_unet and (self.unet_uses_attn_lora or self.normalize_cross_attn):
             unet2 = self.load_unet_lora_weights(pipeline.unet, use_attn_lora=self.unet_uses_attn_lora,
                                                 attn_lora_layer_names=self.attn_lora_layer_names,
-                                                shrink_cross_attn=self.shrink_cross_attn,
+                                                normalize_cross_attn=self.normalize_cross_attn,
                                                 q_lora_updates_query=self.q_lora_updates_query)
                                                 
             pipeline.unet = unet2
@@ -294,12 +294,11 @@ class AdaFaceWrapper(nn.Module):
     def load_unet_loras(self, unet, unet_lora_modules_state_dict, 
                         use_attn_lora=True, use_ffn_lora=False, 
                         attn_lora_layer_names=['q', 'k', 'v', 'out'],
-                        shrink_cross_attn=False, cross_attn_shrink_factor=0.5,
+                        normalize_cross_attn=False, 
                         q_lora_updates_query=False):
         attn_capture_procs, attn_opt_modules = \
             set_up_attn_processors(unet, use_attn_lora=True, attn_lora_layer_names=attn_lora_layer_names,
                                    lora_rank=192, lora_scale_down=8, 
-                                   cross_attn_shrink_factor=cross_attn_shrink_factor,
                                    q_lora_updates_query=q_lora_updates_query)
         # up_blocks.3.resnets.[1~2].conv1, conv2, conv_shortcut. [12] matches 1 or 2.
         if use_ffn_lora:
@@ -343,17 +342,17 @@ class AdaFaceWrapper(nn.Module):
         print(f"Loaded {len(unet_lora_modules_state_dict)} LoRA weights on the UNet:\n{unet_lora_modules.keys()}")
         self.outfeat_capture_blocks.append(unet.up_blocks[3])
 
-        # If shrink_cross_attn is True and use_attn_lora is False, we load all these params from ckpt,
+        # If normalize_cross_attn is True and use_attn_lora is False, we load all these params from ckpt,
         # but since we set use_attn_lora to False, attn loras won't be used during inference nonetheless.
         set_lora_and_capture_flags(unet, None, self.attn_capture_procs, self.outfeat_capture_blocks, 
                                    use_attn_lora, use_ffn_lora, 'recon_loss', capture_ca_activations=False, 
-                                   shrink_cross_attn=shrink_cross_attn, mix_attn_mats_in_batch=False,
+                                   normalize_cross_attn=normalize_cross_attn, mix_attn_mats_in_batch=False,
                                    res_hidden_states_gradscale=0)
 
         return unet
 
     def load_unet_lora_weights(self, unet, use_attn_lora=True, attn_lora_layer_names=['q', 'k', 'v', 'out'],
-                               shrink_cross_attn=False, q_lora_updates_query=False):
+                               normalize_cross_attn=False, q_lora_updates_query=False):
         unet_lora_weight_found = False
         if isinstance(self.adaface_ckpt_paths, str):
             adaface_ckpt_paths = [self.adaface_ckpt_paths]
@@ -380,7 +379,7 @@ class AdaFaceWrapper(nn.Module):
                 unet_ = self.load_unet_loras(unet_, unet_lora_modules_state_dict, 
                                              use_attn_lora=use_attn_lora, 
                                              attn_lora_layer_names=attn_lora_layer_names,
-                                             shrink_cross_attn=shrink_cross_attn,
+                                             normalize_cross_attn=normalize_cross_attn,
                                              q_lora_updates_query=q_lora_updates_query)
                 unet.unets[i] = unet_
             print(f"Loaded LoRA processors on UNetEnsemble of {len(unet.unets)} UNets.")
@@ -388,7 +387,7 @@ class AdaFaceWrapper(nn.Module):
             unet = self.load_unet_loras(unet, unet_lora_modules_state_dict, 
                                         use_attn_lora=use_attn_lora, 
                                         attn_lora_layer_names=attn_lora_layer_names,
-                                        shrink_cross_attn=shrink_cross_attn,
+                                        normalize_cross_attn=normalize_cross_attn,
                                         q_lora_updates_query=q_lora_updates_query)
 
         return unet

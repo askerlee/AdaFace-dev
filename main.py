@@ -239,10 +239,6 @@ def get_parser(**parser_kwargs):
                         default=['all'],
                         choices=['recon_loss', 'unet_distill', 'comp_distill', 'all', 'none'], 
                         help="Load these ffn adapters from the checkpoint")
-    parser.add_argument("--p_shrink_cross_attn_in_comp_iters", type=float, default=argparse.SUPPRESS,
-                        help="Whether to suppress the subject attention in the subject-compositional instances")
-    parser.add_argument("--cross_attn_shrink_factor", type=float, default=argparse.SUPPRESS,
-                        help="Shrink factor of the standard deviation of the subject attention")
     parser.add_argument("--attn_lora_layer_names", type=str, nargs="*", default=['q', 'k', 'v', 'out'],
                         choices=['q', 'k', 'v', 'out'], help="Names of the cross-attn components to apply LoRA on")
     parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=True, default=False,
@@ -731,10 +727,8 @@ if __name__ == "__main__":
             # unet_weights_in_ensemble: not the model weights, but the scalar weights for the teacher UNet models.
             config.model.params.unet_weights_in_ensemble    = opt.unet_weights_in_ensemble
 
-        if hasattr(opt, 'p_shrink_cross_attn_in_comp_iters'):
-            config.model.params.p_shrink_cross_attn_in_comp_iters = opt.p_shrink_cross_attn_in_comp_iters
-        if hasattr(opt, 'cross_attn_shrink_factor'):
-            config.model.params.cross_attn_shrink_factor  = opt.cross_attn_shrink_factor
+        if hasattr(opt, 'p_normalize_cross_attn_in_comp_iters'):
+            config.model.params.p_normalize_cross_attn_in_comp_iters = opt.p_normalize_cross_attn_in_comp_iters
         config.model.params.attn_lora_layer_names = opt.attn_lora_layer_names
         config.model.params.q_lora_updates_query = opt.q_lora_updates_query
 

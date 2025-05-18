@@ -77,37 +77,10 @@ def split_indices_by_instance(indices, as_dict=False):
         indices_by_instance = { uib.item(): indices_N[indices_B == uib] for uib in unique_indices_B }
     return indices_by_instance
 
-# If do_sum, returned emb_attns is 3D. Otherwise 4D.
-# indices are applied on the first 2 dims of attn_mat.
-def sel_emb_attns_by_indices(attn_mat, indices, all_token_weights=None, do_sum=True, do_mean=False):
-    indices_by_instance = split_indices_by_instance(indices)
-    
-    # emb_attns[0]: [1, 9, 8, 64]
-    # 8: 8 attention heads. Last dim 64: number of image tokens.
-    emb_attns   = [ attn_mat[inst_indices].unsqueeze(0) for inst_indices in indices_by_instance ]
-    if all_token_weights is not None:
-        # all_token_weights: [4, 77].
-        # token_weights_by_instance[0]: [1, 9, 1, 1].
-        token_weights = [ all_token_weights[inst_indices].reshape(1, -1, 1, 1) for inst_indices in indices_by_instance ]
-    else:
-        token_weights = [ 1 ] * len(indices_by_instance)
-
-    # Apply token weights.
-    emb_attns = [ emb_attns[i] * token_weights[i] for i in range(len(indices_by_instance)) ]
-
-    # sum among K_subj_i subj embeddings -> [1, 8, 64]
-    if do_sum:
-        emb_attns   = [ emb_attns[i].sum(dim=1) for i in range(len(indices_by_instance)) ]
-    elif do_mean:
-        emb_attns   = [ emb_attns[i].mean(dim=1) for i in range(len(indices_by_instance)) ]
-
-    emb_attns = torch.cat(emb_attns, dim=0)
-    return emb_attns
-
 # Slow implementation equivalent to F.scaled_dot_product_attention.
-def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
-                                 subj_indices=None, shrink_cross_attn=False, 
-                                 cross_attn_shrink_factor=0.5, 
+def scaled_dot_product_attention(query, key, value, cross_attn_scale_factor, 
+                                 attn_mask=None, dropout_p=0.0,
+                                 subj_indices=None, normalize_cross_attn=False, 
                                  mix_attn_mats_in_batch=False, 
                                  is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
     B, L, S = query.size(0), query.size(-2), key.size(-2)
@@ -132,8 +105,8 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
 
     attn_score = query @ key.transpose(-2, -1) * scale_factor
 
-    if shrink_cross_attn:
-        cross_attn_scale = cross_attn_shrink_factor
+    if normalize_cross_attn:
+        cross_attn_scale = cross_attn_scale_factor
     else:
         cross_attn_scale = 1
 
@@ -142,32 +115,27 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.
     if mix_attn_mats_in_batch:
         # The instances in the batch are [sc, mc]. We average their attn scores, 
         # and apply to both instances.
-        # attn_score: [2, 8, 64, 77] -> [1, 8, 64, 77] -> [2, 8, 64, 77].
+        # attn_score: [2, 8, 4096, 77] -> [1, 8, 4096, 77] -> [2, 8, 4096, 77].
         # If BLOCK_SIZE > 1, attn_score.shape[0] = 2 * BLOCK_SIZE.
         if attn_score.shape[0] %2 != 0:
             breakpoint()
         attn_score_sc, attn_score_mc = attn_score.chunk(2, dim=0)
         # Cut off the grad flow from the SC instance to the MC instance. 
-        # Apply cross_attn_shrink_factor when computing the weighted sum.
-        attn_score = (attn_score_sc * cross_attn_shrink_factor + attn_score_mc.detach()) / (1 + cross_attn_shrink_factor)
+        attn_score = (attn_score_sc + attn_score_mc.detach()) / 2
         attn_score = attn_score.repeat(2, 1, 1, 1)
+    elif normalize_cross_attn:
+        if subj_indices is None:
+            breakpoint()
+        subj_indices_B, subj_indices_N = subj_indices
+        subj_attn_score = attn_score[subj_indices_B, :, :, subj_indices_N]
+        subj_attn_score = subj_attn_score - subj_attn_score.mean(dim=2, keepdim=True)
+        subj_attn_score = subj_attn_score * cross_attn_scale
+        attn_score2 = attn_score.clone()
+        attn_score2[subj_indices_B, :, :, subj_indices_N] = subj_attn_score
+        attn_score = attn_score2
+    # Otherwise, do nothing to attn_score.
 
     attn_weight = torch.softmax(attn_score, dim=-1)
-
-    if shrink_cross_attn:
-        # NOTE: After scaling, the sum of "probabilities" of the token embeddings = cross_attn_scale < 1.
-        # But this is intended, as we want to scale down the impact of the subject embeddings 
-        # in the computed attention output tensors.
-        if subj_indices is None:
-            # *** SIMPLE SCALING all embeddings if subj_indices is not provided. ***
-            attn_weight = attn_weight * cross_attn_scale
-        else:
-            # *** ONLY SCALE subject embeddings. ***
-            prompt_token_attn_scaler = torch.ones_like(attn_weight)
-            subj_indices_B, subj_indices_N = subj_indices
-            prompt_token_attn_scaler[subj_indices_B, :, :, subj_indices_N] = cross_attn_scale
-            attn_weight = attn_weight * prompt_token_attn_scaler
-
     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
     output = attn_weight @ value
     return output, attn_score, attn_weight
@@ -181,23 +149,25 @@ class AttnProcessor_LoRA_Capture(nn.Module):
     def __init__(self, capture_ca_activations: bool = False, enable_lora: bool = False, 
                  lora_uses_dora=True, lora_proj_layers=None, 
                  lora_rank: int = 192, lora_alpha: float = 16,
-                 cross_attn_shrink_factor: float = 0.5,
                  q_lora_updates_query=False, attn_proc_idx=-1):
         super().__init__()
 
         self.global_enable_lora = enable_lora
         self.attn_proc_idx = attn_proc_idx
         # reset_attn_cache_and_flags() sets the local (call-specific) self.enable_lora flag.
-        # By default, shrink_cross_attn is False. Later in layers 22, 23, 24 it will be set to True.
+        # By default, normalize_cross_attn is False. Later in layers 22, 23, 24 it will be set to True.
         self.reset_attn_cache_and_flags(capture_ca_activations, False, False, enable_lora)
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
         self.lora_scale = self.lora_alpha / self.lora_rank
-        self.cross_attn_shrink_factor = cross_attn_shrink_factor
         self.q_lora_updates_query = q_lora_updates_query
 
         self.to_q_lora = self.to_k_lora = self.to_v_lora = self.to_out_lora = None
         if self.global_enable_lora:
+            # enable_lora = True iff this is a cross-attn layer in the last 3 up blocks.
+            # Since we only use cross_attn_scale_factor on cross-attn layers, 
+            # we only use cross_attn_scale_factor when enable_lora is True.
+            self.cross_attn_scale_factor = nn.Parameter(torch.tensor(1.0), requires_grad=True)
             for lora_layer_name, lora_proj_layer in lora_proj_layers.items():
                 if lora_layer_name == 'q':
                     self.to_q_lora   = peft_lora.Linear(lora_proj_layer, 'default', r=lora_rank, lora_alpha=lora_alpha, 
@@ -213,9 +183,9 @@ class AttnProcessor_LoRA_Capture(nn.Module):
                                                         use_dora=lora_uses_dora, lora_dropout=0.1)
 
     # LoRA layers can be enabled/disabled dynamically.
-    def reset_attn_cache_and_flags(self, capture_ca_activations, shrink_cross_attn, mix_attn_mats_in_batch, enable_lora):
+    def reset_attn_cache_and_flags(self, capture_ca_activations, normalize_cross_attn, mix_attn_mats_in_batch, enable_lora):
         self.capture_ca_activations = capture_ca_activations
-        self.shrink_cross_attn      = shrink_cross_attn
+        self.normalize_cross_attn      = normalize_cross_attn
         self.mix_attn_mats_in_batch = mix_attn_mats_in_batch
         self.cached_activations     = {}
         # Only enable LoRA for the next call(s) if global_enable_lora is set to True.
@@ -338,12 +308,12 @@ class AttnProcessor_LoRA_Capture(nn.Module):
             breakpoint()
 
         # the output of sdp = (batch, num_heads, seq_len, head_dim)
-        if is_cross_attn and (self.capture_ca_activations or self.shrink_cross_attn):
+        if is_cross_attn and (self.capture_ca_activations or self.normalize_cross_attn):
             hidden_states, attn_score, attn_prob = \
                 scaled_dot_product_attention(query, key, value, attn_mask=attention_mask, 
                                              dropout_p=0.0, subj_indices=subj_indices,
-                                             shrink_cross_attn=self.shrink_cross_attn,
-                                             cross_attn_shrink_factor=self.cross_attn_shrink_factor,
+                                             normalize_cross_attn=self.normalize_cross_attn,
+                                             cross_attn_scale_factor=self.cross_attn_scale_factor,
                                              mix_attn_mats_in_batch=self.mix_attn_mats_in_batch)
 
         else:
@@ -481,7 +451,7 @@ def CrossAttnUpBlock2D_forward_capture(
 # Adapted from ConsistentIDPipeline:set_ip_adapter().
 # attn_lora_layer_names: candidates are subsets of ['q', 'k', 'v', 'out'].
 def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k', 'v', 'out'], 
-                           lora_rank=192, lora_scale_down=8, cross_attn_shrink_factor=0.5,
+                           lora_rank=192, lora_scale_down=8, 
                            q_lora_updates_query=False):
     attn_procs = {}
     attn_capture_procs = {}
@@ -531,7 +501,6 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
             lora_uses_dora=True, lora_proj_layers=lora_proj_layers,
             # LoRA up is initialized to 0. So no need to worry that the LoRA output may be too large.
             lora_rank=lora_rank, lora_alpha=lora_rank // lora_scale_down,
-            cross_attn_shrink_factor=cross_attn_shrink_factor,
             q_lora_updates_query=q_lora_updates_query, attn_proc_idx=attn_proc_idx)
         
         attn_proc_idx += 1
@@ -542,6 +511,11 @@ def set_up_attn_processors(unet, use_attn_lora, attn_lora_layer_names=['q', 'k',
         attn_capture_procs[name] = attn_capture_proc
     
         if use_attn_lora:
+            cross_attn_scale_factor_name = name + "_cross_attn_scale_factor"
+            # Put cross_attn_scale_factor in attn_opt_modules, so that we can optimize and save/load it.
+            attn_opt_modules[cross_attn_scale_factor_name] = attn_capture_proc.cross_attn_scale_factor
+
+            # Put LoRA layers in attn_opt_modules, so that we can optimize and save/load them.
             for subname, module in attn_capture_proc.named_modules():
                 if isinstance(module, peft_lora.LoraLayer):
                     # ModuleDict doesn't allow "." in the key.
@@ -621,10 +595,10 @@ def set_up_ffn_loras(unet, target_modules_pat, lora_uses_dora=True, lora_rank=19
 def set_lora_and_capture_flags(unet, unet_lora_modules, attn_capture_procs, 
                                outfeat_capture_blocks, res_hidden_states_gradscale_blocks,
                                use_attn_lora, use_ffn_lora, ffn_lora_adapter_name, capture_ca_activations, 
-                               shrink_cross_attn, mix_attn_mats_in_batch, res_hidden_states_gradscale):
+                               normalize_cross_attn, mix_attn_mats_in_batch, res_hidden_states_gradscale):
     # For attn capture procs, capture_ca_activations and use_attn_lora are set in reset_attn_cache_and_flags().
     for i, attn_capture_proc in enumerate(attn_capture_procs):
-        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, shrink_cross_attn, mix_attn_mats_in_batch,
+        attn_capture_proc.reset_attn_cache_and_flags(capture_ca_activations, normalize_cross_attn, mix_attn_mats_in_batch,
                                                      enable_lora=use_attn_lora)
     # outfeat_capture_blocks only contains the last up block, up_blocks[3].
     # It contains 3 FFN layers. We want to capture their output features.
