@@ -2138,8 +2138,10 @@ class LatentDiffusion(DDPM):
             self.comp_distill_multistep_denoise(x_starts_ss_sc_mix, noises_ss_sc_mix, ts_ss, ss_context,
                                                 uncond_emb=uncond_emb,
                                                 all_subj_indices_1b=all_subj_indices_1b,
-                                                normalize_cross_attn=self.iter_flags['normalize_cross_attn'],
-                                                mix_sc_mc_attn=self.iter_flags['mix_sc_mc_attn'],
+                                                # Don't apply the cross-attention augmentation 
+                                                # when redenoising the ss instance.
+                                                normalize_cross_attn=False,
+                                                mix_sc_mc_attn=False,
                                                 cfg_scale=2.5, num_denoising_steps=self.num_comp_distill_denoising_steps,
                                                 old_x_starts_mix_ratio=0.3,
                                                 use_attn_lora=use_attn_lora, use_ffn_lora=use_ffn_lora,

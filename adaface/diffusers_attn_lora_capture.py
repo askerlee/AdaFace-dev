@@ -128,7 +128,10 @@ def scaled_dot_product_attention(query, key, value, cross_attn_scale_factor,
             breakpoint()
         subj_indices_B, subj_indices_N = subj_indices
         subj_attn_score = attn_score[subj_indices_B, :, :, subj_indices_N]
+        # Normalize the attention score of the subject tokens to have mean 0 across tokens,
+        # so that positive and negative scores are balanced.
         subj_attn_score = subj_attn_score - subj_attn_score.mean(dim=2, keepdim=True)
+        # cross_attn_scale is a learnable parameter, so the score will be scaled appropriately.
         subj_attn_score = subj_attn_score * cross_attn_scale
         attn_score2 = attn_score.clone()
         attn_score2[subj_indices_B, :, :, subj_indices_N] = subj_attn_score
