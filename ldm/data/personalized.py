@@ -580,11 +580,11 @@ class PersonalizedBase(Dataset):
         # Append ", " to the base_template, so that compos_partial tokens are aligned between fp and non-fp prompts.
         # We align fp prompts with non-fp prompts, because we always use fp prompts for the cls comp prompts,
         # but sometimes we use non-fp prompts for the subj comp prompts.
-        cls_base_fp_template  = "face portrait of {}" + ', ' * base_tmpl_num_extra_tokens
-        subj_base_fp_template = "face portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+        cls_base_fp_template  = ', ' * base_tmpl_num_extra_tokens + "face portrait of {}"
+        subj_base_fp_template = ', ' * base_tmpl_num_extra_tokens + "face portrait of {}"
 
-        cls_base_p_template   = "a portrait of {}"    + ', ' * base_tmpl_num_extra_tokens
-        subj_base_p_template  = "a portrait of {}"    + ', ' * base_tmpl_num_extra_tokens
+        cls_base_p_template   = ', ' * base_tmpl_num_extra_tokens + "a portrait of {}"
+        subj_base_p_template  = ', ' * base_tmpl_num_extra_tokens + "a portrait of {}"
 
         example["subj_single_prompt"]       = base_template.format(subject_string)
         example["subj_comp_prompt"]         = base_template.format(subject_string)   + ", " + compos_partial
