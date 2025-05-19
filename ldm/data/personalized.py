@@ -575,13 +575,16 @@ class PersonalizedBase(Dataset):
         # NOTE: We've made sure that the number of words in each base_template is the same as the number of tokens.
         # So we can use the number of tokens to calculate the number of extra tokens in the base_template 
         # than in single_fp_prompt_tmpl.
-        base_fp_template = "a portrait of {}"
+        base_fp_template = "face portrait of {}"
         base_tmpl_num_extra_tokens = len(base_template.split()) - len(base_fp_template.split())
         # Append ", " to the base_template, so that compos_partial tokens are aligned between fp and non-fp prompts.
         # We align fp prompts with non-fp prompts, because we always use fp prompts for the cls comp prompts,
         # but sometimes we use non-fp prompts for the subj comp prompts.
-        cls_base_fp_template  = "a portrait of {}" + ', ' * base_tmpl_num_extra_tokens
-        subj_base_fp_template = "a portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+        cls_base_fp_template  = "face portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+        subj_base_fp_template = "face portrait of {}" + ', ' * base_tmpl_num_extra_tokens
+
+        cls_base_p_template   = "a portrait of {}"    + ', ' * base_tmpl_num_extra_tokens
+        subj_base_p_template  = "a portrait of {}"    + ', ' * base_tmpl_num_extra_tokens
 
         example["subj_single_prompt"]       = base_template.format(subject_string)
         example["subj_comp_prompt"]         = base_template.format(subject_string)   + ", " + compos_partial
@@ -604,6 +607,11 @@ class PersonalizedBase(Dataset):
         example["cls_single_mod_prompt_fp"]  = cls_base_fp_template.format( cls_delta_string) + ", " + modifier
         example["subj_comp_mod_prompt_fp"]   = subj_base_fp_template.format(subject_string)   + ", " + mod_compos_partial
         example["cls_comp_mod_prompt_fp"]    = cls_base_fp_template.format( cls_delta_string) + ", " + mod_compos_partial
+        
+        example["subj_single_mod_prompt_p"]  = subj_base_p_template.format(subject_string)   + ", " + modifier
+        example["cls_single_mod_prompt_p"]   = cls_base_p_template.format( cls_delta_string) + ", " + modifier
+        example["subj_comp_mod_prompt_p"]    = subj_base_p_template.format(subject_string)   + ", " + mod_compos_partial
+        example["cls_comp_mod_prompt_p"]     = cls_base_p_template.format( cls_delta_string) + ", " + mod_compos_partial
         
         example["mod_compos_partial_prompt"] = mod_compos_partial
         example["compos_partial_prompt"]     = compos_partial

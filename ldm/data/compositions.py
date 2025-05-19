@@ -47,11 +47,12 @@ static_action_regexs = \
 
 static_appearances = [
   # To avoid misalignment issues, we don't use "a red/purple z" as prompts.
-  "that is (red|purple|shiny|cube|wet)",
+  "that is (red|purple|shiny|wet)",
 ]
 
 all_action_regexs = static_action_regexs + animal_action_regexs
-all_dress_regexs  = static_appearances   + animal_dresses
+# Removed static_appearances from all_dress_regexs, as they are not so relevant to humans.
+all_dress_regexs  = animal_dresses
 all_composition_regexs    = all_action_regexs    + all_dress_regexs
 static_composition_regexs = static_action_regexs + static_appearances
 
@@ -125,7 +126,7 @@ def sample_compositions(N, subj_type):
             num_styles = np.random.choice([1, 2])
             styles = np.random.choice(all_styles, size=num_styles, replace=False)
             # style = np.random.choice(all_styles) + ' '
-            style = "in " + " and ".join(styles) + " style"
+            style = " and ".join(styles)
         elif has_styles == 1:   # 20% with photorealistic as the style
             style = "photorealistic"
         elif has_styles == 0:   # 30% without style

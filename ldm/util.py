@@ -967,29 +967,39 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
 
     return extended_token_embeddings
 
-# samples:   a (B, C, H, W) tensor.
-# img_flags: a tensor of (B,) ints.
-# samples should be between [0, 255] (uint8).
-def save_grid(samples, img_flags, grid_filepath, nrow):
+# sample_images:   a (B, C, H, W) tensor.
+# img_colors: a tensor of (B,) ints.
+# sample_images should be between [0, 255] (uint8).
+def save_grid(sample_images, img_colors, img_types, prompts, 
+              grid_filepath, prompt_list_filename, nrow):
     try:
         # img_box indicates the whole image region.
-        img_box = torch.tensor([0, 0, samples.shape[2], samples.shape[3]]).unsqueeze(0)
+        img_box = torch.tensor([0, 0, sample_images.shape[2], sample_images.shape[3]]).unsqueeze(0)
 
         colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
-        if img_flags is not None:
-            # Highlight the teachable samples.
-            for i, img_flag in enumerate(img_flags):
-                if img_flag > 0:
+        if img_colors is not None:
+            for i, img_color in enumerate(img_colors):
+                if img_color > 0:
                     # Draw a 12-pixel wide bounding box around the image.
-                    samples[i] = draw_bounding_boxes(samples[i], img_box, colors=colors[img_flag], width=12)
+                    sample_images[i] = draw_bounding_boxes(sample_images[i], img_box, colors=colors[img_color], width=12)
 
         # grid_samples is a 3D np array: (C, H2, W2)
-        grid_samples = make_grid(samples, nrow=nrow).cpu().numpy()
+        grid_samples = make_grid(sample_images, nrow=nrow).cpu().numpy()
         # Transpose to (H2, W2, C)
         grid_img = Image.fromarray(grid_samples.transpose([1, 2, 0]))
         if grid_filepath is not None:
             grid_img.save(grid_filepath)
-            print(f"{len(samples)} generations saved to {grid_filepath}")
+            print(f"{len(sample_images)} generations saved to {grid_filepath}")
+
+        if prompt_list_filename is not None:
+            with open(prompt_list_filename, 'w') as f:
+                for i, prompt in enumerate(prompts):
+                    # Some prompts may be None.
+                    if prompt is not None:
+                        f.write(f"{i}: {img_types[i]}: {prompt}\n")
+                    else:
+                        f.write(f"{i}: {img_types[i]}\n")
+            print(f"Prompt list saved to {prompt_list_filename}")
 
     except Exception as e:
         print(f"Error saving grid image: {e}")
@@ -1715,14 +1725,18 @@ def calc_recon_and_suppress_losses(noise_gt, noise_pred, noise_pred_cls, face_de
     if noise_pred_cls is not None:
         bg_mask = (1 - fg_mask)
         if bg_mask.sum() == 0:
-            # No background pixels. Do bg recon to noise_pred_cls on every pixel, 
-            # but with a smaller instance-level recon_loss_scale of 0.1.
+            # if normal_recon_on_pure_noise and no face detected, 
+            # then fg_mask2 = fg_mask is full of 1s, and bg_mask is full of 0s.
+            # In this case, do a full-image recon to noise_pred_cls, 
+            # but with a smaller recon_loss_scale of 0.1 (set in calc_normal_recon_loss()).
             bg_mask = torch.ones_like(noise_pred_cls)
         if img_mask is not None:
             bg_mask = bg_mask * img_mask
 
         # Image reconstruction loss on bg pixels only, under the guidance of cls_single_prompts.
         loss_recon_cls, _ = calc_recon_loss(F.mse_loss, noise_pred, noise_pred_cls,
+                                            # NOTE: fg_mask is set to bg_mask, so we focus on bg pixels.
+                                            # Now the fg recon loss receives bg_pixel_weight = 0.025, ignorable.
                                             img_mask, bg_mask, face_detected_inst_weights,
                                             fg_pixel_weight=1, bg_pixel_weight=bg_pixel_weight)
     else:

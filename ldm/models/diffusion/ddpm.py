@@ -102,7 +102,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
-                 num_recon_denoising_steps=3,
+                 num_recon_denoising_steps=2,
                  num_comp_distill_denoising_steps=4,
                  # redenoise_subj_comp_crop_mix_weights: weights of the SC crop, random noise and the original crop.
                  redenoise_subj_comp_crop_mix_weights=(0.5, 0.25, 0.25),
@@ -936,16 +936,6 @@ class LatentDiffusion(DDPM):
         # Encode the input image/noise as 4-channel latent features.
         x_start = self.get_input(batch, "image")
 
-        if self.iter_flags['do_normal_recon']:
-            p_normal_recon_on_pure_noise = self.p_normal_recon_on_pure_noise
-        else:
-            p_normal_recon_on_pure_noise = 0
-
-        if self.iter_flags['do_unet_distill']:
-            p_unet_distill_on_pure_noise = self.p_unet_distill_on_pure_noise
-        else:
-            p_unet_distill_on_pure_noise = 0
-
         if self.iter_flags['do_comp_feat_distill']:
             attn_aug_names = ['no_attn_aug', 'normalize_cross_attn', 'mix_sc_mc_attn']
             attn_aug_idx = torch.multinomial(self.ps_comp_attn_aug, 1).item()
@@ -964,6 +954,15 @@ class LatentDiffusion(DDPM):
             self.iter_flags['normalize_cross_attn'] = False
             self.iter_flags['mix_sc_mc_attn']       = False
 
+        if self.iter_flags['do_normal_recon']:
+            p_normal_recon_on_pure_noise = self.p_normal_recon_on_pure_noise
+        else:
+            p_normal_recon_on_pure_noise = 0
+
+        if self.iter_flags['do_unet_distill']:
+            p_unet_distill_on_pure_noise = self.p_unet_distill_on_pure_noise
+        else:
+            p_unet_distill_on_pure_noise = 0
         self.iter_flags['normal_recon_on_pure_noise'] = (torch.rand(1) < p_normal_recon_on_pure_noise).item()
         self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
         
@@ -994,14 +993,19 @@ class LatentDiffusion(DDPM):
         # subj_single_prompt to reconstruct the foreground face, and use cls_single_prompt
         # to reconstruct the background. Therefore, modifiers could be added to the prompts.
         # So in such cases, we use the mod prompts. 
-        # Moreover, to highlight the face features, we always use the fp trick.
+        # Moreover, to highlight the face features, 
+        # we use fp 50% of the time, and use p 50% of the time.
         if self.iter_flags['normal_recon_on_pure_noise']:
-            SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
-            # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
-            # SUBJ_SINGLE_PROMPT for prompt delta loss.
-            CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
-            SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
-            CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
+            if torch.rand(1) < 0.5:
+                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
+                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
+                CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
+            else:
+                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_p'
+                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_p'
+                CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_p'
+                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_p'
         else:
             # Otherwise, there are ground truth images, and we can only use prompts without modifiers.
             if self.iter_flags['use_fp_trick']:
@@ -1029,15 +1033,16 @@ class LatentDiffusion(DDPM):
                     # subj single prompts still use fp. cls comp prompts use fp 75% of the time.
                     SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt_fp'
                     SUBJ_COMP_PROMPT    = 'subj_comp_mod_prompt'
-                    # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
-                    # SUBJ_SINGLE_PROMPT for prompt delta loss.
-                    CLS_SINGLE_PROMPT   = 'cls_single_mod_prompt_fp'
                     # Sometimes the cls comp instances don't have clear faces.
-                    # So use the fp trick on cls comp prompts at 75% of the time.
+                    # So use the p trick on cls comp prompts at 75% of the time.
+                    # p trick: "a portrait of", fp trick: "face portrait of".
+                    # NOTE: fp trick is not used on cls comp prompts, as it makes the face too big.
                     if self.comp_iters_count % 4 != 0:
-                        CLS_COMP_PROMPT = 'cls_comp_mod_prompt_fp'
+                        CLS_SINGLE_PROMPT = 'cls_single_mod_prompt_p'
+                        CLS_COMP_PROMPT   = 'cls_comp_mod_prompt_p'
                     else:
-                        CLS_COMP_PROMPT = 'cls_comp_mod_prompt'
+                        CLS_SINGLE_PROMPT = 'cls_single_mod_prompt'
+                        CLS_COMP_PROMPT   = 'cls_comp_mod_prompt'
                 else:
                     # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
                     # cls prompts are only used for delta loss, so they don't need to be fp prompts.
@@ -2229,7 +2234,8 @@ class LatentDiffusion(DDPM):
                 # Since the 1st round of recon images have been logged already,
                 # we can only put the second round of SS recon images altogether at the end of 
                 # this batch of logged images.
-                self.cache_and_log_generations(recon_images_ss, log_image_colors, do_normalize=True)
+                self.cache_and_log_generations(recon_images_ss, log_image_colors, f'redenoise-ss_{step}',
+                                               ss_context[1], do_normalize=True)
 
                 # Only replace the activations of the steps that have good confidence.
                 if is_good_confidence and is_clear:
@@ -2429,18 +2435,19 @@ class LatentDiffusion(DDPM):
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # All of them are 1, indicating green.
             x_start0_ss       = x_start0[:BLOCK_SIZE]
-            x_start_primed_ss = x_start_primed[:BLOCK_SIZE]
             input_image = self.decode_first_stage(x_start0_ss)
             # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # All of them are 1, indicating green.
             log_image_colors = torch.ones(input_image.shape[0], dtype=int, device=x_start.device)
-            self.cache_and_log_generations(input_image, log_image_colors, do_normalize=True)
+            self.cache_and_log_generations(input_image, log_image_colors, 'comp_distill-input', 
+                                           None, do_normalize=True)
 
             # NOTE: x_start_primed_2 is primed with 0.4 subj embeddings + 0.6 cls embeddings. Therefore,
             # the faces still don't look like the subject. What matters is that the background is compositional.
             log_image_colors = torch.ones(x_start_primed_2.shape[0], dtype=int, device=x_start.device)
             x_start_primed_2_decoded = self.decode_first_stage(x_start_primed_2)
-            self.cache_and_log_generations(x_start_primed_2_decoded, log_image_colors, do_normalize=True)
+            self.cache_and_log_generations(x_start_primed_2_decoded, log_image_colors, 'comp_distill-primed',
+                                           subj_context[1][:2], do_normalize=True)
 
             x_recons_collate = torch.cat(x_recons, dim=0)
             x_recons_pixel_collate = self.decode_first_stage(x_recons_collate)
@@ -2451,7 +2458,8 @@ class LatentDiffusion(DDPM):
                 # log_image_colors: a list of 0-3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
                 # If there are multiple denoising steps, the output images are assigned different colors.
                 log_image_colors = torch.ones(x_recons_pixel_allsteps[i].shape[0], dtype=int, device=x_start.device) * (i % 4)
-                self.cache_and_log_generations(x_recons_pixel_allsteps[i], log_image_colors, do_normalize=True)
+                self.cache_and_log_generations(x_recons_pixel_allsteps[i], log_image_colors, f'comp_distill_{i}',
+                                               subj_context[1], do_normalize=True)
 
                 if self.log_attn_level > 0:
                     self.log_attention(ca_layers_activations_list[i], all_subj_indices_1b)
@@ -2483,7 +2491,7 @@ class LatentDiffusion(DDPM):
         mon_loss_dict.update({f'{session_prefix}/loss': loss.mean().detach().item() })
         return loss, mon_loss_dict
 
-    def are_faces_present_in_latents(self, latents):
+    def are_faces_detected_in_latents(self, latents):
         # images: [4, 3, 512, 512].
         images = self.decode_first_stage(latents)
         images = torch.clamp(images, -1, 1)
@@ -2624,7 +2632,8 @@ class LatentDiffusion(DDPM):
         # log_image_colors: a list of 3, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
         # All of them are 3, purple.
         log_image_colors = torch.ones(input_images.shape[0], dtype=int, device=x_start.device) * 3
-        self.cache_and_log_generations(input_images, log_image_colors, do_normalize=True)
+        self.cache_and_log_generations(input_images, log_image_colors, 'recon-input', 
+                                       None, do_normalize=True)
 
         # mon_loss_dict is used to log adv_attack stats.
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
@@ -2661,6 +2670,7 @@ class LatentDiffusion(DDPM):
             noise, noise_pred, x_recon, ca_layers_activations = \
                 noises[i], noise_preds[i], x_recons[i], ca_layers_activations_list[i]
 
+            recon_sig = 'noise' if normal_recon_on_pure_noise else 'image'
             recon_images = self.decode_first_stage(x_recon)
             if cls_context is not None:
                 noise_pred_cls   = noise_preds_cls[i]
@@ -2668,7 +2678,8 @@ class LatentDiffusion(DDPM):
                 recon_images_cls = self.decode_first_stage(x_recon_cls)
                 log_image_colors = torch.ones(recon_images_cls.shape[0], dtype=int, device=x_start.device) * 3 \
                                     + i + 1 - num_recon_priming_steps
-                self.cache_and_log_generations(recon_images_cls, log_image_colors, do_normalize=True)
+                self.cache_and_log_generations(recon_images_cls, log_image_colors, f"recon_cls-{recon_sig}_{i}", 
+                                               cls_context[1], do_normalize=True)
             else:
                 noise_pred_cls   = None
                 x_recon_cls      = None
@@ -2677,7 +2688,8 @@ class LatentDiffusion(DDPM):
             # 4 or 5: orange for the first denoising step, blue for the second denoising step.
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 \
                                 + i + 1 - num_recon_priming_steps
-            self.cache_and_log_generations(recon_images, log_image_colors, do_normalize=True)
+            self.cache_and_log_generations(recon_images, log_image_colors, f"recon-{recon_sig}_{i}", 
+                                           subj_context[1], do_normalize=True)
             
             # Calc the L2 norm of noise_pred.
             pred_l2_step = (noise_pred ** 2).mean()
@@ -2716,7 +2728,7 @@ class LatentDiffusion(DDPM):
                         self.normal_recon_face_align_loss_kept_frac.update(0)
                         
                     # loss_arcface_align_recon_stat is the mean of all loss_arcface_align_recon_step 
-                    # without filtering.
+                    # without filtering, used for logging only.
                     losses_arcface_align_recon_stat.append(loss_arcface_align_recon_step)
                     # In this branch, at least one face is detected in x_recon.
                     # Set the weights of the instances without faces detected to 0.1, 
@@ -2749,13 +2761,16 @@ class LatentDiffusion(DDPM):
                     # since we normalize the pixel-wise recon losses by the number of weighted face pixels.
                     recon_loss_scale = 0.1
                     face_detected_inst_weights = torch.ones_like(face_detected_inst_mask)
+                    # if normal_recon_on_pure_noise and no face detected, 
+                    # then fg_mask2 = fg_mask is full of 1s.
                     fg_mask2 = fg_mask
 
                 # NOTE: recon_bg_pixel_weight = 0.025, i.e.,
                 # bg loss is given a small weight to suppress multi-face artifacts.
                 # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
                 # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
-                # If img_mask = None, then blank pixels are regularized as bg pixels.
+                # If img_mask = None, then blank pixels are regularized as bg pixels, and the corresponding
+                # pixels in the predicted images are pushed towards 0.
                 loss_recon_step, loss_recon_cls_step, loss_recon_subj_mb_suppress_step = \
                     calc_recon_and_suppress_losses(noise, noise_pred, noise_pred_cls, 
                                                    face_detected_inst_weights, 
@@ -2965,8 +2980,8 @@ class LatentDiffusion(DDPM):
         return teacher_contexts
     
     def calc_unet_distill_loss(self, mon_loss_dict, session_prefix, 
-                               x_start, noise, subj_context, 
-                               img_mask, fg_mask, num_unet_denoising_steps, unet_distill_on_pure_noise):
+                               x_start, noise, subj_context, img_mask, fg_mask, 
+                               num_unet_denoising_steps, unet_distill_on_pure_noise):
         if unet_distill_on_pure_noise:
             # Alternate between priming using Adaface and priming using the teacher.
             priming_using_adaface = (self.unet_distill_on_noise_iters_count % 2 == 0)
@@ -2988,7 +3003,8 @@ class LatentDiffusion(DDPM):
         # If unet_distill_on_pure_noise: all of them are 6 or 7, indicating pink or magenta.
         # If unet_distill_on_image:      all of them are 2,      indicating red.
         log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
-        self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
+        self.cache_and_log_generations(x_start_pixels, log_image_colors, 'unet_distill-input', 
+                                       None, do_normalize=True)
         teacher_contexts = self.prepare_unet_teacher_context(subj_context, self.uncond_context, BLOCK_SIZE,
                                                              self.iter_flags['id2img_prompt_embs'],
                                                              self.iter_flags['id2img_neg_prompt_embs'],
@@ -3045,7 +3061,7 @@ class LatentDiffusion(DDPM):
 
                 # x_starts are denoised image latents, and x_start is the last denoised image latent.
                 x_start = x_starts[-1]
-                are_face_detected, x_start_pixels = self.are_faces_present_in_latents(x_start)
+                are_face_detected, x_start_pixels = self.are_faces_detected_in_latents(x_start)
                 priming_model_name = 'Adaface' if priming_using_adaface else 'Teacher'
                 if torch.all(are_face_detected):
                     # If all instances contain faces, then we can stop the priming trials.
@@ -3058,7 +3074,8 @@ class LatentDiffusion(DDPM):
 
             # Log the primed x_start images.
             log_image_colors = torch.ones(x_start_pixels.shape[0], dtype=int, device=x_start.device) * log_color_idx
-            self.cache_and_log_generations(x_start_pixels, log_image_colors, do_normalize=True)
+            self.cache_and_log_generations(x_start_pixels, log_image_colors, 'unet_distill-primed', 
+                                           subj_context[1], do_normalize=True)
 
         with torch.no_grad():
             unet_teacher_noise_preds, unet_teacher_x_starts, unet_teacher_noises, all_t = \
@@ -3122,7 +3139,8 @@ class LatentDiffusion(DDPM):
             # If unet_distill_on_pure_noise: all of them are 6, indicating pink.
             # If unet_distill_on_image:      all of them are 2, indicating red.
             log_image_colors = torch.ones(recon_images_s.shape[0], dtype=int, device=x_start.device) * log_color_idx
-            self.cache_and_log_generations(recon_images_s, log_image_colors, do_normalize=True)
+            self.cache_and_log_generations(recon_images_s, log_image_colors, 'unet_distill', 
+                                           subj_context[1], do_normalize=True)
 
         iter_type_str = f'on {num_distill_priming_steps}-step primed noise' if unet_distill_on_pure_noise else 'on image'
         print(f"Rank {self.trainer.global_rank} {len(noise_preds)}-step distillation ({iter_type_str}):")
@@ -3723,7 +3741,7 @@ class LatentDiffusion(DDPM):
         else:
             # If log_attn_level == 1, only log the average heatmap.
             heatmaps = avg_heatmap
-        self.cache_and_log_generations(heatmaps, None, do_normalize=False)
+        self.cache_and_log_generations(heatmaps, None, 'attn-heatmap', None, do_normalize=False)
 
     # samples: a single 4D [B, C, H, W] np array, or a single 4D [B, C, H, W] torch tensor, 
     # or a list of 3D [C, H, W] torch tensors.
@@ -3733,7 +3751,7 @@ class LatentDiffusion(DDPM):
     # For raw output from raw output from SD decode_first_stage(),
     # samples are be between [-1, 1], so we set do_normalize=True, which will convert and clamp to [0, 1].
     @rank_zero_only
-    def cache_and_log_generations(self, samples, img_colors, do_normalize=True):
+    def cache_and_log_generations(self, samples, img_colors, img_type, prompts=None, do_normalize=True):
         if isinstance(samples, np.ndarray):
             samples = torch.from_numpy(samples)
 
@@ -3751,14 +3769,23 @@ class LatentDiffusion(DDPM):
         if img_colors is None:
             img_colors = torch.zeros(samples.size(0), dtype=torch.int, device=samples.device)
 
-        self.sample_image_queue.put((samples.cpu(), img_colors.cpu()))
+        img_types = [ img_type ] * samples.size(0)
+        if prompts is None:
+            prompts = [ None ] * samples.size(0)
+        else:
+            if len(prompts) != samples.size(0):
+                breakpoint()
+            
+        self.sample_image_queue.put((samples.cpu(), img_colors.cpu(), img_types, prompts))
 
     def start_worker_to_save_samples(self, max_cache_size=60):
         # max_cache_size = 60, nrow=12, so we save a 4*12 grid of samples.
         # Each sample is 512*512*3, so the grid is 512*512*3*4*12*4 bytes = 37.7M * 4 = 150M.
-        """Worker that saves images only when pending_samples has at least max_cache_size items"""
-        pending_samples = []
+        """Worker that saves images only when pending_sample_images has at least max_cache_size items"""
+        pending_sample_images = []
         pending_sample_colors = []
+        pending_sample_img_types = []
+        pending_sample_prompts = []
         pending_sample_count = 0
 
         while True:
@@ -3766,11 +3793,13 @@ class LatentDiffusion(DDPM):
                 # samples:    a (B, C, H, W) tensor.
                 # img_colors: a tensor of (B,) ints.
                 # samples should be between [0, 255] (uint8).
-                samples, img_colors = self.sample_image_queue.get(timeout=1)
+                samples, img_colors, img_types, prompts = self.sample_image_queue.get(timeout=1)
                 # Not enough items yet, mark this one as done and continue waiting
                 self.sample_image_queue.task_done()                
-                pending_samples.append(samples)
+                pending_sample_images.append(samples)
                 pending_sample_colors.append(img_colors)
+                pending_sample_img_types.append(img_types)
+                pending_sample_prompts.append(prompts)
                 pending_sample_count += len(samples)
             except queue.Empty:
                 continue
@@ -3778,15 +3807,21 @@ class LatentDiffusion(DDPM):
             if pending_sample_count >= max_cache_size:
                 grid_folder = os.path.join(self.logger._save_dir, 'samples')
                 os.makedirs(grid_folder, exist_ok=True)
-                grid_filename = os.path.join(grid_folder, f'{self.cache_start_iter:04d}-{self.global_step:04d}.png')
-                pending_images     = torch.cat(pending_samples,       0)
+                image_grid_filename  = os.path.join(grid_folder, f'{self.cache_start_iter:04d}-{self.global_step:04d}.png')
+                prompt_list_filename = os.path.join(grid_folder, f'{self.cache_start_iter:04d}-{self.global_step:04d}.txt')
+                pending_images     = torch.cat(pending_sample_images, 0)
                 pending_img_colors = torch.cat(pending_sample_colors, 0)
-                save_grid(pending_images, pending_img_colors, grid_filename, 12)   
-                
+                pending_img_types  = sum(pending_sample_img_types, [])
+                pending_prompts    = sum(pending_sample_prompts, [])
+                save_grid(pending_images, pending_img_colors, pending_img_types, pending_prompts, 
+                          image_grid_filename, prompt_list_filename, 12)
+
                 # Clear the cache. If num_cached_generations > max_cache_size,
                 # some samples at the end of the cache will be discarded.
-                pending_samples.clear()
+                pending_sample_images.clear()
                 pending_sample_colors.clear()
+                pending_sample_img_types.clear()
+                pending_sample_prompts.clear()
                 pending_sample_count  = 0
                 self.cache_start_iter = self.global_step
 
