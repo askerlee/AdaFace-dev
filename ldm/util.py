@@ -970,8 +970,8 @@ def extend_clip_text_embedder(text_embedder, string2embedding, string_list):
 # sample_images:   a (B, C, H, W) tensor.
 # img_colors: a tensor of (B,) ints.
 # sample_images should be between [0, 255] (uint8).
-def save_grid(sample_images, img_colors, img_types, prompts, 
-              grid_filepath, prompt_list_filename, nrow):
+def save_grid(sample_images, img_colors, grid_filepath, nrow, 
+              img_types, prompts, prompt_list_filename):
     try:
         # img_box indicates the whole image region.
         img_box = torch.tensor([0, 0, sample_images.shape[2], sample_images.shape[3]]).unsqueeze(0)

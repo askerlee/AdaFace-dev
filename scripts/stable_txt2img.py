@@ -778,8 +778,8 @@ def main(opt):
 
                 # all_samples is a list of 4D tensors [batch_size, C, H, W]
                 all_samples_cat = torch.cat(all_samples, 0)
-                img = save_grid(all_samples_cat, None, grid_filepath, nrow=n_rows)
-                
+                img = save_grid(all_samples_cat, None, grid_filepath, n_rows, None, None, None)
+
             toc = time.time()
         
     if not opt.skip_grid:

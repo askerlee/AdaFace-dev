@@ -1066,8 +1066,9 @@ class LatentDiffusion(DDPM):
         else:
             p_clear_face = 0
             p_front_view = 0
-            
-        if torch.rand(1) < p_clear_face:
+        
+        # Don't repeatedly add "face" to the prompts, otherwise it may generate two faces.
+        if (torch.rand(1) < p_clear_face) and (not self.iter_flags['use_fp_trick']):
             # Add 'clear face' to the 4 types of prompts. Its effect is weaker than the fp trick.
             cls_single_prompts, cls_comp_prompts, subj_single_prompts, subj_comp_prompts = \
                 [ [ p + ', clear face' for p in prompts ] for prompts in \
@@ -2678,7 +2679,7 @@ class LatentDiffusion(DDPM):
                 recon_images_cls = self.decode_first_stage(x_recon_cls)
                 log_image_colors = torch.ones(recon_images_cls.shape[0], dtype=int, device=x_start.device) * 3 \
                                     + i + 1 - num_recon_priming_steps
-                self.cache_and_log_generations(recon_images_cls, log_image_colors, f"recon_cls-{recon_sig}_{i}", 
+                self.cache_and_log_generations(recon_images_cls, log_image_colors, f"recon-{recon_sig}-cls_{i}", 
                                                cls_context[1], do_normalize=True)
             else:
                 noise_pred_cls   = None
@@ -3813,8 +3814,8 @@ class LatentDiffusion(DDPM):
                 pending_img_colors = torch.cat(pending_sample_colors, 0)
                 pending_img_types  = sum(pending_sample_img_types, [])
                 pending_prompts    = sum(pending_sample_prompts, [])
-                save_grid(pending_images, pending_img_colors, pending_img_types, pending_prompts, 
-                          image_grid_filename, prompt_list_filename, 12)
+                save_grid(pending_images, pending_img_colors, image_grid_filename, 12, 
+                          pending_img_types, pending_prompts, prompt_list_filename)
 
                 # Clear the cache. If num_cached_generations > max_cache_size,
                 # some samples at the end of the cache will be discarded.
