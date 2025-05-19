@@ -102,7 +102,7 @@ class DDPM(pl.LightningModule):
                  unet_teacher_types=None,
                  max_num_unet_distill_denoising_steps=4,
                  max_num_comp_priming_denoising_steps=4,
-                 num_recon_denoising_steps=2,
+                 num_recon_denoising_steps=3,
                  num_comp_distill_denoising_steps=4,
                  # redenoise_subj_comp_crop_mix_weights: weights of the SC crop, random noise and the original crop.
                  redenoise_subj_comp_crop_mix_weights=(0.5, 0.25, 0.25),
@@ -964,7 +964,7 @@ class LatentDiffusion(DDPM):
             self.iter_flags['normalize_cross_attn'] = False
             self.iter_flags['mix_sc_mc_attn']       = False
 
-        self.iter_flags['normal_recon_on_pure_noise']        = (torch.rand(1) < p_normal_recon_on_pure_noise).item()
+        self.iter_flags['normal_recon_on_pure_noise'] = (torch.rand(1) < p_normal_recon_on_pure_noise).item()
         self.iter_flags['unet_distill_on_pure_noise'] = (torch.rand(1) < p_unet_distill_on_pure_noise).item()
         
         # NOTE: *_fp prompts are like "face portrait of ..." or "a portrait of ...". 
@@ -994,52 +994,60 @@ class LatentDiffusion(DDPM):
         # subj_single_prompt to reconstruct the foreground face, and use cls_single_prompt
         # to reconstruct the background. Therefore, modifiers could be added to the prompts.
         # So in such cases, we use the mod prompts. 
-        # Otherwise, there are ground truth images, and we can only use prompts without modifiers.
-        if self.iter_flags['use_fp_trick']:
-            if self.iter_flags['do_comp_feat_distill'] or \
-              (self.iter_flags['do_normal_recon'] and self.iter_flags['normal_recon_on_pure_noise']):
-                # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
-                SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
-                # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
-                # SUBJ_SINGLE_PROMPT for prompt delta loss.
-                CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
-                SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
-                CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
-            else:
-                # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
-                SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
-                CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
-                # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet, 
-                # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
-                SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
-                # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta loss.
-                CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
-
+        # Moreover, to highlight the face features, we always use the fp trick.
+        if self.iter_flags['normal_recon_on_pure_noise']:
+            SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
+            # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
+            # SUBJ_SINGLE_PROMPT for prompt delta loss.
+            CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
+            SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
+            CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
         else:
-            if self.iter_flags['do_comp_feat_distill'] or \
-              (self.iter_flags['do_normal_recon'] and self.iter_flags['normal_recon_on_pure_noise']):
-                # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
-                SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt_fp'
-                SUBJ_COMP_PROMPT    = 'subj_comp_mod_prompt'
-                # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
-                # SUBJ_SINGLE_PROMPT for prompt delta loss.
-                CLS_SINGLE_PROMPT   = 'cls_single_mod_prompt_fp'
-                # Sometimes the cls comp instances don't have clear faces.
-                # So use the fp trick on cls comp prompts at 75% of the time.
-                if self.comp_iters_count % 4 != 0:
-                    CLS_COMP_PROMPT = 'cls_comp_mod_prompt_fp'
+            # Otherwise, there are ground truth images, and we can only use prompts without modifiers.
+            if self.iter_flags['use_fp_trick']:
+                if self.iter_flags['do_comp_feat_distill']:
+                    # If doing compositional distillation, then use the subj single prompts with styles, lighting, etc.
+                    SUBJ_SINGLE_PROMPT = 'subj_single_mod_prompt_fp'
+                    # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
+                    # SUBJ_SINGLE_PROMPT for prompt delta loss.
+                    CLS_SINGLE_PROMPT  = 'cls_single_mod_prompt_fp'
+                    SUBJ_COMP_PROMPT   = 'subj_comp_mod_prompt_fp'
+                    CLS_COMP_PROMPT    = 'cls_comp_mod_prompt_fp'
                 else:
-                    CLS_COMP_PROMPT = 'cls_comp_mod_prompt'
+                    # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
+                    SUBJ_SINGLE_PROMPT = 'subj_single_prompt_fp'
+                    CLS_SINGLE_PROMPT  = 'cls_single_prompt_fp'
+                    # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet, 
+                    # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
+                    SUBJ_COMP_PROMPT   = 'subj_comp_prompt_fp'
+                    # CLS_COMP_PROMPT has to match SUBJ_COMP_PROMPT for prompt delta loss.
+                    CLS_COMP_PROMPT    = 'cls_comp_prompt_fp'
             else:
-                # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
-                # cls prompts are only used for delta loss, so they don't need to be fp prompts.
-                SUBJ_SINGLE_PROMPT  = 'subj_single_prompt'
-                CLS_SINGLE_PROMPT   = 'cls_single_prompt'
-                # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet,
-                # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
-                SUBJ_COMP_PROMPT    = 'subj_comp_prompt'
-                # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match SUBJ_SINGLE_PROMPT for prompt delta loss.
-                CLS_COMP_PROMPT     = 'cls_comp_prompt'
+                # Not using the fp trick.
+                if self.iter_flags['do_comp_feat_distill']:
+                    # If do_comp_feat_distill, use prompts with styles, lighting, etc.
+                    # subj single prompts still use fp. cls comp prompts use fp 75% of the time.
+                    SUBJ_SINGLE_PROMPT  = 'subj_single_mod_prompt_fp'
+                    SUBJ_COMP_PROMPT    = 'subj_comp_mod_prompt'
+                    # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match 
+                    # SUBJ_SINGLE_PROMPT for prompt delta loss.
+                    CLS_SINGLE_PROMPT   = 'cls_single_mod_prompt_fp'
+                    # Sometimes the cls comp instances don't have clear faces.
+                    # So use the fp trick on cls comp prompts at 75% of the time.
+                    if self.comp_iters_count % 4 != 0:
+                        CLS_COMP_PROMPT = 'cls_comp_mod_prompt_fp'
+                    else:
+                        CLS_COMP_PROMPT = 'cls_comp_mod_prompt'
+                else:
+                    # If normal recon or unet distillation, then use the subj single prompts without styles, lighting, etc.
+                    # cls prompts are only used for delta loss, so they don't need to be fp prompts.
+                    SUBJ_SINGLE_PROMPT  = 'subj_single_prompt'
+                    CLS_SINGLE_PROMPT   = 'cls_single_prompt'
+                    # UNet distillation on subj_comp prompts (on joint face encoders) hasn't been implemented yet,
+                    # maybe in the future. So how to set SUBJ_COMP_PROMPT doesn't matter yet.
+                    SUBJ_COMP_PROMPT    = 'subj_comp_prompt'
+                    # SUBJ_COMP_PROMPT, CLS_SINGLE_PROMPT, CLS_COMP_PROMPT have to match SUBJ_SINGLE_PROMPT for prompt delta loss.
+                    CLS_COMP_PROMPT     = 'cls_comp_prompt'
 
         subj_single_prompts = batch[SUBJ_SINGLE_PROMPT]
         cls_single_prompts  = batch[CLS_SINGLE_PROMPT]
@@ -1763,6 +1771,8 @@ class LatentDiffusion(DDPM):
             x_start = x_starts[i]
             t       = ts[i]
             noise   = noises[i]
+            # In our current implementation, num_priming_steps > 0 only if normal_recon_on_pure_noise.
+            # So no need to check (i < num_priming_steps).
             on_priming_steps = (i < num_priming_steps)
             # Half of the priming steps are done using cls_context, 
             # and half using subj_context.
@@ -1771,8 +1781,9 @@ class LatentDiffusion(DDPM):
             else:
                 context = subj_context
 
-            # If normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
-            # Otherwise, enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
+            # If normal_recon_on_pure_noise, enable_unet_attn_lora = enable_unet_ffn_lora = False.
+            # Otherwise, enable_unet_ffn_lora = self.recon_uses_ffn_lora (False),
+            # enable_unet_attn_lora is 50% True.
             use_ffn_lora = enable_unet_ffn_lora and (not on_priming_steps)
 
             # Only enable gradients after num_priming_steps.
@@ -1785,27 +1796,32 @@ class LatentDiffusion(DDPM):
                                     do_pixel_recon=True, cfg_scale=cfg_scale, 
                                     capture_ca_activations=(not on_priming_steps),
                                     res_hidden_states_gradscale=self.res_hidden_states_gradscale,
-                                    # enable_unet_attn_lora: randomly set to True 50% of the time.
+                                    # enable_unet_attn_lora: 50% True if recon on image, otherwise False.
                                     use_attn_lora=enable_unet_attn_lora,
-                                    use_ffn_lora=use_ffn_lora, 
+                                    use_ffn_lora=use_ffn_lora, # always False.
                                     ffn_lora_adapter_name=ffn_lora_adapter_name)
 
             noise_preds.append(noise_pred)
             ca_layers_activations_list.append(ca_layers_activations)
             x_recons.append(x_recon)
 
-            # In our current implementation, num_priming_steps > 0 only if normal_recon_on_pure_noise.
-            # So no need to check (i < num_priming_steps).
             if normal_recon_on_pure_noise or on_priming_steps:
+                # NOTE: currently, on_priming_steps > 0 only when normal_recon_on_pure_noise.
                 # The predicted x0 is used as the x_start in the next denoising step.
-                ## NOTE: we detach the predicted x0, so that the gradients don't flow back to the previous denoising steps.
-                x_starts.append(x_recon.detach())
+                # NOTE: if on_priming_steps, we don't need to detach the predicted x0,
+                # since batch_part_has_grad='none' in the first num_priming_steps.
+                # and the gradients won't flow back to the previous denoising steps.
+                # If normal_recon_on_pure_noise, we need the gradients to flow back to
+                # the previous denoising steps, so we don't detach x_recon either.
+                x_starts.append(x_recon)
             else:
+                # On original input images, we use the input x_start0 to do denoising in each step.
                 # The original x_start0 is used as the x_start in the next denoising step.
                 x_starts.append(x_start0)
 
+            # Use the same x_start, noise, and t but cls_context.
             # NOTE: cls_context reuses extra_info from subj_context.
-            # But since we don't capture ca activations in cls_context,
+            # But since we don't capture ca activations under cls_context,
             # it won't affect the ca activations gotten captured in subj_context.
             if cls_context is not None:
                 noise_pred_cls, x_recon_cls, _ = \
@@ -1816,7 +1832,7 @@ class LatentDiffusion(DDPM):
                                         batch_part_has_grad='none',
                                         do_pixel_recon=True, cfg_scale=cfg_scale, 
                                         capture_ca_activations=False,
-                                        res_hidden_states_gradscale=self.res_hidden_states_gradscale,
+                                        res_hidden_states_gradscale=0, # No grad enabled, so no need to set it.
                                         # enable_unet_attn_lora: randomly set to True 50% of the time.
                                         use_attn_lora=enable_unet_attn_lora,
                                         # enable_unet_ffn_lora = self.recon_uses_ffn_lora = True.
@@ -2280,9 +2296,16 @@ class LatentDiffusion(DDPM):
 
             # NOTE: If normal_recon_on_pure_noise, then disable all LoRAs to avoid biases within LoRAs 
             # being introduced to images generated when normal_recon_on_pure_noise.
-            # Enable attn LoRAs on UNet 50% of the time during recon iterations, to prevent
-            # attn LoRAs don't degerate in comp distillation iterations.
-            if not self.iter_flags['normal_recon_on_pure_noise']:
+            if self.iter_flags['normal_recon_on_pure_noise']:
+                enable_unet_attn_lora = False
+                enable_unet_ffn_lora  = False
+                ffn_lora_adapter_name = 'recon_loss'    # placeholder. Not used.
+                # Since we start with pure noise, we need a few extra priming steps to get a rough image
+                # for further denoising.
+                num_recon_priming_steps = 4
+            else:
+                # Enable attn LoRAs on UNet 50% of the time during recon on image iterations, to prevent
+                # attn LoRAs from degenerating in comp distillation iterations.
                 enable_unet_attn_lora = self.unet_uses_attn_lora and (torch.rand(1).item() < 0.5)
                 enable_unet_ffn_lora  = self.recon_uses_ffn_lora
                 if self.comp_uses_ffn_lora and (torch.randn(1).item() < 0.25):
@@ -2292,10 +2315,7 @@ class LatentDiffusion(DDPM):
                     ffn_lora_adapter_name = 'comp_distill'
                 else:
                     ffn_lora_adapter_name = 'recon_loss'
-            else:
-                enable_unet_attn_lora = False
-                enable_unet_ffn_lora  = False
-                ffn_lora_adapter_name = 'recon_loss'    # placeholder. Not really used.
+                num_recon_priming_steps = 0
 
             # recon_with_adv_attack_iter_gap = 3, i.e., adversarial attack on the input images every 
             # 3 non-comp recon iterations.
@@ -2314,9 +2334,9 @@ class LatentDiffusion(DDPM):
 
             loss_normal_recon = \
                 self.calc_normal_recon_loss(mon_loss_dict, session_prefix, 
-                                            # num_recon_denoising_steps: 2.
-                                            self.num_recon_denoising_steps, x_start, noise, 
-                                            subj_context, cls_context,
+                                            # num_recon_denoising_steps: 3.
+                                            self.num_recon_denoising_steps, num_recon_priming_steps,
+                                            x_start, noise, subj_context, cls_context,
                                             img_mask, fg_mask, all_subj_indices, self.recon_bg_pixel_weight, 
                                             self.iter_flags['normal_recon_on_pure_noise'], 
                                             enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
@@ -2550,18 +2570,19 @@ class LatentDiffusion(DDPM):
 
         return adv_grad
 
-    # cls_context: class single embeddings.
+    # cls_context = cls_single_emb (not mixed with subj_single_emb).
     # NOTE: cls_context is used to align the background denoised using ada embeddings 
     # with images denoised using the class embeddings. This is an important trick
     # *** to mitigate that the subject gradually dominates the whole image and a lot of artifacts
     # *** are generated in the background.
     # With this trick, we can be reassured to use arcface align loss without worrying it bringing a lot
     # of high-frequency noise to the background.
-    # enable_unet_attn_lora: randomly set to True 50% of the time.
-    # enable_unet_ffn_lora: if not normal_recon_on_pure_noise, then True. Otherwise False.
-    # recon_bg_pixel_weight == 0.1, a small penalty on bg errors.
+    # enable_unet_attn_lora: False if normal_recon_on_pure_noise, otherwise 50% True.
+    # enable_unet_ffn_lora:  False if normal_recon_on_pure_noise, otherwise self.recon_uses_ffn_lora (False).
+    # recon_bg_pixel_weight == 0.025, a small penalty on bg errors.
     def calc_normal_recon_loss(self, mon_loss_dict, session_prefix, 
-                               num_denoising_steps, x_start, noise, subj_context, cls_context,
+                               num_denoising_steps, num_recon_priming_steps,
+                               x_start, noise, subj_context, cls_context,
                                img_mask, fg_mask, all_subj_indices, recon_bg_pixel_weight,
                                normal_recon_on_pure_noise, 
                                enable_unet_attn_lora, enable_unet_ffn_lora, ffn_lora_adapter_name,
@@ -2575,13 +2596,13 @@ class LatentDiffusion(DDPM):
             t = torch.randint(int(self.num_timesteps * 0.7), int(self.num_timesteps * 0.9), 
                               (BLOCK_SIZE,), device=x_start.device).long()
             x_start0 = torch.randn_like(x_start)
-            num_recon_priming_steps = 4
+            # num_recon_priming_steps = 4
             num_denoising_steps += num_recon_priming_steps
         else:
             t = torch.randint(int(self.num_timesteps * 0.5), int(self.num_timesteps * 0.8), 
                               (x_start.shape[0],), device=self.device).long()
             x_start0 = x_start
-            num_recon_priming_steps = 0
+            # num_recon_priming_steps = 0
 
         if num_denoising_steps > 1 or normal_recon_on_pure_noise:
             # When doing multi-step denoising, we apply CFG on the recon images.
@@ -2590,6 +2611,7 @@ class LatentDiffusion(DDPM):
             # If cfg_scale == 2, result = 2 * noise_pred - noise_pred_neg.
             cfg_scale = 2
             if normal_recon_on_pure_noise:
+                # No img_mask and fg_mask when normal_recon_on_pure_noise.
                 img_mask = None
                 fg_mask  = torch.ones_like(fg_mask)
         else:
@@ -2608,7 +2630,8 @@ class LatentDiffusion(DDPM):
         # img_mask is used in BasicTransformerBlock.attn1 (self-attention of image tokens),
         # to avoid mixing the invalid blank areas around the augmented images with the valid areas.
         # (img_mask is not used in the prompt-guided cross-attention layers).
-        # x_recons_cls are denoised using cls_context, which is cls_single_emb, not mixed with subj_single_emb.
+        # x_recons_cls are denoised using cls_context = cls_single_emb (not mixed with subj_single_emb).
+        # cls_context is provided even when normal_recon_on_pure_noise.
         noise_preds, noise_preds_cls, x_starts, x_recons, x_recons_cls, noises, ts, ca_layers_activations_list = \
             self.recon_multistep_denoise(mon_loss_dict, session_prefix, 
                                          # img_mask is used to mask the blank areas around the augmented images.
@@ -2618,7 +2641,7 @@ class LatentDiffusion(DDPM):
                                          cfg_scale, num_denoising_steps, num_recon_priming_steps,
                                          # If normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora are False
                                          # Otherwise, enable_unet_attn_lora: randomly set to True 50% of the time.
-                                         # enable_unet_ffn_lora: True.
+                                         # enable_unet_ffn_lora: always False.
                                          normal_recon_on_pure_noise, enable_unet_attn_lora, enable_unet_ffn_lora,
                                          ffn_lora_adapter_name, # Switching between 'recon_loss' or 'comp_distill'.
                                          do_adv_attack, DO_ADV_BS)
@@ -2633,18 +2656,23 @@ class LatentDiffusion(DDPM):
         pred_l2s        = []
         latent_shape, device = x_start.shape, x_start.device
 
-        # Skip the first num_recon_priming_steps denoising steps from the recon loss computation.
+        # Skip the beginning num_recon_priming_steps denoising steps from the recon loss computation.
         for i in range(num_recon_priming_steps, num_denoising_steps):
-            noise, noise_pred, noise_pred_cls, x_recon, \
-            x_recon_cls, ca_layers_activations = \
-                noises[i], noise_preds[i], noise_preds_cls[i], x_recons[i], \
-                x_recons_cls[i], ca_layers_activations_list[i]
+            noise, noise_pred, x_recon, ca_layers_activations = \
+                noises[i], noise_preds[i], x_recons[i], ca_layers_activations_list[i]
 
-            recon_images_cls = self.decode_first_stage(x_recon_cls)
-            recon_images     = self.decode_first_stage(x_recon)
-            log_image_colors = torch.ones(recon_images_cls.shape[0], dtype=int, device=x_start.device) * 3 \
-                                + i + 1 - num_recon_priming_steps
-            self.cache_and_log_generations(recon_images_cls, log_image_colors, do_normalize=True)
+            recon_images = self.decode_first_stage(x_recon)
+            if cls_context is not None:
+                noise_pred_cls   = noise_preds_cls[i]
+                x_recon_cls      = x_recons_cls[i]
+                recon_images_cls = self.decode_first_stage(x_recon_cls)
+                log_image_colors = torch.ones(recon_images_cls.shape[0], dtype=int, device=x_start.device) * 3 \
+                                    + i + 1 - num_recon_priming_steps
+                self.cache_and_log_generations(recon_images_cls, log_image_colors, do_normalize=True)
+            else:
+                noise_pred_cls   = None
+                x_recon_cls      = None
+
             # log_image_colors: a list of 4 or 5, indexing colors = [ None, 'green', 'red', 'purple', 'orange', 'blue', 'pink', 'magenta' ]
             # 4 or 5: orange for the first denoising step, blue for the second denoising step.
             log_image_colors = torch.ones(recon_images.shape[0], dtype=int, device=x_start.device) * 3 \
@@ -2723,7 +2751,7 @@ class LatentDiffusion(DDPM):
                     face_detected_inst_weights = torch.ones_like(face_detected_inst_mask)
                     fg_mask2 = fg_mask
 
-                # NOTE: recon_bg_pixel_weight = 0.1, i.e.,
+                # NOTE: recon_bg_pixel_weight = 0.025, i.e.,
                 # bg loss is given a small weight to suppress multi-face artifacts.
                 # NOTE: img_mask is set to None, because calc_recon_loss() only considers pixels
                 # not masked by img_mask. Therefore, blank pixels due to augmentation are not regularized.
@@ -2824,13 +2852,14 @@ class LatentDiffusion(DDPM):
             print(f"Rank {self.trainer.global_rank} normal_recon_on_pure_noise.")
 
         #### loss_recon_cls ####
-        losses_recon_cls = torch.stack(losses_recon_cls)
-        loss_recon_cls   = (losses_recon_cls * recon_loss_scales).mean()
-        loss_normal_recon += loss_recon_cls
-        loss_recon_cls_unscaled = losses_recon_cls.mean()
-        v_loss_recon_cls = loss_recon_cls_unscaled.detach().item()
-        mon_loss_dict.update({f'{session_prefix}/loss_recon_cls': v_loss_recon_cls})
-        print(f"Rank {self.trainer.global_rank} loss_recon_cls: {v_loss_recon_cls:.4f}")
+        if cls_context is not None:
+            losses_recon_cls = torch.stack(losses_recon_cls)
+            loss_recon_cls   = (losses_recon_cls * recon_loss_scales).mean()
+            loss_normal_recon += loss_recon_cls
+            loss_recon_cls_unscaled = losses_recon_cls.mean()
+            v_loss_recon_cls = loss_recon_cls_unscaled.detach().item()
+            mon_loss_dict.update({f'{session_prefix}/loss_recon_cls': v_loss_recon_cls})
+            print(f"Rank {self.trainer.global_rank} loss_recon_cls: {v_loss_recon_cls:.4f}")
 
         mon_loss_dict.update({f'{session_prefix}/normal_recon_total': loss_normal_recon.mean().detach().item()})
 

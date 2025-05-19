@@ -58,7 +58,7 @@ static_composition_regexs = static_action_regexs + static_appearances
 # Removed "eye level shot", "close-up view", "zoomed-in view"; sometimes it generates a huge eye.
 # Removed "zoomed-out view", "long shot", "wide shot"; they generate very small subjects.
 # Remove "side view"; it's not helping distillation much.
-all_shots = [ "full body view", "mid shot", "front view", ]
+all_shots = [ "full body shot", "medium shot", "front view", ]
 
 # added "style/art" behind some prompt
 all_styles = [ "cartoon style", "animation", "anime art", "comic book art", "steampunk art", "oil on canvas", "oil painting",
@@ -132,9 +132,9 @@ def sample_compositions(N, subj_type):
             style = ""
 
         has_shot = np.random.choice([0, 1], p=shot_probs)
-        if has_shot:   # p = 0.7 has a random shot
+        if has_shot:   # p = 0.25 has a random shot
             shot = np.random.choice(all_shots)
-        else:           # p = 0.3 has no shot
+        else:          # p = 0.75 has no shot
             shot = ""
 
         has_art_by = np.random.choice([0, 1], p=option_probs)
