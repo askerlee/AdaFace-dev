@@ -3199,7 +3199,7 @@ class LatentDiffusion(DDPM):
         losses_comp_rep_distill_nonsubj_k   = []
         losses_comp_rep_distill_subj_v      = []
         losses_comp_rep_distill_nonsubj_v   = []
-        subj_attn_cross_t_diffs    = []
+        subj_attn_cross_t_diffs             = []
         pred_l2s                            = []
 
         device = x_start0_ss.device
@@ -3208,8 +3208,8 @@ class LatentDiffusion(DDPM):
         # S: self.num_comp_distill_denoising_steps
         S = len(x_recons)
 
-        sc_fg_mask, mc_fg_mask = None, None
-        ss_fg_face_bboxes, sc_fg_face_bboxes = None, None
+        sc_fg_mask,         mc_fg_mask        = None, None
+        ss_fg_face_bboxes,  sc_fg_face_bboxes = None, None
         all_ss_contain_faces = False
         first_step_when_sc_face_is_detected = -1
         # When sc_fg_mask_percent >= 0.1, we think the face has a chance to be too large and 
@@ -3376,11 +3376,18 @@ class LatentDiffusion(DDPM):
         # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
         # If comp_sc_face_detected_frac=0.9, then arcface_align_comp_loss_scale= 1.25*3 = 3.75.
         # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
-        if loss_arcface_align_comp > 0 and sc_face_proportion_type in ['too-small', 'good']:
+        if loss_arcface_align_comp > 0 and sc_face_proportion_type in ['too-small', 'good', 'mc-no-sc-large', 'little-no-overlap']:
             # NOTE: loss_arcface_align_comp > 0 implies that faces are detected in both SS and SC instances.
             # This iteration is counted as face detected, as long as the face is detected in one step.
             comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(1)
-            arcface_align_comp_loss_scale = 3 * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
+            if sc_face_proportion_type in ['too-small', 'good']:
+                extra_face_align_loss_scale = 3 
+            else:
+                # If sc_face_proportion_type is 'mc-no-sc-large' or 'little-no-overlap', 
+                # then we decrease the loss scale to 1.5.
+                extra_face_align_loss_scale = 1.5
+
+            arcface_align_comp_loss_scale = extra_face_align_loss_scale * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
             loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
         else:
             # NOTE: loss_arcface_align_comp == 0 implies that faces are not detected in either SS or SC instances.
