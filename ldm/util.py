@@ -78,6 +78,10 @@ def default(val, d):
         return val
     return d() if isfunction(d) else d
 
+def clamp(x, min_val, max_val):
+    assert min_val <= max_val, "min_val should be less than or equal to max_val"
+    return max(min_val, min(x, max_val))
+
 # Count the number of trainable parameters per parameter group
 def count_optimized_params(param_groups):
     num_total_params = 0

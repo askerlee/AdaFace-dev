@@ -22,7 +22,7 @@ from ldm.util import    exists, default, instantiate_from_config, disabled_train
                         collate_dicts, split_dict, recursive_detach, chunk_list, select_and_repeat_instances, halve_token_indices, \
                         merge_cls_token_embeddings, anneal_perturb_embedding, calc_dyn_loss_scale, \
                         count_optimized_params, count_params, torch_uniform, map_bboxes_coords, \
-                        RollingStats, save_grid, set_seed_per_rank_and_batch, var_of_laplacian
+                        RollingStats, save_grid, set_seed_per_rank_and_batch, var_of_laplacian, clamp
                         
 from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor
@@ -3376,22 +3376,24 @@ class LatentDiffusion(DDPM):
         # then gradually increase the weight of loss_arcface_align_comp through arcface_align_comp_loss_scale.
         # If comp_sc_face_detected_frac=0.9, then arcface_align_comp_loss_scale= 1.25*3 = 3.75.
         # If comp_sc_face_detected_frac=0.5, then arcface_align_comp_loss_scale=12 (maximum).
-        if loss_arcface_align_comp > 0 and sc_face_proportion_type in ['too-small', 'good', 'mc-no-sc-large', 'little-no-overlap']:
+        if loss_arcface_align_comp > 0:
             # NOTE: loss_arcface_align_comp > 0 implies that faces are detected in both SS and SC instances.
             # This iteration is counted as face detected, as long as the face is detected in one step.
             comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(1)
             if sc_face_proportion_type in ['too-small', 'good']:
                 extra_face_align_loss_scale = 3 
             else:
-                # If sc_face_proportion_type is 'mc-no-sc-large' or 'little-no-overlap', 
+                # If sc_face_proportion_type is 'mc-no-sc-large', 'little-no-overlap', 'too-large'.
                 # then we decrease the loss scale to 1.5.
                 extra_face_align_loss_scale = 1.5
 
             arcface_align_comp_loss_scale = extra_face_align_loss_scale * min(4, 1 / (comp_sc_face_detected_frac**2 + 0.01))
-            loss_comp_feat_distill += loss_arcface_align_comp * arcface_align_comp_loss_scale * self.arcface_align_loss_weight
+            loss_arcface_align_comp_scaled = loss_arcface_align_comp * arcface_align_comp_loss_scale
+            loss_comp_feat_distill += loss_arcface_align_comp_scaled * self.arcface_align_loss_weight
         else:
             # NOTE: loss_arcface_align_comp == 0 implies that faces are not detected in either SS or SC instances.
             comp_sc_face_detected_frac = self.comp_sc_face_detected_frac.update(0)
+            loss_arcface_align_comp_scaled = torch.tensor(0., device=device, dtype=dtype)
 
         # Even if the face is not detected in this step, we still update comp_sc_face_detected_frac,
         # because it's an accumulated value that's inherently continuous.
@@ -3429,17 +3431,27 @@ class LatentDiffusion(DDPM):
             # ** we optimize both the arcface align loss and the face suppression loss, to drive the face
             # into the center of the face area, and keep the face identity at the same time.
             comp_fg_faces_suppress_loss_scale_dict = \
-                    { 'mc-no-sc-large': 2.5, 'little-no-overlap': 5, 'too-large': 5 }
+                    { 'mc-no-sc-large': 5, 'little-no-overlap': 10, 'too-large': 10 }
             # Suppress the face in the sc instance, which is at the "background" of the mc instance.
             comp_fg_faces_suppress_loss_scale = comp_fg_faces_suppress_loss_scale_dict[sc_face_proportion_type]
             comp_sc_face_suppressed_frac = self.comp_sc_face_suppressed_frac.update(1)
-            # comp_sc_face_suppressed_frac: 0.2~0.5.
-            # If comp_sc_face_suppressed_frac=0.5, then extra_suppress_loss_scale = 15.625.
-            # If comp_sc_face_suppressed_frac=0.2, then extra_suppress_loss_scale = 1.
-            # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 15 * 0.01 = 0.045.
-            extra_suppress_loss_scale = 10
-            loss_comp_feat_distill += loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale \
-                                      * extra_suppress_loss_scale * self.arcface_align_loss_weight
+
+            if loss_arcface_align_comp_scaled > 0 and loss_fg_faces_suppress_comp > 0:
+                # sc_face_proportion_type is 'mc-no-sc-large', 'little-no-overlap', 'too-large'.
+                # We make the loss_fg_faces_suppress_comp_scaled to match 0.1 * loss_arcface_align_comp_scaled.
+                # align_suppress_loss_ratio is around 50~100. So * 0.1 => 5~10.
+                align_suppress_loss_ratio = loss_arcface_align_comp_scaled.detach() / loss_fg_faces_suppress_comp.detach()
+                mon_loss_dict.update({f'{session_prefix}/align_suppress_loss_ratio': align_suppress_loss_ratio})
+                # Clamp comp_fg_faces_suppress_loss_scale to be between [0.5, 1] of the predefined value.
+                comp_fg_faces_suppress_loss_scale = clamp(align_suppress_loss_ratio * 0.1, comp_fg_faces_suppress_loss_scale / 2, 
+                                                          comp_fg_faces_suppress_loss_scale)
+                loss_fg_faces_suppress_comp_scaled = loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale
+            else:
+                # Just in case. Shouldn't reach here.
+                loss_fg_faces_suppress_comp_scaled = loss_fg_faces_suppress_comp * comp_fg_faces_suppress_loss_scale
+
+            # loss_fg_faces_suppress_comp: 0.03 -> 0.03 * 10 * 0.01 = 0.045.
+            loss_comp_feat_distill += loss_fg_faces_suppress_comp_scaled * self.arcface_align_loss_weight
             sc_face_shrink_ratio_for_bg_matching_mask = sc_fg_face_suppress_mask_shrink_ratio  # 0.3
         else:
             do_sc_fg_faces_suppress = False
