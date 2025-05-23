@@ -26,7 +26,7 @@ def create_id2ada_prompt_encoder(adaface_encoder_types, adaface_ckpt_paths=None,
         if adaface_encoder_type == 'arc2face':
             id2ada_prompt_encoder = \
                 Arc2Face_ID2AdaPrompt(adaface_ckpt_path=adaface_ckpt_path, 
-                                    *args, **kwargs)
+                                      *args, **kwargs)
         elif adaface_encoder_type == 'consistentID':
             id2ada_prompt_encoder = \
                 ConsistentID_ID2AdaPrompt(pipe=None,
@@ -64,6 +64,7 @@ class FaceID2AdaPrompt(nn.Module):
         # i.e., 6 for arc2face and 1 for consistentID.
         self.out_id_embs_cfg_scale          = kwargs.get('out_id_embs_cfg_scale', -1)
         self.is_training                    = kwargs.get('is_training', False)
+        self.is_on_hf_space                 = kwargs.get('is_on_hf_space', False)
         # extend_prompt2token_proj_attention_multiplier is an integer >= 1.
         # TODO: extend_prompt2token_proj_attention_multiplier should be a list of integers.        
         self.extend_prompt2token_proj_attention_multiplier = kwargs.get('extend_prompt2token_proj_attention_multiplier', 1)
@@ -654,6 +655,11 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
         # No need to reload face_app on the same device.
         if device == self.device:
             return
+        self.device = device
+        
+        if self.is_on_hf_space and self.face_app is not None:
+            print(f'On HF space. Arc2Face Face encoder already loaded on cpu.')
+            return 
         
         if str(device) == 'cpu':
             self.face_app = FaceAnalysis(name='antelopev2', root='models/insightface', 
@@ -667,7 +673,6 @@ class Arc2Face_ID2AdaPrompt(FaceID2AdaPrompt):
                                                             'cudnn_conv_algo_search': 'HEURISTIC'}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
-        self.device = device
         print(f'Arc2Face Face encoder reloaded on {device}.')
         return 
         
@@ -800,6 +805,11 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
         # No need to reload face_app on the same device.
         if device == self.device:
             return
+        self.device = device
+
+        if self.is_on_hf_space and self.face_app is not None:
+            print(f'On HF space. Arc2Face Face encoder already loaded on cpu.')
+            return 
 
         if str(device) == 'cpu':
             self.face_app = FaceAnalysis(name='buffalo_l', root='models/insightface', 
@@ -813,7 +823,6 @@ class ConsistentID_ID2AdaPrompt(FaceID2AdaPrompt):
                                                             'cudnn_conv_algo_search': 'HEURISTIC'}])
             self.face_app.prepare(ctx_id=device_id, det_size=(512, 512))
 
-        self.device = device
         self.pipe.face_app = self.face_app
         print(f'ConsistentID Face encoder reloaded on {device}.')
         
