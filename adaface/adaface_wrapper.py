@@ -715,7 +715,7 @@ class AdaFaceWrapper(nn.Module):
                 ref_img_strength=0.8, generator=None, 
                 ablate_prompt_only_placeholders=False,
                 ablate_prompt_no_placeholders=False,
-                ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img'
+                ablate_prompt_embed_type='ada', # 'ada', 'ada-nonmix', 'img1', 'img2'.
                 nonmix_prompt_emb_weight=0,
                 repeat_prompt_for_each_encoder=True,                
                 verbose=False):

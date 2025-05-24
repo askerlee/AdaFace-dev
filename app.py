@@ -20,11 +20,14 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError("Boolean value expected.")
 
+def is_running_on_hf_space():
+    return os.getenv("SPACE_ID") is not None
+
 import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument("--adaface_encoder_types", type=str, nargs="+", default=["consistentID", "arc2face"],
                     choices=["arc2face", "consistentID"], help="Type(s) of the ID2Ada prompt encoders")
-parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2024-10-14T16-09-24_zero3-ada-3500.pt',
+parser.add_argument('--adaface_ckpt_path', type=str, default='models/adaface/VGGface2_HQ_masks2025-05-22T17-51-19_zero3-ada-1000.pt',
                     help="Path to the checkpoint of the ID2Ada prompt encoders")
 # If adaface_encoder_cfg_scales is not specified, the weights will be set to 6.0 (consistentID) and 1.0 (arc2face).
 parser.add_argument('--adaface_encoder_cfg_scales', type=float, nargs="+", default=[6.0, 1.0],    
@@ -54,6 +57,23 @@ parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
 args = parser.parse_args()
 
+
+if is_running_on_hf_space():
+    args.device = 'cuda:0'
+    is_on_hf_space = True
+else:
+    if args.gpu is None:
+        args.device = "cuda" 
+    else:
+        args.device = f"cuda:{args.gpu}"
+    is_on_hf_space = False
+
+os.makedirs("/tmp/gradio", exist_ok=True)
+from huggingface_hub import snapshot_download
+if is_on_hf_space:
+    large_files = ["models/*", "models/**/*"]
+    snapshot_download(repo_id="adaface-neurips/adaface-models", repo_type="model", allow_patterns=large_files, local_dir=".")
+
 model_style_type2base_model_path = {
     "realistic": "models/rv51/realisticVisionV51_v51VAE_dste8.safetensors",
     "anime": "models/aingdiffusion/aingdiffusion_v170_ar.safetensors",
@@ -63,8 +83,6 @@ base_model_path = model_style_type2base_model_path[args.model_style_type]
 
 # global variable
 MAX_SEED = np.iinfo(np.int32).max
-device = "cuda" if args.gpu is None else f"cuda:{args.gpu}"
-print(f"Device: {device}")
 
 global adaface
 adaface = None
@@ -80,7 +98,8 @@ if not args.test_ui_only:
                              attn_lora_layer_names=args.attn_lora_layer_names,
                              normalize_cross_attn=False,
                              q_lora_updates_query=args.q_lora_updates_query,
-                             device='cpu')
+                             device='cpu',
+                             is_on_hf_space=is_on_hf_space)
 
 def randomize_seed_fn(seed: int, randomize_seed: bool) -> int:
     if randomize_seed:
@@ -103,13 +122,13 @@ def remove_back_to_files():
 @spaces.GPU
 def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                    num_images, prompt, negative_prompt, gender, highlight_face, 
-                   ablate_prompt_embed_type, nonmix_prompt_emb_weight,
+                   ablate_prompt_embed_type, 
                    composition_level, seed, disable_adaface, subj_name_sig, progress=gr.Progress(track_tqdm=True)):
 
-    global adaface
+    global adaface, args
 
-    adaface.to(device)
-
+    adaface.to(args.device)
+    
     if image_paths is None or len(image_paths) == 0:
         raise gr.Error(f"Cannot find any input face image! Please upload a face image.")
     
@@ -130,10 +149,10 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
 
     # Sometimes the pipeline is on CPU, although we've put it on CUDA (due to some offloading mechanism).
     # Therefore we set the generator to the correct device.
-    generator = torch.Generator(device=device).manual_seed(seed)
+    generator = torch.Generator(device=args.device).manual_seed(seed)
     print(f"Manual seed: {seed}.")
     # Generate two images each time for the user to select from.
-    noise = torch.randn(num_images, 3, 512, 512, device=device, generator=generator)
+    noise = torch.randn(num_images, 3, 512, 512, device=args.device, generator=generator)
     #print(noise.abs().sum())
     # samples: A list of PIL Image instances.
     if highlight_face: 
@@ -151,6 +170,12 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
         else:
             prompt = gender + ", " + prompt
 
+    if ablate_prompt_embed_type != "ada":
+        # Find the prompt_emb_type index in adaface_encoder_types
+        # adaface_encoder_types: ["consistentID", "arc2face"]
+        ablate_prompt_embed_index = args.adaface_encoder_types.index(ablate_prompt_embed_type)
+        ablate_prompt_embed_type = f"img{ablate_prompt_embed_index}"
+
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
     samples = adaface(noise, prompt, negative_prompt=negative_prompt, 
                       guidance_scale=guidance_scale, 
@@ -158,7 +183,6 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
                       repeat_prompt_for_each_encoder=(composition_level >= 1),
                       ablate_prompt_no_placeholders=disable_adaface,
                       ablate_prompt_embed_type=ablate_prompt_embed_type,
-                      nonmix_prompt_emb_weight=nonmix_prompt_emb_weight,
                       verbose=True)
 
     session_signature = ",".join(image_paths + [prompt, str(seed)])
@@ -166,8 +190,15 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     os.makedirs(temp_folder, exist_ok=True)
 
     saved_image_paths = []
-    # adaface_ckpt_path = "VGGface2_HQ_masks2024-11-28T13-13-20_zero3-ada/checkpoints/embeddings_gs-2000.pt"
-    matches = re.search(r"\d{4}-(\d{2})-(\d{2})T(\d{2})-\d{2}-\d{2}_zero3-ada/checkpoints/embeddings_gs-(\d+).pt", args.adaface_ckpt_path)
+    if "models/adaface/" in args.adaface_ckpt_path:
+        # The model is loaded from within the project.
+        # models/adaface/VGGface2_HQ_masks2024-10-14T16-09-24_zero3-ada-3500.pt
+        matches = re.search(r"models/adaface/\w+\d{4}-(\d{2})-(\d{2})T(\d{2})-\d{2}-\d{2}_zero3-ada-(\d+).pt", args.adaface_ckpt_path)
+    else:
+        # The model is loaded from the adaprompt folder.
+        # adaface_ckpt_path = "VGGface2_HQ_masks2024-11-28T13-13-20_zero3-ada/checkpoints/embeddings_gs-2000.pt"
+        matches = re.search(r"\d{4}-(\d{2})-(\d{2})T(\d{2})-\d{2}-\d{2}_zero3-ada/checkpoints/embeddings_gs-(\d+).pt", args.adaface_ckpt_path)
+
     # Extract the checkpoint signature as 112813-2000
     ckpt_sig = f"{matches.group(1)}{matches.group(2)}{matches.group(3)}-{matches.group(4)}"
 
@@ -231,16 +262,17 @@ def check_prompt_and_model_type(prompt, model_style_type, adaface_encoder_cfg_sc
             print(f"Switching to the base model type: {model_style_type}.")
 
             adaface = AdaFaceWrapper(pipeline_name="text2img", base_model_path=model_style_type2base_model_path[model_style_type],
-                                    adaface_encoder_types=args.adaface_encoder_types,
-                                    adaface_ckpt_paths=args.adaface_ckpt_path,                          
-                                    adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
-                                    enabled_encoders=args.enabled_encoders,
-                                    unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
-                                    unet_uses_attn_lora=args.unet_uses_attn_lora,
-                                    attn_lora_layer_names=args.attn_lora_layer_names,
-                                    normalize_cross_attn=False,
-                                    q_lora_updates_query=args.q_lora_updates_query,
-                                    device='cpu')
+                                     adaface_encoder_types=args.adaface_encoder_types,
+                                     adaface_ckpt_paths=args.adaface_ckpt_path,                          
+                                     adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
+                                     enabled_encoders=args.enabled_encoders,
+                                     unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
+                                     unet_uses_attn_lora=args.unet_uses_attn_lora,
+                                     attn_lora_layer_names=args.attn_lora_layer_names,
+                                     normalize_cross_attn=False,
+                                     q_lora_updates_query=args.q_lora_updates_query,
+                                     device='cpu',
+                                     is_on_hf_space=is_on_hf_space)
 
     if adaface_encoder_cfg_scale1 != args.adaface_encoder_cfg_scales[0]:
         args.adaface_encoder_cfg_scales[0] = adaface_encoder_cfg_scale1
@@ -252,26 +284,25 @@ def check_prompt_and_model_type(prompt, model_style_type, adaface_encoder_cfg_sc
 
 ### Description
 title = r"""
-<h1>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</h1>
+<h1>AdaFace: A Versatile Text-space Face Encoder for Face Synthesis and Processing</h1>
 """
 
 description = r"""
-<b>Official demo</b> for our working paper <b>AdaFace: A Versatile Face Encoder for Zero-Shot Diffusion Model Personalization</b>.<br>
+<b>Official demo</b> for our working paper <b>AdaFace: A Versatile Text-space Face Encoder for Face Synthesis and Processing</b>.<br>
 
 ❗️**What's New**❗️
 - Support switching between three model styles: **Photorealistic**, **Realistic** and **Anime**.
-- If you just changed the model style, the first image/video generation will take extra 20~30 seconds for loading new model weight.
+- If you just changed the model style, the first image/video generation will take <b>extra 20~30 seconds</b> for loading the new model weight.
 
 ❗️**Tips**❗️
 1. Upload one or more images of a person. If multiple faces are detected, we use the largest one. 
-2. Check "Highlight face" to highlight fine facial features.
+2. "Highlight face" will make the face more prominent in the generated image.
+3. There are 3 "Composition Levels". Increasing the level will improve the composition at the cost of the face quality. Some difficult prompts like "In a wheelchair" and "on a horse" need at least level 1.
 4. AdaFace Text-to-Video: <a href="https://huggingface.co/spaces/adaface-neurips/adaface-animate" style="display: inline-flex; align-items: center;">
   AdaFace-Animate 
   <img src="https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-yellow" alt="Hugging Face Spaces" style="margin-left: 5px;">
 </a>
 
-**TODO:**
-- ControlNet integration.
 """
 
 css = '''
@@ -305,6 +336,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                         file_types=["image"],
                         file_count="multiple"
                     )
+            img_files.GRADIO_CACHE = "/tmp/gradio"
             # When files are uploaded, show the images in the gallery and hide the file uploader.
             uploaded_files_gallery  = gr.Gallery(label="Subject images", visible=False, columns=3, rows=1, height=300)
             with gr.Column(visible=False) as clear_button_column:
@@ -317,7 +349,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                             file_types=["image"],
                             file_count="multiple"
                         )
-                
+                img_files2.GRADIO_CACHE = "/tmp/gradio"
                 uploaded_files_gallery2 = gr.Gallery(label="2nd Subject images (optional)", visible=False, columns=3, rows=1, height=300)
                 with gr.Column(visible=False) as clear_button_column2:
                     remove_and_reupload2 = gr.ClearButton(value="Remove and upload 2nd Subject images", 
@@ -362,14 +394,8 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                           minimum=0, maximum=2, step=1, value=0)
 
             ablate_prompt_embed_type = gr.Dropdown(label="Ablate prompt embeddings type",
-                                                   choices=["ada", "ada-nonmix", "img"], value="ada", visible=False,
+                                                   choices=["ada", "arc2face", "consistentID"], value="ada", visible=False,
                                                    info="Use this type of prompt embeddings for ablation study")
-            
-            nonmix_prompt_emb_weight = gr.Slider(label="Weight of ada-nonmix ID embeddings",
-                                                 minimum=0.0, maximum=0.5, step=0.1, value=0,
-                                                 info="Weight of ada-nonmix ID embeddings in the prompt embeddings",
-                                                 visible=False)
-                                        
 
             subj_name_sig = gr.Textbox(
                 label="Nickname of Subject (optional; used to name saved images)", 
@@ -472,7 +498,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
             'fn': generate_image,
             'inputs': [img_files, img_files2, guidance_scale, perturb_std, num_images, prompt, 
                        negative_prompt, gender, highlight_face, ablate_prompt_embed_type, 
-                       nonmix_prompt_emb_weight, composition_level, seed, disable_adaface, subj_name_sig],
+                       composition_level, seed, disable_adaface, subj_name_sig],
             'outputs': [out_gallery]
         }
         submit.click(**check_prompt_and_model_type_call_dict).success(**randomize_seed_fn_call_dict).then(**generate_image_call_dict)
