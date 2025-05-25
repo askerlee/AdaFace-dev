@@ -50,6 +50,8 @@ parser.add_argument("--q_lora_updates_query", type=str2bool, nargs="?", const=Tr
                          "If False, the q lora only updates query2.")
 parser.add_argument("--show_disable_adaface_checkbox", type=str2bool, nargs="?", const=True, default=False,
                     help="Whether to show the checkbox for disabling AdaFace")
+parser.add_argument('--show_ablate_prompt_embed_type', type=str2bool, nargs="?", const=True, default=False,
+                    help="Whether to show the dropdown for ablate prompt embeddings type")
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
 parser.add_argument('--test_ui_only', type=str2bool, nargs="?", const=True, default=False,
                     help="Only test the UI layout, and skip loadding the adaface model")
@@ -173,7 +175,7 @@ def generate_image(image_paths, image_paths2, guidance_scale, perturb_std,
     if ablate_prompt_embed_type != "ada":
         # Find the prompt_emb_type index in adaface_encoder_types
         # adaface_encoder_types: ["consistentID", "arc2face"]
-        ablate_prompt_embed_index = args.adaface_encoder_types.index(ablate_prompt_embed_type)
+        ablate_prompt_embed_index = args.adaface_encoder_types.index(ablate_prompt_embed_type) + 1
         ablate_prompt_embed_type = f"img{ablate_prompt_embed_index}"
 
     generator = torch.Generator(device=adaface.pipeline._execution_device).manual_seed(seed)
@@ -394,7 +396,7 @@ with gr.Blocks(css=css, theme=gr.themes.Origin()) as demo:
                           minimum=0, maximum=2, step=1, value=0)
 
             ablate_prompt_embed_type = gr.Dropdown(label="Ablate prompt embeddings type",
-                                                   choices=["ada", "arc2face", "consistentID"], value="ada", visible=False,
+                                                   choices=["ada", "arc2face", "consistentID"], value="ada", visible=args.show_ablate_prompt_embed_type,
                                                    info="Use this type of prompt embeddings for ablation study")
 
             subj_name_sig = gr.Textbox(
