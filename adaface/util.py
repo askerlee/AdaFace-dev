@@ -73,6 +73,26 @@ def calc_stats(emb_name, embeddings, mean_dim=-1):
     print("Norms: min: %.4f, max: %.4f, mean: %.4f, std: %.4f" %(norms.min(), norms.max(), norms.mean(), norms.std()))
 
 
+# new_token_embeddings: [new_num_tokens, 768].
+def extend_nn_embedding(old_nn_embedding, new_token_embeddings):
+    emb_dim         = old_nn_embedding.embedding_dim
+    num_old_tokens  = old_nn_embedding.num_embeddings
+    num_new_tokens  = new_token_embeddings.shape[0]
+    num_tokens2     = num_old_tokens + num_new_tokens
+    
+    new_nn_embedding = nn.Embedding(num_tokens2, emb_dim, 
+                                    device=old_nn_embedding.weight.device,
+                                    dtype=old_nn_embedding.weight.dtype)
+
+    old_num_tokens = old_nn_embedding.weight.shape[0]
+    # Copy the first old_num_tokens embeddings from old_nn_embedding to new_nn_embedding.
+    new_nn_embedding.weight.data[:old_num_tokens] = old_nn_embedding.weight.data
+    # Copy the new embeddings to new_nn_embedding.
+    new_nn_embedding.weight.data[old_num_tokens:] = new_token_embeddings
+
+    print(f"Extended nn.Embedding from {num_old_tokens} to {num_tokens2} tokens.")
+    return new_nn_embedding
+
 # Revised from RevGrad, by removing the grad negation.
 class ScaleGrad(torch.autograd.Function):
     @staticmethod

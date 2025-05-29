@@ -14,7 +14,7 @@ from diffusers import (
     LCMScheduler,
 )
 from diffusers.loaders.single_file_utils import convert_ldm_unet_checkpoint
-from adaface.util import UNetEnsemble
+from adaface.util import UNetEnsemble, extend_nn_embedding
 from adaface.face_id_to_ada_prompt import create_id2ada_prompt_encoder
 from adaface.diffusers_attn_lora_capture import set_up_attn_processors, set_up_ffn_loras, set_lora_and_capture_flags
 from safetensors.torch import load_file as safetensors_load_file
@@ -27,7 +27,7 @@ class AdaFaceWrapper(nn.Module):
                  adaface_ckpt_paths, adaface_encoder_cfg_scales=None, 
                  enabled_encoders=None, use_lcm=False, default_scheduler_name='ddim',
                  num_inference_steps=50, subject_string='z', negative_prompt=None,
-                 use_840k_vae=False, use_ds_text_encoder=False, 
+                 max_prompt_length=77, use_840k_vae=False, use_ds_text_encoder=False, 
                  main_unet_filepath=None, unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None,
                  enable_static_img_suffix_embs=None, unet_uses_attn_lora=False,
                  attn_lora_layer_names=['q', 'k', 'v', 'out'], normalize_cross_attn=False, q_lora_updates_query=False,
@@ -56,6 +56,9 @@ class AdaFaceWrapper(nn.Module):
 
         self.default_scheduler_name = default_scheduler_name
         self.num_inference_steps = num_inference_steps if not use_lcm else 4
+
+        self.max_prompt_length = max_prompt_length
+
         self.use_840k_vae = use_840k_vae
         self.use_ds_text_encoder = use_ds_text_encoder
         self.main_unet_filepath = main_unet_filepath
@@ -198,6 +201,21 @@ class AdaFaceWrapper(nn.Module):
                                                 q_lora_updates_query=self.q_lora_updates_query)
                                                 
             pipeline.unet = unet2
+
+        # Extending prompt length is for SD 1.5 only.
+        if (self.pipeline_name == "text2img") and (self.max_prompt_length > 77):
+            # pipeline.text_encoder.text_model.embeddings.position_embedding.weight: [77, 768] -> [max_length, 768]
+            # We reuse the last EL position embeddings for the new position embeddings.
+            # If we use the "neat" way, i.e., initialize CLIPTextModel with a CLIPTextConfig with 
+            # a larger max_position_embeddings, and set ignore_mismatched_sizes=True, 
+            # then the old position embeddings won't be loaded from the pretrained ckpt, 
+            # leading to degenerated performance. 
+            EL = self.max_prompt_length - 77
+            # position_embedding.weight: [77, 768] -> [max_length, 768]
+            new_position_embedding = extend_nn_embedding(pipeline.text_encoder.text_model.embeddings.position_embedding,
+                                                         pipeline.text_encoder.text_model.embeddings.position_embedding.weight[-EL:])
+            pipeline.text_encoder.text_model.embeddings.position_embedding = new_position_embedding
+            pipeline.text_encoder.text_model.embeddings.position_ids = torch.arange(self.max_prompt_length).unsqueeze(0)
 
         if self.use_840k_vae:
             pipeline.vae = vae
