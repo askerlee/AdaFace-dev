@@ -55,7 +55,7 @@ parser.add_argument('--show_ablate_prompt_embed_type', type=str2bool, nargs="?",
 parser.add_argument('--extra_save_dir', type=str, default=None, help="Directory to save the generated images")
 parser.add_argument('--test_ui_only', type=str2bool, nargs="?", const=True, default=False,
                     help="Only test the UI layout, and skip loadding the adaface model")
-parser.add_argument('--max_prompt_length', type=int, default=97, 
+parser.add_argument('--max_prompt_length', type=int, default=147, 
                     help="Maximum length of the prompt. If > 77, the CLIP text encoder will be extended.")
 parser.add_argument('--gpu', type=int, default=None)
 parser.add_argument('--ip', type=str, default="0.0.0.0")
@@ -271,6 +271,7 @@ def check_prompt_and_model_type(prompt, model_style_type, adaface_encoder_cfg_sc
                                      adaface_ckpt_paths=args.adaface_ckpt_path,                          
                                      adaface_encoder_cfg_scales=args.adaface_encoder_cfg_scales,
                                      enabled_encoders=args.enabled_encoders,
+                                     max_prompt_length=args.max_prompt_length,
                                      unet_types=None, extra_unet_dirpaths=None, unet_weights_in_ensemble=None, 
                                      unet_uses_attn_lora=args.unet_uses_attn_lora,
                                      attn_lora_layer_names=args.attn_lora_layer_names,

@@ -117,14 +117,6 @@ class AdaFaceWrapper(nn.Module):
         else:
             vae = None
 
-        if self.use_ds_text_encoder:
-            # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
-            # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
-            text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", 
-                                                         torch_dtype=torch.float16)
-        else:
-            text_encoder = None
-
         remove_unet = False
 
         if self.pipeline_name == "img2img":
@@ -202,6 +194,13 @@ class AdaFaceWrapper(nn.Module):
                                                 
             pipeline.unet = unet2
 
+        if self.use_ds_text_encoder:
+            # The dreamshaper v7 finetuned text encoder follows the prompt slightly better than the original text encoder.
+            # https://huggingface.co/Lykon/DreamShaper/tree/main/text_encoder
+            pipeline.text_encoder = CLIPTextModel.from_pretrained("models/diffusers/ds_text_encoder", 
+                                                                  torch_dtype=torch.float16)
+            print("Replaced the text encoder with the DreamShaper text encoder.")
+
         # Extending prompt length is for SD 1.5 only.
         if (self.pipeline_name == "text2img") and (self.max_prompt_length > 77):
             # pipeline.text_encoder.text_model.embeddings.position_embedding.weight: [77, 768] -> [max_length, 768]
@@ -210,20 +209,19 @@ class AdaFaceWrapper(nn.Module):
             # a larger max_position_embeddings, and set ignore_mismatched_sizes=True, 
             # then the old position embeddings won't be loaded from the pretrained ckpt, 
             # leading to degenerated performance. 
-            EL = self.max_prompt_length - 77
+            # max_prompt_length <= 77 + 70 = 147.
+            EL = min(self.max_prompt_length - 77, 70)
             # position_embedding.weight: [77, 768] -> [max_length, 768]
             new_position_embedding = extend_nn_embedding(pipeline.text_encoder.text_model.embeddings.position_embedding,
                                                          pipeline.text_encoder.text_model.embeddings.position_embedding.weight[-EL:])
             pipeline.text_encoder.text_model.embeddings.position_embedding = new_position_embedding
             pipeline.text_encoder.text_model.embeddings.position_ids = torch.arange(self.max_prompt_length).unsqueeze(0)
-
+            pipeline.text_encoder.text_model.config.max_position_embeddings = self.max_prompt_length
+            pipeline.tokenizer.model_max_length = self.max_prompt_length
+            
         if self.use_840k_vae:
             pipeline.vae = vae
             print("Replaced the VAE with the 840k-step VAE.")
-            
-        if self.use_ds_text_encoder:
-            pipeline.text_encoder = text_encoder
-            print("Replaced the text encoder with the DreamShaper text encoder.")
 
         if remove_unet:
             # Remove unet and vae to release RAM. Only keep tokenizer and text_encoder.
