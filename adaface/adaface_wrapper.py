@@ -210,7 +210,9 @@ class AdaFaceWrapper(nn.Module):
             # then the old position embeddings won't be loaded from the pretrained ckpt, 
             # leading to degenerated performance. 
             # max_prompt_length <= 77 + 70 = 147.
-            EL = min(self.max_prompt_length - 77, 70)
+            self.max_prompt_length = min(self.max_prompt_length, 147)
+            # Number of extra tokens is at most 70.
+            EL = self.max_prompt_length - 77
             # position_embedding.weight: [77, 768] -> [max_length, 768]
             new_position_embedding = extend_nn_embedding(pipeline.text_encoder.text_model.embeddings.position_embedding,
                                                          pipeline.text_encoder.text_model.embeddings.position_embedding.weight[-EL:])
