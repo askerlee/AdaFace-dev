@@ -28,5 +28,6 @@ onnxruntime-gpu
 insightface
 ftfy
 peft
+-e git+https://github.com/askerlee/Muon
 -e git+https://github.com/adaface-neurips/retinaface@master#egg=retinaface_pytorch
 -e .

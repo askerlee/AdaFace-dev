@@ -45,8 +45,8 @@ model:
     # typical delta reg loss: 0.9, * weight -> 9e-5
     prompt_emb_delta_reg_weight:            1e-4
 
-    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy
-    optimizer_type:           CAdamW 
+    # AdamW, AdamW8bit, Adam8bit, NAdam, Prodigy, Muon
+    optimizer_type:           Muon #CAdamW 
     adam_config:
       # Half life:
       # 0.995  0.996  0.997  0.998  0.999

@@ -10,6 +10,7 @@ from ldm.modules.lr_scheduler import SequentialLR2
 from einops import rearrange
 from pytorch_lightning.utilities import rank_zero_only
 from ldm.c_adamw import AdamW as CAdamW
+from muon import MuonWithAuxAdam
 from diffusers import UNet2DConditionModel, StableDiffusionPipeline, AutoencoderKL
 import queue
 from threading import Thread
@@ -3867,6 +3868,8 @@ class LatentDiffusion(DDPM):
             OptimizerClass = bnb.optim.AdamW8bit
         elif self.optimizer_type == 'Prodigy':
             OptimizerClass = Prodigy
+        elif self.optimizer_type == 'Muon':
+            OptimizerClass = MuonWithAuxAdam
         else:
             raise NotImplementedError()
             
@@ -3887,7 +3890,8 @@ class LatentDiffusion(DDPM):
             opt_param_groups += embedding_param_groups
             # For CAdamW, we are unable to set the learning rate of the embedding_params individually.
 
-        # Are we allowing the base model to train? If so, set two different parameter groups.
+        # Are we allowing the base model to train? If so, 
+        # set two different parameter groups, and adopt smaller learning rate for the U-Net.
         if self.unfreeze_unet: 
             model_params = list(self.model.parameters())
             # unet_lr: default 2e-6 set in finetune-unet.yaml.
@@ -3901,6 +3905,25 @@ class LatentDiffusion(DDPM):
         
         if 'adam' in self.optimizer_type.lower():
             opt = OptimizerClass(opt_param_groups, betas=self.adam_config.betas)
+            assert 'target' in self.adam_config.scheduler_config
+            self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
+            lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
+            print("Setting up LambdaLR scheduler...")
+            scheduler = LambdaLR(opt, lr_lambda=lambda_scheduler.schedule)
+
+        elif 'muon' in self.optimizer_type.lower():
+            hidden_weights      = [p for p in opt_params if p.ndim >= 2]
+            hidden_gains_biases = [p for p in opt_params if p.ndim < 2]
+            print(f"Muon optimizes {len(hidden_weights)} hidden weights, skips {len(hidden_gains_biases)} gains/biases.")
+            param_groups = [
+                # hidden_weights usually take 10x base LR.
+                dict(params=hidden_weights,      use_muon=True,
+                    lr=lr * 5,                          weight_decay=self.weight_decay),
+                dict(params=hidden_gains_biases, use_muon=False,
+                    lr=lr, betas=self.adam_config.betas, weight_decay=self.weight_decay),
+            ]
+            opt = MuonWithAuxAdam(param_groups)
+            # Reuse the same scheduler as AdamW.
             assert 'target' in self.adam_config.scheduler_config
             self.adam_config.scheduler_config.params.max_decay_steps = self.trainer.max_steps
             lambda_scheduler = instantiate_from_config(self.adam_config.scheduler_config)
