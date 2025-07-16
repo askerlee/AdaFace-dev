@@ -265,8 +265,8 @@ class DDPM(pl.LightningModule):
 
         if comp_unet_weight_path is not None:
             # base_unet_state_dict and comp_unet_state_dict are on CPU, and won't consume extra GPU RAM.
-            self.base_unet_state_dict = { k: v.cpu().pin_memory() for k, v in self.model.diffusion_model.state_dict().items() }
-            self.comp_unet_state_dict = load_ckpt_to_cpu(comp_unet_weight_path, pinned=True)
+            self.base_unet_state_dict = { k: v.cpu() for k, v in self.model.diffusion_model.state_dict().items() }
+            self.comp_unet_state_dict = load_ckpt_to_cpu(comp_unet_weight_path, pinned=False)
         else:
             self.base_unet_state_dict = None
             self.comp_unet_state_dict = None

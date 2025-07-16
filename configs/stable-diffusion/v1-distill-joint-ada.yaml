@@ -52,7 +52,7 @@ model:
       # 0.995  0.996  0.997  0.998  0.999
       # 138    172    231    346    693
       # We set beta2 to 0.995 for faster update of the estimated variances.
-      betas:                  [0.9,  0.999]  
+      betas:                  [0.9,  0.9999]  
       scheduler_config:
         target: ldm.modules.lr_scheduler.LambdaWarmUpCosineScheduler
         params:
